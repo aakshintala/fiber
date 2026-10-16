@@ -95,8 +95,7 @@ type LoadObserver = (PathBuf, Box<dyn FnOnce() + Send>);
 static LOAD_OBSERVERS: std::sync::Mutex<Vec<LoadObserver>> = std::sync::Mutex::new(Vec::new());
 
 /// Runs `notify` once, before the next load of the file at canonical `path`
-/// opens it. Test-only: the load signal a `require` of an empty module
-/// gives, without the fifo `go_module` used to need.
+/// opens it. Test-only.
 #[cfg(any(test, feature = "test-hooks"))]
 pub fn observe_load(path: PathBuf, notify: Box<dyn FnOnce() + Send>) {
     LOAD_OBSERVERS
@@ -265,19 +264,11 @@ fn timed_out() -> mlua::Error {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #[allow(clippy::expect_used, reason = "test code; a failure is the test's")]
-#[allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, mpsc};
-    use std::time::Duration;
-
-    use fakes::Deadline;
+    use std::sync::mpsc;
 
     use super::super::MEMORY_CAP;
     use super::*;
-
-    /// Wall-clock bound on the wait for the observer's signal.
-    const WAIT: Duration = Duration::from_secs(5);
 
     #[test]
     fn a_load_observer_fires_once_before_the_read() {
@@ -290,9 +281,7 @@ mod tests {
         let watched = dir.join("go_signal.lua");
         std::fs::write(&watched, "").unwrap();
         std::fs::write(dir.join("other.lua"), "return 8").unwrap();
-        let fired = Arc::new(AtomicUsize::new(0));
         let (tx, rx) = mpsc::channel();
-        let marking = Arc::clone(&fired);
         let writing = watched.clone();
         observe_load(
             watched.canonicalize().unwrap(),
@@ -300,7 +289,6 @@ mod tests {
                 // The read below sees this write, which proves the observer
                 // ran before the loader opened the file.
                 std::fs::write(&writing, "return 7").unwrap();
-                marking.fetch_add(1, Ordering::SeqCst);
                 tx.send(()).unwrap();
             }),
         );
@@ -312,16 +300,12 @@ mod tests {
             .unwrap();
         assert_eq!(untouched, 8);
         assert!(rx.try_recv().is_err(), "no signal for another file");
-        assert_eq!(fired.load(Ordering::SeqCst), 0);
         // The first load of the watched file fires the observer, and its
         // read sees the observer's write.
         let loaded = load_file(&lua, &dir, "go_signal.lua", MEMORY_CAP)
             .unwrap()
             .unwrap();
-        Deadline::after(WAIT)
-            .recv(&rx)
-            .expect("the observer fires before the read");
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        rx.try_recv().expect("the observer fires before the read");
         let value: i64 = loaded.call(()).unwrap();
         assert_eq!(value, 7);
         // A second load finds the registration spent.
@@ -331,7 +315,6 @@ mod tests {
             .call(())
             .unwrap();
         assert_eq!(again, 7);
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
         assert!(rx.try_recv().is_err(), "the observer fires once");
     }
 }
