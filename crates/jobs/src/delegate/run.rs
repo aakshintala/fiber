@@ -369,7 +369,8 @@ impl Runner {
                 self.shared.halt(Termination::OutputCap);
             }
             // Reaped only under the list's lock: the reap cannot race a
-            // signal to a retired group. Then the fold waits for the drain.
+            // signal to a retired group. Then the fold takes the drain's
+            // line, waiting for it when none arrived yet.
             if drained.is_none() {
                 match drain_rx.try_recv() {
                     Ok(line) => drained = Some(line),
