@@ -172,6 +172,83 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     started.servers.stop();
 }
 
+/// A start where one server never answers `initialize` still declares
+/// the other one: the silent server fails with its deadline once the
+/// test advances the fake clock to it, and a start with no advance
+/// fails naming the silent server. The whole test panics with that
+/// name, so the expectation below misses until the guard names it.
+#[test]
+#[should_panic(expected = "the start of [quiet]")]
+fn a_silent_server_fails_its_deadline_while_the_other_declares() {
+    let silent = Setup::new();
+    let answering = Setup::new();
+    answering.tools(&json!([{"name": "alpha"}]));
+    answering.result("alpha", r#"{"content":[]}"#);
+    // Silent: `sleep` answers nothing, so only the deadline ends its
+    // start. Armed before the start: the marker survives `exec` as
+    // argv[0], so a failure below still kills the detached group.
+    let marker = silent.dir.path().display().to_string();
+    let watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
+    let mut stalled = silent.spec("quiet");
+    stalled.stdio_mut().command = "/bin/bash".to_owned();
+    stalled.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    let fake = silent.fake.clone();
+    let cache = silent.cache();
+    // Detached, not scoped: a scope joins its thread even after a
+    // receive panic, so a hung start would hang the test.
+    let (done, result) = std::sync::mpsc::channel();
+    let specs = vec![stalled, answering.spec("two")];
+    std::thread::spawn(move || {
+        done.send(silent.start(specs)).unwrap_or(());
+    });
+    // The answering server wrote its cache entry after its last clock
+    // wait, so only the silent server is still parked on the clock.
+    crate::test_support::await_until("the answering server to be listed", move || {
+        cache.join("two.json").exists()
+    });
+    let deadline = fake
+        .now()
+        .checked_add(DEFAULT_STARTUP_TIMEOUT)
+        .expect("deadline");
+    fake.advance_when_parked(
+        Some(deadline),
+        None,
+        DEFAULT_STARTUP_TIMEOUT,
+        &Deadline::after(WITHIN),
+    );
+    let started = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the stalled start ends within {WITHIN:?}"));
+    assert_eq!(started.failed.len(), 1, "one server fails");
+    assert_eq!(started.failed[0].server, "quiet");
+    assert_eq!(started.failed[0].reason, ServerFailure::Deadline);
+    assert_eq!(names(&started), ["mcp__two__alpha"]);
+    assert_eq!(
+        started
+            .infos
+            .iter()
+            .map(|info| info.source.clone())
+            .collect::<Vec<_>>(),
+        vec![ToolSource::Mcp {
+            server: "two".into(),
+            tool: "alpha".into()
+        },]
+    );
+    started.servers.stop();
+    watchdog.stand_down(WITHIN);
+    // With no advance the deadline never fires, so the guard below is
+    // the only bound, and its message holds the silent server's name.
+    let held = Setup::new();
+    let marker = held.dir.path().display().to_string();
+    let _watchdog = fakes::Watchdog::matching(&marker);
+    let quoted = marker.replace('\'', "'\\''");
+    let mut stalled = held.spec("quiet");
+    stalled.stdio_mut().command = "/bin/bash".to_owned();
+    stalled.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    held.start(vec![stalled]);
+}
+
 #[test]
 fn enabled_declares_only_those_tools() {
     let setup = Setup::new();
