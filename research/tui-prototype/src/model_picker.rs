@@ -269,7 +269,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "list",
         help: "providers and models, current marked",
-        check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.",
+        check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; every row with its input and output price dim after the name and its rebuild cost right-aligned labelled `switch …`, the current model keeping `—`; a centred panel with ▄ ▀ edges, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar, and a bold-key legend foot.",
         build: base,
     },
     // after a click on the thinking chip: the current level focused
@@ -314,7 +314,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "session-only",
         help: "a model picked for this session only",
-        check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.",
+        check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it, its prices and its labelled switch cost on its row; same panel and legend.",
         build: || State {
             focus: 1,
             session_only: Some(1),
@@ -701,11 +701,19 @@ fn price_text(m: &Model, session: Option<u64>) -> Option<String> {
 
 /// The right-aligned switch cell: the rebuild cost labelled as a switch
 /// when the session has conversation to rebuild, `—` for the current
-/// model, nothing with no conversation.
+/// model, nothing with no conversation. A tier in force figures the cost
+/// from the session size at the tier rate instead of the fixture text.
 fn switch_text(m: &Model, session: Option<u64>) -> Option<String> {
     match (m.current, session) {
         (true, Some(_)) => Some("—".to_string()),
-        (false, Some(_)) => Some(format!("switch {}", m.rebuild)),
+        (false, Some(n)) => Some(match rates(m, Some(n)) {
+            (_, _, Some(t)) => format!(
+                "switch ~{}k tokens · ${:.2}",
+                n / 1000,
+                n as f64 * t.input / 1_000_000.0
+            ),
+            _ => format!("switch {}", m.rebuild),
+        }),
         _ => None,
     }
 }
@@ -2240,16 +2248,21 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_cell_covers_current_and_conversation() {
-        let f = fixture();
-        let (opus, sonnet) = (&f[0].models[0], &f[0].models[1]);
-        assert_eq!(switch_text(opus, Some(1)), Some("—".to_string()));
-        assert_eq!(switch_text(opus, None), None);
-        assert_eq!(
-            switch_text(sonnet, Some(1)),
-            Some("switch ~84k tokens · $0.31".to_string())
+    fn the_tiered_switch_matches_the_session_at_the_tier_rate() {
+        let rows = view(&for_case("prices-tiered"), 160);
+        let line = rows
+            .iter()
+            .map(plain)
+            .find(|l| l.contains("claude-sonnet-5-5"))
+            .unwrap();
+        assert!(
+            line.contains("switch ~250k tokens · $1.50"),
+            "tiered switch not figured at the tier rate: {line}"
         );
-        assert_eq!(switch_text(sonnet, None), None);
+        assert!(
+            !line.contains("~84k"),
+            "fixture switch leaks into the tiered row: {line}"
+        );
     }
 
     #[test]
