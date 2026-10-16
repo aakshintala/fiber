@@ -4,10 +4,12 @@
 //! data on the answer. `contract` holds no behaviour beyond checking that a value fits the
 //! vocabulary, and pure conversions of its own values.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 use crate::SessionId;
-use crate::events::{CallStatus, HandoffTrigger, InputItem, Notice};
+use crate::events::{CallStatus, Event, HandoffTrigger, InputItem, Notice, OnFork};
 use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
 use crate::tool::{Cancel, SpillFile};
@@ -260,8 +262,41 @@ pub struct BeforeHandoffAnswer {
     pub notices: Vec<Notice>,
 }
 
+/// Folded extension state: extension, key, whole value and its last fork rule.
+pub type StateSeed = BTreeMap<String, BTreeMap<String, (Value, OnFork)>>;
+
+/// A state write carried beside the change its hook returned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateLine {
+    /// The state event to write before the changed event.
+    pub event: Event,
+    /// The extension that owns the key.
+    pub extension: String,
+    /// The key written.
+    pub key: String,
+    /// The write's position in the session's state view.
+    pub landing: u64,
+    /// The first context this hook added, or none for its other change.
+    pub context: Option<usize>,
+}
+
 /// The session's hooks. Calls come from the loop thread, one at a time.
 pub trait Hooks: Send + Sync {
+    /// Drains admitted non-hook and unchanged-hook writes in landing order.
+    fn take_state_lines(&self) -> Vec<Event> {
+        Vec::new()
+    }
+
+    /// Admits carried writes, after draining any queued writes first.
+    fn admit_state_lines(&self, lines: Vec<StateLine>) -> Vec<Event> {
+        lines.into_iter().map(|line| line.event).collect()
+    }
+
+    /// Takes the state lines of the answer the last hook call returned.
+    fn take_change_state(&self) -> Vec<StateLine> {
+        Vec::new()
+    }
+
     /// Runs every `after_tool` hook on `call`, in order, and returns what
     /// they decided.
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer;
