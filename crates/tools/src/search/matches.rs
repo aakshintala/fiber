@@ -88,14 +88,9 @@ impl MatchFile {
         self.remaining -= len;
     }
 
-    pub(crate) fn finish(mut self) {
-        if let Some(file) = self.file.as_mut()
-            && file.flush().is_err()
-        {
-            self.file = None;
-            std::fs::remove_file(&self.path).unwrap_or(());
-        }
-    }
+    // File writes are unbuffered and File::flush is a no-op; consuming self
+    // closes the side file without an additional flush or failure path.
+    pub(crate) fn finish(self) {}
 }
 
 #[cfg(test)]

@@ -15,8 +15,10 @@ fn records_keep_order_context_lossy_text_and_whole_character_spans() {
     writer.record(b"a.txt", 4, "éé".as_bytes(), &[(1, 3)], false);
     writer.record(b"a.txt", 5, b"n\xff", &[(0, 1)], false);
     writer.record(b"a.txt", 6, b"", &[(0, 0)], false);
+    let before_finish = std::fs::read_to_string(&path).unwrap();
     writer.finish();
     let raw = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(raw, before_finish);
     assert_eq!(
         raw.lines().next().unwrap(),
         r#"{"path":"a.txt","line":1,"text":"needle needle","spans":[[0,6],[7,13]],"context":false}"#
