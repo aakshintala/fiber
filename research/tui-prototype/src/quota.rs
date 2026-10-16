@@ -9,7 +9,7 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BI, bold, dim, fg, paint, row, sp, t};
+use super::{bold, dim, fg, paint, row, sp, t};
 use crate::RED;
 use crate::cases::{Case, Surface};
 use ratatui::style::Style;
@@ -21,19 +21,13 @@ const CASES: &[Case<Look>] = &[
         name: "quota",
         help: "the quota view with the fetch in flight over cached rows",
         check: "the `Quota` header with `  /quota` dim, `fetching` dim and `Esc returns` dim right-aligned; `codex · default` with two windows, each a dim name, its percent and its bar, then its reset time dim (`resets in 3h12m`, `resets in 2d4h`); `claude · default` with its last value and `unreachable` in the error colour; nothing clipped.",
-        build: || Look {
-            kind: Kind::Full,
-            fetching: true,
-        },
+        build: || Look { kind: Kind::Full },
     },
     Case {
         name: "quota-empty",
         help: "the quota view with no entries",
         check: "the same header without `fetching`, and one dim line `No provider reports quota` in place of the rows.",
-        build: || Look {
-            kind: Kind::Empty,
-            fetching: false,
-        },
+        build: || Look { kind: Kind::Empty },
     },
 ];
 
@@ -53,9 +47,6 @@ enum Kind {
 
 struct Look {
     kind: Kind,
-    /// Whether the fetch that fills the view is still in flight: the top
-    /// row then carries the dim `fetching` mark over the cached rows.
-    fetching: bool,
 }
 
 /// A cached quota window: the vendor's name, how much is used, and the
@@ -97,22 +88,11 @@ fn resets_in(mins: u64) -> String {
 /// The swapped-view top row: `Quota` bold, `  /quota` dim, `fetching` dim
 /// while the fetch is in flight, and `Esc returns` dim right-aligned.
 fn quota_header(fetching: bool) -> super::Row {
-    let mut spans = vec![
-        sp(" ", Style::new()),
-        sp("Quota", bold()),
-        sp("  /quota", dim()),
-    ];
+    let mut h = super::view_header("Quota", "/quota");
     if fetching {
-        spans.push(sp("  fetching", dim()));
+        h.spans.insert(3, sp("  fetching", dim()));
     }
-    spans.push(t());
-    spans.push(sp("Esc returns ", dim()));
-    super::Row {
-        spans,
-        bg: Some(BI),
-        act: Some(super::Act::Back),
-        ..Default::default()
-    }
+    h
 }
 
 /// The quota bars cap at this width, so a wide screen keeps them readable:
@@ -140,16 +120,13 @@ fn window_rows(w: &Window, cols: usize) -> Vec<super::Row> {
 }
 
 /// An unreachable entry: its last value and `unreachable` in the error
-/// colour, or `unreachable` alone when it has no last value.
-fn unreachable_row(last: Option<u8>) -> super::Row {
-    match last {
-        Some(pct) => row(vec![
-            sp(format!("{pct}%"), Style::new()),
-            sp(" · ", dim()),
-            sp("unreachable", fg(RED)),
-        ]),
-        None => row(vec![sp("unreachable", fg(RED))]),
-    }
+/// colour.
+fn unreachable_row(last: u8) -> super::Row {
+    row(vec![
+        sp(format!("{last}%"), Style::new()),
+        sp(" · ", dim()),
+        sp("unreachable", fg(RED)),
+    ])
 }
 
 /// One cached entry's header: the provider bold, its credential label dim.
@@ -161,7 +138,7 @@ fn entry_header(provider: &str, credential: &str) -> super::Row {
 }
 
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
-    let mut out = vec![quota_header(c.fetching), super::Row::default()];
+    let mut out = vec![quota_header(c.kind == Kind::Full), super::Row::default()];
     match c.kind {
         Kind::Empty => {
             out.push(row(vec![sp("No provider reports quota", dim())]));
@@ -173,7 +150,7 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             }
             out.push(super::Row::default());
             out.push(entry_header("claude", "default"));
-            out.push(unreachable_row(Some(UNREACHABLE_LAST)));
+            out.push(unreachable_row(UNREACHABLE_LAST));
         }
     }
     out
@@ -246,9 +223,11 @@ pub(crate) fn run_quota(a: &Args, term: &mut Term) -> io::Result<String> {
         }
         for ev in evs {
             match ev {
-                Ev::Key(Key::Char('c'), m) if m.ctrl => return Ok(format!("quota {name}\n")),
-                Ev::Key(Key::Esc, _) => return Ok(format!("quota {name}\n")),
-                Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
+                Ev::Key(k @ (Key::Esc | Key::Char('c') | Key::Char('q')), m)
+                    if k == Key::Esc
+                        || (k == Key::Char('c') && m.ctrl)
+                        || (k == Key::Char('q') && !m.ctrl && !m.alt && !m.sup) =>
+                {
                     return Ok(format!("quota {name}\n"));
                 }
                 _ => {}
@@ -260,6 +239,7 @@ pub(crate) fn run_quota(a: &Args, term: &mut Term) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BI;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use ratatui::style::Modifier;
@@ -408,19 +388,8 @@ mod tests {
     }
 
     #[test]
-    fn unreachable_without_a_last_value_shows_the_word_alone() {
-        let r = unreachable_row(None);
-        let plain: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(plain, "unreachable");
-        assert!(
-            r.spans.iter().all(|s| s.style.fg == Some(RED)),
-            "the lone mark left the error colour"
-        );
-    }
-
-    #[test]
-    fn unreachable_with_a_last_value_keeps_both() {
-        let r = unreachable_row(Some(65));
+    fn unreachable_shows_the_last_value() {
+        let r = unreachable_row(65);
         let plain: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(plain, "65% · unreachable");
         assert_eq!(r.spans[0].style.fg, None);

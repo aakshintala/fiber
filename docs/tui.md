@@ -615,6 +615,7 @@ a click on it returns too. The views are:
   and "unreachable" in `error`, or "unreachable" alone when it has no
   last value. With no entries, one dim line reads "No provider reports
   quota". While the fetch is in flight, the top row shows "fetching" dim.
+  Opening the view sends `quota` with `fetch: true`.
   The view draws the cached answer at once and redraws on the fetch's
   answer, which also updates the panel card.
 - **The context breakdown:** one bar of context by category against the
