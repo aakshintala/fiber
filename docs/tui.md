@@ -1616,7 +1616,6 @@ later release still applies.
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
-| `/quota` | Opens the quota view and fetches every label's quota. |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
