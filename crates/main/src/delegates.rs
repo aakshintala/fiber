@@ -138,6 +138,7 @@ impl Delegates {
         }
     }
 
+    /// The `delegate_models` tool this session declares: the catalogue
     /// built with the session's resolver.
     pub(crate) fn models(&self) -> jobs::DelegateModels {
         jobs::DelegateModels {
