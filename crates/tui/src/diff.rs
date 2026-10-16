@@ -172,8 +172,9 @@ fn flush_pair(removed: Option<usize>, added: Option<usize>, exact: bool, lines: 
     let (Some(first), Some(second)) = (removed, added) else {
         return;
     };
-    if first < second
-        && let (head, tail) = lines.split_at_mut(second)
+    // The removed index always precedes the added one: a `-` after a
+    // `+` completes its run first, so no comparison is needed.
+    if let (head, tail) = lines.split_at_mut(second)
         && let (Some(removed), Some(added)) = (head.get_mut(first), tail.first_mut())
     {
         pair_words(removed, added);
@@ -197,29 +198,24 @@ fn pair_words(removed: &mut DiffLine, added: &mut DiffLine) {
     };
     let removed_words = word_ranges(&removed_rest);
     let added_words = word_ranges(&added_rest);
-    let mut leading = 0;
-    while let (Some(left), Some(right)) = (removed_words.get(leading), added_words.get(leading))
-        && word_text(&removed_rest, left) == word_text(&added_rest, right)
-    {
-        leading += 1;
-    }
-    let mut trailing = 0;
-    while let (Some(left_at), Some(right_at)) = (
-        removed_words.len().checked_sub(1 + trailing),
-        added_words.len().checked_sub(1 + trailing),
-    ) {
-        if left_at < leading || right_at < leading {
-            break;
-        }
-        let (Some(left), Some(right)) = (removed_words.get(left_at), added_words.get(right_at))
-        else {
-            break;
-        };
-        if word_text(&removed_rest, left) != word_text(&added_rest, right) {
-            break;
-        }
-        trailing += 1;
-    }
+    // Bounded walks, so no mutant of the step can spin: the longest
+    // run ends at the shorter word list.
+    let leading = removed_words
+        .iter()
+        .zip(added_words.iter())
+        .take_while(|(left, right)| word_text(&removed_rest, left) == word_text(&added_rest, right))
+        .count();
+    let trailing = removed_words
+        .iter()
+        .rev()
+        .zip(added_words.iter().rev())
+        .enumerate()
+        .take_while(|(at, (left, right))| {
+            *at < removed_words.len().saturating_sub(leading)
+                && *at < added_words.len().saturating_sub(leading)
+                && word_text(&removed_rest, left) == word_text(&added_rest, right)
+        })
+        .count();
     if removed_words.len() <= leading + trailing && added_words.len() <= leading + trailing {
         return;
     }

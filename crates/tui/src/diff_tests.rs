@@ -205,3 +205,233 @@ fn gutter_width_of_zero_is_one_and_of_u64_max_is_twenty() {
     assert_eq!(gutter_width(vec![10].into_iter()), 2);
     assert_eq!(gutter_width(Vec::<u64>::new().into_iter()), 0);
 }
+
+#[test]
+fn two_word_tail_marks_one_word() {
+    let paired = marks("@@ -1 +1 @@\n-p a b c\n+p X b c\n");
+    assert_eq!(
+        paired[1],
+        vec![
+            ("-p ".to_owned(), false),
+            ("a ".to_owned(), true),
+            ("b ".to_owned(), false),
+            ("c".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+p ".to_owned(), false),
+            ("X ".to_owned(), true),
+            ("b ".to_owned(), false),
+            ("c".to_owned(), false),
+        ]
+    );
+}
+
+#[test]
+fn prefix_words_mark_their_tail() {
+    let paired = marks("@@ -1 +1 @@\n-a\n+a b\n");
+    assert_eq!(paired[1], vec![("-a".to_owned(), false)]);
+    assert_eq!(
+        paired[2],
+        vec![("+a ".to_owned(), false), ("b".to_owned(), true)]
+    );
+}
+
+#[test]
+fn added_overlap_marks_its_tail() {
+    let paired = marks("@@ -1 +1 @@\n-a\n+a a\n");
+    assert_eq!(paired[1], vec![("-a".to_owned(), false)]);
+    assert_eq!(
+        paired[2],
+        vec![("+a ".to_owned(), false), ("a".to_owned(), true)]
+    );
+}
+
+#[test]
+fn trailing_edge_marks_one_word() {
+    let paired = marks("@@ -1 +1 @@\n-a b\n+c b\n");
+    assert_eq!(
+        paired[1],
+        vec![("-a ".to_owned(), true), ("b".to_owned(), false)]
+    );
+    assert_eq!(
+        paired[2],
+        vec![("+c ".to_owned(), true), ("b".to_owned(), false)]
+    );
+}
+
+#[test]
+fn two_word_overlap_marks_one_word() {
+    let paired = marks("@@ -1 +1 @@\n-b a\n+c b a\n");
+    assert_eq!(
+        paired[1],
+        vec![("-b ".to_owned(), false), ("a".to_owned(), false)]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+c ".to_owned(), true),
+            ("b ".to_owned(), false),
+            ("a".to_owned(), false),
+        ]
+    );
+}
+
+#[test]
+fn removed_overlap_leaves_the_added_line_plain() {
+    let paired = marks("@@ -1 +1 @@\n-a b\n+b\n");
+    assert_eq!(
+        paired[1],
+        vec![("-a ".to_owned(), true), ("b".to_owned(), false)]
+    );
+    assert_eq!(paired[2], vec![("+b".to_owned(), false)]);
+}
+
+#[test]
+fn shared_overlap_marks_the_diverging_word() {
+    let paired = marks("@@ -1 +1 @@\n-a a\n+a\n");
+    assert_eq!(
+        paired[1],
+        vec![("-a ".to_owned(), false), ("a".to_owned(), true)]
+    );
+    assert_eq!(paired[2], vec![("+a".to_owned(), false)]);
+}
+
+#[test]
+fn reentrant_overlap_leaves_the_middle_plain() {
+    let paired = marks("@@ -1 +1 @@\n-x z a\n+z a\n");
+    assert_eq!(
+        paired[1],
+        vec![
+            ("-x ".to_owned(), true),
+            ("z ".to_owned(), false),
+            ("a".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        paired[2],
+        vec![("+z ".to_owned(), false), ("a".to_owned(), false)]
+    );
+}
+
+#[test]
+fn full_overlap_marks_the_extra_word() {
+    let paired = marks("@@ -1 +1 @@\n-a x\n+a x x\n");
+    assert_eq!(
+        paired[1],
+        vec![("-a ".to_owned(), false), ("x".to_owned(), false)]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+a ".to_owned(), false),
+            ("x ".to_owned(), false),
+            ("x".to_owned(), true),
+        ]
+    );
+}
+
+#[test]
+fn fully_common_words_draw_as_one_segment() {
+    let paired = marks("@@ -1 +1 @@\n-a  b\n+a b\n");
+    assert_eq!(paired[1], vec![("-a  b".to_owned(), false)]);
+    assert_eq!(paired[2], vec![("+a b".to_owned(), false)]);
+}
+
+#[test]
+fn leading_space_survives_pairing() {
+    let paired = marks("@@ -1 +1 @@\n-  foo\n+  bar\n");
+    assert_eq!(
+        paired[1],
+        vec![("-  ".to_owned(), false), ("foo".to_owned(), true)]
+    );
+    assert_eq!(
+        paired[2],
+        vec![("+  ".to_owned(), false), ("bar".to_owned(), true)]
+    );
+}
+
+#[test]
+fn trailing_edge_added_side_marks_one_word() {
+    let paired = marks("@@ -1 +1 @@\n-b\n+c b\n");
+    assert_eq!(paired[1], vec![("-b".to_owned(), false)]);
+    assert_eq!(
+        paired[2],
+        vec![("+c ".to_owned(), true), ("b".to_owned(), false)]
+    );
+}
+
+#[test]
+fn three_word_tail_marks_two_words() {
+    let paired = marks("@@ -1 +1 @@\n-p X a b c d\n+p Y a b c d\n");
+    assert_eq!(
+        paired[1],
+        vec![
+            ("-p ".to_owned(), false),
+            ("X ".to_owned(), true),
+            ("a ".to_owned(), false),
+            ("b ".to_owned(), false),
+            ("c ".to_owned(), false),
+            ("d".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+p ".to_owned(), false),
+            ("Y ".to_owned(), true),
+            ("a ".to_owned(), false),
+            ("b ".to_owned(), false),
+            ("c ".to_owned(), false),
+            ("d".to_owned(), false),
+        ]
+    );
+}
+
+#[test]
+fn tail_sum_and_product_differ() {
+    let paired = marks("@@ -1 +1 @@\n-a b c d\n+a b X d\n");
+    assert_eq!(
+        paired[1],
+        vec![
+            ("-a ".to_owned(), false),
+            ("b ".to_owned(), false),
+            ("c ".to_owned(), true),
+            ("d".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+a ".to_owned(), false),
+            ("b ".to_owned(), false),
+            ("X ".to_owned(), true),
+            ("d".to_owned(), false),
+        ]
+    );
+}
+
+#[test]
+fn trailing_stops_at_the_short_sides_leading_edge() {
+    let paired = marks("@@ -1 +1 @@\n-q x q a b\n+q a b\n");
+    assert_eq!(
+        paired[1],
+        vec![
+            ("-q ".to_owned(), false),
+            ("x ".to_owned(), true),
+            ("q ".to_owned(), true),
+            ("a ".to_owned(), false),
+            ("b".to_owned(), false),
+        ]
+    );
+    assert_eq!(
+        paired[2],
+        vec![
+            ("+q ".to_owned(), false),
+            ("a ".to_owned(), false),
+            ("b".to_owned(), false),
+        ]
+    );
+}

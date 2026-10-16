@@ -120,9 +120,9 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
     }
     for (line, skip, target) in logical {
         let mut pieces = wrap(line, usize::from(room));
-        if skip > 0
-            && let Some((_, first)) = pieces.first_mut()
-        {
+        // Pieces are never empty and adding zero is a no-op, so no
+        // guard is needed.
+        if let Some((_, first)) = pieces.first_mut() {
             first.skip = first.skip.saturating_add(skip);
         }
         let mut first_piece = true;

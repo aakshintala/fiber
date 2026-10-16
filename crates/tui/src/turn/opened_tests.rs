@@ -855,3 +855,81 @@ fn the_more_row_targets_the_call_view() {
     assert_eq!(aimed.len(), 1);
     assert!(lines(&parts)[aimed[0]].contains("…"));
 }
+
+#[test]
+fn logical_lines_skip_gutter_and_headline() {
+    let call = made_call(Some(json!({"start_line": 1})), "boom", "a");
+    let (drawn, texts) = drawn(&call, 76);
+    let logical = crate::logical::logical(&drawn, &texts);
+    assert_eq!(logical.len(), 2);
+    assert_eq!(logical[0].text, "boom");
+    assert_eq!(logical[1].text, "a");
+}
+
+#[test]
+fn logical_lines_keep_unguttered_text() {
+    let call = made_call(Some(json!({"diff": "-old\n+new\n"})), "", "x");
+    let (drawn, texts) = drawn(&call, 76);
+    let logical = crate::logical::logical(&drawn, &texts);
+    assert_eq!(logical.len(), 2);
+    assert_eq!(logical[0].text, "-old");
+    assert_eq!(logical[1].text, "+new");
+}
+
+#[test]
+fn match_row_draws_whole() {
+    let call = made_call(
+        Some(json!({
+            "exit_code": 0,
+            "matches": [{"path": "a", "lines": [
+                {"line": 7, "text": "ab cd", "spans": [[3, 4]]},
+            ]}],
+        })),
+        "",
+        "",
+    );
+    let parts = drawn(&call, 76);
+    assert_eq!(lines(&parts)[1], "        7 ab cd");
+}
+
+#[test]
+fn empty_spans_drop() {
+    let call = made_call(
+        Some(json!({
+            "exit_code": 0,
+            "matches": [{"path": "a", "lines": [
+                {"line": 5, "text": "abcd", "spans": [[0, 0], [2, 3]]},
+            ]}],
+        })),
+        "",
+        "",
+    );
+    let parts = drawn(&call, 76);
+    let tinted: Vec<String> = parts.0[1]
+        .0
+        .spans
+        .iter()
+        .filter(|span| span.style.bg == Some(Role::Match.color()))
+        .map(|span| span.content.to_string())
+        .collect();
+    assert_eq!(tinted, vec!["c".to_owned()]);
+}
+
+#[test]
+fn held_open_without_closing_keeps_both_rows() {
+    let call = made_call(
+        Some(json!({"command": "cmd", "exit_code": 0})),
+        "",
+        "out\nOutput was still held open.",
+    );
+    let parts = drawn(&call, 76);
+    assert_eq!(
+        lines(&parts),
+        vec![
+            "        $ cmd",
+            "        out",
+            "        Output was still held open.",
+            "        exit 0"
+        ]
+    );
+}
