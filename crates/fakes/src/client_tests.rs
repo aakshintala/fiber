@@ -317,6 +317,32 @@ fn send_by_leaves_the_socket_without_a_write_timeout() {
     );
 }
 
+#[test]
+fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
+    let (_dir, client, server) = pair();
+    let (written_tx, written_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    thread::spawn(move || {
+        // Set on the sending thread: the hook runs inside `send_by`.
+        set_send_by_before_reset(Some(Box::new(move || {
+            written_tx.send(()).unwrap();
+            match Deadline::after(Duration::from_secs(5)).recv(&go_rx) {
+                Ok(()) | Err(_) => {}
+            }
+        })));
+        let result = client.send_by("{}", &|| MUST);
+        result_tx.send(result).unwrap();
+    });
+    Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&written_rx, "send_by to write the line and reach the pause");
+    drop(server);
+    go_tx.send(()).unwrap();
+    let result = Deadline::after(Duration::from_secs(5))
+        .recv_or_fail(&result_rx, "send_by to return after the reset");
+    result.expect("a full write stays written when the peer closes before the reset");
+}
+
 /// A reader thread that finishes only once the returned sender drops.
 fn held_reader() -> (JoinHandle<()>, mpsc::Sender<()>) {
     let (release, released) = mpsc::channel::<()>();
