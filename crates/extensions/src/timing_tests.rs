@@ -996,6 +996,30 @@ impl Clock for GatedClock {
     }
 }
 
+/// Releases every pause it holds when it drops, on every exit path
+/// including a panic, ignoring send errors. A wait that expires below
+/// panics while the worker and the hook threads are still parked, so
+/// without this the unwind drops the extension into threads that never
+/// wake and hangs to the harness timeout instead of reporting the wait
+/// that expired.
+struct PauseGuard {
+    releases: Vec<mpsc::Sender<()>>,
+}
+
+impl PauseGuard {
+    fn holding(releases: Vec<mpsc::Sender<()>>) -> Self {
+        Self { releases }
+    }
+}
+
+impl Drop for PauseGuard {
+    fn drop(&mut self) {
+        for release in &self.releases {
+            let _ignored = release.send(());
+        }
+    }
+}
+
 /// Waits, at most `within` of real time, until the hub lock is free.
 /// `FakeClock::wait_until` records the caller's park and wakes
 /// `await_parked` before its wait closure runs, and the caller still holds
@@ -1042,6 +1066,11 @@ fn worker_emits_only_after_the_guard_releases() {
     );
     let (arrived, release) = pause_observed_execution("rz");
     let (paused, resume) = pause_at_admission();
+    // A wait that expires below must panic with its own message: the
+    // worker and the hook threads are parked, so the guard releases both
+    // pauses on every exit path, including a panic, instead of unwinding
+    // into threads that never wake.
+    let _pauses = PauseGuard::holding(vec![release.clone(), resume.clone()]);
     let mark = fake.now();
     let provider = LuaProvider::new(Arc::clone(&ext), "rz");
     let (tx, rx) = mpsc::channel();
@@ -1086,6 +1115,10 @@ fn worker_emits_only_after_the_guard_releases() {
     // that window and prove it cannot complete until the release — a
     // blocked gate plus channels, no sleeps or reruns.
     let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
+    // The gate holds the hub guard while it blocks its caller: release it
+    // on unwind too, so a failure inside the window still ends at its own
+    // message instead of hanging the extension's drop on the guard.
+    let _gate = PauseGuard::holding(vec![gated_release.clone()]);
     fake.advance(Duration::ZERO);
     Deadline::after(WAIT)
         .recv(&gated_arrived)
