@@ -401,6 +401,54 @@ pub enum CommandResult {
         /// The last durable line sent before the stream goes live.
         last_seq: crate::Seq,
     },
+    /// For `quota`.
+    Quota {
+        /// Cached quota, ordered by provider and credential label.
+        quota: Vec<QuotaInfo>,
+        /// Percent used at which little is left.
+        notice_at: f64,
+    },
+}
+
+/// One provider credential label's cached quota, with no age.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaInfo {
+    /// The provider's name.
+    pub provider: String,
+    /// The credential label.
+    pub credential: String,
+    /// Reported windows, in vendor order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Vec<QuotaWindow>>,
+    /// Reported credit, instead of windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credit: Option<QuotaCredit>,
+    /// The last fetch or credential read failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreachable: Option<crate::shapes::True>,
+}
+
+/// A quota window reports either its usage or that it has reset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaWindow {
+    /// The window's name.
+    pub name: String,
+    /// Percent used, absent after reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent_used: Option<f64>,
+    /// The window's reset time has passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<crate::shapes::True>,
+}
+
+/// A provider's remaining credit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaCredit {
+    /// Remaining credit in the provider's units.
+    pub remaining: f64,
+    /// The limit, when the provider reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
 }
 
 /// One declared tool (`docs/tools.md`, "Seeing the tools").
