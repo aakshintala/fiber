@@ -18,6 +18,9 @@ mod install;
 mod installed;
 mod login;
 mod lua;
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use lua::observe_load;
 mod lua_cost;
 mod lua_provider;
 mod manage;
