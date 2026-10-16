@@ -8,8 +8,8 @@ use super::brand_string;
 #[cfg(target_os = "linux")]
 use super::host_cpu;
 use super::{
-    Args, Only, attach, bench, busy, document, idle, listing, measure_all, model_name, paging,
-    parse, resume, selected, timing_names, wheel,
+    Args, Base, Only, Pass, Side, attach, bench, busy, document, idle, listing, measure_all,
+    model_name, paging, parse, resume, selected, sides, timing_names, wheel,
 };
 
 fn args(line: &str) -> Result<Args, String> {
@@ -36,6 +36,7 @@ fn the_defaults_are_five_runs_a_ten_second_window_and_every_workload() {
             paging: None,
             skip_ten_turns: false,
             skip_rows: Vec::new(),
+            base: None,
         })
     );
 }
@@ -54,6 +55,7 @@ fn every_flag_sets_its_value() {
             paging: None,
             skip_ten_turns: false,
             skip_rows: Vec::new(),
+            base: None,
         })
     );
 }
@@ -75,6 +77,9 @@ fn a_usage_error_names_what_is_wrong() {
         ),
         ("--fiber f --out o --timing-runs 0", "positive whole number"),
         ("--fiber f --out o --timing-runs x", "positive whole number"),
+        ("--fiber f --out o --base-fiber b", "--base-fiber"),
+        ("--fiber f --out o --base-out ob", "--base-out"),
+        ("--fiber f --out o --base-paging j", "--base-paging"),
     ] {
         let err = args(line).unwrap_err();
         assert!(err.contains(said), "{line}: {err}");
@@ -85,6 +90,43 @@ fn a_usage_error_names_what_is_wrong() {
 fn paging_names_the_jig() {
     let parsed = args("--fiber f --out o --paging /j/paging").unwrap();
     assert_eq!(parsed.paging, Some(PathBuf::from("/j/paging")));
+}
+
+#[test]
+fn base_flags_name_the_base_binary_its_file_and_its_jig() {
+    let parsed = argv(&[
+        "--fiber",
+        "f",
+        "--out",
+        "o",
+        "--skip-rows",
+        "session start",
+        "--base-fiber",
+        "b",
+        "--base-out",
+        "ob",
+        "--base-paging",
+        "j",
+    ])
+    .unwrap();
+    assert_eq!(parsed.skip_rows, vec!["session start".to_owned()]);
+    assert_eq!(
+        parsed.base,
+        Some(Base {
+            fiber: PathBuf::from("b"),
+            out: PathBuf::from("ob"),
+            paging: Some(PathBuf::from("j")),
+        })
+    );
+    let parsed = args("--fiber f --out o --base-fiber b --base-out ob").unwrap();
+    assert_eq!(
+        parsed.base,
+        Some(Base {
+            fiber: PathBuf::from("b"),
+            out: PathBuf::from("ob"),
+            paging: None,
+        })
+    );
 }
 
 fn names(line: &str) -> Vec<&'static str> {
@@ -222,33 +264,424 @@ fn only_wheel_parses_and_runs_just_the_wheel_workload() {
 #[test]
 fn measure_all_hands_each_workload_its_counts_and_records_them() {
     let parsed = args("--fiber f --out o --runs 5 --timing-runs 3 --paging j").unwrap();
-    let expected: Vec<(&str, u32, u32)> = selected(&parsed)
+    // The per-call sequence the single-side run makes: every workload's
+    // calls in selection order, each with its run count; the failing
+    // `busy turn` ends its row after one call.
+    let expected: Vec<(Side, &str, u32, u32)> = selected(&parsed)
         .iter()
-        .map(|(workload, repeats, runs)| (workload.name, *repeats, *runs))
+        .flat_map(|(workload, repeats, runs)| {
+            let calls = if workload.name == "busy turn" {
+                1
+            } else {
+                *repeats
+            };
+            (1..=calls).map(|n| (Side::Head, workload.name, n, *runs))
+        })
         .collect();
+    let mut head = Pass::new(Side::Head, parsed);
     let mut log = Vec::new();
-    let mut failures = Vec::new();
-    let (metrics, metric_runs) =
-        measure_all(&parsed, &mut failures, |workload, repeats, runs, _| {
-            log.push((workload.name, repeats, runs));
-            if workload.name == "busy turn" {
-                return None;
-            }
-            let mut samples: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
-            samples.insert(
-                Box::leak(format!("{}_m", workload.name).into_boxed_str()),
-                vec![json!(1.0); runs as usize],
-            );
-            Some(samples)
-        });
+    measure_all(&mut head, None, |side, workload, runs, run, _| {
+        log.push((side, workload.name, run, runs));
+        if workload.name == "busy turn" {
+            return Err("boom".to_owned());
+        }
+        let id: &'static str = Box::leak(format!("{}_m", workload.name).into_boxed_str());
+        Ok(vec![(id, json!(1.0))])
+    });
     assert_eq!(log, expected);
-    assert_eq!(metric_runs["session start_m"], 3);
-    assert_eq!(metric_runs["sessions list_m"], 3);
-    assert_eq!(metric_runs["terminal attach_m"], 5);
-    assert_eq!(metric_runs["fsyncs_m"], 1);
-    assert_eq!(metrics["session start_m"].len(), 3);
-    assert!(!metrics.contains_key("busy turn_m"));
-    assert!(!metric_runs.contains_key("busy turn_m"));
+    assert_eq!(head.metric_runs["session start_m"], 3);
+    assert_eq!(head.metric_runs["sessions list_m"], 3);
+    assert_eq!(head.metric_runs["terminal attach_m"], 5);
+    assert_eq!(head.metric_runs["fsyncs_m"], 1);
+    assert_eq!(head.metrics["session start_m"].len(), 3);
+    assert!(!head.metrics.contains_key("busy turn_m"));
+    assert!(!head.metric_runs.contains_key("busy turn_m"));
+    assert_eq!(head.failures, ["busy turn, run 1: boom"]);
+}
+
+/// The per-call log an order test asserts: every entry is one timed
+/// call, in the order it ran.
+fn order(head_args: Args, base_args: Option<Args>) -> Vec<(Side, &'static str, u32)> {
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = base_args.map(|args| Pass::new(Side::Base, args));
+    let mut log = Vec::new();
+    measure_all(&mut head, base.as_mut(), |side, workload, _, run, _| {
+        log.push((side, workload.name, run));
+        Ok(Vec::new())
+    });
+    log
+}
+
+#[test]
+fn a_repeated_row_alternates_head_and_base_by_sample() {
+    // A mutant running the base side first, or two calls of one side in
+    // a row, fails the literal log below.
+    let head = argv(&[
+        "--fiber",
+        "f",
+        "--out",
+        "o",
+        "--runs",
+        "3",
+        "--timing-runs",
+        "3",
+        "--only",
+        "timing",
+        "--skip-rows",
+        "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+    ])
+    .unwrap();
+    let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
+    assert_eq!(
+        order(head, Some(base)),
+        [
+            (Side::Head, "session start", 1),
+            (Side::Base, "session start", 1),
+            (Side::Head, "session start", 2),
+            (Side::Base, "session start", 2),
+            (Side::Head, "session start", 3),
+            (Side::Base, "session start", 3),
+        ]
+    );
+}
+
+#[test]
+fn block_rows_run_the_head_block_then_the_base_block() {
+    // Each block row is its head call then its base call, with no other
+    // row's call between; a mutant interleaving another row fails this.
+    let head = args("--fiber f --out o --runs 5 --timing-runs 3 --only timing").unwrap();
+    let base = args("--fiber b --out ob --runs 5 --timing-runs 3 --only timing").unwrap();
+    let (forward, back) = (Side::Head, Side::Base);
+    assert_eq!(
+        order(head, Some(base)),
+        [
+            (forward, "session start", 1),
+            (back, "session start", 1),
+            (forward, "session start", 2),
+            (back, "session start", 2),
+            (forward, "session start", 3),
+            (back, "session start", 3),
+            (forward, "terminal first frame", 1),
+            (back, "terminal first frame", 1),
+            (forward, "terminal first frame", 2),
+            (back, "terminal first frame", 2),
+            (forward, "terminal first frame", 3),
+            (back, "terminal first frame", 3),
+            (forward, "sessions list", 1),
+            (back, "sessions list", 1),
+            (forward, "terminal attach", 1),
+            (back, "terminal attach", 1),
+            (forward, "terminal wheel", 1),
+            (back, "terminal wheel", 1),
+        ]
+    );
+}
+
+#[test]
+fn skip_rows_filters_the_base_list_only() {
+    // A mutant applying `--skip-rows` to the head list with a base, or
+    // dropping it from the base list, fails the logs below.
+    let (head_args, base_args) = sides(
+        &argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "5",
+            "--timing-runs",
+            "3",
+            "--base-fiber",
+            "b",
+            "--base-out",
+            "ob",
+            "--skip-rows",
+            "session start",
+        ])
+        .unwrap(),
+    );
+    assert!(head_args.skip_rows.is_empty());
+    let base_args = base_args.unwrap();
+    assert_eq!(base_args.skip_rows, ["session start".to_owned()]);
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = Pass::new(Side::Base, base_args);
+    let mut log = Vec::new();
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        log.push((side, workload.name, run));
+        Ok(Vec::new())
+    });
+    let starts: Vec<(Side, &str, u32)> = log
+        .iter()
+        .filter(|(_, name, _)| *name == "session start")
+        .cloned()
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            (Side::Head, "session start", 1),
+            (Side::Head, "session start", 2),
+            (Side::Head, "session start", 3),
+        ]
+    );
+    let firsts: Vec<(Side, &str, u32)> = log
+        .iter()
+        .filter(|(_, name, _)| *name == "terminal first frame")
+        .cloned()
+        .collect();
+    assert_eq!(
+        firsts,
+        [
+            (Side::Head, "terminal first frame", 1),
+            (Side::Base, "terminal first frame", 1),
+            (Side::Head, "terminal first frame", 2),
+            (Side::Base, "terminal first frame", 2),
+            (Side::Head, "terminal first frame", 3),
+            (Side::Base, "terminal first frame", 3),
+        ]
+    );
+    // The head's file skips nothing; the base's reports the skipped row,
+    // so the judge reports it instead of failing its missing metric.
+    let skipped = |pass: &Pass| {
+        document(
+            &pass.args,
+            "CPU-X",
+            None,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+        )["skipped"]
+            .clone()
+    };
+    assert_eq!(skipped(&head), json!([]));
+    assert_eq!(skipped(&base), json!(["session start"]));
+}
+
+/// Runs the lone `session start` row on both sides, failing the named
+/// runs, and hands back the call log with both sides' passes.
+fn fail_row(fail_head: &[u32], fail_base: &[u32]) -> (Vec<(Side, &'static str, u32)>, Pass, Pass) {
+    let head = argv(&[
+        "--fiber",
+        "f",
+        "--out",
+        "o",
+        "--runs",
+        "3",
+        "--timing-runs",
+        "3",
+        "--only",
+        "timing",
+        "--skip-rows",
+        "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+    ])
+    .unwrap();
+    let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
+    let mut head = Pass::new(Side::Head, head);
+    let mut base = Pass::new(Side::Base, base);
+    let mut log = Vec::new();
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        log.push((side, workload.name, run));
+        let failing = match side {
+            Side::Head => fail_head,
+            Side::Base => fail_base,
+        };
+        if failing.contains(&run) {
+            return Err("boom".to_owned());
+        }
+        Ok(vec![("ss_ms", json!(1.0))])
+    });
+    (log, head, base)
+}
+
+#[test]
+fn a_head_error_ends_only_its_side_of_the_row() {
+    let (log, head, base) = fail_row(&[2], &[]);
+    assert_eq!(
+        log,
+        [
+            (Side::Head, "session start", 1),
+            (Side::Base, "session start", 1),
+            (Side::Head, "session start", 2),
+            (Side::Base, "session start", 2),
+            (Side::Base, "session start", 3),
+        ]
+    );
+    assert_eq!(head.failures, ["session start, run 2: boom"]);
+    assert!(base.failures.is_empty());
+    assert!(!head.metrics.contains_key("ss_ms"));
+    assert!(!head.metric_runs.contains_key("ss_ms"));
+    assert_eq!(base.metrics["ss_ms"].len(), 3);
+    assert_eq!(base.metric_runs["ss_ms"], 3);
+}
+
+#[test]
+fn a_head_error_on_the_first_run_leaves_the_base_its_row() {
+    let (log, head, base) = fail_row(&[1], &[]);
+    assert_eq!(
+        log,
+        [
+            (Side::Head, "session start", 1),
+            (Side::Base, "session start", 1),
+            (Side::Base, "session start", 2),
+            (Side::Base, "session start", 3),
+        ]
+    );
+    assert_eq!(head.failures, ["session start, run 1: boom"]);
+    assert!(!head.metrics.contains_key("ss_ms"));
+    assert_eq!(base.metrics["ss_ms"].len(), 3);
+}
+
+#[test]
+fn errors_on_both_sides_leave_neither_side_a_metric() {
+    let (log, head, base) = fail_row(&[1], &[1]);
+    assert_eq!(
+        log,
+        [
+            (Side::Head, "session start", 1),
+            (Side::Base, "session start", 1),
+        ]
+    );
+    assert_eq!(head.failures, ["session start, run 1: boom"]);
+    assert_eq!(base.failures, ["session start, run 1: boom"]);
+    assert!(!head.metrics.contains_key("ss_ms"));
+    assert!(!base.metrics.contains_key("ss_ms"));
+}
+
+#[test]
+fn a_base_error_leaves_the_head_its_metrics() {
+    let (log, head, base) = fail_row(&[], &[1]);
+    assert_eq!(
+        log,
+        [
+            (Side::Head, "session start", 1),
+            (Side::Base, "session start", 1),
+            (Side::Head, "session start", 2),
+            (Side::Head, "session start", 3),
+        ]
+    );
+    assert!(head.failures.is_empty());
+    assert_eq!(base.failures, ["session start, run 1: boom"]);
+    assert_eq!(head.metrics["ss_ms"].len(), 3);
+    assert_eq!(head.metric_runs["ss_ms"], 3);
+    assert!(!base.metrics.contains_key("ss_ms"));
+}
+
+#[test]
+fn untimed_rows_and_a_missing_base_jig_run_on_the_head_alone() {
+    let (head_args, base_args) = sides(
+        &argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "5",
+            "--timing-runs",
+            "3",
+            "--paging",
+            "j",
+            "--base-fiber",
+            "b",
+            "--base-out",
+            "ob",
+        ])
+        .unwrap(),
+    );
+    let base_args = base_args.unwrap();
+    assert!(base_args.paging.is_none());
+    // The base list holds no memory row: every row it runs is timing-only.
+    let base_names: Vec<&str> = selected(&base_args)
+        .iter()
+        .map(|(workload, _, _)| workload.name)
+        .collect();
+    assert!(!base_names.is_empty());
+    for (workload, _, _) in selected(&base_args) {
+        assert!(workload.timing, "{}", workload.name);
+    }
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = Pass::new(Side::Base, base_args);
+    let mut log = Vec::new();
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        log.push((side, workload.name, run));
+        Ok(Vec::new())
+    });
+    for name in ["fsyncs", "busy turn", "paging"] {
+        let calls: Vec<(Side, &str, u32)> = log
+            .iter()
+            .filter(|(_, row, _)| *row == name)
+            .cloned()
+            .collect();
+        assert!(!calls.is_empty(), "{name}");
+        assert!(
+            calls.iter().all(|(side, _, _)| *side == Side::Head),
+            "{name}: {calls:?}"
+        );
+    }
+    assert_eq!(
+        log.iter().filter(|(_, name, _)| *name == "fsyncs").count(),
+        1
+    );
+    assert_eq!(
+        log.iter()
+            .filter(|(_, name, _)| *name == "busy turn")
+            .count(),
+        5
+    );
+    assert_eq!(
+        log.iter().filter(|(_, name, _)| *name == "paging").count(),
+        3
+    );
+}
+
+#[test]
+fn a_base_row_the_head_did_not_select_does_not_run() {
+    let parsed = args("--fiber f --out o --only wheel --base-fiber b --base-out ob").unwrap();
+    let (head_args, base_args) = sides(&parsed);
+    assert!(base_args.is_some());
+    assert_eq!(
+        order(head_args, base_args),
+        [
+            (Side::Head, "terminal wheel", 1),
+            (Side::Base, "terminal wheel", 1),
+        ]
+    );
+}
+
+#[test]
+fn attach_keeps_its_full_count_on_both_sides() {
+    let (head_args, base_args) = sides(
+        &args(
+            "--fiber f --out o --runs 5 --timing-runs 3 --only timing --base-fiber b --base-out ob",
+        )
+        .unwrap(),
+    );
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = Pass::new(Side::Base, base_args.unwrap());
+    let mut log = Vec::new();
+    measure_all(
+        &mut head,
+        Some(&mut base),
+        |side, workload, runs, run, _| {
+            log.push((side, workload.name, run, runs));
+            if workload.name == "terminal attach" {
+                return Ok(vec![("attach_ms", json!(1.0))]);
+            }
+            Ok(Vec::new())
+        },
+    );
+    let attach: Vec<(Side, &str, u32, u32)> = log
+        .iter()
+        .filter(|(_, name, _, _)| *name == "terminal attach")
+        .cloned()
+        .collect();
+    assert_eq!(
+        attach,
+        [
+            (Side::Head, "terminal attach", 1, 5),
+            (Side::Base, "terminal attach", 1, 5),
+        ]
+    );
+    assert_eq!(head.metric_runs["attach_ms"], 5);
+    assert_eq!(base.metric_runs["attach_ms"], 5);
 }
 
 #[test]
@@ -454,7 +887,8 @@ fn a_missing_fiber_records_no_size_and_both_failures() {
         .into_iter(),
     )
     .unwrap();
-    let result = bench(&parsed, "CPU-X");
+    let (result, base) = bench(&parsed, "CPU-X");
+    assert!(base.is_none());
     assert!(result.get("binary_size_bytes").is_none());
     let failures = result["failures"].as_array().unwrap();
     assert_eq!(failures.len(), 2, "{failures:?}");
@@ -482,7 +916,8 @@ fn a_fiber_that_cannot_be_copied_is_still_measured() {
         .into_iter(),
     )
     .unwrap();
-    let result = bench(&parsed, "CPU-X");
+    let (result, base) = bench(&parsed, "CPU-X");
+    assert!(base.is_none());
     let size = std::fs::metadata(dir.path()).unwrap().len();
     assert!(size > 1, "{size}");
     assert_eq!(result["binary_size_bytes"], json!(size));
@@ -495,6 +930,55 @@ fn a_fiber_that_cannot_be_copied_is_still_measured() {
     let only = failures[0].as_str().unwrap();
     assert!(only.starts_with("setup: "), "{only}");
     assert!(!only.contains("binary size of"), "{only}");
+}
+
+#[test]
+fn a_missing_base_binary_leaves_the_head_untouched() {
+    // Both binaries are missing, so neither side runs a benchmark: only
+    // the setup failures are recorded.
+    let dir = fakes::TempDir::new("bench-base");
+    let missing_head = dir.path().join("head-fiber");
+    let missing_base = dir.path().join("base-fiber");
+    let plain = parse(
+        [
+            "--fiber".to_owned(),
+            missing_head.display().to_string(),
+            "--out".to_owned(),
+            "o".to_owned(),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    let paired = parse(
+        [
+            "--fiber".to_owned(),
+            missing_head.display().to_string(),
+            "--out".to_owned(),
+            "o".to_owned(),
+            "--base-fiber".to_owned(),
+            missing_base.display().to_string(),
+            "--base-out".to_owned(),
+            "ob".to_owned(),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    let (alone, no_base) = bench(&plain, "CPU-X");
+    let (head, base) = bench(&paired, "CPU-X");
+    assert!(no_base.is_none());
+    assert_eq!(head, alone);
+    let base = base.unwrap();
+    assert!(base["metrics"].as_object().unwrap().is_empty());
+    let failures = base["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures[0].as_str().unwrap().starts_with("binary size of "),
+        "{failures:?}"
+    );
+    assert!(
+        failures[1].as_str().unwrap().starts_with("setup: "),
+        "{failures:?}"
+    );
 }
 
 #[test]
