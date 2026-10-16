@@ -565,20 +565,7 @@ fn finish(
         .map_err(|e| failed(e.code(), e))
 }
 
-/// Runs one turn of the session `session` writes to `log`, once its log,
-/// model and prompt are known, shared by new and resumed sessions: sends
-/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
-/// what ran. `run` writes the session's first lines through
-/// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
-/// nothing was written for this process, and `run_turn` returns `code`
-/// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
-/// signal, `cancel`, serves the door and the loop, so
-/// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
-/// the exit code.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one hand-off of the turn's end: the session, log, prompt, mode, cancel, diagnostics and runner"
-)]
+/// Closes state before the final drain, without extending a rewound log.
 fn write_state_at_exit(
     log: &Log,
     dir: &Path,
@@ -596,6 +583,20 @@ fn write_state_at_exit(
     Ok(())
 }
 
+/// Runs one turn of the session `session` writes to `log`, once its log,
+/// model and prompt are known, shared by new and resumed sessions: sends
+/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
+/// what ran. `run` writes the session's first lines through
+/// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
+/// nothing was written for this process, and `run_turn` returns `code`
+/// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
+/// signal, `cancel`, serves the door and the loop, so
+/// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
+/// the exit code.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of the turn's end: the session, log, prompt, mode, cancel, diagnostics and runner"
+)]
 fn run_turn(
     session: &Session,
     log: &Arc<Log>,
