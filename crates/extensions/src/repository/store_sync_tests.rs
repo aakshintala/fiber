@@ -18,8 +18,11 @@ use super::{Index, Store, hash};
 const WAIT: Duration = Duration::from_secs(10);
 
 /// The separate short wait proving no answer arrives while the global lock
-/// is held.
-const HELD: Duration = Duration::from_secs(2);
+/// is held. The lock is one blocking `File::lock` call with no probe
+/// interval to count, so the bound only has to cover the no-lock path,
+/// which for a finished copy is metadata checks and a marker lock, with no
+/// install: a bound with a named purpose, not a sleep.
+const HELD: Duration = Duration::from_millis(500);
 
 fn project() -> ProjectKey {
     ProjectKey::new("pin-sync").unwrap()
