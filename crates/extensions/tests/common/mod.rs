@@ -11,7 +11,11 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}, mpsc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};

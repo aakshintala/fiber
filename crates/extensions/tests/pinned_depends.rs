@@ -16,13 +16,17 @@ mod common;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
 use std::time::Duration;
 
 use common::{
-    FIBER, GIT_PROGRESS, Repos, Setup, StoreOperations, approve, decide_on_worker, declare, dep_dir,
-    dep_names, dep_record, dep_version, depends_home, item, manifest, named, on_worker_within,
-    project, store, unapproved_on_worker, write,
+    FIBER, GIT_PROGRESS, Repos, Setup, StoreOperations, approve, decide_on_worker, declare,
+    dep_dir, dep_names, dep_record, dep_version, depends_home, item, manifest, named,
+    on_worker_within, project, store, unapproved_on_worker, write,
 };
 use contract::events::OfferDecision;
 use contract::repository::{Decided, RepositoryCode};
@@ -407,7 +411,10 @@ fn a_stalled_approval_fails_within_the_stall_bound() {
         }
         format!(
             "file://{}",
-            root_path.join("repos").join(repo.replace('/', "-")).display()
+            root_path
+                .join("repos")
+                .join(repo.replace('/', "-"))
+                .display()
         )
     });
     let clock = FakeClock::new();
@@ -419,12 +426,13 @@ fn a_stalled_approval_fails_within_the_stall_bound() {
     let (failed, panicked) = mpsc::channel();
     std::thread::spawn(move || {
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            on_worker_within(STALL, "the approval", move || store.approve(&found, &digest))
+            on_worker_within(STALL, "the approval", move || {
+                store.approve(&found, &digest)
+            })
         }));
         failed.send(outcome).unwrap();
     });
-    let outcome =
-        fakes::Deadline::after(OUTER).recv_or_fail(&panicked, "the stalled approval");
+    let outcome = fakes::Deadline::after(OUTER).recv_or_fail(&panicked, "the stalled approval");
     let message = outcome.expect_err("a stalled approval fails");
     let text = message
         .downcast_ref::<String>()
