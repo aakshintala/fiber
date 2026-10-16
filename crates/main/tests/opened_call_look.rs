@@ -423,8 +423,10 @@ fn a_shell_rg_opens_as_shell() {
     let text = content(&grid, row, left, right);
     assert!(text.starts_with("        $ "), "{text:?}");
     assert!(text.contains("needle"), "{text:?}");
-    // Output, then one closing row: no grouped paths.
-    let exits: Vec<u16> = (0..48)
+    // Output, then one closing row: no grouped paths. The ledger
+    // row above names the shell's own result, which reads exit 0 too.
+    let call = ledger_row(&grid, left + 1, kind, command);
+    let exits: Vec<u16> = (call + 1..48)
         .filter(|y| row_text(&grid, *y).contains("exit 0"))
         .collect();
     assert_eq!(exits.len(), 1, "one closing row");
