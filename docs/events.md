@@ -1484,7 +1484,7 @@ on `fiber_exited`, sits outside any turn and is never read back.
 that rewrites a growing value on every step would bring the quadratic log
 back within its own key. The 64 KiB cap bounds each line, and a value that
 grows with the session, such as one record per turn or per delegate, belongs
-under one key per record (`docs/extensions.md`, "State").
+under one key per record (`docs/extensions.md`, "Extension state").
 
 **A torn tail is discarded.** A reader stops at the last complete line and a
 writer truncates a partial line before appending, so a power cut cannot make a

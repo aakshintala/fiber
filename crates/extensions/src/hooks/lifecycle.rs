@@ -89,8 +89,14 @@ pub(super) fn before_model_call(
         };
         let name = extension.name();
         let returned = extension
-            .hook(BEFORE_MODEL_CALL, entry.index, arg.clone())
-            .and_then(|value| decode_additive(name, BEFORE_MODEL_CALL, "refuse", value));
+            .hook_with(BEFORE_MODEL_CALL, entry.index, arg.clone(), |value| {
+                decode_additive(name, BEFORE_MODEL_CALL, "refuse", value)
+                    .map(|change| (change, false))
+            })
+            .map(|(change, lines, _)| {
+                session.state.queue(lines);
+                change
+            });
         match returned {
             Ok(None) => {}
             Ok(Some(reason)) => {
@@ -139,6 +145,7 @@ fn run_additive(
         };
     }
     let mut context = Vec::new();
+    let mut pending = Vec::new();
     let mut notices = Vec::new();
     for (at, entry) in chain.iter().enumerate() {
         if at > 0 && cancel.is_cancelled() {
@@ -152,8 +159,22 @@ fn run_additive(
         };
         let name = extension.name();
         let returned = extension
-            .hook(point, entry.index, arg.clone())
-            .and_then(|value| decode_additive(name, point, key, value));
+            .hook_with(point, entry.index, arg.clone(), |value| {
+                let change = decode_additive(name, point, key, value)?;
+                let changed = change.is_some();
+                Ok((change, changed))
+            })
+            .map(|(change, mut lines, changed)| {
+                if changed {
+                    for line in &mut lines {
+                        line.context = Some(context.len());
+                    }
+                    pending.extend(lines);
+                } else {
+                    session.state.queue(lines);
+                }
+                change
+            });
         match returned {
             Ok(None) => {}
             Ok(Some(text)) => context.push(Context {
@@ -171,6 +192,9 @@ fn run_additive(
             }
             Err(error) => notices.push(failed_notice(point, name, &error)),
         }
+    }
+    if !context.is_empty() {
+        session.set_change_lines(pending);
     }
     ContextAnswer {
         outcome: ContextOutcome::Added(context),

@@ -462,6 +462,9 @@ impl Shared {
     fn push_at(&mut self, target: Target, arg: Value, asked: Instant, held: bool) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
+        if matches!(&target, Target::Hook { .. }) {
+            self.state.begin(id);
+        }
         self.queue.push_back(Job {
             id,
             target,

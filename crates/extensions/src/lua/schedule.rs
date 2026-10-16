@@ -159,13 +159,35 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                 continue;
             }
             Work::Start(job, timeout, deadline) => {
+                let scope = match &job.target {
+                    Target::Hook { .. } => host::state::Scope::Hook(job.id),
+                    Target::Command(_)
+                    | Target::Provider { .. }
+                    | Target::Timer { .. }
+                    | Target::Tool(_)
+                    | Target::Search(_)
+                    | Target::Effects(_) => host::state::Scope::Other,
+                };
+                vm.state.enter(scope);
                 let step = vm.step(&job.target, &job.arg, timeout, deadline);
+                vm.state.leave();
                 (job.id, job.target, step)
             }
             Work::Resume(p, reply) => {
+                let scope = match &p.target {
+                    Target::Hook { .. } => host::state::Scope::Hook(p.id),
+                    Target::Command(_)
+                    | Target::Provider { .. }
+                    | Target::Timer { .. }
+                    | Target::Tool(_)
+                    | Target::Search(_)
+                    | Target::Effects(_) => host::state::Scope::Other,
+                };
+                vm.state.enter(scope);
                 let step = host::resume_values(&vm.lua, &hub.clock_handle(), reply)
                     .map_err(|e| vm.error(&e))
                     .and_then(|args| vm.after(p.thread, args, &p.target, p.timeout, p.deadline));
+                vm.state.leave();
                 (p.id, p.target.clone(), step)
             }
             Work::Collect => {

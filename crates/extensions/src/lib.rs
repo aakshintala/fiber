@@ -41,6 +41,7 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
+pub use contract::hook::StateSeed;
 pub use extension_tools::LuaTool;
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;

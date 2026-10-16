@@ -27,7 +27,8 @@ fn store_landings_count_only_accepted_writes_and_admission_is_monotone() {
             landing,
             context: None,
         };
-        assert_eq!(registry.admit(vec![line.clone()]), [line.event.clone()]);
+        let expected_event = line.event.clone();
+        assert_eq!(registry.admit(vec![line]), vec![expected_event]);
         assert_eq!(registry.take_outbox().len(), expected);
         assert!(registry.take_outbox().is_empty());
     }
@@ -187,10 +188,14 @@ fn store_vm_scope_is_local_and_leave_restores_other_writes() {
 }
 
 fn apply_event(value: &mut Option<Value>, event: &Event) {
-    match event {
-        Event::ExtensionStateSet(set) => *value = Some(set.value.clone()),
-        Event::ExtensionStateUnset(_) => *value = None,
-        _ => panic!("expected state event"),
+    if let Event::ExtensionStateSet(set) = event {
+        *value = Some(set.value.clone());
+    } else {
+        assert!(
+            matches!(event, Event::ExtensionStateUnset(_)),
+            "expected state event"
+        );
+        *value = None;
     }
 }
 
@@ -292,6 +297,26 @@ fn store_exhaustive_trial_admission_matches_surviving_writes() {
     }
 }
 
+#[test]
+fn lua_state_accepts_each_explicit_fork_rule_and_empty_options() {
+    for (options, expected) in [
+        ("{}", OnFork::AtPoint),
+        ("{on_fork='at_point'}", OnFork::AtPoint),
+        ("{on_fork='latest'}", OnFork::Latest),
+        ("{on_fork='fresh'}", OnFork::Fresh),
+    ] {
+        let (value, events) = lua_api(
+            &format!("state.set('k',true,{options}); return json.encode(state.get('k'))"),
+            StateSeed::new(),
+        );
+        assert_eq!(value, true);
+        let [Event::ExtensionStateSet(set)] = events.as_slice() else {
+            panic!("one set")
+        };
+        assert_eq!(set.on_fork, expected);
+    }
+}
+
 fn lua_api(script: &str, seed: StateSeed) -> (Value, Vec<Event>) {
     let dir = fakes::TempDir::new("fiber-state-api");
     std::fs::write(
@@ -327,6 +352,7 @@ fn lua_state_errors_are_coded_tables_with_messages() {
         "state.set('k', coroutine.create(function() end))",
         "state.set('k', 'v', {on_fork='unknown'})",
         "state.set('k', 'v', false)",
+        "state.set('k', 'v', {on_fork=false})",
         "state.get(1)",
         "state.unset(1)",
     ] {
@@ -549,9 +575,11 @@ fn store_sets_gets_and_sorts_keys() {
     let events = registry.take_outbox();
     let keys: Vec<_> = events
         .iter()
-        .map(|event| match event {
-            Event::ExtensionStateSet(set) => set.key.as_str(),
-            _ => panic!("expected a set"),
+        .map(|event| {
+            let Event::ExtensionStateSet(set) = event else {
+                panic!("expected a set")
+            };
+            set.key.as_str()
         })
         .collect();
     assert_eq!(keys, ["z", "a", "A"]);
@@ -594,9 +622,11 @@ fn store_records_every_fork_rule_and_repeated_value() {
     let rules: Vec<_> = registry
         .take_outbox()
         .into_iter()
-        .map(|event| match event {
-            Event::ExtensionStateSet(set) => set.on_fork,
-            _ => panic!("expected a set"),
+        .map(|event| {
+            let Event::ExtensionStateSet(set) = event else {
+                panic!("expected a set")
+            };
+            set.on_fork
         })
         .collect();
     assert_eq!(

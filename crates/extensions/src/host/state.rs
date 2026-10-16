@@ -22,10 +22,10 @@ fn invalid(message: impl ToString) -> Raise {
 }
 
 fn key(value: &LuaValue) -> Result<String, Raise> {
-    match value {
-        LuaValue::String(key) => key.to_str().map(|key| key.to_owned()).map_err(invalid),
-        _ => Err(invalid("state: key must be a string")),
-    }
+    let LuaValue::String(key) = value else {
+        return Err(invalid("state: key must be a string"));
+    };
+    key.to_str().map(|key| key.to_owned()).map_err(invalid)
 }
 
 fn failed(error: StateError) -> Raise {
@@ -75,29 +75,33 @@ pub(crate) fn install(lua: &Lua, state: Rc<VmState>, failure: &mlua::Function) -
                 ));
             }
             let value = super::to_json(&value).map_err(invalid)?;
-            let rule = match args.next().unwrap_or(LuaValue::Nil) {
-                LuaValue::Nil => OnFork::AtPoint,
-                LuaValue::Table(options) => {
-                    match options.get::<LuaValue>("on_fork").map_err(invalid)? {
-                        LuaValue::Nil => OnFork::AtPoint,
-                        LuaValue::String(rule) => match rule.to_str().map_err(invalid)?.as_ref() {
-                            "at_point" => OnFork::AtPoint,
-                            "latest" => OnFork::Latest,
-                            "fresh" => OnFork::Fresh,
-                            _ => {
-                                return Err(invalid(
-                                    "state.set: on_fork must be at_point, latest or fresh",
-                                ));
-                            }
-                        },
-                        _ => {
-                            return Err(invalid(
-                                "state.set: on_fork must be at_point, latest or fresh",
-                            ));
-                        }
+            let options = args.next().unwrap_or(LuaValue::Nil);
+            let fork = if options.is_nil() {
+                LuaValue::Nil
+            } else {
+                let LuaValue::Table(options) = options else {
+                    return Err(invalid("state.set: options must be a table"));
+                };
+                options.get::<LuaValue>("on_fork").map_err(invalid)?
+            };
+            let rule = if fork.is_nil() {
+                OnFork::AtPoint
+            } else {
+                let LuaValue::String(rule) = fork else {
+                    return Err(invalid(
+                        "state.set: on_fork must be at_point, latest or fresh",
+                    ));
+                };
+                match rule.to_str().map_err(invalid)?.as_ref() {
+                    "at_point" => OnFork::AtPoint,
+                    "latest" => OnFork::Latest,
+                    "fresh" => OnFork::Fresh,
+                    _ => {
+                        return Err(invalid(
+                            "state.set: on_fork must be at_point, latest or fresh",
+                        ));
                     }
                 }
-                _ => return Err(invalid("state.set: options must be a table")),
             };
             set.set(&key, value, rule).map_err(failed)?;
             Ok(MultiValue::new())
@@ -193,6 +197,7 @@ struct Inner {
     outbox: Vec<StateLine>,
 }
 
+#[derive(Default)]
 pub(crate) struct StateRegistry {
     inner: Arc<Mutex<Inner>>,
 }
@@ -422,10 +427,10 @@ impl ExtensionState {
         rule: OnFork,
     ) {
         let store = inner.extensions.entry(self.extension.clone()).or_default();
-        if let Scope::Hook(call) = scope {
-            if !store.calls.contains_key(&(self.generation, call)) {
-                return;
-            }
+        if let Scope::Hook(call) = scope
+            && !store.calls.contains_key(&(self.generation, call))
+        {
+            return;
         }
         inner.landing += 1;
         let landing = inner.landing;

@@ -42,6 +42,7 @@ pub(super) fn before_tool(
     call: &BeforeToolCall<'_>,
 ) -> BeforeToolAnswer {
     let mut arguments = call.arguments.clone();
+    let mut pending = Vec::new();
     let mut changed_by = Vec::new();
     let mut notices = Vec::new();
     for entry in session.before_tool.iter().filter(|entry| !entry.check) {
@@ -57,8 +58,19 @@ pub(super) fn before_tool(
         let name = extension.name();
         let arg = shown(call, &arguments);
         let returned = extension
-            .hook(BEFORE_TOOL, entry.index, arg)
-            .and_then(|value| decode_tool(name, value));
+            .hook_with(BEFORE_TOOL, entry.index, arg, |value| {
+                let change = decode_tool(name, value)?;
+                let changed = matches!(&change, ToolReturn::Rewrite(_));
+                Ok((change, changed))
+            })
+            .map(|(change, lines, changed)| {
+                if changed {
+                    pending.extend(lines);
+                } else {
+                    session.state.queue(lines);
+                }
+                change
+            });
         match returned {
             Ok(ToolReturn::Nothing) => {}
             Ok(ToolReturn::Rewrite(rewritten)) => {
@@ -90,6 +102,7 @@ pub(super) fn before_tool(
         outcome: if changed_by.is_empty() {
             BeforeToolOutcome::Unchanged
         } else {
+            session.set_change_lines(pending);
             BeforeToolOutcome::Rewritten {
                 arguments,
                 changed_by,
@@ -115,8 +128,13 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
         let name = extension.name();
         let arg = shown(call, call.arguments);
         let returned = extension
-            .hook(BEFORE_TOOL, entry.index, arg)
-            .and_then(|value| decode_check(name, value));
+            .hook_with(BEFORE_TOOL, entry.index, arg, |value| {
+                decode_check(name, value).map(|change| (change, false))
+            })
+            .map(|(change, lines, _)| {
+                session.state.queue(lines);
+                change
+            });
         match returned {
             Ok(None) => {}
             Ok(Some(reason)) => {
@@ -152,6 +170,7 @@ pub(super) fn before_message(
     message: &BeforeMessage<'_>,
 ) -> BeforeMessageAnswer {
     let mut content: Option<Vec<ContentPart>> = None;
+    let mut pending = Vec::new();
     let mut changed_by = Vec::new();
     let mut context = Vec::new();
     let mut notices = Vec::new();
@@ -163,8 +182,24 @@ pub(super) fn before_message(
         let current = content.as_deref().unwrap_or(message.content);
         let arg = shown_message(current);
         let returned = extension
-            .hook(BEFORE_MESSAGE, entry.index, arg)
-            .and_then(|value| decode_message(name, current, value, entry.check));
+            .hook_with(BEFORE_MESSAGE, entry.index, arg, |value| {
+                let change = decode_message(name, current, value, entry.check)?;
+                let changed = matches!(&change, MessageReturn::Change { .. });
+                Ok((change, changed))
+            })
+            .map(|(change, mut lines, changed)| {
+                if changed {
+                    if matches!(&change, MessageReturn::Change { text: Some(_), .. }) {
+                        for line in &mut lines {
+                            line.context = Some(context.len());
+                        }
+                    }
+                    pending.extend(lines);
+                } else {
+                    session.state.queue(lines);
+                }
+                change
+            });
         match returned {
             Ok(MessageReturn::Nothing) => {}
             Ok(MessageReturn::Change { replace, text }) => {
@@ -199,6 +234,9 @@ pub(super) fn before_message(
             }
             Err(error) => notices.push(failed_notice(BEFORE_MESSAGE, name, &error)),
         }
+    }
+    if content.is_some() || !context.is_empty() {
+        session.set_change_lines(pending);
     }
     BeforeMessageAnswer {
         outcome: BeforeMessageOutcome::Passed {

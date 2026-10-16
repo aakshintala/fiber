@@ -442,15 +442,15 @@ fn args_nested_past_the_cap_raise_and_reach_no_runner() {
         })
     };
     assert_eq!(
-        run((crate::host::MAX_DEPTH - 1) as i64).unwrap(),
+        run(i64::try_from(crate::host::MAX_DEPTH - 1).unwrap()).unwrap(),
         Some(Value::String("reached".to_owned()))
     );
     assert_eq!(
-        run(crate::host::MAX_DEPTH as i64).unwrap(),
+        run(i64::try_from(crate::host::MAX_DEPTH).unwrap()).unwrap(),
         Some(Value::String("reached".to_owned()))
     );
     assert_eq!(
-        run((crate::host::MAX_DEPTH + 1) as i64).unwrap(),
+        run(i64::try_from(crate::host::MAX_DEPTH + 1).unwrap()).unwrap(),
         Some(Value::String("true/true".to_owned()))
     );
     assert_eq!(runner_calls.calls().len(), 2);
