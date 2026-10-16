@@ -18,6 +18,7 @@ use crate::mouse::{Target, TargetId};
 use crate::surface;
 
 pub(crate) mod delegates;
+pub(crate) mod quota;
 
 /// The permission mode every session runs in (`docs/permissions.md`,
 /// "One mode"): the literal, shared by the Session title row and the
@@ -37,6 +38,8 @@ pub(crate) enum Card {
     Jobs,
     /// The running delegates, two rows each (`docs/tui.md`, "The panel").
     Delegates,
+    /// Each provider credential label's reported quota limits.
+    Quota,
     /// An extension's widget, by its index among the widgets in arrival
     /// order.
     Widget(usize),
@@ -49,8 +52,10 @@ pub(crate) enum Card {
 pub(crate) fn cards(list: &[String], widgets: &[(&str, &str)]) -> Vec<Card> {
     let mut out = Vec::new();
     for name in list {
-        // debt: the Quota card draws nothing until a client can read quota; upgrade trigger: #1200 lands.
-        // `quota` and unknown names fall through and place nothing.
+        if name == "quota" && !out.contains(&Card::Quota) {
+            out.push(Card::Quota);
+            continue;
+        }
         if name == "session" && !out.contains(&Card::Session) {
             out.push(Card::Session);
             continue;
@@ -369,6 +374,7 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
             out.extend(content);
             out
         }
+        Card::Quota => quota::rows(app, text),
         Card::Widget(at) => widget_rows(app, *at),
     }
 }

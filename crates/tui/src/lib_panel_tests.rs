@@ -14,7 +14,6 @@ const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quot
 #[test]
 fn focus_and_stale_keypress_send_quota_through_the_loop() {
     use crate::app::items::testkit::{commands, hello, session_line};
-    use contract::clock::Clock;
     use serde_json::json;
     use std::io::Read;
     use std::sync::mpsc;
@@ -25,7 +24,13 @@ fn focus_and_stale_keypress_send_quota_through_the_loop() {
         lp.app = crate::app::items::testkit::home();
         lp.app.on_line(hello());
         lp.app.attach(contract::SessionId(SESSION.to_owned()));
-        lp.app.set_now(lp.clock.now() - Duration::from_secs(age), 0);
+        lp.app.set_now(
+            lp.clock
+                .now()
+                .checked_sub(Duration::from_secs(age))
+                .unwrap(),
+            0,
+        );
         let out = commands(
             lp.app
                 .on_line(session_line("clients", json!({"clients": []}))),

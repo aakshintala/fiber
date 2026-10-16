@@ -87,7 +87,8 @@ pub(crate) struct Widget {
 /// The attached session's folded panel data.
 #[derive(Debug, Default)]
 pub(crate) struct PanelState {
-    quota: quota::Query,
+    /// The attached session's quota answer and query state.
+    pub(crate) quota: quota::Query,
     widgets: Vec<Widget>,
     status: Option<SessionStatus>,
     model: Option<String>,

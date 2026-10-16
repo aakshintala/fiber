@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use contract::Envelope;
-use contract::events::{CommandAccepted, CommandRejected};
+use contract::events::{CommandAccepted, CommandRejected, CommandResult, QuotaInfo};
 
 use super::super::{App, Link, mint, session_command};
 
@@ -12,11 +12,15 @@ const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
 
 /// One attachment's query: never put in the conversation's pending commands.
 #[derive(Debug, Default)]
-pub(super) struct Query {
+pub(crate) struct Query {
     asked: Option<String>,
     due: bool,
     refused: bool,
     answered: Option<Instant>,
+    /// The last answer's provider credential labels, in wire order.
+    pub(crate) rows: Vec<QuotaInfo>,
+    /// The session's percent-used threshold, from the same answer.
+    pub(crate) notice_at: f64,
 }
 
 impl Query {
@@ -31,6 +35,7 @@ impl Query {
         if self.asked.as_deref() == Some(id) {
             self.asked = None;
             self.refused = true;
+            self.rows.clear();
         }
     }
 }
@@ -61,6 +66,11 @@ impl App {
                 {
                     self.panel_state.quota.asked = None;
                     self.panel_state.quota.answered = self.motion().now_instant();
+                    self.panel_state.quota.rows.clear();
+                    if let Some(CommandResult::Quota { quota, notice_at }) = accepted.result {
+                        self.panel_state.quota.rows = quota;
+                        self.panel_state.quota.notice_at = notice_at;
+                    }
                 }
             }
             "command_rejected" => {

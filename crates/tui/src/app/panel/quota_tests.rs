@@ -70,6 +70,25 @@ fn keypress_uses_the_answer_age_at_the_five_minute_boundary() {
 }
 
 #[test]
+fn the_matching_answer_stores_rows_and_threshold_and_reattach_clears_them() {
+    let mut app = attached();
+    let id = first(&mut app);
+    let quota = json!([{"provider": "codex", "credential": "work", "credit": {"remaining": 4.2}}]);
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": id,
+        "result": {"quota": quota, "notice_at": 70.0}}),
+    ));
+    assert_eq!(
+        serde_json::to_value(&app.panel_state.quota.rows).unwrap(),
+        quota
+    );
+    assert_eq!(app.panel_state.quota.notice_at, 70.0);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(app.panel_state.quota.rows.is_empty());
+}
+
+#[test]
 fn focus_sends_even_with_a_fresh_answer() {
     let mut app = attached();
     let clock = FakeClock::new();
