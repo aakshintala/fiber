@@ -2578,7 +2578,9 @@ fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
             // One kernel timeout for the reply: the served head answers
             // at once, and a hung answer fails the test instead of
             // hanging it.
-            client.set_read_timeout(Some(WITHIN)).ok();
+            client
+                .set_read_timeout(Some(WITHIN))
+                .expect("the reply read has a kernel bound");
             let mut echo = String::new();
             client
                 .read_to_string(&mut echo)
@@ -2614,7 +2616,9 @@ fn the_callback_wait_drops_an_idle_connection_and_serves_the_next() {
         // The wait has served the real callback, so the idle connection
         // is dropped: its read returns 0 at the close.
         if let Some(stream) = idle.as_mut() {
-            stream.set_read_timeout(Some(IDLE_READ)).ok();
+            stream
+                .set_read_timeout(Some(IDLE_READ))
+                .expect("the idle read has a kernel bound");
             let mut byte = [0_u8; 1];
             while stream.read(&mut byte).expect("the idle connection's close") != 0 {}
         }
