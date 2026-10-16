@@ -9,13 +9,13 @@
 use super::input::{Ev, Key};
 use super::overlays;
 use super::{Args, Term};
-use super::{dim, fit, paint, panel, sp, width};
+use super::{BLUE, GREEN, bold, dim, fg, fit, paint, panel, row, sp, width};
 use crate::cases::{Case, Surface};
+use ratatui::style::{Modifier, Style};
 use std::io::{self, Write};
 
 /// Where a proposed line's evidence comes from: the project's own files,
 /// the person's answer to one question per topic, or the person's sessions.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Source {
     ProjectFiles,
@@ -24,7 +24,6 @@ enum Source {
 }
 
 /// The notes layer a line will go to.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Layer {
     PerProject,
@@ -36,7 +35,6 @@ enum Layer {
 /// global notes, and a session line to the per-project notes only when
 /// every escalation behind it came from this project. Outside a project,
 /// every line goes to the global notes.
-#[allow(dead_code)]
 fn layer(source: Source, all_here: bool, in_project: bool) -> Layer {
     if !in_project {
         return Layer::Global;
@@ -55,7 +53,6 @@ fn layer(source: Source, all_here: bool, in_project: bool) -> Layer {
 }
 
 /// The layer's tag on a proposed line.
-#[allow(dead_code)]
 fn tag(layer: Layer) -> &'static str {
     match layer {
         Layer::PerProject => "[per-project]",
@@ -156,9 +153,148 @@ fn footer(s: &State) -> super::Row {
     }
 }
 
-/// The panel's body rows at an inner width. Task 2 draws them.
-fn body(_s: &State, _inner: usize) -> Vec<super::Row> {
-    vec![]
+/// The fixture lines both proposals and the diff share.
+const SQUASH: &str = "squash-merging my own pull requests once CI passes";
+const SQUASH_EV: &str = "14 escalations answered allow for `gh pr merge … --squash`";
+const HOSTS: &str = "corp.example hosts and registries count as inside";
+const HOSTS_EV: &str = "answer: only corp.example hosts and registries count as inside";
+const OURS: &str = "github.com/acme/* are ours";
+const CI: &str = "pull requests merge only with green CI";
+const CI_EV: &str = "its CI configuration: .github/workflows/ci.yml on every pull request";
+/// Fiber home holds both layers: the global file at its top and the
+/// per-project file under `projects/<key>` (docs/configuration.md, "Layers").
+const GLOBAL_FILE: &str = "~/.fiber/config.json";
+const PROJECT_FILE: &str = "~/.fiber/projects/fiber/config.json";
+
+/// A topic heading: which of the five topics this screen proposes.
+fn topic(name: &str) -> super::Row {
+    row(vec![sp(name, dim())])
+}
+
+/// An evidence line, wrapped to the inner width.
+fn evidence(text: &str, inner: usize) -> Vec<super::Row> {
+    super::wrap_rows(vec![sp(text, Style::new())], inner, vec![], vec![])
+}
+
+/// A proposed line as the focused choice: the layer tag in the key column
+/// and the line beside it, the whole row barred.
+fn barred(layer: Layer, line: &str, inner: usize) -> Vec<super::Row> {
+    let key_w = panel::key_width(&[tag(Layer::PerProject), tag(Layer::Global)]);
+    panel::bar(panel::choice_row(true, tag(layer), line, key_w, inner))
+}
+
+/// A proposal from its evidence: the layer comes from the rule, so the
+/// screens cannot tag a line against it.
+fn proposal(
+    source: Source,
+    all_here: bool,
+    in_project: bool,
+    line: &str,
+    inner: usize,
+) -> Vec<super::Row> {
+    barred(layer(source, all_here, in_project), line, inner)
+}
+
+/// An earlier line the rerun kept: a tick in the success colour, no bar.
+/// The layer comes from the rule, as on a proposal.
+fn kept(source: Source, all_here: bool, in_project: bool, line: &str) -> super::Row {
+    let layer = layer(source, all_here, in_project);
+    row(vec![
+        sp("\u{2713} ", fg(BLUE)),
+        sp(tag(layer), Style::new()),
+        sp(format!(" {line}"), dim()),
+    ])
+}
+
+/// A struck line: struck through even on its bar, so it reads as removed.
+fn struck_row(
+    source: Source,
+    all_here: bool,
+    in_project: bool,
+    line: &str,
+    inner: usize,
+) -> Vec<super::Row> {
+    let off = Style::new().add_modifier(Modifier::CROSSED_OUT);
+    panel::bar(super::wrap_rows(
+        vec![
+            sp(tag(layer(source, all_here, in_project)), off),
+            sp(format!(" {line}"), off),
+        ],
+        inner,
+        vec![sp("\u{203a} ", bold().add_modifier(Modifier::CROSSED_OUT))],
+        vec![sp("  ", Style::new())],
+    ))
+}
+
+/// An added diff line in the added colour.
+fn added(line: &str) -> super::Row {
+    row(vec![sp(format!("+ {line}"), fg(GREEN))])
+}
+
+/// The panel's body rows at an inner width.
+fn body(s: &State, inner: usize) -> Vec<super::Row> {
+    match s.kind {
+        Kind::First => [
+            vec![topic("Topic 4 of 5 · Routine actions")],
+            evidence(SQUASH_EV, inner),
+            proposal(Source::Session, true, true, SQUASH, inner),
+        ]
+        .concat(),
+        Kind::Outside => [
+            vec![topic("Topic 2 of 5 · Internal hosts")],
+            evidence(HOSTS_EV, inner),
+            proposal(Source::Answer, true, false, HOSTS, inner),
+            vec![row(vec![sp(
+                "Outside a project: every line goes to the global notes.",
+                dim(),
+            )])],
+        ]
+        .concat(),
+        Kind::Rerun => [
+            vec![row(vec![sp("Earlier lines", dim())])],
+            vec![
+                kept(Source::ProjectFiles, true, true, OURS),
+                kept(Source::Answer, true, true, HOSTS),
+            ],
+            vec![row(vec![sp("New proposals", dim())])],
+            evidence(CI_EV, inner),
+            proposal(Source::ProjectFiles, true, true, CI, inner),
+        ]
+        .concat(),
+        Kind::Struck => vec![
+            topic("Topic 4 of 5 · Routine actions"),
+            row(vec![sp("struck — kept out of the notes", dim())]),
+        ]
+        .into_iter()
+        .chain(struck_row(Source::Session, true, true, SQUASH, inner))
+        .collect(),
+        Kind::Flipped => [
+            vec![topic("Topic 4 of 5 · Routine actions")],
+            evidence(SQUASH_EV, inner),
+            // The person flipped this line off its rule-given layer.
+            barred(Layer::Global, SQUASH, inner),
+            vec![row(vec![sp("was per-project · Tab flipped it", dim())])],
+        ]
+        .concat(),
+        Kind::Diff => vec![
+            row(vec![sp(format!("Global notes · {GLOBAL_FILE}"), dim())]),
+            row(vec![sp("  reviewer.context:", dim())]),
+            row(vec![sp("    (no changes)", dim())]),
+            row(vec![]),
+            row(vec![sp(
+                format!("Per-project notes · {PROJECT_FILE}"),
+                dim(),
+            )]),
+            row(vec![sp("  reviewer.context:", dim())]),
+            added(&format!("- {SQUASH}")),
+            added(&format!("- {OURS}")),
+            row(vec![]),
+            row(vec![sp(
+                "Approving then offers `r` reload now or `n` from the next session.",
+                dim(),
+            )]),
+        ],
+    }
 }
 
 /// The centred panel rows at an area this wide: a bold accent title with
@@ -170,9 +306,10 @@ pub fn view(s: &State, w: usize) -> Vec<super::Row> {
         .max()
         .unwrap_or(0)
         .max(width(&footer(s).spans));
-    // The legend always fits: the preferred width stretches past the usual
-    // cap rather than cutting the foot.
-    let prefer = w.saturating_sub(4).min(96).max(width(&footer(s).spans));
+    // A question-sized panel: docs/tui.md wraps questions at a preferred
+    // width of 71. The legend always fits: the preferred width stretches
+    // past it rather than cutting the foot.
+    let prefer = w.saturating_sub(4).min(71).max(width(&footer(s).spans));
     let panel_w = panel::fit_width(natural, prefer, w);
     let inner = panel::inner_w(panel_w);
     let rows = panel::frame(
@@ -361,6 +498,177 @@ mod tests {
                     c.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn first_proposes_one_line_with_evidence_and_layer() {
+        let t = text(&for_case("first"), 120, 40);
+        assert!(t.contains("4 of 5"), "missing the topic step");
+        assert!(t.contains("Routine actions"), "missing the topic");
+        assert!(
+            t.contains("14 escalations answered allow"),
+            "missing the session evidence"
+        );
+        assert!(t.contains("gh pr merge"), "missing the evidence prefix");
+        assert!(t.contains("[per-project]"), "missing the layer tag");
+        assert!(
+            t.contains("squash-merging my own pull requests once CI passes"),
+            "missing the proposed line"
+        );
+        assert!(
+            t.contains("Tab flip layer · Enter confirm · e edit · x strike · Esc back"),
+            "missing the legend"
+        );
+    }
+
+    #[test]
+    fn outside_runs_global_with_its_note() {
+        let t = text(&for_case("outside"), 120, 40);
+        assert!(t.contains("2 of 5"), "missing the topic step");
+        assert!(t.contains("Internal hosts"), "missing the topic");
+        assert!(t.contains("answer:"), "missing the answer evidence");
+        assert!(t.contains("[global]"), "the line is not global");
+        assert!(!t.contains("[per-project]"), "a project tag leaks outside");
+        assert!(
+            t.contains("Outside a project: every line goes to the global notes."),
+            "missing the outside note"
+        );
+    }
+
+    #[test]
+    fn rerun_lists_earlier_lines_before_new_proposals() {
+        let t = text(&for_case("rerun"), 120, 40);
+        assert!(t.contains("Earlier lines"), "missing the earlier heading");
+        assert!(t.contains("New proposals"), "missing the new heading");
+        assert!(
+            t.contains("github.com/acme/* are ours"),
+            "missing an earlier line"
+        );
+        assert!(
+            t.contains("pull requests merge only with green CI"),
+            "missing the new proposal"
+        );
+        let lines: Vec<&str> = t.split('\n').collect();
+        let earlier = lines
+            .iter()
+            .position(|l| l.contains("Earlier lines"))
+            .unwrap();
+        let new = lines
+            .iter()
+            .position(|l| l.contains("New proposals"))
+            .unwrap();
+        let kept = lines.iter().position(|l| l.contains("are ours")).unwrap();
+        let proposal = lines.iter().position(|l| l.contains("green CI")).unwrap();
+        assert!(earlier < kept, "an earlier line reads above its heading");
+        assert!(kept < new, "an earlier line leaks into new proposals");
+        assert!(new < proposal, "the new proposal reads above its heading");
+        assert!(
+            t.contains("Enter keep · x strike · Esc back"),
+            "missing the legend"
+        );
+    }
+
+    #[test]
+    fn struck_keeps_the_line_out_of_the_notes() {
+        let t = text(&for_case("struck"), 120, 40);
+        assert!(
+            t.contains("squash-merging my own pull requests once CI passes"),
+            "missing the struck line"
+        );
+        assert!(
+            t.contains("struck — kept out of the notes"),
+            "missing the struck state"
+        );
+        assert!(t.contains("Enter keep · Esc back"), "missing the legend");
+        // The struck line reads struck through, even on its bar.
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("struck"), 120);
+        let line = rows
+            .iter()
+            .find(|r| plain(r).contains("squash-merging"))
+            .unwrap();
+        assert!(
+            line.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::CROSSED_OUT)),
+            "the struck line is not struck through"
+        );
+    }
+
+    #[test]
+    fn flipped_moves_the_line_to_global() {
+        let t = text(&for_case("flipped"), 120, 40);
+        assert!(
+            t.contains("squash-merging my own pull requests once CI passes"),
+            "missing the flipped line"
+        );
+        assert!(t.contains("[global]"), "the tag did not flip");
+        assert!(
+            !t.contains("[per-project]"),
+            "the old tag is still on the line"
+        );
+        assert!(
+            t.contains("was per-project · Tab flipped it"),
+            "missing the flip history"
+        );
+    }
+
+    #[test]
+    fn diff_names_both_files_with_added_lines() {
+        let t = text(&for_case("diff"), 120, 40);
+        assert!(
+            t.contains("~/.fiber/config.json"),
+            "the global file is unnamed"
+        );
+        assert!(
+            t.contains("~/.fiber/projects/fiber/config.json"),
+            "the per-project file is unnamed"
+        );
+        assert!(
+            t.contains("+ - squash-merging my own pull requests once CI passes"),
+            "missing an added line"
+        );
+        assert!(
+            t.contains("(no changes)"),
+            "the untouched layer says nothing"
+        );
+        assert!(
+            t.contains("Approving then offers `r` reload now or `n` from the next session."),
+            "missing the reload step"
+        );
+        assert!(
+            t.contains("Enter approve · Esc cancel"),
+            "missing the legend"
+        );
+        // Added lines read in the added colour.
+        let rows = view(&for_case("diff"), 120);
+        let line = rows
+            .iter()
+            .find(|r| plain(r).contains("squash-merging"))
+            .unwrap();
+        assert!(
+            line.spans.iter().any(|s| s.style.fg == Some(crate::GREEN)),
+            "an added line is not the added colour"
+        );
+    }
+
+    #[test]
+    fn proposal_screens_bar_exactly_one_row_and_diff_none() {
+        for (c, bars) in [
+            ("first", 1),
+            ("outside", 1),
+            ("rerun", 1),
+            ("struck", 1),
+            ("flipped", 1),
+            ("diff", 0),
+        ] {
+            let rows = view(&for_case(c), 120);
+            let barred = rows
+                .iter()
+                .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(crate::BLUE)))
+                .count();
+            assert_eq!(barred, bars, "{c}: wrong number of barred rows");
         }
     }
 
