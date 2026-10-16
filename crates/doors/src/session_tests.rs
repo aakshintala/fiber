@@ -4305,3 +4305,70 @@ fn a_second_send_on_a_driven_connection_writes_nothing() {
     );
     close_within(opened.session, opened.log);
 }
+
+fn subscribe_line_for(id: &str) -> contract::commands::CommandLine {
+    contract::commands::CommandLine {
+        id: CommandId(id.into()),
+        command: contract::commands::Command::Subscribe(contract::commands::SubscribeArgs {
+            level: contract::commands::SubscribeLevel::Full,
+            credential: None,
+        }),
+    }
+}
+
+#[test]
+fn dispatch_subscribe_on_driven_is_rejected_and_frees_id() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn::driven(
+        Arc::clone(&gate),
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // A driven connection is already subscribed: `dispatch` answers the
+    // subscribe at its call site instead of starting another one.
+    let line = subscribe_line_for("c_9");
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the driven subscribe is answered");
+    let rejection = match answered {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a driven subscribe is rejected: {answered:?}"),
+    };
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, crate::client::ALREADY);
+    assert!(gate.accepted.reserve(&id), "a rejection frees the id");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn dispatch_subscribe_on_answered_writes_nothing_and_frees_id() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn {
+        id: 0,
+        gate: Arc::clone(&gate),
+        sink: crate::client::Sink::Answered {
+            origin: contract::shapes::Origin::Driver,
+        },
+        full: true,
+        gone: false,
+    };
+    // An answered connection has no stream and no writer: the subscribe
+    // frees the id and leaves the connection alone.
+    let line = subscribe_line_for("c_9");
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(!conn.gone, "an answered subscribe marks nothing gone");
+    assert!(gate.accepted.reserve(&id), "a rejection frees the id");
+    close_within(opened.session, opened.log);
+}

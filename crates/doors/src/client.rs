@@ -75,8 +75,7 @@ pub(crate) enum Sink {
     },
     Driven {
         /// The host call's answer, taken exactly once by the first of
-        /// `send` and `inbox_ack`. The id stays reserved, so a retry is a
-        /// duplicate.
+        /// `send` and `inbox_ack`; a rejection frees the id.
         answer: Ack,
         /// What a driven `prompt` or `steer` carries; a socket's is `Driver`.
         origin: Origin,
@@ -91,14 +90,21 @@ impl Conn {
     /// Whether the connection has subscribed: every sink but the
     /// not-yet-subscribed `Direct` one.
     pub(crate) fn subscribed(&self) -> bool {
-        !matches!(self.sink, Sink::Direct { .. })
+        match &self.sink {
+            Sink::Direct { .. } => false,
+            Sink::Writer { .. } => true,
+            Sink::Driven { .. } => true,
+            Sink::Answered { .. } => true,
+        }
     }
 
     /// The subscribed connection's route to its writer, if it has one.
     pub(crate) fn subscription(&self) -> Option<(level::Outbox, mpsc::Sender<level::Switch>)> {
         match &self.sink {
             Sink::Writer { outbox, switches } => Some((outbox.clone(), switches.clone())),
-            Sink::Direct { .. } | Sink::Driven { .. } | Sink::Answered { .. } => None,
+            Sink::Direct { .. } => None,
+            Sink::Driven { .. } => None,
+            Sink::Answered { .. } => None,
         }
     }
 
@@ -110,53 +116,10 @@ impl Conn {
     /// The sender a driven `prompt` or `steer` carries; a socket's is `Driver`.
     pub(crate) fn origin(&self) -> Origin {
         match &self.sink {
-            Sink::Direct { .. } | Sink::Writer { .. } => Origin::Driver,
+            Sink::Direct { .. } => Origin::Driver,
+            Sink::Writer { .. } => Origin::Driver,
             Sink::Driven { origin, .. } => origin.clone(),
             Sink::Answered { origin } => origin.clone(),
-        }
-    }
-}
-
-/// Takes the answer out of a `Driven` sink, leaving `Answered` behind:
-/// the first of `send` and `inbox_ack` takes it, so a second answer writes
-/// nowhere and the id stays reserved for a duplicate. Every other sink is
-/// put back and answers `None`.
-fn take_answer(conn: &mut Conn) -> Option<Ack> {
-    match std::mem::replace(
-        &mut conn.sink,
-        Sink::Answered {
-            origin: Origin::Driver,
-        },
-    ) {
-        Sink::Driven { answer, origin } => {
-            conn.sink = Sink::Answered { origin };
-            Some(answer)
-        }
-        Sink::Direct { direct, writer } => {
-            conn.sink = Sink::Direct { direct, writer };
-            None
-        }
-        Sink::Writer { outbox, switches } => {
-            conn.sink = Sink::Writer { outbox, switches };
-            None
-        }
-        Sink::Answered { origin } => {
-            conn.sink = Sink::Answered { origin };
-            None
-        }
-    }
-}
-
-/// Takes the socket halves out of a `Direct` sink, leaving an `Answered`
-/// placeholder with the connection's own origin behind: `subscribe` runs
-/// once, on a `Direct` sink, and overwrites the placeholder with `Writer`
-/// before returning, so the placeholder is never observed.
-fn take_direct(conn: &mut Conn) -> (UnixStream, Box<dyn Write + Send>) {
-    let origin = conn.origin();
-    match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
-        Sink::Direct { direct, writer } => (direct, writer),
-        Sink::Writer { .. } | Sink::Driven { .. } | Sink::Answered { .. } => {
-            unreachable!("subscribe runs once, on a Direct sink")
         }
     }
 }
@@ -294,10 +257,34 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
         Command::Subscribe(args) => {
-            if conn.subscribed() {
-                level::change(conn, id, args.level, args.credential);
-            } else {
-                subscribe(conn, id, args.level, args.credential);
+            // `dispatch` pulls the `Direct` halves out of the sink for a
+            // subscribe and passes them to `subscribe` as arguments, so
+            // `subscribe` never re-checks the sink for its halves. Every
+            // arm is named: the non-driven arms put their variant back
+            // unchanged, and the `Driven` arm answers at this call site.
+            let origin = conn.origin();
+            match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
+                Sink::Direct { direct, writer } => {
+                    subscribe(conn, id, args.level, args.credential, direct, writer);
+                }
+                Sink::Writer { outbox, switches } => {
+                    conn.sink = Sink::Writer { outbox, switches };
+                    level::change(conn, id, args.level, args.credential);
+                }
+                Sink::Driven { answer, origin } => {
+                    conn.sink = Sink::Answered { origin };
+                    // A driven connection is already subscribed: a second
+                    // subscribe is rejected, and a rejection frees the id.
+                    conn.gate.accepted.release(&id);
+                    answer.0(Err(Rejection {
+                        code: ErrorCode::InvalidArguments,
+                        message: ALREADY.to_owned(),
+                    }));
+                }
+                Sink::Answered { origin } => {
+                    conn.sink = Sink::Answered { origin };
+                    reject(conn, Some(id), ErrorCode::InvalidArguments, ALREADY);
+                }
             }
         }
         Command::Tools => {
@@ -502,11 +489,16 @@ fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name:
     }
 }
 
+/// Runs once, on a `Direct` sink: `dispatch` pulls the socket halves out
+/// of the sink and passes them in, then `subscribe` overwrites the
+/// `Answered` placeholder with `Writer` before returning.
 fn subscribe(
     conn: &mut Conn,
     id: CommandId,
     level: contract::commands::SubscribeLevel,
     credential: Option<String>,
+    mut direct: UnixStream,
+    stream: Box<dyn Write + Send>,
 ) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
     // The watcher is registered and its seed queued under the one log lock
@@ -515,6 +507,12 @@ fn subscribe(
     // the session lock.
     let (watcher, status, extensions) = {
         let Some(log) = conn.gate.log.upgrade() else {
+            // The halves are already out of the sink: put the `Direct`
+            // sink back so the rejection reaches the client.
+            conn.sink = Sink::Direct {
+                direct,
+                writer: stream,
+            };
             reject(conn, Some(id), ErrorCode::Closing, ENDED);
             return;
         };
@@ -552,7 +550,6 @@ fn subscribe(
     // answer, which the writer emits before folded history. A refused
     // switch keeps this successful subscription.
     if let Some(label) = credential {
-        let (direct, stream) = take_direct(conn);
         let (ack, response, cancel) = settle_response(&conn.gate, id, last_seq);
         let snapshots = if summary {
             [status, extensions].into_iter().flatten().collect()
@@ -582,13 +579,20 @@ fn subscribe(
         drop(direct);
         return;
     }
-    // The acknowledgement is written here, before the writer starts, so it
-    // is the first line the client reads.
-    accept(
-        conn,
-        id,
-        last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
+    // The acknowledgement is written here, through the halves `dispatch`
+    // passed in, before the writer starts, so it is the first line the
+    // client reads.
+    let accepted = session::envelope(
+        &conn.gate.session_id,
+        conn.gate.clock.as_ref(),
+        &Event::CommandAccepted(CommandAccepted {
+            command_id: id,
+            result: last_seq.map(|last_seq| CommandResult::Subscribe { last_seq }),
+        }),
     );
+    if write_line(&mut direct, &accepted).is_err() {
+        conn.gone = true;
+    }
     #[cfg(test)]
     if conn.full {
         conn.gate
@@ -598,21 +602,15 @@ fn subscribe(
         return;
     }
     if summary {
+        // The halves in hand are the only state this loop writes: no
+        // other sink is reachable here, so the halves' type excludes it.
         for line in [status, extensions].into_iter().flatten() {
-            match &mut conn.sink {
-                Sink::Direct { direct, .. } => {
-                    if write_line(direct, &line).is_err() {
-                        conn.gone = true;
-                        return;
-                    }
-                }
-                Sink::Writer { .. } | Sink::Driven { .. } | Sink::Answered { .. } => {
-                    return;
-                }
+            if write_line(&mut direct, &line).is_err() {
+                conn.gone = true;
+                return;
             }
         }
     }
-    let (direct, stream) = take_direct(conn);
     conn.sink = Sink::Writer {
         outbox,
         switches: spawn_writer(
@@ -720,36 +718,39 @@ fn send(conn: &mut Conn, event: Event) {
     // sink to `Answered`. A send on an answered connection writes nowhere:
     // every `dispatch` arm answers a driven connection once, so the single
     // answer is never lost.
-    if let Some(answer) = take_answer(conn) {
-        if let Event::CommandAccepted(accepted) = event {
-            answer.0(Ok(accepted.result));
-        } else if let Event::CommandRejected(rejected) = event {
-            answer.0(Err(Rejection {
-                code: rejected.code,
-                message: rejected.message,
-            }));
-        } else {
-            // `send` carries only acknowledgements; anything else answers `closing`.
-            answer.0(Err(Rejection {
-                code: ErrorCode::Closing,
-                message: ENDED.to_owned(),
-            }));
-        }
-        return;
-    }
-    let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
-    match &mut conn.sink {
-        Sink::Answered { .. } => {}
-        Sink::Writer { outbox, .. } => {
-            outbox.push_kept(line);
-        }
-        Sink::Direct { direct, .. } => {
-            if write_line(direct, &line).is_err() {
+    let origin = conn.origin();
+    match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
+        Sink::Direct { mut direct, writer } => {
+            let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
+            if write_line(&mut direct, &line).is_err() {
                 conn.gone = true;
             }
+            conn.sink = Sink::Direct { direct, writer };
         }
-        Sink::Driven { .. } => {
-            unreachable!("take_answer took a Driven sink")
+        Sink::Writer { outbox, switches } => {
+            let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
+            outbox.push_kept(line);
+            conn.sink = Sink::Writer { outbox, switches };
+        }
+        Sink::Driven { answer, origin } => {
+            conn.sink = Sink::Answered { origin };
+            if let Event::CommandAccepted(accepted) = event {
+                answer.0(Ok(accepted.result));
+            } else if let Event::CommandRejected(rejected) = event {
+                answer.0(Err(Rejection {
+                    code: rejected.code,
+                    message: rejected.message,
+                }));
+            } else {
+                // `send` carries only acknowledgements; anything else answers `closing`.
+                answer.0(Err(Rejection {
+                    code: ErrorCode::Closing,
+                    message: ENDED.to_owned(),
+                }));
+            }
+        }
+        Sink::Answered { origin } => {
+            conn.sink = Sink::Answered { origin };
         }
     }
 }
@@ -837,21 +838,17 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
     // The driver's acknowledgement goes to the host call, as the socket
     // path's does to its outbox: the first of `inbox_ack` and `send` takes
-    // it and moves the sink to `Answered`, and the id stays reserved, so a
-    // retry is a duplicate.
-    if let Some(answer) = take_answer(conn) {
-        let gate = Arc::clone(&conn.gate);
-        return guard(move |result| {
-            if result.is_err() {
-                gate.accepted.release(&id);
-            }
-            answer.0(result);
-        });
-    }
-    match &conn.sink {
-        Sink::Writer { outbox, .. } => {
-            let outbox = outbox.clone();
+    // it and moves the sink to `Answered`; a rejection frees the id.
+    let origin = conn.origin();
+    match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
+        Sink::Direct { direct, writer } => {
+            conn.sink = Sink::Direct { direct, writer };
+            guard(|_| {})
+        }
+        Sink::Writer { outbox, switches } => {
+            let queued = outbox.clone();
             let gate = Arc::clone(&conn.gate);
+            conn.sink = Sink::Writer { outbox, switches };
             guard(move |result| {
                 let event = match result {
                     Ok(result) => Event::CommandAccepted(CommandAccepted {
@@ -867,16 +864,26 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
                         })
                     }
                 };
-                outbox.push_kept(session::envelope(
+                queued.push_kept(session::envelope(
                     &gate.session_id,
                     gate.clock.as_ref(),
                     &event,
                 ));
             })
         }
-        Sink::Direct { .. } | Sink::Answered { .. } => guard(|_| {}),
-        Sink::Driven { .. } => {
-            unreachable!("take_answer took a Driven sink")
+        Sink::Driven { answer, origin } => {
+            conn.sink = Sink::Answered { origin };
+            let gate = Arc::clone(&conn.gate);
+            guard(move |result| {
+                if result.is_err() {
+                    gate.accepted.release(&id);
+                }
+                answer.0(result);
+            })
+        }
+        Sink::Answered { origin } => {
+            conn.sink = Sink::Answered { origin };
+            guard(|_| {})
         }
     }
 }

@@ -171,6 +171,12 @@ pub(crate) fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
     })
 }
 
+/// The `unknown_command` rejection for an unbuilt name, shared by both
+/// `parse` branches.
+fn unknown_command(id: CommandId, command: &str) -> (CommandId, ErrorCode, String) {
+    (id, ErrorCode::UnknownCommand, client::not_built(command))
+}
+
 /// The `CommandLine` check, shared by the socket line and the
 /// in-process driver: `classify` runs first in both. A line that reads as
 /// a command goes on; a line whose name is not built answers
@@ -182,21 +188,16 @@ pub(crate) fn parse(
     match serde_json::from_value::<CommandLine>(line.value) {
         Ok(parsed) => {
             if matches!(parsed.command, Command::Unknown) {
-                let message = client::not_built(&line.command);
-                return Err((line.id, ErrorCode::UnknownCommand, message));
+                return Err(unknown_command(line.id, &line.command));
             }
             Ok((parsed, line.command))
         }
         Err(_) => {
             // The name alone decides which rejection: an unbuilt name
             // answers `unknown_command`, anything else `invalid_arguments`.
-            let mut name = Map::new();
-            name.insert("command".into(), Value::String(line.command.clone()));
-            match serde_json::from_value::<Command>(Value::Object(name)) {
-                Ok(Command::Unknown) => {
-                    let message = client::not_built(&line.command);
-                    Err((line.id, ErrorCode::UnknownCommand, message))
-                }
+            match serde_json::from_value::<Command>(serde_json::json!({ "command": &line.command }))
+            {
+                Ok(Command::Unknown) => Err(unknown_command(line.id, &line.command)),
                 _ => Err((
                     line.id,
                     ErrorCode::InvalidArguments,
