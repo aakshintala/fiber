@@ -702,13 +702,15 @@ fn price_text(m: &Model, session: Option<u64>) -> Option<String> {
 /// The right-aligned switch cell: the rebuild cost labelled as a switch
 /// when the session has conversation to rebuild, `—` for the current
 /// model, nothing with no conversation. A tier in force figures the cost
-/// from the session size at the tier rate instead of the fixture text.
+/// from the session size at the tier rate instead of the fixture text; the
+/// figured cost reads shorter (`~250k`, not `~250k tokens`) so the tier
+/// mark survives the panel fit.
 fn switch_text(m: &Model, session: Option<u64>) -> Option<String> {
     match (m.current, session) {
         (true, Some(_)) => Some("—".to_string()),
         (false, Some(n)) => Some(match rates(m, Some(n)) {
             (_, _, Some(t)) => format!(
-                "switch ~{}k tokens · ${:.2}",
+                "switch ~{}k · ${:.2}",
                 n / 1000,
                 n as f64 * t.input / 1_000_000.0
             ),
@@ -2256,7 +2258,7 @@ mod tests {
             .find(|l| l.contains("claude-sonnet-5-5"))
             .unwrap();
         assert!(
-            line.contains("switch ~250k tokens · $1.50"),
+            line.contains("switch ~250k · $1.50"),
             "tiered switch not figured at the tier rate: {line}"
         );
         assert!(
