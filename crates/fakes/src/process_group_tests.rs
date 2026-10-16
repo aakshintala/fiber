@@ -16,8 +16,8 @@ use rustix::process::{Pid, Signal};
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
     bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
-    listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup, signal_group,
-    signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
+    listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
+    signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
 
