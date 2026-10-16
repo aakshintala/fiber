@@ -19,6 +19,7 @@ use contract::events::{
 use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log, Watcher};
+use support::text::one_line;
 
 use crate::Loop;
 
@@ -560,11 +561,6 @@ fn call_step(name: &str, subject: Option<&str>) -> String {
         Some(subject) => one_line(&format!("{name} {subject}")),
         None => one_line(name),
     }
-}
-
-/// `text` on one line.
-fn one_line(text: &str) -> String {
-    text.replace(['\n', '\r'], " ")
 }
 
 /// Classification's private path to the status watcher; never logged.

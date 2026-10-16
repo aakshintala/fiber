@@ -46,6 +46,7 @@ fn progress_subjects_join_only_nonempty_subjects_and_stay_on_one_line() {
         (Some(""), "shell"),
         (None, "shell"),
         (Some("ls\n-la\r"), "shell ls -la "),
+        (Some("ls\r\n-la"), "shell ls -la"),
     ] {
         let mut w = world();
         w.call("a1", "shell");
