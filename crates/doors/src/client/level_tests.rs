@@ -219,6 +219,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             since: 0,
             started: 0,
             calls: 0,
+            turns: Some(0),
             step: None,
             git: None,
             context: None,

@@ -77,6 +77,8 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
     // The first status is the one written at the start: nothing has run.
     assert_eq!(seen[0].payload["state"], "idle");
     assert_eq!(seen[0].payload["name"], "");
+    assert_eq!(seen[0].payload["turns"], 0);
+    assert_eq!(seen.last().unwrap().payload["turns"], 1);
     let order = states(&seen);
     assert_eq!(order.last(), Some(&"idle"));
     let streaming = order.iter().position(|s| *s == "streaming").unwrap();
@@ -240,6 +242,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     let finished = run(resumed);
     let (mut lines, seen) = statuses_until(lines, |_| true);
     assert_eq!(seen[0].payload["name"], "say hi");
+    assert_eq!(seen[0].payload["turns"], 1);
     assert_eq!(seen[0].payload["state"], "idle");
     drop(inbox);
     Deadline::after(DEADLINE)

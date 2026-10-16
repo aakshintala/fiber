@@ -272,6 +272,7 @@ fn status(name: &str) -> Event {
         since: 0,
         started: 0,
         calls: 0,
+        turns: Some(0),
         step: None,
         git: None,
         context: None,
