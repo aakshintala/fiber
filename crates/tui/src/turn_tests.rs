@@ -2368,16 +2368,23 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
         .flat_map(|group| group.calls())
         .next()
         .expect("the completed call");
+    let result = call
+        .result
+        .as_deref()
+        .expect("a completed call has a result");
     assert_eq!(
-        call.details,
+        result
+            .details
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok()),
         Some(json!({"command": "cargo t", "exit_code": 3}))
     );
-    assert_eq!(call.artifact.as_deref(), Some("artifacts/out.txt"));
-    assert_eq!(call.kept, Some(vec![[0, 2]]));
-    assert_eq!(call.signal.as_deref(), Some("SIGKILL"));
+    assert_eq!(result.artifact.as_deref(), Some("artifacts/out.txt"));
+    assert_eq!(result.kept, Some(vec![[0, 2]]));
+    assert_eq!(result.signal.as_deref(), Some("SIGKILL"));
     assert_eq!(call.exit, Some(3));
-    assert_eq!(call.headline, "");
-    assert_eq!(call.content, "x\ny");
+    assert_eq!(call.headline(), "");
+    assert_eq!(call.content(), "x\ny");
     assert_eq!(call.lines, 2);
 }
 

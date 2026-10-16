@@ -62,23 +62,10 @@ pub(crate) struct Call {
     /// How it ended; `None` while it runs.
     pub(crate) status: Option<CallStatus>,
     pub(crate) changes: Vec<FileChange>,
-    /// The result's `details`: JSON for clients, such as an edit's diff
-    /// for the terminal to draw (`docs/tools.md`, "What a result
-    /// carries"). A `null` on the wire is stored as none.
-    pub(crate) details: Option<Value>,
-    /// The full output's path, when the result was cut or a hook
-    /// returned text for it; kept, never drawn inline.
-    pub(crate) artifact: Option<String>,
-    /// On a cut result, ordered byte ranges of the full output held in
-    /// `content`; kept, never drawn inline.
-    pub(crate) kept: Option<Vec<[u64; 2]>>,
-    /// The signal's name when a signal ended the call's process.
-    pub(crate) signal: Option<String>,
-    /// A failed call's "<code>: <message>" or a denial's reason, else
-    /// empty: the first row an opened call draws.
-    pub(crate) headline: String,
-    /// The result's text parts joined with "\n".
-    pub(crate) content: String,
+    /// What only an opened call reads, boxed so the row the paging
+    /// and the re-count walk stays one pointer over base; `None`
+    /// while it runs.
+    pub(crate) result: Option<Box<CallResult>>,
     /// The process's exit code, when it ran one
     /// (`tool_call_completed`'s `process.exit_code`).
     pub(crate) exit: Option<i32>,
@@ -95,6 +82,71 @@ pub(crate) struct Call {
     pub(crate) started: bool,
     /// The question form it raised.
     pub(crate) asked: Option<super::answers::Asked>,
+}
+
+/// What only an opened call reads: the result's `details` as JSON
+/// text, parsed when the call is opened and never on load
+/// (`docs/tools.md`, "What a result carries"), the full output's
+/// path, the kept byte ranges, the signal's name, the headline and
+/// the text parts joined with "\n". A `null` details on the wire
+/// is stored as none; a details string that fails to parse falls
+/// back to the plain-content view.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CallResult {
+    pub(crate) details: Option<String>,
+    /// The full output's path, when the result was cut or a hook
+    /// returned text for it; kept, never drawn inline.
+    #[allow(
+        dead_code,
+        reason = "kept for the call's whole view; pinned by turn_tests"
+    )]
+    pub(crate) artifact: Option<String>,
+    /// On a cut result, ordered byte ranges of the full output held in
+    /// `content`; kept, never drawn inline.
+    pub(crate) kept: Option<Vec<[u64; 2]>>,
+    /// The signal's name when a signal ended the call's process.
+    #[allow(
+        dead_code,
+        reason = "kept for the call's whole view; pinned by turn_tests"
+    )]
+    pub(crate) signal: Option<String>,
+    /// A failed call's "<code>: <message>" or a denial's reason, else
+    /// empty: the first row an opened call draws.
+    pub(crate) headline: String,
+    /// The result's text parts joined with "\n".
+    pub(crate) content: String,
+}
+
+impl Call {
+    /// The result's JSON text, when the wire carried details.
+    pub(crate) fn details_text(&self) -> Option<&str> {
+        self.result
+            .as_deref()
+            .and_then(|result| result.details.as_deref())
+    }
+
+    /// The kept byte ranges, when the result was cut.
+    pub(crate) fn kept(&self) -> Option<&Vec<[u64; 2]>> {
+        self.result
+            .as_deref()
+            .and_then(|result| result.kept.as_ref())
+    }
+
+    /// A failed call's headline, else empty.
+    pub(crate) fn headline(&self) -> &str {
+        self.result
+            .as_deref()
+            .map(|result| result.headline.as_str())
+            .unwrap_or("")
+    }
+
+    /// The result's text parts joined with "\n", else empty.
+    pub(crate) fn content(&self) -> &str {
+        self.result
+            .as_deref()
+            .map(|result| result.content.as_str())
+            .unwrap_or("")
+    }
 }
 
 /// A call still streaming: its message, position, name and raw text.
@@ -526,10 +578,10 @@ impl Group {
             Some(CallStatus::Cancelled) => return vec![dim_span("cancelled".to_owned())],
             Some(CallStatus::Denied) => return vec![dim_span("denied".to_owned())],
             Some(CallStatus::Failed) => {
-                if call.headline.is_empty() {
-                    return vec![dim_span(first_result_line(&call.content))];
+                if call.headline().is_empty() {
+                    return vec![dim_span(first_result_line(call.content()))];
                 }
-                return vec![dim_span(call.headline.clone())];
+                return vec![dim_span(call.headline().to_owned())];
             }
             Some(CallStatus::Completed) => {}
         }
@@ -562,7 +614,7 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
-            | Kind::Other => vec![dim_span(first_result_line(&call.content))],
+            | Kind::Other => vec![dim_span(first_result_line(call.content()))],
         }
     }
 }

@@ -77,19 +77,30 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
     // renders every closed call, and the full path costs several
     // allocations per row there.
     if fast_path(call) {
-        legacy_rows(&call.content, out);
+        legacy_rows(call.content(), out);
         return;
     }
     let room = width.saturating_sub(8);
     let mut bodies: Vec<Body> = Vec::new();
-    if !call.headline.is_empty() {
+    if !call.headline().is_empty() {
         bodies.push(Body {
             number: None,
             gutter: false,
-            line: dim(call.headline.clone()),
+            line: dim(call.headline().to_owned()),
         });
     }
-    push_view(&view_of(call), &mut bodies);
+    // Details ride as JSON text and parse when the call opens, never
+    // on load; a string that fails to parse falls back to the
+    // plain-content view for unrecognised details.
+    let parsed: Option<Value> = call
+        .details_text()
+        .and_then(|text| serde_json::from_str(text).ok());
+    let view = if call.details_text().is_some() && parsed.is_none() {
+        View::Plain(call.content())
+    } else {
+        view_of(call, parsed.as_ref())
+    };
+    push_view(&view, &mut bodies);
     let shown = bodies.len().min(OPENED_LINES);
     let left = bodies.len().saturating_sub(shown);
     // The gutter fits the largest number among the rows drawn, after
@@ -150,16 +161,16 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
 /// that is not JSON. Only the search redraw reaches such a call
 /// unopened; an opened call always takes the full view.
 fn fast_path(call: &Call) -> bool {
-    call.details.is_none()
-        && call.headline.is_empty()
-        && call.kept.is_none()
+    call.details_text().is_none()
+        && call.headline().is_empty()
+        && call.kept().is_none()
         && !call.open
         && call
             .arguments
             .get("content")
             .and_then(Value::as_str)
             .is_none()
-        && !starts_json(&call.content)
+        && !starts_json(call.content())
 }
 
 /// Whether `text` parses to an object or array: its first
@@ -205,27 +216,27 @@ fn legacy_rows(content: &str, out: &mut Rows) {
 /// on a shell `grep`, which carries both. Only a missing or null
 /// `details` reads the `content` argument; any other value that is not
 /// recognised shows the content.
-fn view_of(call: &Call) -> View<'_> {
-    let Some(details) = call.details.as_ref().filter(|details| !details.is_null()) else {
+fn view_of<'a>(call: &'a Call, details: Option<&'a Value>) -> View<'a> {
+    let Some(details) = details.filter(|details| !details.is_null()) else {
         return write_or_plain(call);
     };
     let Some(object) = details.as_object() else {
-        return View::Plain(&call.content);
+        return View::Plain(call.content());
     };
     if let Some(diff) = object.get("diff") {
         if let Some(diff) = diff.as_str() {
             return View::Diff(diff);
         }
-        return View::Plain(&call.content);
+        return View::Plain(call.content());
     }
     if let Some(start) = object.get("start_line") {
         if let Some(start) = start.as_u64() {
             return View::Read {
                 start,
-                text: &call.content,
+                text: call.content(),
             };
         }
-        return View::Plain(&call.content);
+        return View::Plain(call.content());
     }
     if let Some(matches) = object.get("matches") {
         if let Some(groups) = matches.as_array() {
@@ -234,19 +245,19 @@ fn view_of(call: &Call) -> View<'_> {
                 end: end_of(object).unwrap_or(End::None),
             };
         }
-        return View::Plain(&call.content);
+        return View::Plain(call.content());
     }
     if let Some(command) = object.get("command") {
         if let (Some(command), Some(end)) = (command.as_str(), end_of(object)) {
             return View::Shell {
                 command,
                 end,
-                output: &call.content,
+                output: call.content(),
             };
         }
-        return View::Plain(&call.content);
+        return View::Plain(call.content());
     }
-    View::Plain(&call.content)
+    View::Plain(call.content())
 }
 
 /// A call with no `details` whose arguments hold a string `content`
@@ -255,7 +266,7 @@ fn write_or_plain(call: &Call) -> View<'_> {
     if let Some(text) = call.arguments.get("content").and_then(Value::as_str) {
         View::Written(text)
     } else {
-        View::Plain(&call.content)
+        View::Plain(call.content())
     }
 }
 

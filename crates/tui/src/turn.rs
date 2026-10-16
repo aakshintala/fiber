@@ -421,19 +421,28 @@ impl Turn {
             group.call(action).is_some_and(|call| {
                 call.status = Some(done.status);
                 call.changes = done.changes.clone().unwrap_or_default();
-                // A `null` details counts as none: the views fall back
-                // to the content, never to a `content` argument.
-                call.details = done.details.clone().filter(|details| !details.is_null());
-                call.artifact = done.artifact.clone();
-                call.kept = done.kept.clone();
-                call.signal = done
-                    .process
-                    .as_ref()
-                    .and_then(|process| process.signal.clone());
-                call.headline = format::headline(done);
-                call.content = format::content_text(done);
+                // Details ride as JSON text and parse when the call
+                // opens, never on load. A `null` details counts as
+                // none: the views fall back to the content, never to
+                // a `content` argument.
+                let content = format::content_text(done);
+                call.result = Some(Box::new(group::CallResult {
+                    details: done
+                        .details
+                        .clone()
+                        .filter(|details| !details.is_null())
+                        .map(|details| details.to_string()),
+                    artifact: done.artifact.clone(),
+                    kept: done.kept.clone(),
+                    signal: done
+                        .process
+                        .as_ref()
+                        .and_then(|process| process.signal.clone()),
+                    headline: format::headline(done),
+                    content,
+                }));
                 call.exit = done.process.as_ref().and_then(|process| process.exit_code);
-                call.lines = call.content.lines().count() as u64;
+                call.lines = call.content().lines().count() as u64;
                 call.images = crate::image::parts(&done.content);
                 true
             }) && group.touched(ts)

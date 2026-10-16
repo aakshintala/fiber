@@ -4,7 +4,7 @@ use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
 use serde_json::json;
 
-use super::{Call, Group, Section, Streaming, Thought};
+use super::{Call, CallResult, Group, Section, Streaming, Thought};
 use crate::theme::Role;
 
 #[test]
@@ -441,7 +441,10 @@ fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, content: 
         name: "shell".to_owned(),
         arguments: json!({"command": command}),
         status: Some(CallStatus::Completed),
-        content: content.to_owned(),
+        result: Some(Box::new(CallResult {
+            content: content.to_owned(),
+            ..CallResult::default()
+        })),
         exit,
         lines,
         started: true,
@@ -456,7 +459,10 @@ fn failed_call(id: usize) -> Call {
         name: "shell".to_owned(),
         arguments: json!({"command": "cargo t"}),
         status: Some(CallStatus::Failed),
-        headline: "nonzero_exit: exit 101".to_owned(),
+        result: Some(Box::new(CallResult {
+            headline: "nonzero_exit: exit 101".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
@@ -469,7 +475,10 @@ fn denied_call(id: usize) -> Call {
         name: "web_fetch".to_owned(),
         arguments: json!({"url": "u"}),
         status: Some(CallStatus::Denied),
-        headline: "not allowed".to_owned(),
+        result: Some(Box::new(CallResult {
+            headline: "not allowed".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
@@ -482,10 +491,46 @@ fn cancelled_call(id: usize) -> Call {
         name: "custom".to_owned(),
         arguments: json!("raw text"),
         status: Some(CallStatus::Cancelled),
-        content: "x".to_owned(),
+        result: Some(Box::new(CallResult {
+            content: "x".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
+}
+
+/// `call` with its result's content replaced.
+fn with_content(mut call: Call, content: &str) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.content = content.to_owned();
+    call
+}
+
+/// `call` with its result's headline replaced.
+fn with_headline(mut call: Call, headline: &str) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.headline = headline.to_owned();
+    call
+}
+
+/// `call` with its result's details replaced by `details` JSON text.
+fn with_details(mut call: Call, details: serde_json::Value) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.details = Some(details.to_string());
+    call
+}
+
+/// `call` opened.
+fn with_open(mut call: Call) -> Call {
+    call.open = true;
+    call
 }
 
 fn ask_call(id: usize) -> Call {
@@ -712,10 +757,7 @@ fn ledger_results_name_what_each_call_did() {
             // A shell with no process shows its first line, or "done".
             shell_call(6, "echo hi", None, 0, "a\nb"),
             shell_call(7, "true", None, 0, ""),
-            Call {
-                content: "\n\nfirst\nsecond".to_owned(),
-                ..shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond")
-            },
+            shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond"),
             failed_call(9),
             denied_call(10),
             cancelled_call(11),
@@ -723,10 +765,10 @@ fn ledger_results_name_what_each_call_did() {
             edit_call(13, "e.rs", 2, 0),
             // An edit with no changes shows its first line like any
             // other call.
-            Call {
-                content: "wrote it".to_owned(),
-                changes: vec![],
-                ..edit_call(14, "f.rs", 0, 0)
+            {
+                let mut call = edit_call(14, "f.rs", 0, 0);
+                call.changes = vec![];
+                with_content(call, "wrote it")
             },
         ])],
         ..Group::default()
@@ -788,12 +830,10 @@ fn a_failed_call_with_no_error_falls_back_to_its_content_on_the_ledger_row() {
         open: true,
         sections: vec![Section {
             step: 1,
-            calls: vec![Call {
-                headline: String::new(),
-                content: "boom\nsecond".to_owned(),
-                status: Some(CallStatus::Failed),
-                ..failed_call(1)
-            }],
+            calls: vec![with_content(
+                with_headline(failed_call(1), ""),
+                "boom\nsecond",
+            )],
             ..Section::default()
         }],
         ..Group::default()
@@ -1080,8 +1120,11 @@ fn open_read_call(id: usize, lines: usize) -> Call {
         name: "read".to_owned(),
         arguments: json!({"path": "notes.txt"}),
         status: Some(CallStatus::Completed),
-        details: Some(json!({"start_line": 1})),
-        content,
+        result: Some(Box::new(CallResult {
+            details: Some(json!({"start_line": 1}).to_string()),
+            content,
+            ..CallResult::default()
+        })),
         lines: lines as u64,
         started: true,
         open: true,
@@ -1152,16 +1195,10 @@ fn an_opened_diff_is_capped_with_its_colours() {
     for n in 1..=23 {
         diff.push_str(&format!(" context {n}\n"));
     }
-    let call = Call {
-        details: Some(json!({"diff": diff})),
-        changes: vec![contract::events::FileChange {
-            path: "a.rs".to_owned(),
-            added: 13,
-            removed: 12,
-        }],
-        open: true,
-        ..edit_call(1, "a.rs", 13, 12)
-    };
+    let call = with_open(with_details(
+        edit_call(1, "a.rs", 13, 12),
+        json!({"diff": diff}),
+    ));
     let (rows, _) = summary_row(&opened_group(call), false, 76);
     let shown: Vec<_> = rows.into_iter().skip(2).collect();
     assert_eq!(shown.len(), 21);
@@ -1202,18 +1239,10 @@ fn an_opened_diff_is_capped_with_its_colours() {
 /// output reads "no output" dim.
 #[test]
 fn an_opened_call_shows_its_error_or_no_output() {
-    let call = Call {
-        headline: "ambiguous_match: boom".to_owned(),
-        open: true,
-        ..failed_call(1)
-    };
+    let call = with_open(with_headline(failed_call(1), "ambiguous_match: boom"));
     let rows = opened_rows(&opened_group(call), 76);
     assert_eq!(rows, vec!["        ambiguous_match: boom".to_owned()]);
-    let call = Call {
-        content: "".to_owned(),
-        open: true,
-        ..shell_call(2, "true", Some(0), 0, "")
-    };
+    let call = with_open(shell_call(2, "true", Some(0), 0, ""));
     let rows = opened_rows(&opened_group(call), 76);
     assert_eq!(rows, vec!["        no output".to_owned()]);
 }

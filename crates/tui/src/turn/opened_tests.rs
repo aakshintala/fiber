@@ -8,7 +8,7 @@ use super::rows;
 use crate::rows::{RowText, Rows};
 use crate::theme::Role;
 use crate::turn::Row;
-use crate::turn::group::Call;
+use crate::turn::group::{Call, CallResult};
 
 /// The call's rows at `width`: text and target per row.
 fn drawn(call: &Call, width: u16) -> (Vec<Row>, Vec<RowText>) {
@@ -20,9 +20,12 @@ fn drawn(call: &Call, width: u16) -> (Vec<Row>, Vec<RowText>) {
 /// A call with `details`, `headline` and `content`.
 fn made_call(details: Option<Value>, headline: &str, content: &str) -> Call {
     Call {
-        details,
-        headline: headline.to_owned(),
-        content: content.to_owned(),
+        result: Some(Box::new(CallResult {
+            details: details.map(|details| details.to_string()),
+            headline: headline.to_owned(),
+            content: content.to_owned(),
+            ..CallResult::default()
+        })),
         ..Call::default()
     }
 }
@@ -991,10 +994,11 @@ fn a_closed_call_without_details_caps_at_twenty_legacy_lines() {
 /// Kept ranges keep the call on the full view: its long line wraps.
 #[test]
 fn a_kept_call_without_details_builds_the_plain_view() {
-    let call = Call {
-        kept: Some(vec![[0, 2]]),
-        ..made_call(None, "", &"y".repeat(200))
-    };
+    let mut call = made_call(None, "", &"y".repeat(200));
+    call.result
+        .as_deref_mut()
+        .expect("made_call sets a result")
+        .kept = Some(vec![[0, 2]]);
     let parts = drawn(&call, 76);
     assert!(parts.0.len() > 1);
     assert!(lines(&parts)[0].starts_with("        y"));
@@ -1014,6 +1018,20 @@ fn json_with_leading_whitespace_indents() {
             "        }"
         ]
     );
+}
+
+/// Details that fail to parse fall back to the plain-content view,
+/// never to the `content` argument.
+#[test]
+fn details_that_fail_to_parse_show_plain_content() {
+    let mut call = made_call(None, "", "actual");
+    call.arguments = json!({"content": "argument"});
+    call.result
+        .as_deref_mut()
+        .expect("made_call sets a result")
+        .details = Some("{oops".to_owned());
+    let parts = drawn(&call, 76);
+    assert_eq!(lines(&parts), vec!["        actual"]);
 }
 
 #[test]
