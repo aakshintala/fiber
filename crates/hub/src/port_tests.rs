@@ -1038,6 +1038,36 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
             .attention
             .notify("s_0000000000000000", None, &first, false),
     );
+    // Force the drained order from the outside peer: read until the
+    // first small line's bytes arrive, which proves the pump drained the
+    // bridge and the line went through, then stop reading. The writer is
+    // idle from here on, so the block wait below fails.
+    let drained = Deadline::after(DEADLINE);
+    let needle: &[u8] = b"run r0";
+    let mut overlap = Vec::new();
+    loop {
+        if drained.left().is_zero() {
+            panic!("the TCP peer to drain the first small line");
+        }
+        let mut chunk = [0u8; 4096];
+        let n = match tcp_client.read(&mut chunk) {
+            Ok(0) => panic!(
+                "the TCP peer to drain the first small line: the stream closed"
+            ),
+            Ok(n) => n,
+            Err(error) => panic!(
+                "the TCP peer to drain the first small line: {error}"
+            ),
+        };
+        // The frame may split the needle across reads, so each search
+        // covers the new chunk plus the previous needle-length overlap.
+        overlap.extend_from_slice(&chunk[..n]);
+        if overlap.windows(needle.len()).any(|w| w == needle) {
+            break;
+        }
+        let keep = overlap.len().min(needle.len() - 1);
+        overlap.drain(..overlap.len() - keep);
+    }
     let blocked = Arc::clone(&owned);
     await_true("the Unix writer to block in its write", move || {
         blocked.try_lock().is_err()
