@@ -411,13 +411,11 @@ fn a_clean_removal_times_the_one_remove_call() {
         let path_drop = path.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_in = Arc::clone(&calls);
-        let clock_in = Arc::clone(&clock);
         let timing: Timing = Arc::new(move |op, tool, started| {
             if op == Op::WorktreeCreate {
                 assert_eq!(tool, None);
                 assert!(started.is_some(), "the create guard starts stamped");
-                let start = started.unwrap();
-                let guard = CreateEnd { start };
+                let guard = CreateEnd;
                 return Some(Box::new(guard) as Box<dyn Send>);
             }
             assert_eq!(op, Op::WorktreeRemove);
@@ -426,10 +424,7 @@ fn a_clean_removal_times_the_one_remove_call() {
             assert!(exists(&path_call), "the worktree stands at the call");
             calls_in.fetch_add(1, Ordering::SeqCst);
             let guard = Presence {
-                calls: Arc::clone(&calls_in),
-                clock: Arc::clone(&clock_in),
                 path: path_drop.clone(),
-                start: clock_in.now(),
             };
             Some(Box::new(guard) as Box<dyn Send>)
         });
@@ -446,30 +441,16 @@ fn a_clean_removal_times_the_one_remove_call() {
     });
 }
 
-/// The create probe's guard: dropping it emits the stamped line.
-struct CreateEnd {
-    start: Instant,
-}
-
-impl Drop for CreateEnd {
-    fn drop(&mut self) {
-        let _ = self.start;
-    }
-}
+/// The create probe's guard: held for the stamped scope, dropped at its end.
+struct CreateEnd;
 
 /// The removal probe's guard: dropping it proves the worktree is gone.
 struct Presence {
-    calls: Arc<AtomicUsize>,
-    clock: Arc<FakeClock>,
     path: PathBuf,
-    start: Instant,
 }
 
 impl Drop for Presence {
     fn drop(&mut self) {
-        let _ = self.clock.now();
-        let _ = self.start;
-        let _ = self.calls.load(Ordering::SeqCst);
         assert!(!exists(&self.path), "the worktree is gone at the drop");
     }
 }

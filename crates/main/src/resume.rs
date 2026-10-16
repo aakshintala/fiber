@@ -21,9 +21,6 @@ use r#loop::Loop;
 use crate::session_command::close;
 use crate::{ask_failed, failed, run_turn};
 
-/// Opens the recreated worktree's create line once the writer exists.
-type WorktreeOpener = Arc<dyn Fn(&contract::diag::Timing) + Send + Sync>;
-
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
 /// session's log, folds what the resume needs, and runs one turn on it. A
 /// held lock attaches instead of opening a second writer; every failure
@@ -249,7 +246,7 @@ fn resume_session(
     // the launch directory, as today.
     // The create line's opener is taken before the hold is rebuilt, so
     // the later `resumed_session` opens the same slot `end` reads.
-    let mut opened: Option<WorktreeOpener> = None;
+    let mut opened: Option<doors::WorktreeOpener> = None;
     if let Held::Made(isolation) = held {
         opened = Some(isolation.opener());
         let path = isolation.path().to_path_buf();
@@ -324,7 +321,7 @@ fn resumed_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     reads: Arc<crate::switch::Reads>,
-    opened: Option<WorktreeOpener>,
+    opened: Option<doors::WorktreeOpener>,
 ) -> Result<i32, Failure> {
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,

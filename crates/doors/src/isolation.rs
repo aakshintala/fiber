@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::Clock;
@@ -73,10 +73,7 @@ pub fn isolate(
     let start = clock.now();
     match worktree::create(launch, &path, &branch, add) {
         Ok(created) => {
-            let made_in = clock
-                .now()
-                .checked_duration_since(start)
-                .unwrap_or(Duration::ZERO);
+            let made_in = elapsed(&clock, start);
             Ok(Isolation::new(
                 created, session, home, clock, repository, None, made_in,
             ))
@@ -194,10 +191,7 @@ fn recreate_with(
                     });
                 }
             };
-            let made_in = clock
-                .now()
-                .checked_duration_since(start)
-                .unwrap_or(Duration::ZERO);
+            let made_in = elapsed(&clock, start);
             match downgrade(creating) {
                 Ok(shared) => Ok(Recreated::Made(Isolation::new(
                     created,
@@ -266,6 +260,19 @@ fn sentence(error: &worktree::Error, path: &Path) -> String {
     }
 }
 
+/// Opens the worktree's create line once the diagnostic writer exists.
+pub type WorktreeOpener = Arc<dyn Fn(&Timing) + Send + Sync>;
+
+/// How long the one stamped `worktree::create` or `worktree::recreate`
+/// call took, from `start` to now: a clock that ran backwards reads as
+/// zero.
+fn elapsed(clock: &Arc<dyn Clock>, start: Instant) -> Duration {
+    clock
+        .now()
+        .checked_duration_since(start)
+        .unwrap_or(Duration::ZERO)
+}
+
 impl Isolation {
     /// One constructor for both entry points: `isolate` shares nothing
     /// yet, and `recreate` keeps the share it arrived on.
@@ -298,7 +305,7 @@ impl Isolation {
     /// clock that ran backwards starts at `now`. Later calls emit
     /// nothing. A worktree adopted as present has no `Isolation` and no
     /// opener, so it writes none.
-    pub fn opener(&self) -> Arc<dyn Fn(&Timing) + Send + Sync> {
+    pub fn opener(&self) -> WorktreeOpener {
         let slot = Arc::clone(&self.timing);
         let clock = Arc::clone(&self.clock);
         let made_in = self.made_in;
