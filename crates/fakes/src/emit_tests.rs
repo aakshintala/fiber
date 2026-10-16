@@ -9,7 +9,7 @@ use contract::events::{Event, Progress, TextDelta, ToolCallStarted};
 use contract::shapes::DeclaredEffects;
 use serde_json::json;
 
-use super::Recorder;
+use super::{EventLog, Recorder};
 
 #[test]
 fn records_a_delta_and_ignores_a_durable_event() {
@@ -69,4 +69,56 @@ fn ignores_another_ephemeral_kind_and_keeps_recording_deltas() {
         details: Some(json!({"done": 1})),
     }));
     assert!(recorder.wait_for_text("yes", Duration::from_secs(10)));
+}
+
+#[test]
+fn event_log_records_durable_and_ephemeral_events_in_order() {
+    let log = EventLog::default();
+    let recorder = Recorder::default();
+    let started = Event::ToolCallStarted(ToolCallStarted {
+        always_reviewed: false,
+        declared: DeclaredEffects {
+            effects: vec![],
+            reversible: true,
+            paths: None,
+        },
+        arguments: None,
+        changed_by: None,
+    });
+    let delta = Event::ToolCallDelta(Progress {
+        text: Some("half".into()),
+        details: None,
+    });
+    let message = Event::AssistantMessageDelta(TextDelta {
+        text: "hello".into(),
+    });
+    for event in [&started, &delta, &message] {
+        log.emit(event);
+        recorder.emit(event);
+    }
+    let events = log.events();
+    assert_eq!(events.len(), 3);
+    assert!(matches!(events[0], Event::ToolCallStarted(_)));
+    assert!(matches!(events[1], Event::ToolCallDelta(_)));
+    assert!(matches!(events[2], Event::AssistantMessageDelta(_)));
+    // The same three through `Recorder` keep only the two ephemeral ones:
+    // a filter on class in `EventLog` would drop the durable event here.
+    assert_eq!(recorder.events().len(), 2);
+}
+
+#[test]
+fn event_log_events_is_a_snapshot() {
+    let log = EventLog::default();
+    log.emit(&Event::ToolCallDelta(Progress {
+        text: Some("first".into()),
+        details: None,
+    }));
+    let first = log.events();
+    assert_eq!(first.len(), 1);
+    log.emit(&Event::ToolCallDelta(Progress {
+        text: Some("second".into()),
+        details: None,
+    }));
+    assert_eq!(first.len(), 1, "the earlier vec is unchanged");
+    assert_eq!(log.events().len(), 2);
 }
