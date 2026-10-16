@@ -1130,10 +1130,7 @@ fn openai_search_marks_match_the_october_probe() {
             ids.push(id);
         }
     }
-    let models: Vec<(&str, Value)> = ids
-        .iter()
-        .map(|id| (*id, tool_model(json!({}))))
-        .collect();
+    let models: Vec<(&str, Value)> = ids.iter().map(|id| (*id, tool_model(json!({})))).collect();
     let (output, _) = generate_one(package, &models);
     assert_eq!(
         generated_model(&output, "gpt-4o").unwrap()["web_search"],
