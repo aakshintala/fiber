@@ -24,8 +24,8 @@ use std::sync::{
 use std::time::Duration;
 
 use common::{
-    FIBER, GIT_PROGRESS, Repos, Setup, StoreOperations, approve, decide_on_worker, declare,
-    dep_dir, dep_names, dep_record, dep_version, depends_home, item, manifest, named,
+    FIBER, GIT_PROGRESS, Repos, STALL_SLICES, Setup, StoreOperations, approve, decide_on_worker,
+    declare, dep_dir, dep_names, dep_record, dep_version, depends_home, item, manifest, named,
     on_worker_within, project, store, unapproved_on_worker, write,
 };
 use contract::events::OfferDecision;
@@ -386,12 +386,6 @@ const STALL: Duration = Duration::from_millis(500);
 /// below the nextest kill, so a bound that never fires fails the test
 /// instead of hanging it.
 const OUTER: Duration = Duration::from_secs(5);
-/// How long the re-arm test holds a paced approval's answer before
-/// requiring it unanswered: two of the wait's own probe intervals, past
-/// one silence but short of the stall bound, so the check itself cannot
-/// trip it.
-const MID: Duration = Duration::from_millis(400);
-
 #[test]
 fn a_stalled_approval_fails_within_the_stall_bound() {
     let setup = Setup::new();
@@ -445,95 +439,68 @@ fn a_stalled_approval_fails_within_the_stall_bound() {
     release.send(()).unwrap();
 }
 
-/// How long one paced round parks without progress: far below the stall
-/// bound, so every round re-arms it while the rounds span longer than it
-/// in total.
-const PACE: Duration = Duration::from_millis(100);
-/// Paced rounds per stall-bound span: eight 100 ms rounds keep every
-/// silence near one `ROUND` and span past the 500 ms stall bound.
+/// Rounds the synthetic worker parks, one stall-bound slice each: more
+/// slices than the stall bound allows silent ones, so only re-arming lets
+/// the run finish.
 const PACES: u64 = 8;
-/// How long one observation poll waits: the paced worker bumps every 100
-/// ms, so 10 ms polls observe every round without ever nearing a stall.
+/// How long one observation poll waits: short, so polls never near a stall.
 const POLL: Duration = Duration::from_millis(10);
-/// Observation polls before the test gives up: 500 of them bound the
-/// paced wait, so a worker that never progresses fails instead of hanging.
+/// Observation polls before the test gives up, so a worker that never
+/// progresses fails instead of hanging.
 const POLLS: u32 = 500;
+
+/// Holds the work for one whole stall-bound slice: waits, by short receives
+/// that must time out, until `on_worker_within` has passed a slice without
+/// an answer. The test bumps nothing, so the hold is silence the bound
+/// counts.
+fn hold_one_slice<T>(returned: &mpsc::Receiver<T>) {
+    let start = STALL_SLICES.load(Ordering::Relaxed);
+    for _ in 0..POLLS {
+        match fakes::Deadline::after(POLL).recv(returned) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the approval failed while held")
+            }
+            Ok(_) => panic!("the held work answered before it was released"),
+        }
+        if STALL_SLICES.load(Ordering::Relaxed) > start {
+            return;
+        }
+    }
+    panic!("the stall bound never passed a slice");
+}
 
 #[test]
 fn git_progress_re_arms_the_stall_bound() {
     let (release, gate) = mpsc::channel::<()>();
-    let (pacing_done, paced) = mpsc::channel();
+    let (parked_tx, parked) = mpsc::channel::<()>();
     let (finished, returned) = mpsc::channel();
     std::thread::spawn(move || {
-        // Simulated slow git work: every round proves progress first, then
-        // parks. No single silence reaches the stall bound, but the rounds
-        // span past it in total: without re-arming, the bound would fire.
-        // The signal proves all rounds ran instead of finishing inside the
-        // bound, so the test never mistakes a fast run for a slow one.
+        // Simulated slow git work: every round proves progress, then parks
+        // on a gate the test owns. No single silence reaches the stall
+        // bound, but the rounds span past it in total: without re-arming,
+        // the bound would fire.
         let value = on_worker_within(STALL, "the approval", move || {
-            let (_held, idle) = mpsc::channel::<()>();
             for _ in 0..PACES {
                 GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
-                match fakes::Deadline::after(PACE).recv(&idle) {
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        panic!("the pacing channel hung up")
-                    }
-                    Ok(()) => panic!("the pacing channel fired"),
-                }
+                parked_tx.send(()).unwrap();
+                gate.recv().unwrap();
             }
-            GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
-            pacing_done.send(()).unwrap();
-            gate.recv().unwrap();
             42
         });
         finished.send(value).unwrap();
     });
-    // Both parties prove progress: the worker through its rounds, the test
-    // with a bump on every poll. Either thread descheduled alone never
-    // looks like a stall; only whole-process silence trips the bound. Every
-    // receive waits through its own short deadline, so the polls carrying
-    // the bumps never park the whole remainder; the poll counts bound each
-    // phase instead of hanging it.
-    let mut rounds_done = false;
-    for _ in 0..POLLS {
-        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
-        match fakes::Deadline::after(POLL).recv(&paced) {
-            Ok(()) => {
-                rounds_done = true;
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("the paced work hung up before signalling")
-            }
-        }
+    for _ in 0..PACES {
+        fakes::Deadline::after(OUTER).recv_or_fail(&parked, "the paced work to park");
+        hold_one_slice(&returned);
+        release.send(()).unwrap();
     }
-    assert!(
-        rounds_done,
-        "the paced work never finished its {PACES} rounds"
-    );
-    release.send(()).unwrap();
-    let mut value = None;
-    for _ in 0..POLLS {
-        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
-        match fakes::Deadline::after(POLL).recv(&returned) {
-            Ok(returned) => {
-                value = Some(returned);
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("the worker for the approval hung up before sending")
-            }
-        }
-    }
-    assert_eq!(value, Some(42));
+    let value = fakes::Deadline::after(OUTER).recv_or_fail(&returned, "the paced answer");
+    assert_eq!(value, 42);
 }
 
-/// How many paced fetches prove the approval spanned the stall bound: six
-/// 100 ms holds already outlast it, and the replacement fixture below
-/// fetches more than that.
+/// How many held fetches prove the approval spanned the stall bound: each
+/// holds one slice, and the bound allows fewer silent slices than this.
 const MIN_CALLS: u64 = 6;
 
 #[test]
@@ -558,25 +525,21 @@ fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
     );
     let root = "fiber.test/root";
     declare(&setup, &named(root, &[(&z, "1.0"), (&zz, "1.0")]));
-    // Every fetch holds below the stall bound: the closure proves progress,
-    // then parks, so the approval spans past the bound with no silence ever
-    // reaching it. Each hold releases itself; nothing stays parked, because
-    // progress here is continuous. The repository path repeats `Repos::tag`
-    // as in the stall test above.
+    // Every fetch proves progress, then parks on a gate the test owns, so
+    // the approval spans past the bound with no silence ever reaching it.
+    // The repository path repeats `Repos::tag` as in the stall test above.
     let calls = Arc::new(AtomicU64::new(0));
     let counted = Arc::clone(&calls);
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let (parked_tx, parked) = mpsc::channel::<()>();
+    let parked_tx = Mutex::new(parked_tx);
     let root_path = setup.root();
     let origin = Origin::new("git", move |repo: &str| {
         counted.fetch_add(1, Ordering::SeqCst);
         GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
-        let (_held, idle) = mpsc::channel::<()>();
-        match fakes::Deadline::after(PACE).recv(&idle) {
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("the pacing channel hung up")
-            }
-            Ok(()) => panic!("the pacing channel fired"),
-        }
+        parked_tx.lock().unwrap().send(()).unwrap();
+        gate.lock().unwrap().recv().unwrap();
         format!(
             "file://{}",
             root_path
@@ -597,21 +560,18 @@ fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
             }))
             .unwrap();
     });
-    // The approval is still fetching: the answer must not have arrived yet.
-    // An answer here means the run finished inside the bound instead of
-    // spanning it, and a hangup means the bound fired on live progress.
-    match fakes::Deadline::after(MID).recv(&returned) {
-        Err(mpsc::RecvTimeoutError::Timeout) => {}
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the approval failed while still fetching")
-        }
-        Ok(_) => panic!("the paced approval answered before spanning the stall bound"),
-    }
-    // The fetches keep proving progress while the test polls: either thread
-    // descheduled alone never looks like a stall.
+    // Hold every fetch for a slice, then release it, until the approval
+    // answers. An answer while a fetch is held, or a hangup, fails inside
+    // `hold_one_slice`.
     let mut value = None;
     for _ in 0..POLLS {
-        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+        // A hangup here means the store dropped its origin when the
+        // approval ended: no more fetches, so the answer is next.
+        if let Ok(()) = fakes::Deadline::after(POLL).recv(&parked) {
+            hold_one_slice(&returned);
+            release.send(()).unwrap();
+            continue;
+        }
         match fakes::Deadline::after(POLL).recv(&returned) {
             Ok(returned) => {
                 value = Some(returned);
@@ -624,12 +584,12 @@ fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
         }
     }
     value
-        .expect("the paced approval answers")
-        .expect("the paced approval succeeds");
+        .expect("the held approval answers")
+        .expect("the held approval succeeds");
     let calls = calls.load(Ordering::SeqCst);
     assert!(
         calls >= MIN_CALLS,
-        "the approval spanned the bound on only {calls} paced fetches"
+        "the approval spanned the bound on only {calls} held fetches"
     );
 }
 

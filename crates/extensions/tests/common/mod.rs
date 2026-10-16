@@ -572,6 +572,11 @@ const STORE_OPERATION_WITHIN: Duration = Duration::from_secs(10);
 /// data, which is why `Ordering::Relaxed` is enough everywhere it is read.
 pub(crate) static GIT_PROGRESS: AtomicU64 = AtomicU64::new(0);
 
+/// Stall-bound slices `on_worker_within` has waited through without an
+/// answer, so a test can hold work for a whole slice by waiting on this
+/// count instead of on a clock.
+pub(crate) static STALL_SLICES: AtomicU64 = AtomicU64::new(0);
+
 /// Runs one blocking store operation on a worker under a stall bound:
 /// silence (no new git work) for the whole bound fails the test instead of
 /// hanging it, while slow git work that keeps starting fetches runs as long
@@ -598,7 +603,9 @@ pub(crate) fn on_worker_within<T: Send + 'static>(
                 worker.join().unwrap();
                 return value;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                STALL_SLICES.fetch_add(1, Ordering::Relaxed);
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("the sender for {waited_for} hung up before sending")
             }
