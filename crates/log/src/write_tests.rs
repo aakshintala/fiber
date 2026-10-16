@@ -270,6 +270,9 @@ fn status(name: &str) -> Event {
         model: "m".into(),
         state: SessionState::Idle,
         since: 0,
+        started: 0,
+        calls: 0,
+        step: None,
         git: None,
         context: None,
         spend: Usage {

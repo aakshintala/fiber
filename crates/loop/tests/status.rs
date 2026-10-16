@@ -114,6 +114,58 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
 }
 
 #[test]
+fn two_calls_report_their_classified_subject_and_session_start() {
+    let weather = Arc::new(TestTool::reads("weather", "sunny"));
+    let mut session = Session::with_tools(
+        vec![
+            tool_call_reply("", &["weather"]),
+            tool_call_reply("", &["shell"]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![
+            weather as Arc<dyn Tool>,
+            support::shell(Some("ls -la"), None),
+        ],
+    );
+    session.rules.set(contract::rules::StandingRules {
+        global: vec![contract::rules::Rule {
+            decision: contract::rules::RuleDecision::Allow,
+            tool: "shell".into(),
+            prefix: "ls".into(),
+            added: None,
+            session_id: None,
+        }],
+        project: Vec::new(),
+    });
+    let started = log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind == "session_started")
+        .unwrap()
+        .ts;
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, |line| {
+        line.payload["calls"] == 2 && line.payload["state"] == "idle"
+    });
+    assert_eq!(seen[0].payload["calls"], 0);
+    assert!(!seen[0].payload.contains_key("step"));
+    let first = seen.iter().find(|line| line.payload["calls"] == 1).unwrap();
+    assert_eq!(first.payload["step"], "weather");
+    assert_eq!(seen.last().unwrap().payload["step"], "shell ls -la");
+    for line in seen {
+        assert_eq!(line.payload["started"], started);
+    }
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
+}
+
+#[test]
 fn no_status_follows_the_line_written_after_run_returns() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
     let watcher = session.log.watch();

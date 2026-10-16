@@ -75,7 +75,7 @@ fn durable(seq: u64, state: &str) -> String {
     let line = json!({"kind": "session_status", "session_id": SID, "seq": seq,
         "ts": 5, "schema_version": 1,
         "payload": {"name": "n", "workspace": "/w", "project": "-w", "model": "p/m",
-            "state": state, "since": 7,
+            "state": state, "started": 0, "calls": 0, "since": 7,
             "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {},
                 "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
             "delegates": 0, "jobs": 0, "clients": 0}});

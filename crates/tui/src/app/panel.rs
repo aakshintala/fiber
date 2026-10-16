@@ -103,6 +103,8 @@ pub(crate) struct PanelState {
     /// delegate keeps its `jobs` entry and records its `status` here, so
     /// the card keeps showing it as done (`docs/tui.md`, "The panel").
     finished: BTreeMap<JobId, Outcome>,
+    ended: BTreeMap<JobId, u64>,
+    last: BTreeMap<JobId, (u64, u64)>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -199,6 +201,8 @@ impl PanelState {
                     // (`docs/delegates.md`, "Identity and resume").
                     self.jobs.retain(|(id, _)| *id != started.job_id);
                     self.finished.remove(&started.job_id);
+                    self.ended.remove(&started.job_id);
+                    self.last.remove(&started.job_id);
                     self.jobs.push((started.job_id, started.description));
                 }
             }
@@ -207,11 +211,17 @@ impl PanelState {
                     self.delegates.insert(started.job_id.clone(), started);
                 }
             }
+            "delegate_finished" => {
+                if let Some(done) = super::read!(envelope, contract::events::DelegateFinished) {
+                    self.ended.insert(done.job_id, envelope.ts);
+                }
+            }
             "job_completed" => {
                 if let Some(done) = super::read!(envelope, JobCompleted) {
                     // A finished delegate stays on its card as done; a
                     // plain job leaves the fold.
                     if self.delegates.contains_key(&done.job_id) {
+                        self.ended.entry(done.job_id.clone()).or_insert(envelope.ts);
                         self.finished.insert(done.job_id, done.status);
                     } else {
                         self.jobs.retain(|(id, _)| *id != done.job_id);
@@ -339,6 +349,18 @@ impl PanelState {
                     .map(|started| (started, description.as_str()))
             })
             .collect()
+    }
+
+    /// Keeps the last readable summary before the delegate's row is dropped.
+    pub(super) fn keep_last(&mut self, job: JobId, calls: u64, started: u64) {
+        self.last.insert(job, (calls, started));
+    }
+
+    /// The finished delegate's calls and elapsed milliseconds, when known.
+    pub(crate) fn finished_figures(&self, job: &JobId) -> Option<(u64, u64)> {
+        let (calls, started) = self.last.get(job)?;
+        let ended = self.ended.get(job)?;
+        Some((*calls, ended.saturating_sub(*started)))
     }
 
     /// Finished delegates in job start order, each with its job's

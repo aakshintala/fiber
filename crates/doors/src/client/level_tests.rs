@@ -217,6 +217,9 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             model: "m".into(),
             state: contract::events::SessionState::Idle,
             since: 0,
+            started: 0,
+            calls: 0,
+            step: None,
             git: None,
             context: None,
             spend: contract::shapes::Usage {

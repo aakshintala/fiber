@@ -59,7 +59,7 @@ fn session_line(kind: &str, payload: Value, action: Option<&str>, ts: u64) -> Li
 fn status(state: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w",
-        "project": "-w", "state": "idle", "since": WALL,
+        "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": WALL,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

@@ -110,7 +110,7 @@ fn live(session: &str, state: serde_json::Value) -> Line {
         "name": "fix tests",
         "workspace": "/w",
         "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -144,7 +144,7 @@ fn waiting_row(session: &str, kind: &str) -> Line {
 fn waiting_row_since(session: &str, kind: &str, since: u64) -> Line {
     live(
         session,
-        serde_json::json!({"state": "waiting", "since": since,
+        serde_json::json!({"state": "waiting", "started": 0, "calls": 0, "since": since,
             "waiting": {"request_id": "r_1", "kind": kind, "summary": "Run cargo test"}}),
     )
 }
@@ -233,7 +233,7 @@ fn it_clears_when_the_row_stops_waiting() {
     assert_eq!(app.title(), "! fiber · approval");
     app.on_line(live(
         SESSION,
-        serde_json::json!({"state": "streaming", "since": 1}),
+        serde_json::json!({"state": "streaming", "started": 0, "calls": 0, "since": 1}),
     ));
     assert_eq!(app.title(), "fiber");
 }
@@ -338,7 +338,7 @@ fn a_seen_row_that_stops_waiting_stays_cleared() {
     assert_eq!(app.title(), "! fiber · approval");
     app.on_line(live(
         SESSION,
-        serde_json::json!({"state": "streaming", "since": 1}),
+        serde_json::json!({"state": "streaming", "started": 0, "calls": 0, "since": 1}),
     ));
     assert_eq!(app.title(), "fiber");
     // Waiting again without a new attention line never re-shows.
@@ -386,14 +386,14 @@ fn a_late_copy_of_an_earlier_status_keeps_the_waiting_title() {
     let mut app = home(Attention::default());
     app.on_line(live(
         SESSION,
-        serde_json::json!({"state": "streaming", "since": 5}),
+        serde_json::json!({"state": "streaming", "started": 0, "calls": 0, "since": 5}),
     ));
     app.on_line(waiting_row_since(SESSION, "approval", 9));
     app.on_line(attention(SESSION, "waiting"));
     // The `full` subscription's copy of the earlier status arrives late.
     app.on_line(live(
         SESSION,
-        serde_json::json!({"state": "streaming", "since": 5}),
+        serde_json::json!({"state": "streaming", "started": 0, "calls": 0, "since": 5}),
     ));
     app.on_line(waiting_row_since(SESSION, "approval", 9));
     assert_eq!(app.title(), "! fiber · approval");

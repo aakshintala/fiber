@@ -75,6 +75,14 @@ impl App {
                     .get(&done.job_id)
                     .map(|started| started.delegate_session_id.clone());
                 if let Some(session) = session {
+                    if let Some(status) = self
+                        .delegate_rows
+                        .get(&session)
+                        .and_then(|row| row.status.as_ref())
+                    {
+                        self.panel_state
+                            .keep_last(done.job_id, status.calls, status.started);
+                    }
                     self.delegate_rows.remove(&session);
                 }
             }

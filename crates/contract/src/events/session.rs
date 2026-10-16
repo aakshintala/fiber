@@ -366,6 +366,13 @@ pub struct SessionStatus {
     pub state: SessionState,
     /// When this state began, as `ts`.
     pub since: u64,
+    /// When the session started, as `ts`.
+    pub started: u64,
+    /// Tool calls the session has made so far.
+    pub calls: u64,
+    /// The latest call's tool name and subject, after the first call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
     /// Present in a git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<Git>,

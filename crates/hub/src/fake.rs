@@ -620,7 +620,7 @@ pub(crate) fn status(name: &str, workspace: &str, state: &str, parent: Option<&s
     });
     let mut payload = serde_json::json!({
         "name": name, "workspace": workspace, "project": "-w", "model": "p/m", "state": state,
-        "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
+        "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
     });
     if state == "waiting" {
         payload["waiting"] = serde_json::json!({

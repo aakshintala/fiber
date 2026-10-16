@@ -3,6 +3,6 @@ source: crates/tui/src/view/panel/delegates_motion_tests.rs
 expression: shown
 ---
 ⠋ alpha
-  WORKING · test/model
+  0 calls · 0s
 ⠋ beta
   fiber · test/model

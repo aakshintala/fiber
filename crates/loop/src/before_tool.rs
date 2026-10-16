@@ -115,7 +115,12 @@ impl Loop {
             )));
         };
         match classify(&tool, &arguments) {
-            Ok(effects) => Ok((tool, arguments, effects)),
+            Ok(effects) => {
+                if let Some(tap) = &self.status_tap {
+                    tap.subject(call, effects.subject.as_deref());
+                }
+                Ok((tool, arguments, effects))
+            }
             Err(ClassifyFailure::Schema(errors)) => Err(Box::new(crate::completion::failed(
                 ErrorCode::InvalidArguments,
                 format!(

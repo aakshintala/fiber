@@ -437,7 +437,7 @@ fn the_span_covers_only_the_card_rows() {
         "session_status",
         serde_json::json!({
             "name": "work", "workspace": "/w", "project": "-w",
-            "state": "idle", "since": 0,
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {},
                 "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 2, "jobs": 3, "clients": 0,
@@ -485,7 +485,7 @@ fn delegates_card_scrolled() {
 fn delegate_status(app: &mut App, job: &str, state: serde_json::Value) {
     let mut payload = serde_json::json!({
         "name": "delegate one", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -525,12 +525,115 @@ fn unreadable_status(app: &mut App, job: &str) {
     }));
 }
 
+fn session_line_at(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
+    let Line::Session(mut line) = session_line(kind, payload) else {
+        unreachable!()
+    };
+    line.ts = ts;
+    Line::Session(line)
+}
+
 #[test]
-fn with_a_status_the_second_row_shows_its_word_and_model() {
+fn progress_running_rows_show_calls_elapsed_and_the_optional_step() {
+    let clock = fakes::clock::FakeClock::new();
+    const WALL: u64 = 1_700_000_000_000;
+    for (fields, expected) in [
+        (
+            serde_json::json!({"calls": 14, "started": WALL-130_000, "step": "read app.rs"}),
+            "  14 calls · 2m 10s · read app.rs",
+        ),
+        (
+            serde_json::json!({"calls": 1, "started": WALL-130_000}),
+            "  1 call · 2m 10s",
+        ),
+        (
+            serde_json::json!({"calls": 0, "started": WALL-3_000}),
+            "  0 calls · 3s",
+        ),
+        (
+            serde_json::json!({"calls": 2, "started": WALL+1}),
+            "  2 calls · 0s",
+        ),
+    ] {
+        let mut app = attached(160, 40);
+        app.set_now(clock.origin(), WALL);
+        fold_fiber(&mut app, 1);
+        let mut state = fields;
+        state["state"] = serde_json::json!("idle");
+        delegate_status(&mut app, "j_1", state);
+        let drawn = super::rows(&app, 100);
+        assert_eq!(drawn[1].line.to_string(), expected);
+        assert_eq!(
+            drawn[1].line.spans[0].style,
+            crate::markdown::style(crate::markdown::Role::Muted)
+        );
+    }
+    let mut app = attached(160, 40);
+    fold_fiber(&mut app, 1);
+    assert_eq!(
+        super::rows(&app, 100)[1].line.to_string(),
+        "  fiber · test/model"
+    );
+    unreadable_status(&mut app, "j_1");
+    assert!(
+        super::rows(&app, 100)[1]
+            .line
+            .to_string()
+            .contains("CANNOT ATTACH")
+    );
+}
+
+#[test]
+fn progress_finished_rows_freeze_the_last_status_at_the_first_end() {
+    for (outcome, word, with_finish, elapsed) in [
+        ("completed", "done", true, "48s"),
+        ("completed", "done", false, "58s"),
+        ("failed", "failed", true, "48s"),
+        ("cancelled", "cancelled", true, "48s"),
+    ] {
+        let mut app = attached(160, 40);
+        fold_fiber(&mut app, 1);
+        delegate_status(
+            &mut app,
+            "j_1",
+            serde_json::json!({"state": "idle", "calls": 6, "started": 2000}),
+        );
+        if with_finish {
+            app.on_line(session_line_at("delegate_finished", 50_000, serde_json::json!({"job_id": "j_1", "text": "done",
+                "usage": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0}, "cost": null, "subscription_cost": 0.0}})));
+        }
+        app.on_line(session_line_at(
+            "job_completed",
+            60_000,
+            serde_json::json!({"job_id": "j_1", "status": outcome}),
+        ));
+        assert_eq!(
+            super::rows_with_done(&app, 100)[1].line.to_string(),
+            format!("  6 calls · {elapsed} · {word}")
+        );
+        assert!(
+            app.delegate_row(&contract::SessionId(format!("s_{:0>16}", "j_1")))
+                .is_none()
+        );
+        // A resumed job must not reuse either the status or its ending.
+        fold_job(&mut app, "j_1", "again");
+        app.on_line(session_line_at(
+            "job_completed",
+            70_000,
+            serde_json::json!({"job_id": "j_1", "status": "completed"}),
+        ));
+        assert_eq!(
+            super::rows_with_done(&app, 100)[1].line.to_string(),
+            "  done"
+        );
+    }
+}
+
+#[test]
+fn with_a_status_the_second_row_shows_its_progress() {
     use crate::markdown::Role;
-    // The first row is always `●` in attention with the description;
-    // the state word rides the dim second row with the started model.
-    for (state, word) in [
+    // The first row keeps the state glyph; progress is dim below it.
+    for (state, _word) in [
         (serde_json::json!({"state": "streaming"}), "WORKING"),
         (
             serde_json::json!({"state": "tool", "tool": "read"}),
@@ -555,10 +658,7 @@ fn with_a_status_the_second_row_shows_its_word_and_model() {
         assert_eq!(glyph.content, "\u{25cf}");
         assert_eq!(glyph.style, crate::markdown::style(Role::Attention));
         let second = &drawn[1];
-        assert_eq!(
-            second.line.to_string(),
-            format!("  {word} \u{00b7} test/model")
-        );
+        assert_eq!(second.line.to_string(), "  0 calls · 0s");
         assert_eq!(
             second.line.spans.first().map(|span| span.style),
             Some(crate::markdown::style(Role::Muted))
@@ -578,7 +678,7 @@ fn with_a_status_the_second_row_shows_its_word_and_model() {
 }
 
 #[test]
-fn the_status_row_keeps_the_started_model() {
+fn the_progress_row_does_not_show_the_model() {
     let mut app = attached(160, 40);
     fold_delegate(
         &mut app,
@@ -589,13 +689,9 @@ fn the_status_row_keeps_the_started_model() {
     );
     delegate_status(&mut app, "j_1", serde_json::json!({"state": "streaming"}));
     let drawn = super::rows(&app, text_width(&app));
-    // The first row names the description; the fold's model rides the
-    // dim second row with the state word.
+    // The description remains above the progress, regardless of model.
     assert_eq!(drawn[0].line.to_string(), "\u{25cf} review the parser");
-    assert_eq!(
-        drawn[1].line.to_string(),
-        "  WORKING \u{00b7} started/model"
-    );
+    assert_eq!(drawn[1].line.to_string(), "  0 calls · 0s");
 }
 
 /// A delegate's end draws from its outcome: the glyph, the description

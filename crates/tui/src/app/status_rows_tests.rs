@@ -91,7 +91,7 @@ fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
 fn live(session: &str, name: &str, state: serde_json::Value) -> Line {
     let mut payload = serde_json::json!({
         "name": name, "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

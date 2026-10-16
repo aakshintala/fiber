@@ -63,7 +63,7 @@ fn fold_widget(app: &mut App, extension: &str, widget: &str, lines: &[&str]) {
 fn status_line(spend: serde_json::Value, context: Option<serde_json::Value>) -> Line {
     let mut payload = serde_json::json!({
         "name": "work", "workspace": "/Users/you/work/fiber", "project": "-w",
-        "state": "idle", "since": 0, "spend": spend,
+        "state": "idle", "started": 0, "calls": 0, "since": 0, "spend": spend,
         "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
     });
     if let Some(context) = context {
@@ -114,7 +114,7 @@ fn other_waiting(session: &str) -> Line {
         seq: None,
         payload: serde_json::json!({
             "name": "other", "workspace": "/Users/you/work/fiber",
-            "project": "-w", "state": "waiting", "since": 0,
+            "project": "-w", "state": "waiting", "started": 0, "calls": 0, "since": 0,
             "waiting": {"request_id": "r_1", "kind": "approval",
                 "summary": "shell ls"},
             "spend": {"tokens": {"input": 1, "cache_read": 0,
@@ -142,7 +142,7 @@ fn other_idle(session: &str) -> Line {
         seq: None,
         payload: serde_json::json!({
             "name": "other", "workspace": "/Users/you/work/fiber",
-            "project": "-w", "state": "idle", "since": 0,
+            "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -1525,7 +1525,7 @@ fn full_session_on_main(app: &mut App) {
         "session_status",
         serde_json::json!({
             "name": "work", "workspace": "/Users/you/work/fiber",
-            "project": "-w", "state": "idle", "since": 0,
+            "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 900, "cache_read": 100,
                 "cache_write": {"5m": 50}, "output": 200},
                 "cost": 0.41, "subscription_cost": 1.10},
