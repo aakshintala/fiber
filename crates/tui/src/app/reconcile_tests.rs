@@ -150,7 +150,12 @@ fn sessions_answer(id: &str, running: &[&str]) -> Line {
 /// The rows home draws.
 fn rows(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(_, line, _)| line).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

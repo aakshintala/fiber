@@ -289,7 +289,11 @@ fn delete_question() -> App {
     app.on_line(accepted(&recent, json!({"sessions": [exited("old work")]})));
     let key = app
         .home_screen()
-        .and_then(|screen| screen.rows.first().map(|row| row.0))
+        .and_then(|screen| {
+            crate::home::home_test_rows(&screen)
+                .first()
+                .map(|row| row.0)
+        })
         .expect("one row");
     assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
     assert!(app.home_modal());

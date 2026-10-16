@@ -85,6 +85,7 @@ pub(crate) struct Fold {
     since: Option<u64>,
     started: u64,
     calls: u64,
+    turns: u64,
     step: Option<String>,
     latest: Option<(String, serde_json::Map<String, serde_json::Value>)>,
     pending_subject: Option<(serde_json::Value, Option<String>)>,
@@ -141,6 +142,7 @@ impl Fold {
                 since: 0,
                 started: 0,
                 calls: 0,
+                turns: Some(0),
                 step: None,
                 git: None,
                 context: None,
@@ -161,6 +163,7 @@ impl Fold {
             since: None,
             started: 0,
             calls: 0,
+            turns: 0,
             step: None,
             latest: None,
             pending_subject: None,
@@ -251,6 +254,9 @@ impl Fold {
                 self.thinking.clone_from(&changed.after.thinking);
             }
             Event::TurnStarted(started) => {
+                if line.turn_id.is_some() {
+                    self.turns += 1;
+                }
                 if self.first_prompt.is_none() {
                     if let Some(prompt) = prompt_of(&started.input) {
                         self.first_prompt = Some(prompt);
@@ -524,6 +530,7 @@ impl Fold {
             since: self.since.unwrap_or_default(),
             started: self.started,
             calls: self.calls,
+            turns: Some(self.turns),
             step: self.step.clone(),
             git: self.git.clone(),
             // A window of 0 is no window: a fill against it means nothing.

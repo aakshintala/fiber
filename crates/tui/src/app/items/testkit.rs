@@ -79,10 +79,9 @@ pub(crate) fn opened(app: &mut App) {
     let key = app
         .home_screen()
         .map(|screen| {
-            screen
-                .rows
+            crate::home::home_test_rows(&screen)
                 .into_iter()
-                .map(|(key, _, _)| key)
+                .map(|(key, _)| key)
                 .collect::<Vec<_>>()
         })
         .and_then(|keys| keys.into_iter().next())

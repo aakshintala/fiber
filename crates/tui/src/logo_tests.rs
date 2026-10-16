@@ -47,9 +47,19 @@ fn two_pixels_make_one_cell_by_the_half_block_rule() {
 }
 
 #[test]
-fn width_cells_counts_pixels_a_blank_and_the_version() {
-    assert_eq!(super::width_cells("0.0.1"), 32 + 1 + 5);
-    assert_eq!(super::width_cells(""), 32 + 1);
+fn width_cells_counts_only_the_32_pixel_columns() {
+    assert_eq!(super::width_cells(), 32);
+}
+
+#[test]
+fn the_fourth_row_ends_with_the_pixel_letters() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4));
+    super::draw(&mut buf, 0, 0);
+    let beyond: String = (32..40).map(|x| buf[(x, 3)].symbol()).collect();
+    assert_eq!(beyond, "        ");
 }
 
 #[test]
@@ -58,11 +68,10 @@ fn full_blocks_carry_no_background_and_two_tone_halves_carry_both() {
     use ratatui::layout::Rect;
     use ratatui::style::Color;
 
-    let version = "0.0.1";
-    let wide = u16::try_from(super::width_cells(version)).unwrap_or(u16::MAX);
+    let wide = u16::try_from(super::width_cells()).unwrap_or(u16::MAX);
     let area = Rect::new(0, 0, wide.saturating_add(2), 4);
     let mut buf = Buffer::empty(area);
-    super::draw(&mut buf, 0, 0, version);
+    super::draw(&mut buf, 0, 0);
     let mut full = 0;
     let mut half = 0;
     for y in 0..4 {

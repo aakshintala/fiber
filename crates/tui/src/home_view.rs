@@ -1,6 +1,5 @@
-//! Home's frame: the logo, the input box with its chips, the session
-//! list under it, and the foot hint (`docs/tui.md`, "Home"). Each width is
-//! picked, not measured: the box is at most 100 columns, centred.
+//! Home's frame: the logo header, project sections, the bottom input box
+//! and the foot hint (`docs/tui.md`, "Home").
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -11,7 +10,7 @@ use super::{FOCUS_STYLE, completions, lift_hover};
 use crate::app::App;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
-use crate::home::{HomeScreen, Spot, TypedScreen};
+use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -25,11 +24,8 @@ const BOX_TINT: Style = Style::new().bg(Role::Surface.color());
 /// no `start` went out in this run.
 const PLACEHOLDER: &str = "› /? for shortcuts";
 
-/// The box's width: at most 100 columns, centred.
-const BOX_WIDTH: u16 = 100;
-
-/// The draft rows the box shows: at least 3, at most 8.
-const MIN_BOX: usize = 3;
+/// The draft rows the box shows: at least 2, at most 8.
+const MIN_BOX: usize = 2;
 const MAX_BOX: usize = 8;
 
 /// Where home's rows draw.
@@ -54,26 +50,19 @@ struct Placed {
     top: usize,
     /// The chip row and the ▀ edge row.
     chip: u16,
-    edge: u16,
     /// The foot hint's row.
     foot: u16,
+    /// The list's first row and exclusive end.
+    list_top: u16,
+    list_end: u16,
 }
 
-/// Lays home out in `area`: the pad, the logo, one blank row, the box,
-/// the list, and the foot hint on the last row. The logo is four pixel
-/// rows when they fit with three list rows kept, else the one-row form.
+/// Reserves the foot, optional banner and bottom box before the list.
+/// A four-row header needs twelve rows plus the wrapped blockers.
 fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
-    let width = area.width.min(BOX_WIDTH);
-    // Without colour the box is thin: its sides take one column each,
-    // so the draft, the blockers and the chips wrap two narrower
-    // (`docs/tui.md`, "Look").
-    let inner = if crate::surface::box_fit(width) {
-        width.saturating_sub(2)
-    } else {
-        width
-    };
-    let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
-    let pad = area.height / 8;
+    let width = area.width;
+    let inner = crate::surface::inset(width);
+    let x = area.x;
     let draft = app.input().rows(inner);
     let height = draft.len().clamp(MIN_BOX, MAX_BOX);
     // The box is its ▄ edge, the draft rows, the chip row and its ▀ edge.
@@ -85,26 +74,28 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         .iter()
         .flat_map(|line| wrap(line, usize::from(inner)))
         .collect();
-    // Four rows need the pad, the four-row logo, one blank row, the
-    // blocker lines, the box, three list rows and the foot, and the
-    // logo's width.
-    let need = pad + 4 + boxed + 3 + 1;
-    let need = need.saturating_add(super::to_u16(blockers.len()));
-    let four =
-        area.height > need && area.width >= super::to_u16(logo::width_cells(&screen.version));
+    let need = 12u16.saturating_add(super::to_u16(blockers.len()));
+    let four = area.height >= need && area.width >= super::to_u16(logo::width_cells());
     let logo_rows = if four { 4 } else { 1 };
-    let logo = area.y.saturating_add(pad);
-    let box_top = logo
-        .saturating_add(super::to_u16(logo_rows))
-        .saturating_add(1)
-        .saturating_add(super::to_u16(blockers.len()));
+    let logo = area.y;
+    let foot = area.bottom().saturating_sub(1);
+    let box_top = foot
+        .saturating_sub(u16::from(app.banner().is_some()))
+        .saturating_sub(boxed)
+        .max(area.y);
+    let list_top = area.y.saturating_add(5);
+    let list_end = if area.height >= 12 {
+        box_top
+            .saturating_sub(super::to_u16(blockers.len()))
+            .max(area.y)
+    } else {
+        list_top
+    };
     let (row, _) = app.input().cursor(inner);
     let top = row.saturating_add(1).saturating_sub(height);
     let shown = draft.into_iter().skip(top).take(height).collect();
     let draft_top = box_top.saturating_add(1);
     let chip = draft_top.saturating_add(super::to_u16(height));
-    let edge = chip.saturating_add(1);
-    let foot = area.bottom().saturating_sub(1);
     Placed {
         x,
         width,
@@ -117,9 +108,17 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         shown,
         top,
         chip,
-        edge,
         foot,
+        list_top,
+        list_end,
     }
+}
+
+/// The input text's first column inside the box.
+fn text_x(placed: &Placed) -> u16 {
+    placed
+        .x
+        .saturating_add(placed.width.saturating_sub(placed.inner))
 }
 
 /// Writes `text` at `x`, `y`, cut to `width`, or nothing below the area.
@@ -303,6 +302,239 @@ fn draw_delete_question(
     }
 }
 
+struct ListRow {
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    spot: Option<Spot>,
+    stop: bool,
+    plus: Option<(u64, u16)>,
+}
+
+fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let mut rows = Vec::new();
+    for line in &screen.list {
+        let mut row = ListRow {
+            left: Vec::new(),
+            right: Vec::new(),
+            spot: None,
+            stop: false,
+            plus: None,
+        };
+        match line {
+            ListLine::Head {
+                start,
+                name,
+                live,
+                spend,
+                waiting,
+            } => {
+                row.left.push(Span::styled(
+                    name.clone(),
+                    style(Role::Accent).add_modifier(Modifier::BOLD),
+                ));
+                if let Some(key) = start {
+                    row.plus = Some((*key, super::to_u16(width(name).saturating_add(1))));
+                    row.left.push(Span::styled(" +", style(Role::Accent)));
+                }
+                row.left
+                    .push(Span::styled(format!("  {live} live · {spend}"), dim));
+                if *waiting != 0 {
+                    row.left.push(Span::styled(
+                        format!("  {waiting} waiting on you"),
+                        style(Role::Attention),
+                    ));
+                }
+            }
+            ListLine::Live {
+                key,
+                number,
+                glyph,
+                name,
+                word,
+                tone,
+                since,
+                stop,
+                id,
+                turns,
+                branch,
+                spend,
+                context,
+                wait,
+            } => {
+                row.spot = Some(Spot::Entry(*key));
+                row.stop = *stop;
+                let number = number.map(|n| format!("⌥{n} ")).unwrap_or_default();
+                row.left = vec![
+                    Span::styled(number, dim),
+                    Span::styled(format!("{glyph} "), style(*tone)),
+                    Span::raw(name.clone()),
+                ];
+                row.right = vec![
+                    Span::styled(word.to_string(), style(*tone)),
+                    Span::styled(format!("  {since}"), dim),
+                ];
+                rows.push(row);
+                let mut segments = vec![id.clone()];
+                if let Some(turns) = turns {
+                    segments.push(crate::format::count(*turns, "turn", "turns"));
+                }
+                if let Some(branch) = branch {
+                    segments.push(format!("⎇ {branch}"));
+                }
+                segments.push(spend.clone());
+                if let Some(context) = context {
+                    segments.push(format!("{context}%"));
+                }
+                let mut left = vec![Span::styled(format!("    {}", segments.join(" · ")), dim)];
+                if let Some(wait) = wait {
+                    left.push(Span::styled(format!(" · {wait}"), style(Role::Attention)));
+                }
+                rows.push(ListRow {
+                    left,
+                    right: Vec::new(),
+                    spot: Some(Spot::Entry(*key)),
+                    stop: false,
+                    plus: None,
+                });
+                continue;
+            }
+            ListLine::ExitedHead { count } => row
+                .left
+                .push(Span::styled(format!("  exited · {count}"), dim)),
+            ListLine::Exited {
+                key,
+                glyph,
+                name,
+                id,
+                turns,
+                spend,
+                age,
+            } => {
+                row.spot = Some(Spot::Entry(*key));
+                row.left
+                    .push(Span::styled(format!("   {glyph} {name}"), dim));
+                let mut segments = vec![id.clone()];
+                if let Some(turns) = turns {
+                    segments.push(crate::format::count(*turns, "turn", "turns"));
+                }
+                segments.push(spend.clone());
+                if let Some(age) = age {
+                    segments.push(age.clone());
+                }
+                row.right.push(Span::styled(segments.join(" · "), dim));
+            }
+            ListLine::More { key, count } => {
+                row.spot = Some(Spot::More(*key));
+                row.left
+                    .push(Span::styled(format!("     … {count} more"), dim));
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+fn draw_list(
+    app: &App,
+    screen: &HomeScreen,
+    placed: &Placed,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    let capacity = usize::from(placed.list_end.saturating_sub(placed.list_top));
+    let rows = list_rows(screen);
+    let focused = app.focused().and_then(|target| {
+        let TargetId::Home(spot) = target else {
+            return None;
+        };
+        spot.list_stop()
+    });
+    let start = focused
+        .and_then(|spot| rows.iter().position(|r| r.spot == Some(spot)))
+        .map_or(0, |at| {
+            let height = 1 + usize::from(
+                rows.get(at.saturating_add(1))
+                    .is_some_and(|r| r.spot == focused),
+            );
+            at.saturating_add(height.min(capacity))
+                .saturating_sub(capacity)
+        });
+    if screen.empty {
+        let y = placed
+            .list_top
+            .saturating_add(super::to_u16(capacity.saturating_sub(2) / 2));
+        for (i, text) in [
+            "No sessions yet.",
+            "Type below and press Enter to start one.",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = y.saturating_add(super::to_u16(i));
+            if y < placed.list_end {
+                put(
+                    buf,
+                    area,
+                    area.x
+                        .saturating_add(area.width.saturating_sub(super::to_u16(width(text))) / 2),
+                    y,
+                    text,
+                    area.width,
+                    Style::new().add_modifier(Modifier::DIM),
+                );
+            }
+        }
+    }
+    for (at, row) in rows.iter().skip(start).take(capacity).enumerate() {
+        let y = placed.list_top.saturating_add(super::to_u16(at));
+        let body = placed.width.saturating_sub(if row.stop { 2 } else { 0 });
+        let right = ratatui::text::Line::from(row.right.clone());
+        let right_width = super::to_u16(right.width()).min(body);
+        let right_x = placed.x.saturating_add(body.saturating_sub(right_width));
+        let left = ratatui::text::Line::from(row.left.clone());
+        buf.set_line(placed.x, y, &left, body.saturating_sub(right_width));
+        buf.set_line(right_x, y, &right, right_width);
+        if let Some(spot) = row.spot {
+            let entry_width = placed.width.saturating_sub(u16::from(row.stop));
+            if entry_width > 1 {
+                targets.push(Target {
+                    id: TargetId::Home(spot),
+                    rect: Rect::new(placed.x, y, entry_width, 1),
+                });
+            }
+            if row.spot == focused {
+                buf.set_style(
+                    Rect::new(placed.x, y, placed.width, 1),
+                    Style::new().bg(Role::Selection.color()),
+                );
+            }
+            if let Spot::Entry(key) = spot {
+                if row.stop {
+                    let x = area.right().saturating_sub(1);
+                    put(buf, area, x, y, "✕", 1, Style::default());
+                    targets.push(Target {
+                        id: TargetId::Home(Spot::Stop(key)),
+                        rect: Rect::new(x, y, 1, 1),
+                    });
+                }
+                if let Some(row) = app.row_by_key(key) {
+                    app.motion().ask_spin(row);
+                }
+            }
+        }
+        if let Some((key, offset)) = row.plus
+            && offset < placed.width
+        {
+            targets.push(Target {
+                id: TargetId::Home(Spot::Start(key)),
+                rect: Rect::new(placed.x.saturating_add(offset), y, 1, 1),
+            });
+        }
+    }
+}
+
 /// Draws home's `screen` into `area` of `buf`: the one-row logo, the box
 /// with the completion panel above it, the session list under the box,
 /// and the foot hint on the last row, with the notice rows over the rows
@@ -323,23 +555,51 @@ pub(super) fn render(
     let mut targets = Vec::new();
     let placed = layout(app, screen, area);
     if placed.logo_rows == 4 {
-        // The four-row logo is pixel letters drawn with half blocks,
-        // centred, with the version dim on its fourth row.
-        let cells = super::to_u16(logo::width_cells(&screen.version));
-        let at = placed
-            .x
-            .saturating_add(placed.width.saturating_sub(cells) / 2);
-        logo::draw(buf, at, placed.logo, &screen.version);
+        logo::draw(buf, placed.x, placed.logo);
+        let x = placed.x.saturating_add(35);
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        put(
+            buf,
+            area,
+            x,
+            placed.logo.saturating_add(1),
+            &screen.version,
+            placed.width.saturating_sub(35),
+            dim,
+        );
+        let mut spans = Vec::new();
+        for (role, text) in &screen.header.counts {
+            if !spans.is_empty() {
+                spans.push(Span::styled(" · ", dim));
+            }
+            spans.push(Span::styled(text.clone(), style(*role)));
+        }
+        if let Some(spend) = &screen.header.spend {
+            if !spans.is_empty() {
+                spans.push(Span::styled(" · ", dim));
+            }
+            spans.push(Span::styled(spend.clone(), dim));
+        } else {
+            spans.push(Span::styled("no sessions yet", dim));
+        }
+        let count_width = placed
+            .width
+            .saturating_sub(35)
+            .min(area.right().saturating_sub(x));
+        if count_width != 0 {
+            buf.set_line(
+                x,
+                placed.logo.saturating_add(2),
+                &ratatui::text::Line::from(spans),
+                count_width,
+            );
+        }
     } else {
         // The logo is `⌇ fiber <version>`: the ⌇ and the name in the accent
         // colour, the version dim. The logo row always draws: the pad
         // keeps it inside the area.
         let name = format!("{} fiber ", screen.glyph);
-        let at = placed.x.saturating_add(
-            placed.width.saturating_sub(super::to_u16(
-                width(&name).saturating_add(width(&screen.version)),
-            )) / 2,
-        );
+        let at = placed.x;
         let (end, _) = buf.set_stringn(
             at,
             placed.logo,
@@ -357,9 +617,8 @@ pub(super) fn render(
     }
     // The blocker lines sit above the box, wrapped at its width.
     let mut blocker_y = placed
-        .logo
-        .saturating_add(super::to_u16(placed.logo_rows))
-        .saturating_add(1);
+        .box_top
+        .saturating_sub(super::to_u16(placed.blockers.len()));
     for line in &placed.blockers {
         put(
             buf,
@@ -388,13 +647,20 @@ pub(super) fn render(
     );
     // The text's first column: one past the box's left side where the
     // box takes the sides.
-    let text_x = placed
-        .x
-        .saturating_add(u16::from(crate::surface::box_fit(placed.width)));
+    let text_x = text_x(&placed);
     if crate::surface::box_fit(placed.width) {
         crate::surface::draw_box(buf, area, slab, crate::surface::Edges::BOTH);
     } else {
-        crate::surface::draw_slab(buf, slab, Role::Surface, None, crate::surface::Edges::BOTH);
+        crate::surface::draw_slab(
+            buf,
+            slab,
+            Role::Surface,
+            Some(crate::surface::Stripe {
+                colour: Role::Accent,
+                right: false,
+            }),
+            crate::surface::Edges::BOTH,
+        );
     }
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
@@ -458,99 +724,7 @@ pub(super) fn render(
         }
         chip_x = chip_x.saturating_add(wide);
     }
-    // The session list draws under the box, down to the row above the
-    // foot, scrolling past the screen. The scope toggle heads it while
-    // it shows; each row is a target opening its session. The focused
-    // row is the last drawn one once it is past the first screenful,
-    // and the list draws from the top otherwise.
-    // While the link is down the reconnect banner takes the row above
-    // the foot, and the list above yields it one row (`docs/tui.md`,
-    // "A dropped connection"). With the link up nothing draws and no
-    // row moves, so the snapshots stay byte-identical.
-    let banner = usize::from(app.banner().is_some());
-    let list_top = placed.edge.saturating_add(1);
-    let mut row_y = list_top;
-    if let Some(toggle) = &screen.toggle
-        && row_y < placed.foot
-    {
-        put(
-            buf,
-            area,
-            placed.x,
-            row_y,
-            toggle,
-            placed.width,
-            Style::default(),
-        );
-        targets.push(Target {
-            id: TargetId::Home(Spot::Toggle),
-            rect: Rect::new(placed.x, row_y, placed.width, 1),
-        });
-        row_y = row_y.saturating_add(1);
-    }
-    let rows_capacity = usize::from(placed.foot.saturating_sub(list_top))
-        .saturating_sub(banner)
-        .saturating_sub(usize::from(screen.toggle.is_some()));
-    let start = match app.focused() {
-        Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => screen
-            .rows
-            .iter()
-            .position(|(row, _, _)| *row == key)
-            .map_or(0, |at| (at + 1).saturating_sub(rows_capacity)),
-        _ => 0,
-    };
-    for (key, text, has_x) in screen.rows.iter().skip(start) {
-        if row_y >= placed.foot {
-            break;
-        }
-        // A readable row ends in a ✕ in its last column: stopping a
-        // live session, deleting an exited one. The box fills the
-        // width, so there is always a last column.
-        if *has_x {
-            let body = usize::from(placed.width.saturating_sub(1));
-            let wide = super::to_u16(body);
-            put(
-                buf,
-                area,
-                placed.x,
-                row_y,
-                &cut(text, body),
-                wide,
-                Style::default(),
-            );
-            let cross = placed.x.saturating_add(wide);
-            buf.set_stringn(cross, row_y, "✕", 1, Style::default());
-            if wide > 0 {
-                targets.push(Target {
-                    id: TargetId::Home(Spot::Entry(*key)),
-                    rect: Rect::new(placed.x, row_y, wide, 1),
-                });
-            }
-            targets.push(Target {
-                id: TargetId::Home(Spot::Stop(*key)),
-                rect: Rect::new(cross, row_y, 1, 1),
-            });
-        } else {
-            put(
-                buf,
-                area,
-                placed.x,
-                row_y,
-                text,
-                placed.width,
-                Style::default(),
-            );
-            targets.push(Target {
-                id: TargetId::Home(Spot::Entry(*key)),
-                rect: Rect::new(placed.x, row_y, placed.width, 1),
-            });
-        }
-        // A drawn row's spinner moves on the tick.
-        if let Some(row) = app.row_by_key(*key) {
-            app.motion().ask_spin(row);
-        }
-        row_y = row_y.saturating_add(1);
-    }
+    draw_list(app, screen, &placed, area, buf, &mut targets);
     // The workspace picker is an overlay centred over home: the title,
     // one row per recent workspace with the selection barred, and what
     // the mouse does (`docs/tui.md`, "Home", "Look", "Overlays"). It
@@ -622,7 +796,16 @@ pub(super) fn render(
             );
         }
     }
-    let rows = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+    let rows = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        placed
+            .box_top
+            .saturating_sub(super::to_u16(placed.blockers.len()))
+            .saturating_sub(area.y),
+    );
+    bottom = rows.bottom();
     super::notice_rows::overlay(app, rows, buf, &mut targets);
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
@@ -667,7 +850,10 @@ pub(super) fn render(
         for target in targets.iter().filter(|target| target.id == id) {
             if chip {
                 lift_hover(buf, target.rect);
-            } else {
+            } else if !matches!(
+                id,
+                TargetId::Home(Spot::Entry(_) | Spot::Stop(_) | Spot::More(_))
+            ) {
                 buf.set_style(target.rect, FOCUS_STYLE);
             }
         }
@@ -992,10 +1178,7 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
     if y >= area.bottom() {
         return None;
     }
-    let x = placed
-        .x
-        .saturating_add(u16::from(crate::surface::box_fit(placed.width)))
-        .saturating_add(col.min(placed.inner.saturating_sub(1)));
+    let x = text_x(&placed).saturating_add(col.min(placed.inner.saturating_sub(1)));
     Some(Position::new(x, y))
 }
 

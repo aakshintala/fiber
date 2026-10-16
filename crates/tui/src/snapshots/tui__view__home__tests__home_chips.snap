@@ -2,27 +2,27 @@
 source: crates/tui/src/home_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no sessions yet
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
 
 
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+
+
+
+                                No sessions yet.
+                    Type below and press Enter to start one.
+
+
+
+
+
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts
-
-
-[w]  [test/model]  [thinking: high]  Enter starts a session
+▌ › █? for shortcuts
+▌
+▌ [w]  [test/model]  [thinking: high]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

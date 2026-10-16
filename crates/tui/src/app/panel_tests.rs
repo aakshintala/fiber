@@ -683,7 +683,12 @@ fn live(session: &str, state: Value) -> Line {
 /// The home rows' keys.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

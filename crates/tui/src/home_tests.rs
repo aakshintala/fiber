@@ -2,11 +2,39 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, glyph, line,
-    line_with, opening, quit_count, recent_rows,
+    HomeScreen, Left, Level, ListLine, Row, Sessions, State, Subs, delete_line, dependents,
+    from_status, glyph, line, line_with, opening, quit_count, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
+
+/// Session rows in the form test assertions read them.
+#[cfg(test)]
+pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
+    screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            ListLine::Live {
+                key,
+                glyph,
+                name,
+                wait,
+                ..
+            } => {
+                let line = wait.as_ref().filter(|wait| !wait.is_empty()).map_or_else(
+                    || format!("{glyph}  {name}"),
+                    |wait| format!("{glyph}  {name}  {wait}"),
+                );
+                Some((*key, line))
+            }
+            ListLine::Exited {
+                key, glyph, name, ..
+            } => Some((*key, format!("{glyph}  {name}"))),
+            ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
+        })
+        .collect()
+}
 
 const PROJECT: &str = "-Users-a-work-fiber-.git";
 const OTHER: &str = "-Users-a-work-lens-.git";
@@ -48,7 +76,7 @@ fn envelope(session: &str, state: Value) -> Envelope {
 /// The rows shown for `project`, unscoped.
 fn shown(sessions: &Sessions) -> Vec<String> {
     sessions
-        .shown(PROJECT, false)
+        .all()
         .iter()
         .map(|row| line(row, PROJECT))
         .collect()
@@ -75,6 +103,193 @@ fn recent_row(session: &str, name: &str, how: &str, status: Option<Value>) -> Va
     row
 }
 
+fn section_row(id: &str, project: &str, started: u64) -> Row {
+    from_status(&envelope(
+        id,
+        json!({"state": "idle", "project": project,
+        "workspace": format!("/work/{project}"), "started": started}),
+    ))
+}
+
+#[test]
+fn sections_put_the_launch_project_first_then_first_start_order() {
+    let mut sessions = Sessions::default();
+    for (id, project) in [("s_a", "other"), ("s_b", PROJECT), ("s_c", "third")] {
+        sessions.status(section_row(id, project, 0));
+    }
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(
+        sections.iter().map(|s| s.project).collect::<Vec<_>>(),
+        [PROJECT, "other", "third"]
+    );
+    assert_eq!(sections[1].name, "other");
+    assert_eq!(sections[1].start, Some(sections[1].live[0].key));
+    assert_eq!(
+        sessions
+            .sections("absent")
+            .iter()
+            .map(|s| s.project)
+            .collect::<Vec<_>>(),
+        ["other", PROJECT, "third"]
+    );
+    assert_eq!(sessions.all().len(), 3);
+}
+
+#[test]
+fn an_exited_only_project_sorts_after_live_projects_by_earliest_started() {
+    let mut sessions = Sessions::default();
+    for (id, project, started) in [
+        ("s_a", "late", 3),
+        ("s_b", "early", 1),
+        ("s_c", "live", 9),
+        ("s_d", "tie", 3),
+    ] {
+        sessions.status(section_row(id, project, started));
+    }
+    for id in ["s_a", "s_b", "s_d"] {
+        sessions.left(&SessionId(id.into()), Left::Exited);
+    }
+    let mut missing = section_row("s_e", "missing", 0);
+    missing.status = None;
+    sessions.status(missing);
+    sessions.left(&SessionId("s_e".into()), Left::Exited);
+    assert_eq!(
+        sessions
+            .sections("absent")
+            .iter()
+            .map(|s| s.project)
+            .collect::<Vec<_>>(),
+        ["live", "early", "late", "tie", "missing"]
+    );
+    assert_eq!(sessions.sections("late")[0].project, "late");
+}
+
+#[test]
+fn a_crashed_feed_row_is_live_in_counts_and_spend() {
+    let mut sessions = Sessions::default();
+    for (id, spend) in [
+        ("s_a", 1.35),
+        ("s_b", 1.10),
+        ("s_c", 0.05),
+        ("s_d", 0.42),
+        ("s_e", 1.0),
+    ] {
+        let mut row = section_row(id, PROJECT, 0);
+        row.spend = spend;
+        sessions.status(row);
+    }
+    sessions.left(&SessionId("s_c".into()), Left::Crashed);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].live.len(), 5);
+    assert_eq!(
+        crate::format::money(sections[0].live.iter().map(|r| r.spend).sum()),
+        "$3.92"
+    );
+    assert!(sections[0].exited.is_empty());
+}
+
+#[test]
+fn a_feed_row_that_left_exited_joins_the_exited_rows_newest_first() {
+    let mut sessions = Sessions::default();
+    for id in ["s_a", "s_b", "s_c"] {
+        sessions.status(section_row(id, PROJECT, 0));
+    }
+    sessions.left(&SessionId("s_a".into()), Left::Exited);
+    sessions.left(&SessionId("s_c".into()), Left::Exited);
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_d", "recent", "exited", None)])),
+        true,
+    );
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(
+        sections[0]
+            .live
+            .iter()
+            .map(|r| r.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_b"]
+    );
+    assert_eq!(
+        sections[0]
+            .exited
+            .iter()
+            .map(|r| r.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_c", "s_a", "s_d"]
+    );
+}
+
+#[test]
+fn exited_rows_cap_at_three_and_count_the_rest() {
+    for count in [0, 1, 2, 3, 4] {
+        let mut sessions = Sessions::default();
+        sessions.status(section_row("s_live", PROJECT, 0));
+        sessions.recent(
+            recent_rows(&result(
+                (0..count)
+                    .map(|i| recent_row(&format!("s_{i}"), "recent", "exited", None))
+                    .collect(),
+            )),
+            true,
+        );
+        let sections = sessions.sections(PROJECT);
+        assert_eq!(sections[0].shown_exited, count.min(3));
+        assert_eq!(sections[0].hidden(), count.saturating_sub(3));
+    }
+}
+
+#[test]
+fn expanding_a_project_shows_every_loaded_exited_row_and_only_that_project() {
+    let mut sessions = Sessions::default();
+    for project in [PROJECT, OTHER] {
+        for i in 0..4 {
+            let id = format!("s_{project}_{i}");
+            sessions.status(section_row(&id, project, 0));
+            sessions.left(&SessionId(id), Left::Exited);
+        }
+    }
+    sessions.expand(PROJECT);
+    sessions.expand(PROJECT);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].shown_exited, 4);
+    assert_eq!(sections[0].hidden(), 0);
+    assert_eq!(sections[1].shown_exited, 3);
+    assert_eq!(sections[1].hidden(), 1);
+    sessions.recent(Vec::new(), true);
+    assert_eq!(sessions.sections(PROJECT)[0].shown_exited, 4);
+}
+
+#[test]
+fn an_unreadable_row_stays_in_its_stored_project() {
+    let mut sessions = Sessions::default();
+    let mut row = section_row("s_a", "stored", 0);
+    row.state = State::Unreadable;
+    row.status = None;
+    row.workspace.clear();
+    sessions.status(row);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].project, "stored");
+    assert_eq!(sections[0].name, "stored");
+    assert_eq!(sections[0].start, None);
+}
+
+#[test]
+fn a_recent_row_keeps_its_last_status() {
+    let rows = recent_rows(&result(vec![
+        recent_row(
+            "s_a",
+            "present",
+            "exited",
+            Some(payload(json!({"state": "idle", "turns": 5, "since": 123}))),
+        ),
+        recent_row("s_b", "absent", "exited", None),
+    ]));
+    let status = rows[0].status.as_ref().unwrap();
+    assert_eq!(status.turns, Some(5));
+    assert_eq!(status.since, 123);
+    assert_eq!(rows[1].status, None);
+}
+
 #[test]
 fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
     let mut sessions = Sessions::default();
@@ -83,7 +298,7 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
         json!({"state": "streaming"}),
     )));
     assert_eq!(shown(&sessions), ["●  fix the parser"]);
-    let key = sessions.shown(PROJECT, false)[0].key;
+    let key = sessions.all()[0].key;
     let mut renamed = payload(json!({"state": "streaming"}));
     renamed["name"] = json!("tidy docs");
     sessions.status(from_status(&Envelope {
@@ -91,7 +306,7 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
         ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}))
     }));
     assert_eq!(shown(&sessions), ["●  tidy docs"]);
-    assert_eq!(sessions.shown(PROJECT, false)[0].key, key);
+    assert_eq!(sessions.all()[0].key, key);
 }
 
 #[test]
@@ -138,11 +353,7 @@ fn a_new_status_goes_after_the_rows_already_there() {
         sessions.status(from_status(&envelope(session, json!({"state": "idle"}))));
     }
     assert_eq!(shown(&sessions), ["✓  fix the parser", "✓  fix the parser"]);
-    let ids: Vec<String> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.id.0.clone())
-        .collect();
+    let ids: Vec<String> = sessions.all().iter().map(|row| row.id.0.clone()).collect();
     assert_eq!(ids, ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
 }
 
@@ -156,14 +367,14 @@ fn a_status_for_a_recent_row_moves_it_and_keeps_its_key() {
         ])),
         true,
     );
-    let key = sessions.shown(PROJECT, false)[1].key;
+    let key = sessions.all()[1].key;
     sessions.status(from_status(&envelope(
         "s_bbbbbbbbbbbbbbbb",
         json!({"state": "streaming"}),
     )));
     // The resumed session moves into the feed rows, live again.
     assert_eq!(shown(&sessions), ["●  fix the parser", "○  first"]);
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert_eq!(rows[0].id.0, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(rows[0].key, key);
     assert_eq!(rows[0].left, None);
@@ -230,11 +441,7 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
         ])),
         true,
     );
-    let keys: Vec<u64> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.key)
-        .collect();
+    let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
     // A first page listing the same ids again keeps their keys, drops the
     // missing row, and skips the id already in the feed.
     sessions.recent(
@@ -249,11 +456,7 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
         shown(&sessions),
         ["●  fix the parser", "○  second", "✗  third"]
     );
-    assert_eq!(
-        sessions.shown(PROJECT, false)[1].key,
-        keys[2],
-        "the kept row keeps its key",
-    );
+    assert_eq!(sessions.all()[1].key, keys[2], "the kept row keeps its key",);
 }
 
 #[test]
@@ -273,7 +476,7 @@ fn an_older_page_skips_ids_already_in_the_feed() {
         false,
     );
     assert_eq!(shown(&sessions), ["●  fix the parser", "○  second"]);
-    assert_eq!(sessions.shown(PROJECT, false).len(), 2);
+    assert_eq!(sessions.all().len(), 2);
 }
 
 #[test]
@@ -301,11 +504,7 @@ fn removing_a_feed_row_keeps_the_others_in_order() {
         sessions.status(from_status(&envelope(session, json!({"state": "idle"}))));
     }
     sessions.remove(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
-    let ids: Vec<String> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.id.0.clone())
-        .collect();
+    let ids: Vec<String> = sessions.all().iter().map(|row| row.id.0.clone()).collect();
     assert_eq!(ids, ["s_aaaaaaaaaaaaaaaa", "s_cccccccccccccccc"]);
 }
 
@@ -337,7 +536,7 @@ fn a_recent_row_adds_cost_and_subscription_cost() {
         )])),
         true,
     );
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert!((rows[0].spend - 0.60).abs() < 1e-9);
     assert_eq!(shown(&sessions), ["○  old work  $0.60"]);
 }
@@ -408,11 +607,7 @@ fn keys_are_never_reused_after_a_row_drops() {
         ])),
         true,
     );
-    let keys: Vec<u64> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.key)
-        .collect();
+    let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), 3);
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
     // A first page that drops a row, then a status for that id: a new key,
@@ -428,7 +623,7 @@ fn keys_are_never_reused_after_a_row_drops() {
         "s_bbbbbbbbbbbbbbbb",
         json!({"state": "idle"}),
     )));
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     let revived = rows
         .iter()
         .find(|row| row.id.0 == "s_bbbbbbbbbbbbbbbb")
@@ -726,43 +921,6 @@ fn opening_from_each_level() {
 }
 
 #[test]
-fn hidden_counts_waiting_rows_only() {
-    let mut sessions = Sessions::default();
-    let mut waiting = payload(json!({"state": "waiting", "waiting": {
-        "request_id": "r_1", "kind": "approval", "summary": "shell"}}));
-    waiting["project"] = json!(OTHER);
-    sessions.status(from_status(&Envelope {
-        payload: waiting.as_object().cloned().unwrap_or_default(),
-        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "waiting"}))
-    }));
-    let mut idle = payload(json!({"state": "idle"}));
-    idle["project"] = json!(OTHER);
-    sessions.status(from_status(&Envelope {
-        payload: idle.as_object().cloned().unwrap_or_default(),
-        ..envelope("s_bbbbbbbbbbbbbbbb", json!({"state": "idle"}))
-    }));
-    sessions.status(from_status(&envelope(
-        "s_cccccccccccccccc",
-        json!({"state": "idle"}),
-    )));
-    assert_eq!(sessions.hidden(PROJECT), (2, 1));
-    assert_eq!(sessions.hidden(OTHER), (1, 0));
-}
-
-#[test]
-fn toggle_line_names_waiting_or_scoping_back() {
-    assert_eq!(
-        super::toggle_line(2, false),
-        "2 waiting in other projects · show all"
-    );
-    assert_eq!(
-        super::toggle_line(0, false),
-        "0 waiting in other projects · show all"
-    );
-    assert_eq!(super::toggle_line(0, true), "show this project only");
-}
-
-#[test]
 fn dependents_reads_each_backticked_id_once_in_order() {
     use contract::SessionId;
     let id = |session: &str| SessionId(session.to_owned());
@@ -849,7 +1007,7 @@ fn a_recent_row_is_in_git_when_its_last_status_is() {
         ])),
         true,
     );
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert!(rows[0].git);
     assert!(!rows[1].git);
 }
