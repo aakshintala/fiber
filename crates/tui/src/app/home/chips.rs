@@ -1,11 +1,11 @@
-//! The chip row's keyboard: ↓ from the entry bar, ← → between chips,
-//! Enter clicking the chip, and ↓ ↑ between the chip row and the session
-//! list (`docs/tui.md`, "Home"). Chip focus is `App.focus`; `Home`
-//! remembers only which chip was focused last.
+//! The home keyboard: arrows between the entry bar, chip row and list,
+//! ← → between chips, Enter clicking a chip (`docs/tui.md`, "Home").
+//! Chip focus is `App.focus`; `Home` remembers only which chip was focused
+//! last.
 
 use super::super::{App, Effect};
 use crate::focus::{Area, order};
-use crate::home::Spot;
+use crate::home::{ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::keyset::Context;
 use crate::mouse::TargetId;
@@ -90,20 +90,58 @@ impl App {
         }
     }
 
-    /// Whether the last frame drew a session row: row moves act only
-    /// then, and do nothing when no row fits.
-    fn drew_a_row(&self) -> bool {
-        self.stops
-            .iter()
-            .any(|target| matches!(target.id, TargetId::Home(Spot::Entry(_))))
+    /// The list stops from the last frame, in their drawn focus order.
+    /// A row's two lines and cross remain one stop.
+    pub(super) fn list_stops(&self) -> Vec<Spot> {
+        let mut stops = Vec::new();
+        for id in order(&self.stops, &self.regions, Area::Conversation) {
+            let spot = match id {
+                TargetId::Home(Spot::Entry(key) | Spot::Stop(key)) => Some(Spot::Entry(key)),
+                TargetId::Home(Spot::More(key)) => Some(Spot::More(key)),
+                _ => None,
+            };
+            if let Some(spot) = spot
+                && stops.last() != Some(&spot)
+            {
+                stops.push(spot);
+            }
+        }
+        stops
     }
 
-    /// The rows home draws, scoped as drawn: their keys top to bottom.
-    fn shown_keys(&self) -> Vec<u64> {
-        let Some(home) = self.home.as_ref() else {
-            return Vec::new();
-        };
-        home.sessions.all().iter().map(|row| row.key).collect()
+    /// Every list stop in display order, including rows the current frame
+    /// has not scrolled into view yet.
+    pub(super) fn all_list_stops(&self) -> Vec<Spot> {
+        self.home_screen()
+            .map(|screen| {
+                screen
+                    .list
+                    .into_iter()
+                    .filter_map(|line| match line {
+                        ListLine::Live { key, .. } | ListLine::Exited { key, .. } => {
+                            Some(Spot::Entry(key))
+                        }
+                        ListLine::More { key, .. } => Some(Spot::More(key)),
+                        ListLine::Head { .. } | ListLine::ExitedHead { .. } => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// ↑ on the entry bar: a draft, completion panel or recalled prompt
+    /// keeps the key; otherwise focus the last list stop when one drew.
+    pub(super) fn entry_up(&mut self) -> Option<Effect> {
+        if !self.draft.is_empty() || self.completions().is_some() || self.recall_browsing() {
+            return None;
+        }
+        if self.list_stops().is_empty() {
+            return Some(Effect::None);
+        }
+        if let Some(last) = self.all_list_stops().last().copied() {
+            self.focus = Some(TargetId::Home(last));
+        }
+        Some(Effect::None)
     }
 
     /// ↓ on the entry bar: the completion panel and a recalled prompt
@@ -126,9 +164,9 @@ impl App {
         }
     }
 
-    /// A key with a chip focused: ↑ returns to the entry bar, ↓ leaves
-    /// for the first session row, Enter clicks the chip and focus stays
-    /// on it, Esc and Tab pass to focus, typing returns to the entry bar
+    /// A key with a chip focused: ↑ returns to the entry bar, ↓ stays on
+    /// the chip, Enter clicks it and focus stays on it, Esc and Tab pass
+    /// to focus, typing returns to the entry bar
     /// and then acts there. `None` passes the key on, after any focus
     /// change; every other key keeps the chip focused and acts as from
     /// the entry bar.
@@ -142,16 +180,7 @@ impl App {
             }
             Key::Down => {
                 self.remember_chip(chip);
-                if !self.drew_a_row() {
-                    return Some(Effect::None);
-                }
-                match self.shown_keys().into_iter().next() {
-                    Some(first) => {
-                        self.focus = Some(TargetId::Home(Spot::Entry(first)));
-                        Some(Effect::None)
-                    }
-                    None => Some(Effect::None),
-                }
+                Some(Effect::None)
             }
             Key::Enter => {
                 self.remember_chip(chip);
@@ -215,28 +244,27 @@ impl App {
         }
     }
 
-    /// ↑ ↓ on a session row or the scope toggle: ↓ moves down the rows,
-    /// skipping the toggle, and at the end asks the next `recent` page;
-    /// ↑ moves up the rows, from the first row to the chip focused last,
-    /// and from the toggle to that chip. A row's ✕ counts as its row.
-    /// `None` for any other key, or when no row was drawn.
+    /// ↑ ↓ on a drawn list stop: move through rows and the `More` row,
+    /// scrolling as needed. ↑ holds at the first row; ↓ from the last row
+    /// returns to the entry bar, asking for another `recent` page first
+    /// when that row qualifies. A row's ✕ counts as its row. `None` for
+    /// any other key or a non-list focus.
     pub(super) fn list_key(&mut self, key: &Key) -> Option<Effect> {
         let focus = self.focus?;
         if !matches!(key, Key::Up | Key::Down) {
             return None;
         }
-        if !self.drew_a_row() {
+        let drawn = self.list_stops();
+        if drawn.is_empty() {
             return Some(Effect::None);
         }
-        let down = matches!(key, Key::Down);
-        let shown = self.shown_keys();
         let TargetId::Home(spot) = focus else {
             return None;
         };
-        let row = match spot {
-            Spot::Entry(row) | Spot::Stop(row) => Some(row),
+        let current = match spot {
+            Spot::Entry(key) | Spot::Stop(key) => Spot::Entry(key),
+            Spot::More(key) => Spot::More(key),
             Spot::Start(_)
-            | Spot::More(_)
             | Spot::Workspace
             | Spot::Worktree
             | Spot::Model
@@ -246,61 +274,30 @@ impl App {
             | Spot::Question
             | Spot::Quit(_) => return None,
         };
-        if down {
-            let next = match row {
-                // The toggle is not a ↓ stop: ↓ on it skips to the
-                // first row.
-                None => shown.into_iter().next(),
-                Some(row) => {
-                    let mut keys = shown.iter();
-                    match keys.position(|key| *key == row) {
-                        Some(at) => shown.get(at.saturating_add(1)).copied(),
-                        None => None,
-                    }
-                }
-            };
-            if let Some(next) = next {
-                self.focus = Some(TargetId::Home(Spot::Entry(next)));
-                return Some(Effect::None);
-            }
-            // Past the last row, ↓ asks the next `recent` page when the
-            // focused row ends the list, and stays otherwise. Focus
-            // stays either way.
-            if let Some(row) = row {
-                if let Some(effect) = self.page_recent(row) {
-                    return Some(effect);
-                }
-                return Some(Effect::None);
-            }
+        if !drawn.contains(&current) {
             return Some(Effect::None);
         }
-        let prev = match row {
-            Some(row) => {
-                let mut above = None;
-                for key in &shown {
-                    if *key == row {
-                        break;
-                    }
-                    above = Some(*key);
-                }
-                above
-            }
-            // ↑ on the toggle returns to the chip focused last.
-            None => None,
+        let stops = self.all_list_stops();
+        let Some(at) = stops.iter().position(|stop| *stop == current) else {
+            return Some(Effect::None);
         };
-        match prev {
-            Some(prev) => {
-                self.focus = Some(TargetId::Home(Spot::Entry(prev)));
-                Some(Effect::None)
+        if matches!(key, Key::Down) {
+            if let Some(next) = stops.get(at.saturating_add(1)) {
+                self.focus = Some(TargetId::Home(*next));
+                return Some(Effect::None);
             }
-            None => match self.landing_chip() {
-                Some(chip) => {
-                    self.focus_chip(chip);
-                    Some(Effect::None)
-                }
-                None => Some(Effect::None),
-            },
+            if let Spot::Entry(row) = current
+                && let Some(effect) = self.page_recent(row)
+            {
+                return Some(effect);
+            }
+            self.focus = None;
+            return Some(Effect::None);
         }
+        if let Some(prev) = at.checked_sub(1).and_then(|prev| stops.get(prev)) {
+            self.focus = Some(TargetId::Home(*prev));
+        }
+        Some(Effect::None)
     }
 }
 

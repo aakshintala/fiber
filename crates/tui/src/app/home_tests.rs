@@ -1600,12 +1600,11 @@ fn two_rows(app: &mut App) {
 }
 
 #[test]
-fn down_in_an_empty_box_focuses_the_first_row() {
+fn home_arrows_focus_the_list_and_entry_bar() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // ↓ focuses the chip row first, and a second ↓ the first row.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
@@ -1614,17 +1613,26 @@ fn down_in_an_empty_box_focuses_the_first_row() {
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
     );
-    // Esc returns focus to the input box, and ↓ ↓ focuses the first row
-    // again.
-    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
 }
 
@@ -1714,17 +1722,17 @@ fn down_on_the_conversation_screen_is_unchanged() {
 }
 
 #[test]
-fn down_twice_moves_to_the_second_row() {
+fn up_and_j_walk_the_row_stops() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Workspace))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -1743,7 +1751,7 @@ fn down_twice_moves_to_the_second_row() {
 }
 
 #[test]
-fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
+fn up_focuses_the_last_loaded_row_and_scrolls() {
     let mut app = home();
     linked(&mut app);
     for n in 0..15u8 {
@@ -1756,24 +1764,14 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
             json!({"state": "idle"}),
         ));
     }
-    assert_eq!(keys(&app).len(), 15);
+    let all = keys(&app);
+    assert_eq!(all.len(), 15);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // Nine rows fit under the four-row logo's box: one chip step and
-    // eight row steps reach the ninth row, and the next ↓ moves below
-    // the fold to the tenth.
-    for _ in 0..10 {
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    let shown = keys(&app);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[8])))
-    );
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[9])))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(all[14])))
     );
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -1788,33 +1786,27 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
             }
         })
         .collect();
-    assert_eq!(drawn.last(), Some(&shown[9]));
-    assert!(!drawn.contains(&shown[0]));
+    assert!(drawn.contains(&all[14]));
+    assert!(!drawn.contains(&all[0]));
 }
 
 #[test]
-fn down_on_the_last_row_of_the_list_does_nothing() {
+fn down_on_the_last_row_of_the_list_focuses_the_entry_bar() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
-    // ↓ on the last row stays on its line, never its ✕.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
     );
 }
 
@@ -1880,8 +1872,7 @@ fn y_on_a_focused_row_copies_its_line() {
     ));
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.on_key(Key::Char('y'), now),
         Effect::Copy("✓  fix the parser".to_owned())
@@ -2275,10 +2266,7 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
     assert!(app.home.as_ref().is_some_and(|home| !home.sessions.more()));
     // ↓ returns nothing with focus on the row's line.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
+    assert_eq!(app.focused(), None);
 }
 
 #[test]
@@ -2649,8 +2637,7 @@ fn backspace_on_a_focused_exited_row_asks() {
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         question(&app),
@@ -2668,8 +2655,7 @@ fn delete_on_a_focused_crashed_row_asks() {
     ));
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
@@ -2683,8 +2669,8 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
@@ -3389,9 +3375,10 @@ fn y_on_a_focused_x_copies_nothing() {
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // ↓ ↓ focuses the row, and j steps onto its ✕.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    // ↑ focuses the last row, then another ↑ reaches the first; j steps
+    // onto its ✕.
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -3950,21 +3937,19 @@ fn start_carries_the_terminal_layer_in_overrides() {
     assert_eq!(args["worktree"], true);
 }
 
-/// Focuses the last row home draws, through the frame's own targets.
+/// Focuses the last list stop from the entry bar.
 fn focus_last(app: &mut App) {
     drawn(app);
-    let now = fakes::clock::FakeClock::new().now();
     let last = keys(app)
         .into_iter()
         .last()
         .unwrap_or_else(|| panic!("a row"));
-    for _ in 0..6 {
-        if app.focused() == Some(crate::mouse::TargetId::Home(Spot::Entry(last))) {
-            return;
-        }
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    panic!("the last row never focused");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(last)))
+    );
 }
 
 /// The foot home draws.

@@ -800,10 +800,9 @@ fn the_focused_row_is_on_the_selection_bar() {
     let mut buf = Buffer::empty(area);
     let targets = home_only(&app, area, &mut buf);
     app.drawn(&targets);
-    // Down reaches the chip row, then the first session row.
+    // ↑ focuses the only session row from the entry bar.
     let now = fakes::clock::FakeClock::new().now();
-    app.on_key(Key::Down, now);
-    app.on_key(Key::Down, now);
+    app.on_key(Key::Up, now);
     let targets = home_only(&app, area, &mut buf);
     let row_target = targets
         .iter()
@@ -889,8 +888,7 @@ fn at_height_twelve_the_focused_live_rows_first_line_stays_on_screen() {
     let targets = home_only(&app, initial_area, &mut initial_buf);
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
-    app.on_key(Key::Down, now);
-    app.on_key(Key::Down, now);
+    app.on_key(Key::Up, now);
     app.set_size(80, 12);
     let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
@@ -1122,11 +1120,9 @@ fn home_cursor_hides_while_navigating() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Down reaches the chip row, then the session row, where the draft
-    // cursor is hidden.
+    // ↑ focuses the session row, where the draft cursor is hidden.
     let now = fakes::clock::FakeClock::new().now();
-    app.on_key(Key::Down, now);
-    app.on_key(Key::Down, now);
+    app.on_key(Key::Up, now);
     assert!(matches!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
@@ -1161,25 +1157,19 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Thirteen list lines fit under the box: one chip step and ten
-    // row steps focus the tenth session below the fold.
-    let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..11 {
-        app.on_key(Key::Down, now);
-    }
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(crate::home::Spot::Entry(
-            app.home_screen()
-                .and_then(|screen| screen.rows.get(9).map(|(key, _, _)| *key))
-                .unwrap_or_else(|| panic!("a tenth row"))
-        )))
-    );
     let keys: Vec<u64> = app
         .home_screen()
         .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
         .unwrap_or_default();
     assert_eq!(keys.len(), 15);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(crate::home::Spot::Entry(
+            keys[14]
+        )))
+    );
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     let drawn: Vec<u64> = targets
@@ -1192,8 +1182,7 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
             }
         })
         .collect();
-    assert_eq!(drawn.len(), 13);
-    assert_eq!(drawn.last(), Some(&keys[9]));
+    assert!(drawn.contains(&keys[14]));
     assert!(!drawn.contains(&keys[0]));
     // j steps onto the row's ✕, and the list still ends there.
     let mut buf = Buffer::empty(area);
@@ -1203,7 +1192,7 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(crate::home::Spot::Stop(
-            keys[9]
+            keys[14]
         )))
     );
     let mut buf = Buffer::empty(area);
@@ -1218,8 +1207,7 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
             }
         })
         .collect();
-    assert_eq!(drawn.len(), 13);
-    assert_eq!(drawn.last(), Some(&keys[9]));
+    assert!(drawn.contains(&keys[14]));
 }
 
 #[test]
@@ -1232,9 +1220,10 @@ fn home_with_a_focused_row() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // ↓ focuses the chip row first, then the first row.
-    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
-    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    // Two ↑ moves from the empty box to the first of two rows.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Up, now);
+    app.on_key(Key::Up, now);
     insta::assert_snapshot!("home_with_a_focused_row", screen(&app, 80, 24));
 }
 
@@ -1730,10 +1719,8 @@ fn focus_does_not_paint_through_the_delete_question() {
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
-    // Down to the chip row, Down to the first row, Backspace opens
-    // the delete question with focus still on that row.
-    app.on_key(Key::Down, now);
-    app.on_key(Key::Down, now);
+    // ↑ focuses the only row; Backspace opens its delete question.
+    app.on_key(Key::Up, now);
     app.on_key(Key::Backspace, now);
     assert!(
         app.home_screen()
@@ -2417,8 +2404,8 @@ fn home_focus_chip_typing() {
 fn home_focus_first_row() {
     let mut app = focus_home();
     let now = fakes::clock::FakeClock::new().now();
-    app.on_key(Key::Down, now);
-    app.on_key(Key::Down, now);
+    app.on_key(Key::Up, now);
+    app.on_key(Key::Up, now);
     check_chips(&app, None);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);

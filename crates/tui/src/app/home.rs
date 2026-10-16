@@ -600,12 +600,11 @@ impl App {
     }
 
     /// A key for home, ahead of the key map and focus: the picker's keys
-    /// while it is open, then the chip row's and the list's arrows, and
-    /// j on the last drawn row paging below the fold. `None` for
-    /// anything else, so the focused stops keep moving as they do on the
-    /// conversation. Only ↓ enters the list from the entry bar, landing
-    /// on the chip row first: j moves only while the list has focus, and
-    /// the draft keeps every printable key typed into it.
+    /// while open, then the chip row's and the list's arrows, and j at
+    /// the last drawn list stop paging below the fold. `None` for anything
+    /// else, so focused stops keep moving as they do on the conversation.
+    /// ↓ from the entry bar focuses the last chip; ↑ from an empty bar
+    /// focuses the last drawn list stop. Typing on a row returns to the box.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
         // The quit question takes every key first, on home or not.
         if let Some(effect) = self.quit_key(key) {
@@ -639,63 +638,72 @@ impl App {
         if self.focused_chip().is_some() {
             return self.chip_key(key);
         }
-        // Only ↓ enters the list: with the box focused the draft keeps
-        // j, and focus moves it once the list has focus.
+        // With the box focused, j is still draft text. On a row, j/k
+        // remain focus movement keys rather than draft text.
         if matches!(key, Key::Char('j')) && self.focus.is_none() {
             return None;
         }
         if matches!(key, Key::Up | Key::Down) {
-            // ↑ ↓ on a row or the toggle walk the rows, row to row.
             if self.focus.is_some() {
                 if let Some(effect) = self.list_key(key) {
                     return Some(effect);
                 }
                 return None;
             }
-            // ↑ in the box stays with recall; ↓ leaves for the chip
-            // row, while the completion panel and a recalled prompt
-            // keep it and a multi-line draft moves its cursor first.
-            if matches!(key, Key::Up) {
-                return None;
-            }
-            return self.entry_down();
+            return if matches!(key, Key::Up) {
+                self.entry_up()
+            } else {
+                self.entry_down()
+            };
         }
         if !matches!(key, Key::Char('j')) {
-            // Backspace on a focused row asks to delete it when it
-            // exited; anything else on a focused row is swallowed.
             if matches!(key, Key::Backspace) {
                 return self.delete_key();
             }
+            if matches!(key, Key::Char(ch) if !matches!(ch, 'k' | 'y'))
+                && matches!(
+                    self.focus,
+                    Some(TargetId::Home(
+                        Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)
+                    ))
+                )
+            {
+                self.focus = None;
+            }
             return None;
         }
-        // j on the last drawn row pages below the fold; shorter of it
-        // steps through the stops as on the conversation.
-        let Some(TargetId::Home(Spot::Entry(focused) | Spot::Stop(focused))) = self.focus else {
+        // j follows the drawn list order; when it reaches the last drawn
+        // stop it advances into the next logical row, or pages recents.
+        let Some(TargetId::Home(spot @ (Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)))) =
+            self.focus
+        else {
             return None;
         };
-        let ordered = order(&self.stops, &self.regions, Area::Conversation);
-        // The last drawn list stop, rows or their crosses: further steps
-        // stay while focus is short of it.
-        let last = ordered
-            .iter()
-            .rev()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Stop(_))));
-        if last != self.focus.as_ref() {
+        let current = match spot {
+            Spot::Entry(key) | Spot::Stop(key) => Spot::Entry(key),
+            Spot::More(key) => Spot::More(key),
+            _ => unreachable!(),
+        };
+        if matches!(spot, Spot::Entry(key) if self.stops.iter().any(|target| target.id == TargetId::Home(Spot::Stop(key))))
+            || self.list_stops().last().copied() != Some(current)
+        {
             return None;
         }
-        let next = self.home.as_ref().and_then(|home| {
-            let shown = home.sessions.all();
-            let at = shown.iter().position(|row| row.key == focused)?;
-            shown.get(at + 1).map(|row| row.key)
-        });
-        if let Some(key) = next {
-            self.focus = Some(TargetId::Home(Spot::Entry(key)));
+        let stops = self.all_list_stops();
+        let Some(at) = stops.iter().position(|stop| *stop == current) else {
+            return None;
+        };
+        if let Some(next) = stops.get(at.saturating_add(1)) {
+            self.focus = Some(TargetId::Home(*next));
             return Some(Effect::None);
         }
-        // At the end of the list, ↓ asks the next `recent` page when
-        // the focused row is the last recent row, the last answer was
-        // not empty, and no `recent` is in flight. Focus stays.
-        self.page_recent(focused)
+        if let Spot::Entry(key) = current
+            && let Some(effect) = self.page_recent(key)
+        {
+            return Some(effect);
+        }
+        self.focus = None;
+        Some(Effect::None)
     }
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
