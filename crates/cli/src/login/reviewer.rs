@@ -9,8 +9,6 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use config::{Config, Sources, get_global, replace_global};
@@ -130,37 +128,6 @@ fn redacted(code: contract::ErrorCode, provider: &str, owner: &str) -> String {
     }
 }
 
-/// A test's pause before each discovery step in [`reviewer_models`]: 1
-/// is `get_global`, 2 the project resolution and `Config::load`, 3
-/// `login_provider` and 4 `add_lua`. The step signals its number, then
-/// waits for the test's release, so a test holds each step in turn and
-/// shows which one does not return within its bound. No gate is installed
-/// outside tests, and a thread the test did not name passes straight
-/// through, so parallel tests never meet each other's gates.
-#[cfg(test)]
-pub(crate) type StepGate = Arc<dyn Fn(u8) + Send + Sync>;
-
-#[cfg(test)]
-static STEP_GATE: Mutex<Option<StepGate>> = Mutex::new(None);
-
-/// Installs the test's discovery gate (`None` removes it).
-#[cfg(test)]
-pub(crate) fn set_step_gate(gate: Option<StepGate>) {
-    *STEP_GATE.lock().unwrap_or_else(PoisonError::into_inner) = gate;
-}
-
-/// Pauses before discovery step `step` on the installed test gate, if any.
-#[cfg(test)]
-fn pause_at(step: u8) {
-    if let Some(gate) = STEP_GATE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
-    {
-        gate(step);
-    }
-}
-
 /// Reads the reviewer choice for the installed provider `name`: its models
 /// through its own admitted extension only, preselecting the saved global
 /// value, else the package default. The caller has stored the credential:
@@ -177,8 +144,6 @@ pub fn reviewer_models(
 ) -> Result<ReviewerModels, Failure> {
     let data = installed(providers, name)?.clone();
     let key = reviewer_key(name);
-    #[cfg(test)]
-    pause_at(1);
     let selected = match get_global(home, &key).map_err(config_failure)? {
         Some(value) => value.as_str().map(str::to_owned),
         None => None,
@@ -197,8 +162,6 @@ pub fn reviewer_models(
     // The home layers are discovery's configuration: the stored
     // credential it checks was just written to the global file, so the
     // check does not depend on the launch directory.
-    #[cfg(test)]
-    pause_at(2);
     let (_, project) = crate::project_of(home, home)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
@@ -207,8 +170,6 @@ pub fn reviewer_models(
         overrides: Vec::new(),
     })
     .map_err(config_failure)?;
-    #[cfg(test)]
-    pause_at(3);
     let lua = match login_provider(
         home,
         providers,
@@ -229,8 +190,6 @@ pub fn reviewer_models(
     // stay as loaded, and the VM drops with this return.
     let mut temp = providers.clone();
     let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, &clock);
-    #[cfg(test)]
-    pause_at(4);
     let mut notices: Vec<String> = temp
         .add_lua(&owner, &lua, &config, &run)
         .into_iter()
