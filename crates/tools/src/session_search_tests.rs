@@ -382,22 +382,12 @@ fn its_result_is_bounded_like_any_other() {
 #[test]
 fn a_crlf_pair_in_a_snippet_prints_as_one_space() {
     let scan = FakeScan::new(Found {
-        hits: vec![hit(
-            "s_a",
-            "a",
-            2,
-            0,
-            Label::Message,
-            "say hi\r\nthen bye",
-        )],
+        hits: vec![hit("s_a", "a", 2, 0, Label::Message, "say hi\r\nthen bye")],
         total: 1,
         ..Found::default()
     });
 
     let shown = text(&run(&scan, json!({"text": "x"})));
 
-    assert!(
-        shown.ends_with("   say hi then bye\n"),
-        "{shown}"
-    );
+    assert!(shown.ends_with("   say hi then bye\n"), "{shown}");
 }

@@ -725,10 +725,7 @@ fn a_crlf_pair_in_a_snippet_prints_as_one_space() {
     )
     .unwrap();
     let out = String::from_utf8(out).unwrap();
-    assert!(
-        out.ends_with("   say hi then retry budget\n"),
-        "{out}"
-    );
+    assert!(out.ends_with("   say hi then retry budget\n"), "{out}");
 }
 
 /// The child runs `search` and exits with its code, so the parent can read
