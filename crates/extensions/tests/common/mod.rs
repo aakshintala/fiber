@@ -43,7 +43,7 @@ const FAR: Duration = Duration::from_secs(24 * 3600);
 const ROUNDS: u32 = 30;
 
 /// One bounded wait for the run's answer or park signal.
-const ROUND: Duration = Duration::from_millis(200);
+pub(crate) const ROUND: Duration = Duration::from_millis(200);
 
 /// Rounds of waiting for the stalled run to wait on the clock: 15 waits of
 /// `ROUND` are about 3 s of wall clock, the hang guard for a run that never
