@@ -1292,8 +1292,7 @@ fn read_until_eof<R: Read>(read: &mut R) -> std::io::Result<usize> {
     loop {
         match read.read(&mut buf) {
             Err(error)
-                if error.kind() == ErrorKind::WouldBlock
-                    || error.kind() == ErrorKind::TimedOut =>
+                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
             {
                 waited += 1;
                 if waited >= polls {
