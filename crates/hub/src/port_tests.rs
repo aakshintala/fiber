@@ -1100,5 +1100,18 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .expect("the read loop to return");
     assert_eq!(hub.clients(), 0, "the count released");
     crate::testkit::stop_within(&hub.feed);
-    assert_eq!(Arc::strong_count(&owned), 1, "the writer ended and joined");
+    // The block wait's helper thread holds the last other clone until it
+    // exits, and the retired writer holds its own until it ends: the
+    // count reads 1 only after both end, so wait for it under a deadline
+    // instead of asserting a count another thread still owns.
+    let joined = Deadline::after(DEADLINE);
+    loop {
+        if Arc::strong_count(&owned) == 1 {
+            break;
+        }
+        if joined.left().is_zero() {
+            panic!("the writer ended and joined");
+        }
+        thread::yield_now();
+    }
 }
