@@ -911,8 +911,7 @@ type ArmedPause = (
 /// store whose test armed one pauses, so concurrent approvals in other
 /// tests never park on it.
 #[cfg(test)]
-static RECORD_PAUSES: std::sync::Mutex<Vec<ArmedPause>> =
-    std::sync::Mutex::new(Vec::new());
+static RECORD_PAUSES: std::sync::Mutex<Vec<ArmedPause>> = std::sync::Mutex::new(Vec::new());
 
 /// Arms the pause between pinning and recording in `approve` for `home`:
 /// while the file `home/approve-pause` exists, the approving thread signals
