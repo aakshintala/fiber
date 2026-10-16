@@ -1322,6 +1322,55 @@ fn other_keys_leave_the_delete_question_open() {
         "the question stays open"
     );
 }
+
+#[test]
+fn focus_does_not_paint_through_the_delete_question() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    // Down to the chip row, Down to the first row, Backspace opens
+    // the delete question with focus still on that row.
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Backspace, now);
+    assert!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("home draws"))
+            .question
+            .is_some(),
+        "Backspace opens the question"
+    );
+    assert!(
+        matches!(
+            app.focused(),
+            Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
+        ),
+        "focus stays on the row under the box"
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let slab = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Question))
+        .map(|target| target.rect)
+        .unwrap_or_else(|| panic!("a delete slab target"));
+    for y in slab.top()..slab.bottom() {
+        for x in slab.left()..slab.right() {
+            assert!(
+                !buf[(x, y)].modifier.contains(Modifier::REVERSED),
+                "no reversed cell inside the delete box at ({x}, {y})"
+            );
+        }
+    }
+}
 fn ask_quit(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);

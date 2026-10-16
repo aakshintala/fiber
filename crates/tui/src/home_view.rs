@@ -210,6 +210,17 @@ fn split_question(question: &str) -> (&str, DeleteFooter) {
     }
 }
 
+/// One delete frame body row: its `spans`, with no right end, no
+/// targets and no bar.
+fn question_row(spans: Vec<Span<'static>>) -> super::overlay::Row {
+    super::overlay::Row {
+        spans,
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
 /// The delete frame's body rows for `question` in `area`: the head
 /// wrapped at the frame's inner width, a blank row, and that deleting
 /// is permanent. Drawing and scrolling share them, so the key path
@@ -221,36 +232,16 @@ fn question_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
     let (head, _) = split_question(question);
     let mut rows: Vec<super::overlay::Row> = wrap(head, inner)
         .into_iter()
-        .map(|line| super::overlay::Row {
-            spans: vec![Span::styled(line, Style::default())],
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        })
+        .map(|line| question_row(vec![Span::styled(line, Style::default())]))
         .collect();
     if rows.is_empty() {
-        rows.push(super::overlay::Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        });
+        rows.push(question_row(Vec::new()));
     }
-    rows.push(super::overlay::Row {
-        spans: Vec::new(),
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    });
-    rows.push(super::overlay::Row {
-        spans: vec![Span::styled(
-            "It cannot be undone.".to_owned(),
-            Style::default(),
-        )],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    });
+    rows.push(question_row(Vec::new()));
+    rows.push(question_row(vec![Span::styled(
+        "It cannot be undone.".to_owned(),
+        Style::default(),
+    )]));
     rows
 }
 
@@ -667,7 +658,9 @@ pub(super) fn render(
             lift_hover(buf, target.rect);
         }
     }
-    if let Some(id) = app.focused() {
+    if let Some(id) = app.focused()
+        && screen.question.is_none()
+    {
         // A focused chip draws as a hovered one, never reversed; every
         // other focused target keeps the focus style.
         let chip = matches!(id, TargetId::Home(spot) if spot.is_chip());
