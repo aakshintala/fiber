@@ -1,6 +1,7 @@
-//! An [`Emit`] that records every ephemeral event a test tool is given
-//! (`docs/tools.md`, "Progress"). A durable event is ignored, as [`Emit`]
-//! says, and nothing is written for it.
+//! [`Recorder`], an [`Emit`] that records every ephemeral event a test
+//! tool is given (`docs/tools.md`, "Progress"): a durable event is
+//! ignored, as [`Emit`] says. [`EventLog`] instead records every event,
+//! ephemeral and durable alike, in arrival order.
 
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -47,6 +48,28 @@ impl Emit for Recorder {
         }
         lock(&self.inner).push(event.clone());
         self.changed.notify_all();
+    }
+}
+
+/// An [`Emit`] a test hands an emitter: it records every event without
+/// looking at its class, so durable events are kept as well as ephemeral
+/// ones. Unlike [`Recorder`] it cannot wait for text; it only replays what
+/// arrived, in arrival order.
+#[derive(Default)]
+pub struct EventLog {
+    inner: Mutex<Vec<Event>>,
+}
+
+impl EventLog {
+    /// Every event recorded so far, in arrival order.
+    pub fn events(&self) -> Vec<Event> {
+        lock(&self.inner).clone()
+    }
+}
+
+impl Emit for EventLog {
+    fn emit(&self, event: &Event) {
+        lock(&self.inner).push(event.clone());
     }
 }
 

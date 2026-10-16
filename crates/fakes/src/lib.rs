@@ -43,7 +43,7 @@ pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
-pub use emit::Recorder;
+pub use emit::{EventLog, Recorder};
 pub use finished::finished;
 pub use gated_http::GatedHttp;
 pub use locks::{FakeLock, NoLock};

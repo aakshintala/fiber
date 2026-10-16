@@ -11,7 +11,7 @@
     reason = "test code"
 )]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use contract::emit::Emit;
 use contract::events::{Event, ExtensionMessage, ExtensionUi, Ui};
@@ -20,17 +20,6 @@ use mlua::{Lua, StdLib};
 
 use super::install;
 use crate::lua::Hub;
-
-#[derive(Default)]
-struct Recorder {
-    events: Mutex<Vec<Event>>,
-}
-
-impl Emit for Recorder {
-    fn emit(&self, event: &Event) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-}
 
 fn installed() -> (Lua, Arc<Hub>) {
     let lua = Lua::new_with(
@@ -62,10 +51,10 @@ fn message_of(event: &Event) -> ExtensionMessage {
 #[test]
 fn status_emits_exactly_its_extension_ui() {
     let (lua, hub) = installed();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
     lua.load(r#"host.status("syncing 3/10")"#).exec().unwrap();
-    let events = recorder.events.lock().unwrap();
+    let events = recorder.events();
     assert_eq!(events.len(), 1);
     assert_eq!(
         ui_of(&events[0]),
@@ -81,12 +70,12 @@ fn status_emits_exactly_its_extension_ui() {
 #[test]
 fn widget_emits_exactly_its_extension_ui() {
     let (lua, hub) = installed();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
     lua.load(r#"host.widget("models", {"gpt-x", "claude-y"})"#)
         .exec()
         .unwrap();
-    let events = recorder.events.lock().unwrap();
+    let events = recorder.events();
     assert_eq!(events.len(), 1);
     assert_eq!(
         ui_of(&events[0]),
@@ -103,10 +92,10 @@ fn widget_emits_exactly_its_extension_ui() {
 #[test]
 fn emit_sends_its_data_as_an_extension_message() {
     let (lua, hub) = installed();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
     lua.load(r#"host.emit({ picked = 2 })"#).exec().unwrap();
-    let events = recorder.events.lock().unwrap();
+    let events = recorder.events();
     assert_eq!(events.len(), 1);
     let message = message_of(&events[0]);
     assert_eq!(message.extension, "fiber.test/a");
@@ -120,9 +109,9 @@ fn calls_before_emit_to_are_buffered_and_flushed_in_order() {
     lua.load(r#"host.status("first")"#).exec().unwrap();
     lua.load(r#"host.widget("w", {"a"})"#).exec().unwrap();
     lua.load(r#"host.status("second")"#).exec().unwrap();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
-    let events = recorder.events.lock().unwrap();
+    let events = recorder.events();
     assert_eq!(events.len(), 3);
     assert_eq!(
         ui_of(&events[0]),
@@ -158,11 +147,11 @@ fn calls_before_emit_to_are_buffered_and_flushed_in_order() {
 fn after_seal_nothing_is_emitted() {
     // After `seal`, a resumed emission reaches neither the emitter nor anyone.
     let (lua, hub) = installed();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
     hub.seal();
     lua.load(r#"host.status("late")"#).exec().unwrap();
-    assert!(recorder.events.lock().unwrap().is_empty());
+    assert!(recorder.events().is_empty());
 }
 
 #[test]
@@ -195,9 +184,9 @@ fn widget_with_non_string_lines_raises() {
 #[test]
 fn emit_of_a_function_raises() {
     let (lua, hub) = installed();
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(recorder.clone() as Arc<dyn Emit>);
     let err = lua.load(r#"host.emit(print)"#).exec().unwrap_err();
     assert!(err.to_string().contains("host.emit"), "{err}");
-    assert!(recorder.events.lock().unwrap().is_empty());
+    assert!(recorder.events().is_empty());
 }

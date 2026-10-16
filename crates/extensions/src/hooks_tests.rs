@@ -1069,17 +1069,6 @@ fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
     );
 }
 
-#[derive(Default)]
-struct SealRecorder {
-    events: std::sync::Mutex<Vec<contract::events::Event>>,
-}
-
-impl contract::emit::Emit for SealRecorder {
-    fn emit(&self, event: &contract::events::Event) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-}
-
 fn hold_init(url: &str) -> String {
     format!(
         "fiber.command(\"hold\", {{ timeout = 8000, run = function() local r = host.http({{ url = \"{url}\" }}) host.status(\"late\") host.log(\"late\") host.emit({{x=1}}) return r.body end }})\n"
@@ -1098,7 +1087,7 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     home.install("a", Some(&hold_init(&url)), &[]);
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
-    let recorder = Arc::new(SealRecorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     session.emit_to(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
     let (inbox_tx, inbox_rx) = mpsc::channel();
     session.deliver_to(inbox_tx);
@@ -1118,7 +1107,7 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
         .expect("waited for the parked command to return");
     assert_eq!(result.unwrap(), "ok");
     assert!(
-        recorder.events.lock().unwrap().is_empty(),
+        recorder.events().is_empty(),
         "nothing reaches the Emit after the session seal"
     );
     assert!(
