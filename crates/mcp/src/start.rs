@@ -7,7 +7,7 @@
 //! deadline is left out and recorded as `mcp_server_failed`. The session
 //! still starts, unless a `required` server failed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
@@ -456,6 +456,30 @@ pub fn start_observed(
     version: &str,
     timing: Option<contract::diag::Timing>,
 ) -> Started {
+    start_observed_tracked(
+        specs, workspace, artifacts, images, cache, clock, version, timing, None,
+    )
+}
+
+/// As [`start_observed`], reporting every session server still starting
+/// in `outstanding`: each server leaves the set when its start reports,
+/// so a watcher holding the handle reads exactly the servers that have
+/// not reported. `None` tracks nothing, as before.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the tracked companion adds only the outstanding set"
+)]
+pub(crate) fn start_observed_tracked(
+    specs: Vec<ServerSpec>,
+    workspace: &Path,
+    artifacts: &Path,
+    images: Arc<dyn Images>,
+    cache: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+    timing: Option<contract::diag::Timing>,
+    outstanding: Option<Arc<Mutex<BTreeSet<String>>>>,
+) -> Started {
     let mut lazy = Vec::new();
     let mut session = Vec::new();
     for (index, spec) in specs.into_iter().enumerate() {
@@ -472,6 +496,14 @@ pub fn start_observed(
         }
     }
     let (done, results) = mpsc::channel();
+    if let Some(outstanding) = outstanding.as_ref() {
+        for (_, spec) in session.iter() {
+            outstanding
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(spec.name.clone());
+        }
+    }
     for (index, spec) in session.into_iter() {
         let done = done.clone();
         let workspace = workspace.to_path_buf();
@@ -481,14 +513,19 @@ pub fn start_observed(
         let clock = Arc::clone(clock);
         let version = version.to_owned();
         let timing = timing.clone();
+        let name = spec.name.clone();
+        let outstanding = outstanding.clone();
         thread::spawn(move || {
-            done.send((
-                index,
-                open_observed(
-                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
-                ),
-            ))
-            .unwrap_or(());
+            let opened = open_observed(
+                spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+            );
+            if let Some(outstanding) = outstanding.as_ref() {
+                outstanding
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&name);
+            }
+            done.send((index, opened)).unwrap_or(());
         });
     }
     drop(done);
