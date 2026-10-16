@@ -107,6 +107,7 @@ pub(crate) struct RunFailed {
 /// Why a call through [`Slot::call`] failed.
 #[allow(
     clippy::result_large_err,
+    clippy::large_enum_variant,
     reason = "the death record travels with the call that observed it"
 )]
 pub(crate) enum Fault {
@@ -654,28 +655,6 @@ fn died(server: &str, will_restart: bool, remote: bool) -> Death {
         },
         error,
     }
-}
-
-/// The message of a server that is gone: no spawn was tried, or its start
-/// failed, or it has since exited. Used by the call sites `tool.rs` and
-/// `prompt.rs` until they pass a case; deleted then.
-pub(crate) fn unavailable(server: &str) -> String {
-    format!("The MCP server `{server}` did not start, or it has since exited.")
-}
-
-/// The message of a call that saw the remote session expire: the next
-/// call starts a new session, with no record (`docs/mcp.md`, "When a
-/// server dies").
-pub(crate) fn expired(server: &str) -> String {
-    format!("The MCP server `{server}` ended its session; Fiber starts a new one on the next call.")
-}
-
-/// The `mcp_tool_removed` message: the call never reaches the server, and
-/// the tool stays declared until the next session.
-pub(crate) fn removed(server: &str, tool: &str) -> String {
-    format!(
-        "The MCP server `{server}` no longer has the tool `{tool}`; it stays declared until the next session.",
-    )
 }
 
 /// One in-flight start's hold on its slot: clearing the flag and waking

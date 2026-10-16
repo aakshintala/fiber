@@ -7,16 +7,16 @@
 use std::sync::Weak;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::events::CommandInfo;
-use contract::shapes::ContentPart;
+use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output, ServerRecord};
 use serde_json::{Map, Value};
 
+use crate::error::McpError;
 use crate::fail;
 use crate::rpc::{Named, PROMPTS_GET};
 use crate::server_json::{Argument, Content, ListedPrompt, PromptResult, from_object};
-use crate::slot::{self, Fault, Served, Slot};
+use crate::slot::{Fault, Served, Slot};
 
 /// The `commands` row's `argument_hint`: each argument as `<name>` when
 /// required and `[name]` when not, space-separated; absent when the prompt
@@ -220,10 +220,10 @@ impl Prompts {
             .iter()
             .find(|entry| entry.server == server && entry.prompt.name == prompt)
         else {
-            return fail::failed(
-                ErrorCode::McpPromptFailed,
-                format!("The MCP server `{server}` has no prompt `/{prompt}`."),
-            );
+            return fail::failed(&McpError::PromptMissing {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+            });
         };
         let filled = match fill(&entry.prompt.arguments, arguments) {
             Ok(filled) => filled,
@@ -237,29 +237,37 @@ impl Prompts {
                     Some(hint) => format!(" Run it as `/{prompt} {hint}`."),
                     None => String::new(),
                 };
-                return fail::failed(
-                    ErrorCode::InvalidArguments,
-                    format!(
-                        "The MCP server `{server}`'s prompt `/{prompt}` needs {needs}.{follow}"
-                    ),
-                );
+                return fail::failed(&McpError::PromptArgumentsMissing {
+                    server: server.to_owned(),
+                    prompt: prompt.to_owned(),
+                    needs,
+                    follow,
+                });
             }
         };
         let Some(slot) = entry.slot.upgrade() else {
-            return fail::failed(
-                ErrorCode::McpPromptFailed,
-                not_run(server, prompt, &slot::unavailable(server)),
-            );
+            return fail::failed(&McpError::PromptNotRun {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                cause: Box::new(McpError::ServerUnavailable {
+                    server: server.to_owned(),
+                }),
+            });
         };
         match slot.serve() {
-            Served::Failed(failed) => Output {
-                error: Some(fail::failure(
-                    ErrorCode::McpPromptFailed,
-                    not_run(server, prompt, &failed.error.to_string()),
-                )),
-                servers: failed.records,
-                ..Output::default()
-            },
+            Served::Failed(failed) => {
+                let failed = *failed;
+                let error = McpError::PromptNotRun {
+                    server: server.to_owned(),
+                    prompt: prompt.to_owned(),
+                    cause: Box::new(failed.error),
+                };
+                Output {
+                    error: Some(Failure::from(&error)),
+                    servers: failed.records,
+                    ..Output::default()
+                }
+            }
             Served::Up(running, servers) => {
                 let params = Named {
                     arguments: &filled.named,
@@ -286,13 +294,10 @@ fn output(
     match called {
         Ok(result) => match from_object::<PromptResult>(result) {
             Err(_) => {
-                let mut out = fail::failed(
-                    ErrorCode::McpPromptFailed,
-                    format!(
-                        "The MCP server `{server}`'s prompt `/{prompt}` returned no messages, \
-                         which Fiber cannot send as a message."
-                    ),
-                );
+                let mut out = fail::failed(&McpError::PromptNoMessages {
+                    server: server.to_owned(),
+                    prompt: prompt.to_owned(),
+                });
                 out.servers = servers;
                 out
             }
@@ -311,85 +316,76 @@ fn output(
                     out
                 }
                 Err(reason) => {
-                    let mut out = fail::failed(
-                        ErrorCode::McpPromptFailed,
-                        format!(
-                            "The MCP server `{server}`'s prompt `/{prompt}` returned {reason}, \
-                             which Fiber cannot send as a message."
-                        ),
-                    );
+                    let mut out = fail::failed(&McpError::PromptUnreadable {
+                        server: server.to_owned(),
+                        prompt: prompt.to_owned(),
+                        reason,
+                    });
                     out.servers = servers;
                     out
                 }
             },
         },
         Err(Fault::Timeout) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                format!(
-                    "The MCP server `{server}` did not answer the prompt `/{prompt}` \
-                     within {} ms.",
-                    entry.timeout.as_millis(),
-                ),
-            );
+            let mut out = fail::failed(&McpError::PromptTimedOut {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                timeout_ms: entry.timeout.as_millis(),
+            });
             out.servers = servers;
             out
         }
         Err(Fault::Cancelled) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                format!(
-                    "The run of the prompt `/{prompt}` on the MCP server `{server}` was \
-                     cancelled; the server may still act on it."
-                ),
-            );
+            let mut out = fail::failed(&McpError::PromptCancelled {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+            });
             out.servers = servers;
             out
         }
         Err(Fault::Died(death)) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                not_run(server, prompt, &death.error.to_string()),
-            );
+            let mut out = fail::failed(&McpError::PromptNotRun {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                cause: Box::new(death.error),
+            });
             let mut all = servers;
             all.push(ServerRecord::Failed(death.record));
             out.servers = all;
             out
         }
         Err(Fault::Gone) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                not_run(server, prompt, &slot::unavailable(server)),
-            );
+            let mut out = fail::failed(&McpError::PromptNotRun {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                cause: Box::new(McpError::ServerUnavailable {
+                    server: server.to_owned(),
+                }),
+            });
             out.servers = servers;
             out
         }
         Err(Fault::Refused(message)) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                format!("The MCP server `{server}` refused the prompt `/{prompt}`: {message}."),
-            );
+            let mut out = fail::failed(&McpError::PromptRefused {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                message,
+            });
             out.servers = servers;
             out
         }
         Err(Fault::Expired) => {
-            let mut out = fail::failed(
-                ErrorCode::McpPromptFailed,
-                not_run(server, prompt, &slot::expired(server)),
-            );
+            let mut out = fail::failed(&McpError::PromptNotRun {
+                server: server.to_owned(),
+                prompt: prompt.to_owned(),
+                cause: Box::new(McpError::SessionExpired {
+                    server: server.to_owned(),
+                }),
+            });
             out.servers = servers;
             out
         }
     }
-}
-
-/// The sentence when the prompt's text cannot be had for a server-side
-/// cause (`docs/errors.md`, `mcp_prompt_failed`): the server, the prompt
-/// and the cause. Every cause the slot reports starts with "The ", so it
-/// reads as the sentence's end.
-fn not_run(server: &str, prompt: &str, cause: &str) -> String {
-    let cause = cause.strip_prefix("The ").unwrap_or(cause);
-    format!("The MCP server `{server}`'s prompt `/{prompt}` was not run: the {cause}")
 }
 
 #[cfg(test)]

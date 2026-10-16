@@ -11,21 +11,21 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::images::{ImageError, Images};
 use contract::provider::ToolDefinition;
-use contract::shapes::ContentPart;
+use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
 use crate::elicit::Asker;
+use crate::error::McpError;
 use crate::fail;
 use crate::name::qualified;
 use crate::rpc::{Named, TOOLS_CALL};
 use crate::server_json::{CallResult, Content, Resource, from_object};
-use crate::slot::{self, Fault, Run, Slot};
+use crate::slot::{Fault, Run, Slot};
 
 /// One server tool declared to the model.
 pub(crate) struct McpTool {
@@ -164,21 +164,20 @@ impl McpTool {
         asker: Option<Asker<'_>>,
     ) -> Output {
         let Some(slot) = self.call.slot.upgrade() else {
-            return fail::failed(
-                ErrorCode::McpServerUnavailable,
-                slot::unavailable(&self.call.server),
-            );
+            return fail::failed(&McpError::ServerUnavailable {
+                server: self.call.server.clone(),
+            });
         };
         match slot.run(&self.call.tool) {
             Run::Removed(servers) => Output {
                 servers,
-                ..fail::failed(
-                    ErrorCode::McpToolRemoved,
-                    slot::removed(&self.call.server, &self.call.tool),
-                )
+                ..fail::failed(&McpError::ToolRemoved {
+                    server: self.call.server.clone(),
+                    tool: self.call.tool.clone(),
+                })
             },
             Run::Failed(failed) => Output {
-                error: Some(contract::shapes::Failure::from(&failed.error)),
+                error: Some(Failure::from(&failed.error)),
                 servers: failed.records,
                 ..Output::default()
             },
@@ -229,38 +228,45 @@ fn output(
 pub(crate) fn faulted(call: &Call, fault: Fault, servers: Vec<ServerRecord>) -> Output {
     match fault {
         Fault::Timeout => {
-            let mut out = fail::failed(ErrorCode::Timeout, timed_out(call));
+            let mut out = fail::failed(&McpError::CallTimedOut {
+                server: call.server.clone(),
+                tool: call.tool.clone(),
+                timeout_ms: call.timeout.as_millis(),
+            });
             out.servers = servers;
             out
         }
         Fault::Cancelled => {
-            let mut out = fail::failed(ErrorCode::McpCancelRequested, cancelled(call));
+            let mut out = fail::failed(&McpError::CallCancelled {
+                server: call.server.clone(),
+                tool: call.tool.clone(),
+            });
             out.servers = servers;
             out
         }
         Fault::Refused(message) => {
-            let mut out = fail::failed(ErrorCode::ToolError, message);
+            let mut out = fail::failed(&McpError::CallRefused { message });
             out.servers = servers;
             out
         }
         Fault::Expired => {
-            let mut out =
-                fail::failed(ErrorCode::McpServerUnavailable, slot::expired(&call.server));
+            let mut out = fail::failed(&McpError::SessionExpired {
+                server: call.server.clone(),
+            });
             out.servers = servers;
             out
         }
         Fault::Died(death) => {
-            let mut out = fail::failed(death.error.code(), death.error.to_string());
+            let mut out = fail::failed(&death.error);
             let mut all = servers;
             all.push(ServerRecord::Failed(death.record));
             out.servers = all;
             out
         }
         Fault::Gone => {
-            let mut out = fail::failed(
-                ErrorCode::McpServerUnavailable,
-                slot::unavailable(&call.server),
-            );
+            let mut out = fail::failed(&McpError::ServerUnavailable {
+                server: call.server.clone(),
+            });
             out.servers = servers;
             out
         }
@@ -298,7 +304,7 @@ pub(crate) fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> O
             }),
             Content::Resource { resource } => match resource_text(call, resource, cancel) {
                 Ok(mut parts) => content.append(&mut parts),
-                Err((code, message)) => return fail::failed(code, message),
+                Err(error) => return fail::failed(&error),
             },
             Content::Audio { data, mime_type } => {
                 content.push(ContentPart::Text {
@@ -313,7 +319,7 @@ pub(crate) fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> O
             }
             Content::Image { data, .. } => match image_content(call, data.as_ref(), cancel) {
                 Ok(mut parts) => content.append(&mut parts),
-                Err((code, message)) => return fail::failed(code, message),
+                Err(error) => return fail::failed(&error),
             },
             Content::Other | Content::Unreadable => {
                 content.push(ContentPart::Text {
@@ -334,7 +340,7 @@ pub(crate) fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> O
         };
         Output {
             content,
-            error: Some(fail::failure(ErrorCode::ToolError, message)),
+            error: Some(Failure::from(&McpError::ToolReportedError { message })),
             ..Output::default()
         }
     } else {
@@ -378,7 +384,7 @@ fn resource_text(
     call: &Call,
     resource: &Resource,
     cancel: &dyn Cancel,
-) -> Result<Vec<ContentPart>, (ErrorCode, String)> {
+) -> Result<Vec<ContentPart>, McpError> {
     match (&resource.text, &resource.blob) {
         (Some(text), _) => Ok(vec![ContentPart::Text { text: text.clone() }]),
         (None, Some(blob)) if is_image(&resource.mime_type) => {
@@ -410,26 +416,17 @@ fn image_content(
     call: &Call,
     data: Option<&Value>,
     cancel: &dyn Cancel,
-) -> Result<Vec<ContentPart>, (ErrorCode, String)> {
+) -> Result<Vec<ContentPart>, McpError> {
     let Some(encoded) = data else {
-        return Err((
-            ErrorCode::UnsupportedFile,
-            "image content: no data".to_owned(),
-        ));
+        return Err(McpError::ImageNoData);
     };
     let Some(text) = encoded.as_str() else {
-        return Err((
-            ErrorCode::UnsupportedFile,
-            "image content: expected a base64 string".to_owned(),
-        ));
+        return Err(McpError::ImageNotBase64String);
     };
     let bytes = match STANDARD.decode(text) {
         Ok(bytes) => bytes,
         Err(error) => {
-            return Err((
-                ErrorCode::UnsupportedFile,
-                format!("image content: {error}"),
-            ));
+            return Err(McpError::ImageUndecodable(error));
         }
     };
     match call.images.process(&bytes, cancel) {
@@ -447,12 +444,12 @@ fn image_content(
                 height: reference.height,
             },
         ]),
-        Err(ImageError::Unreadable(message)) => Err((
-            ErrorCode::UnsupportedFile,
-            format!("The image cannot be read as an image: {message}"),
-        )),
-        Err(ImageError::Failed(message)) => Err((ErrorCode::ToolError, message)),
-        Err(ImageError::Cancelled) => Err((ErrorCode::McpCancelRequested, cancelled(call))),
+        Err(ImageError::Unreadable(message)) => Err(McpError::ImageUnreadable { message }),
+        Err(ImageError::Failed(message)) => Err(McpError::ImageFailed { message }),
+        Err(ImageError::Cancelled) => Err(McpError::CallCancelled {
+            server: call.server.clone(),
+            tool: call.tool.clone(),
+        }),
     }
 }
 
@@ -492,22 +489,6 @@ fn artifact_name(bytes: &[u8]) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect();
     format!("mcp-{}.bin", &hex[..16])
-}
-
-fn timed_out(call: &Call) -> String {
-    format!(
-        "The MCP server `{}` did not answer `{}` within {} ms.",
-        call.server,
-        call.tool,
-        call.timeout.as_millis(),
-    )
-}
-
-fn cancelled(call: &Call) -> String {
-    format!(
-        "The call to `{}` on the MCP server `{}` was cancelled; the server may still act on it.",
-        call.tool, call.server,
-    )
 }
 
 #[cfg(test)]
