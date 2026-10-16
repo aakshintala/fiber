@@ -155,7 +155,9 @@ fn panel_header_text(grid: &Grid, y: u16, head: &str) -> String {
 #[test]
 fn a_standing_ask_draws_the_panel_typing_feeds_back_and_esc_puts_it_aside() {
     let setup = shell_setup("cargo mutants -p hub");
-    configure(&setup, json!({}));
+    // One session: the rail stays hidden, so the panel's columns are
+    // the look pinned.
+    configure(&setup, json!({"tui": {"rail": {"shown": false}}}));
     ask_rule(&setup, "cargo");
     let mut run = terminal(&setup, &TRUECOLOUR);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -181,18 +183,19 @@ fn a_standing_ask_draws_the_panel_typing_feeds_back_and_esc_puts_it_aside() {
     );
     // Every cell of the panel's text rows takes the approval tint, the
     // stripe its `attention` cell, and the edges draw above and below:
-    // header, tool, facts, blank, two choices, blank, hint.
-    for x in 0..end + 1 {
+    // header, tool, facts, blank, two choices, blank, hint. Past the
+    // grip, which takes column 0.
+    for x in 1..end + 1 {
         assert_eq!(grid.cell(x, header - 1).symbol.as_str(), "▄", "top {x}");
         assert_eq!(grid.cell(x, header + 8).symbol.as_str(), "▀", "bottom {x}");
     }
     let text: Vec<u16> = (header..header + 8).collect();
     for y in text.iter().copied() {
-        for x in 0..end + 1 {
+        for x in 1..end + 1 {
             assert_eq!(grid.cell(x, y).bg, APPROVAL_BG, "({x}, {y})");
         }
-        assert_eq!(grid.cell(0, y).symbol.as_str(), "▌", "row {y}");
-        assert_eq!(grid.cell(0, y).fg, ATTENTION, "row {y}");
+        assert_eq!(grid.cell(1, y).symbol.as_str(), "▌", "row {y}");
+        assert_eq!(grid.cell(1, y).fg, ATTENTION, "row {y}");
     }
     // No row holds the call's JSON.
     assert!(
@@ -315,7 +318,8 @@ fn a_reviewer_failure_escalates_to_an_alert_panel() {
     write_json(&setup.workspace().join("empty.json"), &json!({"steps": []}));
     configure(
         &setup,
-        json!({"reviewer": {"model": "scripted/empty.json"}}),
+        json!({"reviewer": {"model": "scripted/empty.json"},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = terminal(&setup, &TRUECOLOUR);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -335,17 +339,18 @@ fn a_reviewer_failure_escalates_to_an_alert_panel() {
         .find(|y| {
             grid.rows[usize::from(*y)]
                 .chars()
-                .take(usize::from(end) + 1)
+                .skip(1)
+                .take(usize::from(end))
                 .all(|cell| cell == '▀')
         })
         .expect("the bottom edge");
     assert_eq!(bottom - header, 10, "ten text rows to the edge");
     for y in header..bottom {
-        for x in 0..end + 1 {
+        for x in 1..end + 1 {
             assert_eq!(grid.cell(x, y).bg, ALERT_BG, "({x}, {y})");
         }
-        assert_eq!(grid.cell(0, y).symbol.as_str(), "▌", "row {y}");
-        assert_eq!(grid.cell(0, y).fg, ERROR, "row {y}");
+        assert_eq!(grid.cell(1, y).symbol.as_str(), "▌", "row {y}");
+        assert_eq!(grid.cell(1, y).fg, ERROR, "row {y}");
     }
     let facts = row_with(&grid, "the reviewer failed");
     assert!(
@@ -369,7 +374,8 @@ fn an_escalation_takes_palette_52_at_256_colours() {
     write_json(&setup.workspace().join("empty.json"), &json!({"steps": []}));
     configure(
         &setup,
-        json!({"reviewer": {"model": "scripted/empty.json"}}),
+        json!({"reviewer": {"model": "scripted/empty.json"},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = terminal(&setup, &[("TERM_PROGRAM", "ghostty")]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -385,7 +391,7 @@ fn an_escalation_takes_palette_52_at_256_colours() {
         .find(|x| grid.cell(*x, header).bg == Colour::Indexed(52))
         .expect("the tinted run");
     for y in [header] {
-        for x in 0..end + 1 {
+        for x in 1..end + 1 {
             assert_eq!(grid.cell(x, y).bg, Colour::Indexed(52), "({x}, {y})");
         }
     }

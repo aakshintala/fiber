@@ -50,7 +50,8 @@ fn light_run() -> (Setup, Run, Grid) {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "tui": {"theme": "light"}, "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "scripted/s.json", "tui": {"theme": "light",
+            "rail": {"shown": false}}, "hub": {"idle_exit_ms": 1000}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &[("TERM_PROGRAM", "ghostty")]);
     // The end of the first frame proves the input reader runs before
@@ -97,8 +98,9 @@ fn light_drawn(grid: &Grid) -> bool {
         return false;
     }
     // The white page: every blank cell above the first content row is
-    // the page, with a blank page row above the turn.
-    let Some(first) = (1..45).find(|y| (0..126).any(|x| grid.cell(x, *y).symbol.as_str() != " "))
+    // the page, with a blank page row above the turn. Past the grip,
+    // which takes column 0.
+    let Some(first) = (1..45).find(|y| (1..126).any(|x| grid.cell(x, *y).symbol.as_str() != " "))
     else {
         return false;
     };
@@ -106,7 +108,7 @@ fn light_drawn(grid: &Grid) -> bool {
         return false;
     }
     for y in 1..first {
-        for x in 0..126 {
+        for x in 1..126 {
             let cell = grid.cell(x, y);
             if cell.symbol.as_str() != " " || cell.bg != Colour::Indexed(231) {
                 return false;
@@ -134,7 +136,7 @@ fn light_drawn(grid: &Grid) -> bool {
     // surfaced run, not a single lucky cell.
     if (first..y)
         .find(|row| {
-            let run = (0..126)
+            let run = (1..126)
                 .filter(|col| {
                     let cell = grid.cell(*col, *row);
                     cell.symbol == "▄" && matches!(cell.fg, Colour::Indexed(_))
@@ -148,12 +150,12 @@ fn light_drawn(grid: &Grid) -> bool {
     }
     // The input box's striped surface: every asserted cell indexed,
     // with the stripe in its surface.
-    for x in 0..126 {
+    for x in 1..126 {
         if !matches!(grid.cell(x, 46).bg, Colour::Indexed(_)) {
             return false;
         }
     }
-    let stripe = grid.cell(0, 46);
+    let stripe = grid.cell(1, 46);
     stripe.symbol.as_str() == "▌" && matches!(stripe.fg, Colour::Indexed(_))
 }
 
@@ -166,11 +168,11 @@ fn light_at_256_paints_its_own_white_page() {
     // Every blank cell above the first content row is the page: the
     // colour cube's white, 231, which the grey ramp lacks.
     let first = (1..45)
-        .find(|y| (0..126).any(|x| screen.cell(x, *y).symbol.as_str() != " "))
+        .find(|y| (1..126).any(|x| screen.cell(x, *y).symbol.as_str() != " "))
         .expect("a content row above the input box");
     assert!(first > 1, "a blank page row above the turn");
     for y in 1..first {
-        for x in 0..126 {
+        for x in 1..126 {
             let cell = screen.cell(x, y);
             assert_eq!(cell.symbol.as_str(), " ", "page cell ({x}, {y})");
             assert_eq!(cell.bg, Colour::Indexed(231), "page cell ({x}, {y})");
@@ -195,7 +197,7 @@ fn light_at_256_paints_its_own_white_page() {
     // The turn card's ▄ edge between the page and the reply, and the
     // input box's striped surface: full surfaced runs, not single cells.
     let edge = (first..y).find(|row| {
-        let run = (0..126)
+        let run = (1..126)
             .filter(|col| {
                 let cell = screen.cell(*col, *row);
                 cell.symbol == "▄" && matches!(cell.fg, Colour::Indexed(_))
@@ -204,11 +206,11 @@ fn light_at_256_paints_its_own_white_page() {
         run >= 100
     });
     assert!(edge.is_some(), "a turn edge run above the reply");
-    for x in 0..126 {
+    for x in 1..126 {
         let cell = screen.cell(x, 46);
         assert!(matches!(cell.bg, Colour::Indexed(_)), "box cell ({x}, 46)");
     }
-    let stripe = screen.cell(0, 46);
+    let stripe = screen.cell(1, 46);
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert!(matches!(stripe.fg, Colour::Indexed(_)));
     run.write(b"\x03\x03\r");
@@ -434,8 +436,8 @@ fn input_side(screen: &Grid) -> (u16, u16) {
 #[test]
 fn no_color_boxes_every_surface_on_the_final_frame() {
     let (_setup, mut run) = no_color_run();
-    // One live session shows no rail: Ctrl+N reaches home, and a second
-    // scripted session brings the rail with it.
+    // Ctrl+N reaches home, and a second scripted session brings the
+    // rail; the test waits for that rail.
     let home_from = run.output().len();
     run.write(b"\x0e");
     run.wait_screen("home", |screen| screen.cell(150, 20).bg == Colour::Default);

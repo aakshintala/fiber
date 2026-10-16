@@ -1,13 +1,14 @@
 //! Dragging the rail's and the panel's edges: the drag in progress and
-//! the shares a release queued to save (`docs/tui.md`, "Layout",
+//! the settings a release queues to save (`docs/tui.md`, "Layout",
 //! "Shedding"). Drawing lives in `crate::view::drag`.
 
 use super::App;
 use crate::keys::{Button, Mouse, MouseKind};
 use crate::layout::{self, Edge};
 
-/// A share waiting to be saved: its configuration key and its percent.
-type QueuedSave = (&'static str, f64);
+/// A setting waiting to be saved: its configuration key and its value's
+/// text, as `fiber config set` would write it.
+type QueuedSave = (&'static str, String);
 
 /// The drag in progress and the shares waiting to be saved.
 #[derive(Debug, Default)]
@@ -130,7 +131,7 @@ impl App {
             return;
         };
         if drag.edge == Edge::Rail && drag.below {
-            self.chrome.hide_rail();
+            self.hide_rail();
             if let Some(home) = self.home.as_mut() {
                 home.launch.rail_share = drag.before;
             }
@@ -153,7 +154,7 @@ impl App {
         if let Some(share) = share
             && share != drag.before
         {
-            self.drag.saves.push((key, share));
+            self.queue_save(key, format!("{share}"));
         }
         self.settle();
     }
@@ -168,7 +169,13 @@ impl App {
         }
     }
 
-    /// The shares a release queued, in order, emptied.
+    /// Queues a setting's text to save, in order, through the
+    /// configuration seam.
+    pub(super) fn queue_save(&mut self, key: &'static str, value: String) {
+        self.drag.saves.push((key, value));
+    }
+
+    /// The settings a show, hide or release queued, in order, emptied.
     pub(crate) fn take_saves(&mut self) -> Vec<QueuedSave> {
         std::mem::take(&mut self.drag.saves)
     }

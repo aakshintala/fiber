@@ -86,7 +86,8 @@ fn markdown_reply_uses_the_markdown_look() {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
@@ -101,7 +102,8 @@ fn markdown_reply_uses_the_markdown_look() {
     // The heading drops its marker, in bold in the heading colour.
     let heading = find_row(&screen, "Ship it");
     let hx = find_col(&screen, heading, "Ship it");
-    let head = symbols(&screen, heading, 0..hx + 7);
+    // Past the grip, which takes column 0.
+    let head = symbols(&screen, heading, 1..hx + 7);
     assert!(!head.contains('#'), "no heading marker in {head:?}");
     assert_eq!(head.trim(), "Ship it");
     for x in hx..hx + 7 {

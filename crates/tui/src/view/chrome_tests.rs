@@ -122,7 +122,7 @@ fn attached_160x40_with_the_panel() {
     assert_eq!(buf.cell((126, 18)).map(|cell| cell.symbol()), Some(" "));
     assert_eq!(
         cursor(&app, Rect::new(0, 0, 160, 40)),
-        Some(Position::new(4, 38))
+        Some(Position::new(28, 38))
     );
 }
 
@@ -184,13 +184,25 @@ fn the_conversation_has_no_header_and_a_blank_column_each_side() {
             row.contains("hello")
         })
         .expect("the reply row");
-    let tint = buf.cell((1, y)).map(|cell| cell.bg).unwrap_or(Color::Reset);
+    let layout = app.chrome().layout().expect("a layout with the rail");
+    let rail = layout.rail.expect("a rail");
+    let tint = buf
+        .cell((rail.right().saturating_add(1), y))
+        .map(|cell| cell.bg)
+        .unwrap_or(Color::Reset);
     assert_ne!(tint, Color::Reset, "the reply's tint");
-    assert_eq!(buf.cell((0, y)).map(|cell| cell.bg), Some(Color::Reset));
-    assert_eq!(buf.cell((1, y)).map(|cell| cell.bg), Some(tint));
+    assert_eq!(
+        buf.cell((rail.right(), y)).map(|cell| cell.bg),
+        Some(Color::Reset)
+    );
+    assert_eq!(
+        buf.cell((rail.right().saturating_add(1), y))
+            .map(|cell| cell.bg),
+        Some(tint)
+    );
     assert_eq!(buf.cell((124, y)).map(|cell| cell.bg), Some(tint));
     assert_eq!(buf.cell((125, y)).map(|cell| cell.bg), Some(Color::Reset));
-    // A second live session shows the rail: the card starts one column
+    // A second live session keeps the rail: the card starts one column
     // after the rail's edge.
     app.on_line(status(SESSION, "two"));
     app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));

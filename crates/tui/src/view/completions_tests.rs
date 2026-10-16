@@ -104,7 +104,7 @@ fn row_text(buf: &Buffer, y: u16) -> String {
         .collect()
 }
 
-/// An app with a 40-row `/` list: the built-ins and 17 session skills.
+/// An app with a 41-row `/` list: the built-ins and 17 session skills.
 fn forty() -> App {
     let mut app = attached(160, 48);
     let skills: Vec<String> = (0..17).map(|n| format!("skill{n:02}")).collect();
@@ -120,7 +120,7 @@ fn slash_eight_of_forty() {
     insta::assert_snapshot!("slash", screen(&app, 160, 48));
     // Eight entries and the range line, with the first match focused.
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("1–8 of 40 · ↓ 32 more"), "{shown}");
+    assert!(shown.contains("1–8 of 41 · ↓ 33 more"), "{shown}");
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
@@ -137,7 +137,7 @@ fn a_scrolled_slash_list_counts_both_directions() {
     }
     let shown = screen(&app, 160, 48);
     assert!(
-        shown.contains("↑ 3 above · 4–11 of 40 · ↓ 29 more"),
+        shown.contains("↑ 3 above · 4–11 of 41 · ↓ 30 more"),
         "{shown}"
     );
     let buf = buffer(&app, 160, 48);
@@ -322,7 +322,7 @@ fn narrow_slash() {
     app.set_size(100, 40);
     type_text(&mut app, "/");
     insta::assert_snapshot!("narrow-slash", screen(&app, 100, 40));
-    assert!(screen(&app, 100, 40).contains("1–8 of 40 · ↓ 32 more"));
+    assert!(screen(&app, 100, 40).contains("1–8 of 41 · ↓ 33 more"));
 }
 
 #[test]
@@ -453,16 +453,16 @@ fn range_text_counts_bindings_on_both_sides() {
     assert_eq!(range_text(0, 0, 0), None);
     // Neither end hidden: no counts, only where the rows sit.
     assert_eq!(
-        range_text(0, 8, 40),
-        Some("1–8 of 40 · ↓ 32 more".to_owned())
+        range_text(0, 8, 41),
+        Some("1–8 of 41 · ↓ 33 more".to_owned())
     );
     // The end shown: no "more" behind it.
     assert_eq!(range_text(0, 8, 9), Some("1–8 of 9 · ↓ 1 more".to_owned()));
     assert_eq!(range_text(1, 8, 9), Some("↑ 1 above · 2–9 of 9".to_owned()));
     // Scrolled: what hides above leads.
     assert_eq!(
-        range_text(3, 8, 40),
-        Some("↑ 3 above · 4–11 of 40 · ↓ 29 more".to_owned())
+        range_text(3, 8, 41),
+        Some("↑ 3 above · 4–11 of 41 · ↓ 30 more".to_owned())
     );
     // Fewer drawn than matched, however many fit: the counts follow
     // the entries actually drawn.
@@ -636,8 +636,8 @@ fn short_conversation_slash_keeps_its_selection_barred() {
     let shown = screen(&app, 80, 12);
     let bars = barred(&buf);
     assert_eq!(bars.len(), 1, "{shown}");
-    assert!(row_text(&buf, bars[0]).contains("rules"), "{shown}");
-    assert!(shown.contains("of 40"), "{shown}");
+    assert!(row_text(&buf, bars[0]).contains("rail"), "{shown}");
+    assert!(shown.contains("of 41"), "{shown}");
 }
 
 /// A short conversation with an `@` list: the third path stays barred,

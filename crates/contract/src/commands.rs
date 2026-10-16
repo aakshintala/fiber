@@ -447,6 +447,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "usage",
     "tools",
     "panel",
+    "rail",
     "rules",
     "settings",
     "keys",

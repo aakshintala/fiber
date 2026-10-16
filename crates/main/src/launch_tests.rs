@@ -254,6 +254,40 @@ fn shares_and_cards_come_from_config_with_defaults() {
 }
 
 #[test]
+fn the_rail_shows_unless_config_hides_it() {
+    let dir = fakes::TempDir::new("fiber-launch-rail-shown");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    let unset = launch(
+        workspace.clone(),
+        &workspace,
+        &plain,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+        None,
+        Vec::new(),
+    );
+    assert!(!unset.rail_hidden);
+    for (value, hidden) in [("false", true), ("true", false)] {
+        let set_config = config(
+            dir.path(),
+            &workspace,
+            vec![format!("tui.rail.shown={value}")],
+        );
+        let set = launch(
+            workspace.clone(),
+            &workspace,
+            &set_config,
+            tui::ThemeSetting::Follow,
+            dir.path(),
+            None,
+            Vec::new(),
+        );
+        assert_eq!(set.rail_hidden, hidden, "{value}");
+    }
+}
+
+#[test]
 fn an_out_of_range_share_reads_as_the_default() {
     let dir = fakes::TempDir::new("fiber-launch-range");
     let workspace = dir.path().to_path_buf();

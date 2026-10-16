@@ -1402,7 +1402,7 @@ search box and the draft shows without a cursor.
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
 | Show or hide the panel | `toggle_panel` | ⌥P | `/panel` |
-| Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
+| Show or hide the rail | `toggle_rail` | ⌥R | `/rail`; drag its edge |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Next or previous match | `search_next_prev` | Enter or ↓, Shift+Enter or ↑, with search open | |
@@ -1551,6 +1551,7 @@ later release still applies.
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
 | `/panel` | Shows or hides the panel ("The panel"). |
+| `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
 | `/settings` | Opens the configuration keys. |
 | `/keys` | Opens the rebinding screen ("Bindings"). |

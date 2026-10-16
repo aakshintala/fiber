@@ -20,7 +20,11 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// Whether `row` is a right-aligned prompt bubble edge: the bar's glyph
 /// may end it.
 fn prompt_edge(row: &str) -> bool {
-    let row = row.trim_end_matches(['█', '│', '┃']);
+    // The grip's ⋮ at mid-height may prefix the row, where the input
+    // box's edge overlaps it on a short screen.
+    let row = row
+        .trim_start_matches('⋮')
+        .trim_end_matches(['█', '│', '┃']);
     row.chars()
         .position(|cell| cell != ' ')
         .is_some_and(|first| {
@@ -156,12 +160,13 @@ fn on_home_there_is_no_layout() {
 }
 
 #[test]
-fn attached_at_160_the_column_is_the_screen_less_the_panel() {
+fn attached_at_160_the_column_is_the_screen_less_the_rail_and_panel() {
     let app = attached(160, 40);
     let layout = app.chrome().layout().expect("a layout");
-    assert_eq!(layout.column, Rect::new(0, 0, 126, 40));
+    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.column, Rect::new(24, 0, 102, 40));
     assert_eq!(layout.panel, Some(Rect::new(126, 0, 34, 40)));
-    assert_eq!(app.column_width(), 126);
+    assert_eq!(app.column_width(), 102);
     assert_eq!(app.chrome().regions().panel, layout.panel);
     assert_eq!(app.regions.panel, layout.panel);
     // The input box's row with its edges.
@@ -173,7 +178,7 @@ fn the_pages_rewrap_at_the_column_width() {
     let long: String = std::iter::repeat_n('w', 400).collect();
     let mut app = attached(160, 40);
     app.on_line(turn_started(&long));
-    let mut narrow = plain(125, 40);
+    let mut narrow = plain(101, 40);
     narrow.on_line(turn_started(&long));
     let mut wide = plain(160, 40);
     wide.on_line(turn_started(&long));
@@ -187,17 +192,17 @@ fn alt_p_hides_and_shows_the_panel_and_rewraps() {
     let long: String = std::iter::repeat_n('w', 400).collect();
     let mut app = attached(160, 40);
     app.on_line(turn_started(&long));
-    let mut wide = plain(160, 40);
+    let mut wide = plain(135, 40);
     wide.on_line(turn_started(&long));
     let shown = total(&app);
     app.on_key(Key::AltP, now);
     assert_eq!(app.chrome().layout().and_then(|layout| layout.panel), None);
     assert_eq!(app.chrome().regions().panel, None);
     assert_eq!(app.regions.panel, None);
-    assert_eq!(app.column_width(), 160);
+    assert_eq!(app.column_width(), 136);
     assert_eq!(total(&app), total(&wide));
     app.on_key(Key::AltP, now);
-    assert_eq!(app.column_width(), 126);
+    assert_eq!(app.column_width(), 102);
     assert_eq!(total(&app), shown);
 }
 
@@ -207,11 +212,11 @@ fn slash_panel_does_the_same() {
     let mut app = attached(160, 40);
     type_draft(&mut app, "/panel");
     app.on_key(Key::Enter, now);
-    assert_eq!(app.column_width(), 160);
+    assert_eq!(app.column_width(), 136);
     assert!(app.input().is_empty());
     type_draft(&mut app, "/panel");
     app.on_key(Key::Enter, now);
-    assert_eq!(app.column_width(), 126);
+    assert_eq!(app.column_width(), 102);
 }
 
 #[test]
@@ -410,7 +415,7 @@ fn notices_are_cut_at_the_column() {
         .map(|target| target.rect)
         .expect("a notice");
     // The row spans the conversation's width, ending in its ✕.
-    assert_eq!((notice.x, notice.width), (0, 126));
+    assert_eq!((notice.x, notice.width), (24, 102));
     let dismiss = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::DismissNotice(_)))
@@ -427,21 +432,64 @@ fn notices_are_cut_at_the_column() {
 }
 
 #[test]
-fn the_rail_is_wanted_from_two_live_sessions() {
+fn the_rail_is_drawn_beside_every_session() {
     let mut app = attached(160, 40);
     app.on_line(status(SESSION, "one"));
-    let layout = app.chrome().layout().expect("a layout");
-    assert_eq!((layout.rail, layout.grip), (None, None));
-    app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));
     let layout = app.chrome().layout().expect("a layout");
     assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
     assert_eq!(app.regions.rail, layout.rail);
     assert_eq!(app.column_width(), 102);
-    // Narrower, the rail hides for width and leaves its grip.
+    assert!(app.take_saves().is_empty());
+    // A second live session changes nothing.
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "two"));
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert!(app.take_saves().is_empty());
+    // Narrower, the rail hides for width and leaves its grip, saving
+    // nothing.
     app.set_size(130, 40);
     let layout = app.chrome().layout().expect("a layout");
     assert_eq!(layout.rail, None);
     assert_eq!(layout.grip, Some(Rect::new(0, 0, 1, 40)));
+    assert!(app.take_saves().is_empty());
+    // Wider, it returns, still saving nothing.
+    app.set_size(160, 40);
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert!(app.take_saves().is_empty());
+}
+
+#[test]
+fn a_crashed_card_only_screen_draws_the_rail() {
+    let mut app = attached(160, 40);
+    app.on_line(status(SESSION, "one"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": SESSION, "how": "crashed"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    // No live session is left, and the rail still draws.
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert!(app.take_saves().is_empty());
+}
+
+#[test]
+fn a_launch_with_the_rail_hidden_starts_on_its_grip_and_saves_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    let mut desc = launch();
+    desc.rail_hidden = true;
+    app.set_home(desc);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_size(160, 40);
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!(layout.rail, None);
+    assert_eq!(layout.grip, Some(Rect::new(0, 0, 1, 40)));
+    assert!(app.take_saves().is_empty());
 }
 
 #[test]

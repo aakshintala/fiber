@@ -254,7 +254,7 @@ fn working_line_glimmer_frame_2() {
     // the muted line style. The word starts past the indent and spinner.
     let buf = buffer_sized(&app, 80, 24);
     let row = working_row(&buf, 80);
-    for x in [4, 6] {
+    for x in [5, 7] {
         assert_eq!(
             buf.cell((x, row)).and_then(|cell| cell.style().fg),
             Some(Role::Attention.color()),
@@ -268,16 +268,16 @@ fn working_line_glimmer_frame_2() {
         );
     }
     assert_eq!(
-        buf.cell((5, row)).and_then(|cell| cell.style().fg),
+        buf.cell((6, row)).and_then(|cell| cell.style().fg),
         Some(Role::Attention.color()),
     );
     assert!(
-        buf.cell((5, row))
+        buf.cell((6, row))
             .map(|cell| cell.style().add_modifier)
             .is_some_and(|modifier| modifier.contains(ratatui::style::Modifier::BOLD)),
     );
     assert_eq!(
-        buf.cell((7, row)).and_then(|cell| cell.style().fg),
+        buf.cell((8, row)).and_then(|cell| cell.style().fg),
         Some(Role::Muted.color()),
     );
 }
@@ -297,9 +297,9 @@ fn the_spinner_steps_on_the_tick_in_attention() {
         );
         let buf = buffer_sized(&app, 80, 24);
         let row = working_row(&buf, 80);
-        assert_eq!(buf.cell((2, row)).map(|cell| cell.symbol()), Some(want));
+        assert_eq!(buf.cell((3, row)).map(|cell| cell.symbol()), Some(want));
         assert_eq!(
-            buf.cell((2, row)).and_then(|cell| cell.style().fg),
+            buf.cell((3, row)).and_then(|cell| cell.style().fg),
             Some(Role::Attention.color()),
         );
     }
@@ -311,7 +311,7 @@ fn the_bands_edge_cells_carry_the_bold_centre() {
     let origin = clock.origin();
     // Frame 0's band is the word's first cell alone, frame 8's its last
     // cell alone: a one-cell band is its own bold centre.
-    for (frame, x) in [(0, 4), (8, 10)] {
+    for (frame, x) in [(0, 5), (8, 11)] {
         app.set_now(
             origin
                 .checked_add(Duration::from_millis(frame * 120))
@@ -376,13 +376,13 @@ fn working_line_reduced_has_no_glimmer() {
     // is bold.
     let buf = buffer_sized(&app, 80, 24);
     let row = working_row(&buf, 80);
-    assert_eq!(buf.cell((2, row)).map(|cell| cell.symbol()), Some("●"));
+    assert_eq!(buf.cell((3, row)).map(|cell| cell.symbol()), Some("●"));
     assert_eq!(
-        buf.cell((2, row)).and_then(|cell| cell.style().fg),
+        buf.cell((3, row)).and_then(|cell| cell.style().fg),
         Some(Role::Attention.color()),
     );
     for x in 0..80 {
-        if x != 2 {
+        if x != 3 {
             assert_ne!(
                 buf.cell((x, row)).and_then(|cell| cell.style().fg),
                 Some(Role::Attention.color()),
@@ -996,7 +996,7 @@ fn rest_frames_keep_asking_for_the_next_frame() {
     render(&app, area, &mut buf, None);
     let row = working_row(&buf, 80);
     assert_eq!(
-        buf.cell((4, row)).and_then(|cell| cell.style().fg),
+        buf.cell((5, row)).and_then(|cell| cell.style().fg),
         Some(crate::theme::Role::Attention.color())
     );
     assert_eq!(

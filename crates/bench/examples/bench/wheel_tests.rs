@@ -115,11 +115,12 @@ fn the_wheel_down_report_names_button_65() {
 }
 
 #[test]
-fn conversation_cuts_each_row_to_125_columns() {
-    let text = format!("{}\n{}", "a".repeat(160), "short");
+fn conversation_cuts_each_row_to_101_columns() {
+    // The second row starts with the 24-column rail, which the cut skips.
+    let text = format!("{}\n{}short", "a".repeat(160), " ".repeat(24));
     let cut = conversation(&text);
     let mut rows = cut.split('\n');
-    assert_eq!(rows.next(), Some("a".repeat(125).as_str()));
+    assert_eq!(rows.next(), Some("a".repeat(101).as_str()));
     assert_eq!(rows.next(), Some("short"));
     assert_eq!(rows.next(), None);
 }

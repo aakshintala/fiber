@@ -13,7 +13,7 @@ const DEFAULT: Shares = Shares {
     panel: 21.0,
 };
 
-/// The panel wanted, one live session.
+/// The panel wanted, the rail not wanted.
 const PANEL: Want = Want {
     rail: false,
     rail_by_count: false,
@@ -222,18 +222,18 @@ fn widths_follow_the_screen() {
             Some((370, 30)),
             false,
         ),
-        // One live session: no rail and no grip.
+        // One live session with the rail hidden: no rail, but its grip.
         (
             160,
             DEFAULT,
             Want {
                 rail: false,
-                rail_by_count: false,
+                rail_by_count: true,
                 panel: false,
             },
             None,
-            None,
-            (0, 160),
+            Some((0, 1)),
+            (1, 159),
             None,
             false,
         ),

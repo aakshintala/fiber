@@ -27,6 +27,7 @@ const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
     ("context", "Opens the context breakdown.", None),
     ("usage", "Opens the usage view.", None),
     ("panel", "Shows or hides the panel.", None),
+    ("rail", "Shows or hides the rail.", None),
     ("rules", "Opens the standing rules.", None),
     ("settings", "Opens the configuration keys.", None),
     ("keys", "Opens the rebinding screen.", None),

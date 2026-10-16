@@ -2,8 +2,8 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
-fix the parser › ◆ review the parser                                           ✕
-⠋ running · harness fiber · model test/model · 0 calls · 11s · session  · ■ stop
+ fix the parser › ◆ review the parser                                          ✕
+ ⠋ running · harness fiber · model test/model · 0 calls · 11s · session · ■ stop
 
 
 
@@ -13,16 +13,16 @@ fix the parser › ◆ review the parser                                        
 
 
 
+⋮
+⋮
+⋮
 
 
 
-
-
-
-⠋ review the parser
-  fiber · test/model
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ › █
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
- $0.00
- ◆ 1 delegate running
+ ⠋ review the parser
+   fiber · test/model
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  0 waiting  │  $0.00
+  ◆ 1 delegate running

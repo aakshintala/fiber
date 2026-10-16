@@ -109,7 +109,8 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &[("FIBER_TEST_FAKE_KEY", "sk-test")]);
     // The end of the first frame proves the input reader runs before

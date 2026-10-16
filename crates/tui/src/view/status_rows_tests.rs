@@ -197,7 +197,7 @@ fn row_one_follows_the_card_order_and_is_cut_at_the_edge() {
     let row: &str = screen.lines().next_back().unwrap_or_default().trim_start();
     assert!(
         row.starts_with(
-            "\u{00b1} 2 files +13 \u{2212}5  \u{2502}  /w  \u{2502}  a-model-with-a-very-long-name"
+            "\u{00b1} 2 files +13 \u{2212}5  \u{2502}  0 waiting  \u{2502}  /w  \u{2502}  a-model-with-a-very-long-name"
         ),
         "{row}"
     );
@@ -284,7 +284,7 @@ fn an_empty_row_two_takes_no_row() {
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
     assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 2], "▌ › █", "{}", screen);
+    assert_eq!(rows[bottom - 2], " ▌ › █", "{}", screen);
 }
 
 /// A `session_status` with billed `cost` and `subscription` spend.
@@ -458,7 +458,12 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     let screen = crate::view::text(&buf);
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
-    assert_eq!(screen.lines().rev().nth(1), Some("▌ › █"));
+    // The rail takes 30 columns at this width, so the input box starts
+    // there.
+    assert_eq!(
+        screen.lines().rev().nth(1),
+        Some("                              ▌ › █")
+    );
     // The row above the input box is blank inside the column: past the
     // drawn cursor.
     assert_eq!(
@@ -733,7 +738,7 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
         let below = &rows[usize::from(at.y) + 1..];
         assert_eq!(below.len(), keep + 1, "{height}: {rows:?}");
         assert!(
-            below[0].chars().all(|cell| cell == '▀'),
+            below[0].trim_start().chars().all(|cell| cell == '▀'),
             "{height}: {rows:?}"
         );
         if keep >= 1 {
@@ -832,7 +837,10 @@ fn the_approval_panel_draws_above_the_status_row() {
     // The panel's bottom edge sits above the status row.
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
     assert!(
-        rows[rows.len() - 2].chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 2]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
@@ -859,7 +867,10 @@ fn the_approval_panel_takes_the_bottom_row_once_the_status_sheds() {
     // No status row survives, so the panel's bottom edge ends on the last row.
     assert!(!rows.iter().any(|row| row.contains("$1.50")), "{rows:?}");
     assert!(
-        rows[rows.len() - 1].chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 1]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
@@ -901,7 +912,10 @@ fn the_question_caret_sits_inside_the_panel_above_the_status_row() {
     assert!(rows[usize::from(at.y)].contains("qx"), "{rows:?}");
     assert!(usize::from(at.y) < rows.len() - 3, "{rows:?}");
     assert!(
-        rows[rows.len() - 2].chars().all(|cell| cell == '▀'),
+        rows[rows.len() - 2]
+            .trim_start()
+            .chars()
+            .all(|cell| cell == '▀'),
         "{rows:?}"
     );
     assert!(
@@ -1153,20 +1167,25 @@ fn the_narrow_bar_fills_without_a_marker() {
     );
 }
 
-/// Without a status the row count matches the base's: the model alone
-/// draws one row, and nothing draws no row.
+/// Without a status the row count matches the base's: the model with
+/// the waiting segment draws one row, and nothing held draws no row.
 #[test]
 fn without_a_status_the_row_count_matches_the_base() {
-    // The preamble's model with no status: one row, no new segments.
+    // The preamble's model with no status: one row with the waiting
+    // segment, while the rail is not drawn.
     let mut app = attached(100, 30);
     app.on_line(preamble("test/model", 100));
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].line.to_string(), "test/model");
-    assert!(rows[0].spots.is_empty());
-    // Nothing held: no row.
+    assert_eq!(rows[0].line.to_string(), "0 waiting  \u{2502}  test/model");
+    // The waiting segment opens the row and carries its target.
+    assert_eq!(waiting_spots(&app, 100), vec![(0, 9)]);
+    // Nothing held: only the waiting segment's row, while the rail is
+    // not drawn.
     let app = attached(100, 30);
-    assert!(crate::view::status_rows::status(&app, 100).is_empty());
+    let rows = crate::view::status_rows::status(&app, 100);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].line.to_string(), "0 waiting");
 }
 
 /// A status with nothing else takes one row: the working directory
@@ -1177,7 +1196,8 @@ fn a_status_with_nothing_else_takes_one_row() {
     app.on_line(idle(SESSION, "one"));
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].line.to_string().starts_with("/w"));
+    assert!(rows[0].line.to_string().starts_with("0 waiting"));
+    assert!(rows[0].line.to_string().contains("/w"));
 }
 
 /// The status rows draw on the `panel` tint one column in; with no
@@ -1278,12 +1298,13 @@ fn the_tools_segment_joins_down_servers_with_a_space() {
     fail_server(&mut app, "gateway");
     let rows = crate::view::status_rows::status(&app, 100);
     assert_eq!(rows.len(), 1);
-    // Sorted: gateway before relay, one space between the values.
+    // Sorted: gateway before relay, one space between the values; the
+    // row is cut at the edge, so the second value's head shows.
     assert!(
         rows[0]
             .line
             .to_string()
-            .contains("tools \u{2717} gateway down \u{2717} relay down"),
+            .contains("tools \u{2717} gateway down \u{2717} relay d\u{2026}"),
         "{}",
         rows[0].line
     );

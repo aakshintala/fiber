@@ -104,6 +104,9 @@ pub struct Launch {
     /// `tui.rail.width`: the rail's share of the screen's width, in
     /// percent (`docs/tui.md`, "Layout").
     pub rail_share: f64,
+    /// `tui.rail.shown`: false hides the rail until the person shows it
+    /// (`docs/tui.md`, "The rail").
+    pub rail_hidden: bool,
     /// `tui.panel.width`: the panel's share of the screen's width, in
     /// percent.
     pub panel_share: f64,

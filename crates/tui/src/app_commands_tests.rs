@@ -1206,7 +1206,7 @@ fn a_long_slash_list_windows_around_the_selection() {
         super::Rows::Slash(rows) => {
             assert_eq!(rows.len(), crate::slash::SHOWN);
             assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
-            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("rules"));
+            assert_eq!(rows.last().map(|row| row.name.as_str()), Some("rail"));
         }
         super::Rows::Files(_) | super::Rows::Search(_) | super::Rows::Message(_) => {
             panic!("a slash window, not {:?}", completions.rows)

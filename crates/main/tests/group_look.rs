@@ -177,7 +177,8 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     script(&setup, &command);
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+            "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();

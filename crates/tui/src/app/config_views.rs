@@ -111,17 +111,17 @@ impl App {
         self.config_views.seam.clone()
     }
 
-    /// Saves one dragged share to the global configuration through the
-    /// seam, as `fiber config set` would (`docs/tui.md`, "Layout"). With
-    /// no seam nothing is saved; a failed save and each warning is a
-    /// notice, so it shows on the frame drawn next, keeping the live
-    /// width.
-    pub(crate) fn save_share(&mut self, key: &str, share: f64) {
+    /// Saves one setting's text to the global configuration through the
+    /// seam, as `fiber config set` would (`docs/tui.md`, "Layout",
+    /// "The rail"). With no seam nothing is saved; a failed save and
+    /// each warning is a notice, so it shows on the frame drawn next,
+    /// keeping the live width.
+    pub(crate) fn save_setting(&mut self, key: &str, value: &str) {
         let Some(seam) = self.config_views.seam.clone() else {
             return;
         };
         let workspace = self.workspace();
-        match seam.set(&workspace, Layer::Global, key, &format!("{share}")) {
+        match seam.set(&workspace, Layer::Global, key, value) {
             Ok(saved) => {
                 for warning in saved.warnings {
                     self.push_notice("config_invalid", warning);

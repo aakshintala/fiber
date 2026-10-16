@@ -545,11 +545,12 @@ fn the_wheel_over_the_transcript_scrolls_it() {
     }
     let height = app.conversation_height();
     assert!(height > 0);
-    // Below the header's two rows, on the transcript's last row.
+    // Below the header's two rows, on the transcript's last row: past
+    // the grip, which takes column 0.
     let row = 2u16.saturating_add(u16::try_from(height).unwrap_or(u16::MAX).saturating_sub(1));
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
-        col: 0,
+        col: 2,
         row,
     });
     assert!(app.top().is_some());
@@ -949,5 +950,5 @@ fn a_refusal_message_draws_on_the_status_row() {
     let (rows, _) = rendered(&app, 160, 40);
     // The row is cut at the column's edge, so only the message's head
     // shows beside the stop target.
-    assert!(rows.iter().any(|row| row.contains("Could not open")));
+    assert!(rows.iter().any(|row| row.contains("· Co ·")));
 }

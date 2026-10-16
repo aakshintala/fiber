@@ -854,10 +854,11 @@ fn a_click_on_a_notice_row_a_later_frame_moved_opens_nothing() {
     let moved = notice_row(&lp);
     assert_eq!(moved, old.checked_sub(1).expect("the notice row moves up"));
     // A click on the old row lands below the notice, opening nothing.
-    feed(&mut lp, vec![click(0, old)]);
+    // Past the grip, which takes column 0.
+    feed(&mut lp, vec![click(1, old)]);
     assert_eq!(lp.app.notice_overlay(), None);
     // The notice opens from its new row.
-    feed(&mut lp, vec![click(0, moved)]);
+    feed(&mut lp, vec![click(1, moved)]);
     assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 1.".to_owned()]));
 }
 
@@ -870,8 +871,8 @@ fn a_click_on_a_notice_row_a_second_notice_took_opens_the_newer_notice() {
     second.remove(0);
     feed(&mut lp, second);
     // The newer notice takes the old row, so the stale click opens it,
-    // not the one read.
-    feed(&mut lp, vec![click(0, old)]);
+    // not the one read: past the grip, which takes column 0.
+    feed(&mut lp, vec![click(1, old)]);
     assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
 }
 

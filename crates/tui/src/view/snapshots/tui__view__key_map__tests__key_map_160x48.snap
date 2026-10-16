@@ -36,7 +36,7 @@ expression: "screen(&app, 160, 48)"
     The conversation           Copy the focused item                                                     y · select it
     The conversation           Move focus to the panel, the rail, then the conversation                  Tab · click the area
     The conversation           Show or hide the panel                                                    ⌥P · /panel
-    The conversation           Show or hide the rail                                                     ⌥R · drag its edge
+    The conversation           Show or hide the rail                                                     ⌥R · /rail; drag its edge
     The conversation           Search (where forwarded)                                                  Ctrl+F; Cmd+F
     The conversation           Open the search results (with search open)                                Ctrl+F · click the match count
     The conversation           Next or previous match (with search open)                                 Enter or ↓, Shift+Enter or ↑

@@ -129,11 +129,11 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
     assert!(app.config_view_open());
     let rows = screen(&app);
     assert!(
-        rows.iter().any(|row| row.starts_with(" Settings")),
+        rows.iter().any(|row| row.starts_with("  Settings")),
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with("handoff.tokens")),
+        rows.iter().any(|row| row.starts_with(" handoff.tokens")),
         "{rows:?}"
     );
 }
@@ -372,7 +372,7 @@ fn the_view_hides_the_cursor_and_keeps_the_input_box_attached() {
     assert_eq!(crate::view::cursor(&app, area), None);
     // Attached, the view takes the conversation's place, not the screen.
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row == "▌ ›"), "{rows:#?}");
+    assert!(rows.iter().any(|row| row == " ▌ ›"), "{rows:#?}");
     app.on_key(Key::Esc, now());
     assert!(crate::view::cursor(&app, area).is_some());
 }
@@ -708,7 +708,10 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
     slash_rules(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
-    assert!(rows.iter().any(|row| row.starts_with(" Rules")), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.starts_with("  Rules")),
+        "{rows:?}"
+    );
 }
 
 #[test]

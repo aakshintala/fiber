@@ -276,8 +276,12 @@ fn a_rail_dragged_below_22_hides_on_release_and_keeps_its_share() {
     let layout = app.chrome().layout().expect("a layout");
     assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
     assert_eq!(shares(&app), (15.0, 21.0));
-    assert!(app.take_saves().is_empty());
-    // ⌥R shows it again at the old share.
+    // Hiding the rail below its floor is person-caused: it saves off.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
+    // ⌥R shows it again at the old share, saving on.
     app.on_key(Key::AltR, fakes::clock::FakeClock::new().now());
     assert_eq!(
         app.chrome()
@@ -286,7 +290,10 @@ fn a_rail_dragged_below_22_hides_on_release_and_keeps_its_share() {
             .map(|rail| rail.width),
         Some(30)
     );
-    assert!(app.take_saves().is_empty());
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
 }
 
 #[test]
@@ -302,7 +309,26 @@ fn a_rail_dragged_to_exactly_22_stays() {
             .map(|rail| rail.width),
         Some(22)
     );
-    assert_eq!(app.take_saves(), vec![("tui.rail.width", 11.0)]);
+    assert_eq!(app.take_saves(), vec![("tui.rail.width", "11".to_owned())]);
+}
+
+#[test]
+fn a_rail_dragged_to_23_stays() {
+    let mut app = two(200, 40);
+    app.on_drag(&press(29, 20));
+    app.on_drag(&drag(22, 20));
+    app.on_drag(&release());
+    assert_eq!(
+        app.chrome()
+            .layout()
+            .and_then(|layout| layout.rail)
+            .map(|rail| rail.width),
+        Some(23)
+    );
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.width", "11.5".to_owned())]
+    );
 }
 
 #[test]
@@ -330,7 +356,8 @@ fn dragging_the_grip_out_shows_the_rail() {
         Some(22)
     );
     assert_eq!(app.dragging(), Some((Edge::Rail, 11.0)));
-    // It follows as the rail edge from here.
+    // Dragging the grip past the floor shows the rail, saving on, and
+    // the drag follows as the rail's edge from here.
     app.on_drag(&drag(30, 20));
     assert_eq!(
         app.chrome()
@@ -340,7 +367,42 @@ fn dragging_the_grip_out_shows_the_rail() {
         Some(31)
     );
     app.on_drag(&release());
-    assert_eq!(app.take_saves(), vec![("tui.rail.width", 15.5)]);
+    assert_eq!(
+        app.take_saves(),
+        vec![
+            ("tui.rail.shown", "false".to_owned()),
+            ("tui.rail.shown", "true".to_owned()),
+            ("tui.rail.width", "15.5".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_grip_shown_rail_released_below_the_floor_hides_and_saves_false_last() {
+    let mut app = two(200, 40);
+    hide_rail(&mut app);
+    app.on_drag(&press(0, 20));
+    // Past the floor the rail shows, saving on.
+    app.on_drag(&drag(21, 20));
+    assert!(
+        app.chrome()
+            .layout()
+            .and_then(|layout| layout.rail)
+            .is_some()
+    );
+    // Back below the floor the release hides it again, saving off last.
+    app.on_drag(&drag(20, 20));
+    app.on_drag(&release());
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
+    assert_eq!(
+        app.take_saves(),
+        vec![
+            ("tui.rail.shown", "false".to_owned()),
+            ("tui.rail.shown", "true".to_owned()),
+            ("tui.rail.shown", "false".to_owned()),
+        ]
+    );
 }
 
 #[test]
@@ -350,8 +412,12 @@ fn dragging_the_grip_out_where_both_do_not_fit_hides_the_panel() {
     assert_eq!((layout.rail, layout.panel.is_some()), (None, true));
     app.on_drag(&press(0, 20));
     app.on_drag(&drag(21, 20));
-    // Showing the rail hides the panel, as ⌥P does.
+    // Showing the rail hides the panel, as ⌥P does, and saves on.
     assert_eq!(app.chrome().layout().and_then(|layout| layout.panel), None);
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "true".to_owned())]
+    );
     // ⌥P brings the panel back and the rail sheds.
     app.on_key(Key::AltP, fakes::clock::FakeClock::new().now());
     let layout = app.chrome().layout().expect("a layout");
@@ -382,7 +448,11 @@ fn releasing_the_grip_short_of_the_floor_changes_nothing() {
     let layout = app.chrome().layout().expect("a layout");
     assert_eq!((layout.rail, layout.grip.is_some()), (None, true));
     assert_eq!(shares(&app), (15.0, 21.0));
-    assert!(app.take_saves().is_empty());
+    // Only the ⌥R hide saved; the short grip drag queued nothing.
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.shown", "false".to_owned())]
+    );
 }
 
 #[test]
@@ -449,7 +519,10 @@ fn release_queues_one_save_rounded_to_a_tenth() {
     app.on_drag(&press(29, 20));
     app.on_drag(&drag(30, 20));
     app.on_drag(&release());
-    assert_eq!(app.take_saves(), vec![("tui.rail.width", 15.5)]);
+    assert_eq!(
+        app.take_saves(),
+        vec![("tui.rail.width", "15.5".to_owned())]
+    );
     assert!(app.take_saves().is_empty());
 }
 
@@ -459,7 +532,7 @@ fn a_panel_drag_saves_tui_panel_width() {
     app.on_drag(&press(158, 20));
     app.on_drag(&drag(150, 20));
     app.on_drag(&release());
-    assert_eq!(app.take_saves(), vec![("tui.panel.width", 25.0)]);
+    assert_eq!(app.take_saves(), vec![("tui.panel.width", "25".to_owned())]);
 }
 
 #[test]
@@ -484,7 +557,10 @@ fn two_drags_queue_two_saves_in_order() {
     app.on_drag(&release());
     assert_eq!(
         app.take_saves(),
-        vec![("tui.rail.width", 15.5), ("tui.panel.width", 25.0)]
+        vec![
+            ("tui.rail.width", "15.5".to_owned()),
+            ("tui.panel.width", "25".to_owned()),
+        ]
     );
 }
 
