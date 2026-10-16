@@ -561,7 +561,7 @@ fn up_on_the_entry_bar_with_no_rows_does_nothing() {
 }
 
 #[test]
-fn up_in_a_non_empty_draft_still_moves_the_cursor() {
+fn up_keeps_the_box_with_a_multiline_draft() {
     let mut app = home_with(Some("acme/m1"));
     type_text(&mut app, "a");
     assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
@@ -570,6 +570,30 @@ fn up_in_a_non_empty_draft_still_moves_the_cursor() {
     assert_eq!(before.0, 1);
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(app.input().cursor(20).0, 0);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn up_keeps_the_box_with_completions() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert!(app.completions().is_some());
+}
+
+#[test]
+fn up_keeps_the_box_browsing_a_recalled_prompt() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    seed_recalled_prompt(&mut app, "previous answer");
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.input().expand(), "previous answer");
 }
 
 #[test]

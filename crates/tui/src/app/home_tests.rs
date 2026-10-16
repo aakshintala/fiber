@@ -1761,6 +1761,92 @@ fn up_and_j_walk_the_row_stops() {
 }
 
 #[test]
+fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let rows = [
+        exited_in("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
+        exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
+        exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
+    ];
+    assert!(
+        app.on_line(accepted(&recent, json!({"sessions": rows})))
+            .is_empty()
+    );
+    let (_, targets) = drawn_frame(&app);
+    let entries: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(entries.len(), 3, "all three exited rows draw");
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[2])))
+    );
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[1])))
+    );
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Start(entries[2])))
+    );
+}
+
+#[test]
+fn j_from_the_last_list_row_clears_focus_without_skipping() {
+    let mut app = home();
+    linked(&mut app);
+    for (session, name, workspace, project) in [
+        ("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
+        ("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
+        ("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
+    ] {
+        app.on_line(live(
+            session,
+            name,
+            workspace,
+            project,
+            json!({"state": "idle"}),
+        ));
+        app.on_line(left(session, "crashed"));
+    }
+    let (_, targets) = drawn_frame(&app);
+    let mut entries: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.dedup();
+    assert_eq!(entries.len(), 3, "all three crashed rows draw");
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[2])))
+    );
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
 fn up_focuses_the_last_loaded_row_and_scrolls() {
     let mut app = home();
     linked(&mut app);
@@ -2408,6 +2494,35 @@ fn y_on_more_copies_its_label() {
         app.on_key(Key::Char('y'), now),
         Effect::Copy("… 1 more".to_owned())
     );
+}
+
+#[test]
+fn y_on_more_copies_a_positive_count_but_not_zero() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+            ("s_eeeeeeeeeeeeeeee", "fifth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("two rows are hidden");
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_key(Key::Char('y'), now),
+        Effect::Copy("… 2 more".to_owned())
+    );
+
+    app.home.as_mut().unwrap().sessions.expand("-w");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
 }
 
 #[test]

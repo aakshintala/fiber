@@ -582,12 +582,16 @@ pub(super) fn render(
         } else {
             spans.push(Span::styled("no sessions yet", dim));
         }
-        if x < area.right() {
+        let count_width = placed
+            .width
+            .saturating_sub(35)
+            .min(area.right().saturating_sub(x));
+        if count_width != 0 {
             buf.set_line(
                 x,
                 placed.logo.saturating_add(2),
                 &ratatui::text::Line::from(spans),
-                placed.width.saturating_sub(35),
+                count_width,
             );
         }
     } else {

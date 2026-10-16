@@ -469,6 +469,42 @@ fn status_in(session: &str, name: &str, workspace: &str) -> Line {
 }
 
 #[test]
+fn a_start_target_at_the_right_edge_is_not_drawn() {
+    let mut app = home(12, 24);
+    app.on_line(hello());
+    let workspace = format!("/{}", "x".repeat(11));
+    app.on_line(status_in("s_aaaaaaaaaaaaaaaa", "row", &workspace));
+    let area = Rect::new(0, 0, 12, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    assert!(
+        !targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Start(_))))
+    );
+}
+
+#[test]
+fn four_row_header_has_no_count_line_at_the_right_edge() {
+    let app = home(35, 24);
+    let area = Rect::new(0, 0, 35, 24);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let frame = text(&buf);
+    assert!(
+        frame
+            .lines()
+            .take(4)
+            .any(|row| { row.contains('▄') || row.contains('▀') || row.contains('█') }),
+        "the four-row logo draws: {frame}"
+    );
+    assert!(
+        !frame.contains("no sessions yet"),
+        "counts have no room: {frame}"
+    );
+}
+
+#[test]
 fn the_picker_keeps_its_selection_drawn() {
     let mut app = home(80, 24);
     app.on_line(hello());
@@ -815,6 +851,12 @@ fn the_focused_row_is_on_the_selection_bar() {
     for y in row_target.rect.y..row_target.rect.y.saturating_add(2) {
         for x in area.x..area.right() {
             assert_eq!(buf[(x, y)].bg, crate::theme::Role::Selection.color());
+            assert!(
+                !buf[(x, y)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::REVERSED),
+                "the focused row uses selection, not reverse video"
+            );
         }
     }
     let next = row_target.rect.y.saturating_add(2);
@@ -1238,6 +1280,31 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
         })
         .collect();
     assert!(drawn.contains(&keys[14]));
+}
+
+#[test]
+fn a_focused_live_row_keeps_its_detail_line_at_the_fold() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    for n in 0..15u8 {
+        let session = format!("s_{n:016x}");
+        let title = if n == 14 {
+            "focused below fold"
+        } else {
+            "older row"
+        };
+        app.on_line(status(&session, title, idle()));
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    app.drawn(&targets);
+
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("focused below fold"), "{frame}");
+    assert!(frame.contains("s_000000000000000e"), "{frame}");
 }
 
 #[test]
