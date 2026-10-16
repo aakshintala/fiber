@@ -441,6 +441,13 @@ impl<B: Backend> Loop<B> {
         );
         let before = self.app.session().cloned();
         for event in events {
+            if matches!(
+                event,
+                Event::Stroke(_) | Event::Key(_) | Event::Edit(_) | Event::Focus(true)
+            ) && let Some(line) = self.app.quota_poke(matches!(event, Event::Focus(true)))
+            {
+                self.hub.send(&[line], &mut self.app);
+            }
             let effect = match event {
                 Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
                 Event::Key(key) => self.app.on_key(key, self.clock.now()),
@@ -476,7 +483,7 @@ impl<B: Backend> Loop<B> {
                     self.screen.appearance(appearance);
                     Effect::None
                 }
-                Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                Event::Reply(Reply::DeviceAttributes) | Event::Focus(_) => Effect::None,
             };
             match effect {
                 Effect::None => {}

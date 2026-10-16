@@ -17,9 +17,11 @@ fn feed_all(chunks: &[&[u8]]) -> Vec<Event> {
                         out.push(mapped);
                     }
                 }
-                Event::Key(_) | Event::Edit(_) | Event::Mouse(_) | Event::Reply(_) => {
-                    out.push(event)
-                }
+                Event::Key(_)
+                | Event::Edit(_)
+                | Event::Mouse(_)
+                | Event::Reply(_)
+                | Event::Focus(_) => out.push(event),
             }
         }
     }
@@ -39,6 +41,16 @@ fn feed_strokes(chunks: &[&[u8]]) -> Vec<Stroke> {
         }
     }
     out
+}
+
+#[test]
+fn focus_reports_have_no_parameters_and_can_be_split_across_reads() {
+    assert_eq!(feed_all(&[b"\x1b[I"]), vec![Event::Focus(true)]);
+    assert_eq!(feed_all(&[b"\x1b[O"]), vec![Event::Focus(false)]);
+    assert!(feed_all(&[b"\x1b[1I\x1b[1O"]).is_empty());
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b[").is_empty());
+    assert_eq!(parser.feed(b"I"), vec![Event::Focus(true)]);
 }
 
 /// A stroke with no modifiers.

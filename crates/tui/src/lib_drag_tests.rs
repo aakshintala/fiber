@@ -316,7 +316,7 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
     let tail = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     // After the resume bytes the arrow is written again.
     let resumed: &[u8] =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h";
     let at = tail
         .windows(resumed.len())
         .position(|window| window == resumed)

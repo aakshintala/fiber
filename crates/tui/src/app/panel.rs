@@ -4,6 +4,8 @@
 //! fold through [`PanelState`]'s accessors; drawing lives in
 //! `crate::view::panel`.
 
+mod quota;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
@@ -85,6 +87,7 @@ pub(crate) struct Widget {
 /// The attached session's folded panel data.
 #[derive(Debug, Default)]
 pub(crate) struct PanelState {
+    quota: quota::Query,
     widgets: Vec<Widget>,
     status: Option<SessionStatus>,
     model: Option<String>,
@@ -398,6 +401,7 @@ impl PanelState {
     /// A branch query is due on the next attached-session line.
     pub(crate) fn attached(&mut self) {
         self.due = true;
+        self.quota.attached();
     }
 
     /// The branch the last query answered, if any.
@@ -500,7 +504,16 @@ impl App {
     /// Delegates card's subscribes (`docs/tui.md`, "The panel").
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
-        let mut send = self.panel_branch(envelope);
+        let ended = if envelope.kind == "session_status" {
+            super::read!(envelope, SessionStatus).is_some_and(|status| {
+                let busy = !matches!(status.state, SessionState::Idle | SessionState::Jobs);
+                self.panel_state.turn_end(busy)
+            })
+        } else {
+            false
+        };
+        let mut send = self.panel_branch(envelope, ended);
+        send.extend(self.panel_quota(envelope, ended));
         send.extend(self.delegate_line(envelope));
         send
     }
@@ -508,7 +521,7 @@ impl App {
     /// The branch query's answers and triggers (`docs/tui.md`, "Git"): a
     /// `shell` running `git rev-parse --abbrev-ref HEAD` on attach and
     /// after each turn. Nothing polls.
-    fn panel_branch(&mut self, envelope: &Envelope) -> Vec<String> {
+    fn panel_branch(&mut self, envelope: &Envelope, ended: bool) -> Vec<String> {
         let mut send = Vec::new();
         match envelope.kind.as_str() {
             "command_accepted" => {
@@ -530,16 +543,11 @@ impl App {
                     send.extend(self.branch_query());
                 }
             }
-            "session_status" => {
-                if let Some(status) = super::read!(envelope, SessionStatus) {
-                    let busy = !matches!(status.state, SessionState::Idle | SessionState::Jobs);
-                    if self.panel_state.turn_end(busy) {
-                        if self.panel_state.asked.is_some() {
-                            self.panel_state.again = true;
-                        } else {
-                            send.extend(self.branch_query());
-                        }
-                    }
+            "session_status" if ended => {
+                if self.panel_state.asked.is_some() {
+                    self.panel_state.again = true;
+                } else {
+                    send.extend(self.branch_query());
                 }
             }
             _ => {}
@@ -581,6 +589,7 @@ impl App {
     /// A hub `command_rejected` for the branch query leaves the row out,
     /// with no notice, and clears the query so the next turn end sends.
     pub(super) fn panel_refused(&mut self, id: &str) -> Vec<String> {
+        self.panel_state.quota.refuse(id);
         if self.panel_state.asked.as_deref() == Some(id) && self.panel_state.refuse_branch() {
             return self.branch_query().into_iter().collect();
         }
