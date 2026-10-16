@@ -29,6 +29,12 @@ use open::Subscriptions;
 use prompt::{Prompt, Questions};
 use workspace::Chooser;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListFocus {
+    FirstStop,
+    FirstExited,
+}
+
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
 pub(super) struct Home {
@@ -52,8 +58,8 @@ pub(super) struct Home {
     /// This connection's subscriptions, the session opening and the
     /// lowering lines queued.
     subs: Subscriptions,
-    /// `/resume` asks the next frame to focus the list.
-    focus_list: bool,
+    /// The target the next home frame focuses, if a list open asked for it.
+    focus_list: Option<ListFocus>,
     /// A rejected `start`'s message, above the box until the next `start`
     /// goes out.
     blockers: Vec<String>,
@@ -94,7 +100,7 @@ impl App {
             feed_id: None,
             recent_ask: None,
             subs: Subscriptions::default(),
-            focus_list: false,
+            focus_list: None,
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
             chooser: Chooser::default(),
@@ -577,25 +583,37 @@ impl App {
     pub(super) fn resume_list(&mut self) -> Effect {
         let effect = self.leave();
         if let Some(home) = self.home.as_mut() {
-            home.focus_list = true;
+            home.focus_list = Some(ListFocus::FirstExited);
         }
         effect
     }
 
-    /// Focuses the list after `/resume`: the first list stop among the
-    /// new targets, leaving focus in the box when the list is empty.
+    /// Focuses the requested list stop after the next home frame. `/resume`
+    /// asks for the first exited row; `OpenAt::List` asks for the first row.
     /// True when it ran, so the frame draws again with the focus shown.
     pub(super) fn home_drawn(&mut self, targets: &[Target]) -> bool {
         let Some(home) = self.home.as_mut() else {
             return false;
         };
-        if !home.focus_list {
+        let Some(focus_list) = home.focus_list.take() else {
             return false;
-        }
-        home.focus_list = false;
+        };
         self.focus = order(targets, &self.regions, Area::Conversation)
             .into_iter()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
+            .find_map(|id| {
+                let TargetId::Home(spot) = id else {
+                    return None;
+                };
+                let Some(Spot::Entry(key)) = spot.list_stop() else {
+                    return None;
+                };
+                let row = home.sessions.by_key(key)?;
+                let should_focus = match focus_list {
+                    ListFocus::FirstStop => true,
+                    ListFocus::FirstExited => row.left.is_some(),
+                };
+                should_focus.then_some(TargetId::Home(Spot::Entry(key)))
+            });
         true
     }
 

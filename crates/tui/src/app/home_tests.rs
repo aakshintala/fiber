@@ -1811,17 +1811,18 @@ fn down_on_the_last_row_of_the_list_focuses_the_entry_bar() {
 }
 
 #[test]
-fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
+fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame() {
     let mut app = home();
-    linked(&mut app);
+    let (_, recent) = linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
-        "fix the parser",
+        "current work",
         "/w",
         "-w",
         json!({"state": "streaming"}),
     ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     // The conversation frame first, as the loop draws it.
     drawn(&mut app);
     assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
@@ -1830,10 +1831,18 @@ fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    let row = keys(&app)[0];
+    let exited = *keys(&app)
+        .get(1)
+        .expect("the exited row follows the live row");
+    let row = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.by_key(exited))
+        .unwrap_or_else(|| panic!("the exited row is present"));
+    assert_eq!(row.left, Some(crate::home::Left::Exited));
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(exited)))
     );
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
@@ -1844,7 +1853,7 @@ fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
         .collect();
     assert_eq!(lines[0]["command"], "subscribe");
-    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
 }
 
 #[test]
@@ -2392,7 +2401,7 @@ fn y_on_more_copies_its_label() {
 }
 
 #[test]
-fn slash_resume_focuses_the_first_list_row() {
+fn slash_resume_with_live_rows_but_no_exited_rows_leaves_the_box_focused() {
     let mut app = git_home();
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
@@ -2411,10 +2420,7 @@ fn slash_resume_focuses_the_first_list_row() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
+    assert_eq!(app.focused(), None);
 }
 
 /// The blocker lines home draws above the box.
