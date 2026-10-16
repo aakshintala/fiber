@@ -2,6 +2,11 @@
 //! and the offer draw hunks through this renderer (`docs/tui.md`, "Tool
 //! groups and the ledger").
 
+use ratatui::text::Span;
+
+use crate::swapped::Ink;
+use crate::theme::Role;
+
 /// One drawn diff line: its line number when a hunk header numbers it,
 /// its kind, and its text cut into plain and marked pieces. The pieces'
 /// concatenation is the printed line, hunk headers dropped from it.
@@ -323,6 +328,58 @@ pub(crate) fn safe_line(line: &str) -> String {
         }
     }
     safe
+}
+
+/// The gutter prefix for a diff line: its number right-aligned in
+/// `width` and one space, or blanks of that width where it has no
+/// number. The caller draws it dim.
+pub(crate) fn gutter_text(number: Option<u64>, width: usize) -> String {
+    match number {
+        Some(number) => format!("{number:>width$} "),
+        None => " ".repeat(width + 1),
+    }
+}
+
+/// One diff line as text under its ink: hunk and note rows dim,
+/// removed and added lines under their colours with the differing
+/// words marked, context plain. The gutter is drawn by the caller.
+pub(crate) fn ink_spans(line: &DiffLine) -> Vec<(String, Ink)> {
+    let joined: String = line
+        .segments
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect();
+    match line.kind {
+        DiffKind::Hunk | DiffKind::Note => vec![(joined, Ink::Muted)],
+        DiffKind::Removed => mark_spans(&line.segments, Role::Removed),
+        DiffKind::Added => mark_spans(&line.segments, Role::Added),
+        DiffKind::Context => vec![(joined, Ink::Plain)],
+    }
+}
+
+/// Diff segments under their role's ink, the differing words marked.
+fn mark_spans(segments: &[(String, bool)], role: Role) -> Vec<(String, Ink)> {
+    segments
+        .iter()
+        .map(|(text, marked)| {
+            (
+                text.clone(),
+                if *marked {
+                    Ink::Marked(role)
+                } else {
+                    Ink::Role(role)
+                },
+            )
+        })
+        .collect()
+}
+
+/// One diff line as styled spans, through its ink.
+pub(crate) fn styled_spans(line: &DiffLine) -> Vec<Span<'static>> {
+    ink_spans(line)
+        .into_iter()
+        .map(|(text, ink)| Span::styled(text, ink.style()))
+        .collect()
 }
 
 #[cfg(test)]

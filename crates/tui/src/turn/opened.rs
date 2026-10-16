@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 
 use super::group::{Call, dim_span, fit};
-use crate::diff::{DiffKind, diff_lines, gutter_width, safe_line};
+use crate::diff::{diff_lines, gutter_text, gutter_width, safe_line, styled_spans};
 use crate::app::Target;
 use crate::format::{count, dim};
 use crate::markdown::style;
@@ -247,45 +247,12 @@ fn plain(text: &str) -> Body {
 /// The diff's lines with their numbers, inside the numbered view.
 fn push_diff(diff: &str, bodies: &mut Vec<Body>) {
     for drawn in diff_lines(diff) {
-        let line = match drawn.kind {
-            DiffKind::Hunk | DiffKind::Note => Line::from(dim_span(joined(&drawn.segments))),
-            DiffKind::Removed => Line::from(marked_spans(&drawn.segments, Role::Removed)),
-            DiffKind::Added => Line::from(marked_spans(&drawn.segments, Role::Added)),
-            DiffKind::Context => Line::from(joined(&drawn.segments)),
-        };
         bodies.push(Body {
             number: drawn.number,
             gutter: true,
-            line,
+            line: Line::from(styled_spans(&drawn)),
         });
     }
-}
-
-/// The segments' text joined back into its line.
-fn joined(segments: &[(String, bool)]) -> String {
-    segments.iter().map(|(text, _)| text.as_str()).collect()
-}
-
-/// Diff segments under their colour, the differing words in reverse
-/// video.
-fn marked_spans(segments: &[(String, bool)], role: Role) -> Vec<Span<'static>> {
-    segments
-        .iter()
-        .map(|(text, marked)| {
-            if *marked {
-                Span::styled(text.clone(), marked_style(role))
-            } else {
-                Span::styled(text.clone(), style(role))
-            }
-        })
-        .collect()
-}
-
-/// A colour's reverse-video mark for its differing words.
-fn marked_style(role: Role) -> Style {
-    Style::new()
-        .fg(role.color())
-        .add_modifier(Modifier::REVERSED)
 }
 
 /// Lines numbered from `start`, saturating, inside the numbered view.
@@ -483,11 +450,7 @@ fn with_gutter(body: Body, gutter: usize) -> Line<'static> {
     if !body.gutter || gutter == 0 {
         return body.line;
     }
-    let prefix = match body.number {
-        Some(number) => format!("{number:>gutter$} "),
-        None => " ".repeat(gutter + 1),
-    };
-    let mut spans = vec![dim_span(prefix)];
+    let mut spans = vec![dim_span(gutter_text(body.number, gutter))];
     spans.extend(body.line.spans);
     Line::from(spans)
 }

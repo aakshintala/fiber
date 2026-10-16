@@ -61,7 +61,7 @@ pub(crate) enum Ink {
 
 impl Ink {
     /// The cell's style.
-    fn style(self) -> Style {
+    pub(crate) fn style(self) -> Style {
         match self {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),

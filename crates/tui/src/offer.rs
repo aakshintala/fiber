@@ -12,8 +12,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{read, session_command};
+use crate::diff::{diff_lines, gutter_text, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
 use crate::markdown::{Role, style};
+use crate::swapped::Ink;
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";
@@ -646,66 +648,20 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
 /// one removed line pairs with one added line, as "Changed files"
 /// draws a hunk (`docs/tui.md`, "Swapped views").
 fn diff_rows(diff: &str) -> Vec<Row> {
-    let drawn = crate::diff::diff_lines(diff);
-    let gutter = crate::diff::gutter_width(drawn.iter().filter_map(|line| line.number));
+    let drawn = diff_lines(diff);
+    let gutter = gutter_width(drawn.iter().filter_map(|line| line.number));
     drawn
         .into_iter()
         .map(|line| {
             let mut spans = vec![Span::raw("    ")];
             if gutter > 0 {
-                let text = match line.number {
-                    Some(number) => format!("{number:>gutter$} "),
-                    None => " ".repeat(gutter + 1),
-                };
-                spans.push(Span::styled(text, dim_style()));
+                spans.push(Span::styled(
+                    gutter_text(line.number, gutter),
+                    Ink::Muted.style(),
+                ));
             }
-            let joined: String = line
-                .segments
-                .iter()
-                .map(|(text, _)| text.as_str())
-                .collect();
-            match line.kind {
-                crate::diff::DiffKind::Hunk | crate::diff::DiffKind::Note => {
-                    spans.push(Span::styled(joined, dim_style()));
-                }
-                crate::diff::DiffKind::Removed => {
-                    spans.extend(marked_spans(&line.segments, Role::Removed));
-                }
-                crate::diff::DiffKind::Added => {
-                    spans.extend(marked_spans(&line.segments, Role::Added));
-                }
-                crate::diff::DiffKind::Context => {
-                    spans.push(Span::raw(joined));
-                }
-            }
+            spans.extend(styled_spans(&line));
             Row::text(Line::from(spans))
-        })
-        .collect()
-}
-
-/// The changed-files hunk look's dim: the muted colour, dimmed.
-fn dim_style() -> Style {
-    Style::new()
-        .fg(Role::Muted.color())
-        .add_modifier(Modifier::DIM)
-}
-
-/// Diff segments under their colour, the differing words in reverse
-/// video, as the changed-files hunk draws them.
-fn marked_spans(segments: &[(String, bool)], role: Role) -> Vec<Span<'static>> {
-    segments
-        .iter()
-        .map(|(text, marked)| {
-            if *marked {
-                Span::styled(
-                    text.clone(),
-                    Style::new()
-                        .fg(role.color())
-                        .add_modifier(Modifier::REVERSED),
-                )
-            } else {
-                Span::styled(text.clone(), style(role))
-            }
         })
         .collect()
 }

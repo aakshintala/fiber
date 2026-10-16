@@ -7,8 +7,7 @@ use contract::events::CommandResult;
 
 use crate::format;
 use crate::swapped::{Frame, Ink, List, Spot};
-use crate::theme::Role;
-use crate::diff::{DiffKind, DiffLine, diff_lines, gutter_width, safe_line};
+use crate::diff::{DiffLine, diff_lines, gutter_text, gutter_width, ink_spans, safe_line};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -165,48 +164,19 @@ fn totals(changes: &BTreeMap<String, (u64, u64)>) -> (u64, u64, u64) {
         })
 }
 
-/// One diff line as swapped cells: the dim gutter, then the text under
-/// its ink, the differing words in reverse video. The gutter fits the
-/// widest number in the diff.
+/// One diff line as swapped cells: the dim gutter, then the text
+/// under its ink. The gutter fits the widest number in the diff.
 fn hunk_row(line: DiffLine, gutter: usize) -> Vec<(String, Option<Spot>, Ink)> {
     let mut cells = Vec::new();
     if gutter > 0 {
-        let text = match line.number {
-            Some(number) => format!("{number:>gutter$} "),
-            None => " ".repeat(gutter + 1),
-        };
-        cells.push((text, None, Ink::Muted));
+        cells.push((gutter_text(line.number, gutter), None, Ink::Muted));
     }
-    let joined: String = line
-        .segments
-        .iter()
-        .map(|(text, _)| text.as_str())
-        .collect();
-    match line.kind {
-        DiffKind::Hunk | DiffKind::Note => cells.push((joined, None, Ink::Muted)),
-        DiffKind::Removed => cells.extend(marked_cells(&line.segments, Role::Removed)),
-        DiffKind::Added => cells.extend(marked_cells(&line.segments, Role::Added)),
-        DiffKind::Context => cells.push((joined, None, Ink::Plain)),
-    }
+    cells.extend(
+        ink_spans(&line)
+            .into_iter()
+            .map(|(text, ink)| (text, None, ink)),
+    );
     cells
-}
-
-/// Diff segments under their role's ink, the differing words marked.
-fn marked_cells(segments: &[(String, bool)], role: Role) -> Vec<(String, Option<Spot>, Ink)> {
-    segments
-        .iter()
-        .map(|(text, marked)| {
-            (
-                text.clone(),
-                None,
-                if *marked {
-                    Ink::Marked(role)
-                } else {
-                    Ink::Role(role)
-                },
-            )
-        })
-        .collect()
 }
 
 /// The standard unreadable-diff answer.
