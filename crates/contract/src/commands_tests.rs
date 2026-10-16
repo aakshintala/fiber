@@ -94,6 +94,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "tools"}),
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
+        json!({"id": "c", "command": "quota"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 0}}),
@@ -230,6 +231,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("tools", Command::Tools),
         ("commands", Command::Commands),
         ("skills", Command::Skills),
+        ("quota", Command::Quota),
         ("close", Command::Close(CloseArgs { now: false })),
     ] {
         let missing = format!(r#"{{"id":"c","command":"{name}"}}"#);
@@ -245,7 +247,11 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         );
         assert!(parse(&extra).is_err(), "{extra}");
     }
-    for (name, command) in [("commands", Command::Commands), ("skills", Command::Skills)] {
+    for (name, command) in [
+        ("commands", Command::Commands),
+        ("skills", Command::Skills),
+        ("quota", Command::Quota),
+    ] {
         let line = CommandLine {
             id: CommandId("c_1".into()),
             command,

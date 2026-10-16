@@ -227,6 +227,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "tools"
             | "commands"
             | "skills"
+            | "quota"
             | "history"
             | "artifact_page"
             | "model"
@@ -284,6 +285,10 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Skills => {
             let skills = conn.gate.skills();
             accept(conn, id, Some(CommandResult::Skills { skills }));
+        }
+        Command::Quota => {
+            let (quota, notice_at) = conn.gate.quota();
+            accept(conn, id, Some(CommandResult::Quota { quota, notice_at }));
         }
         Command::History(args) => {
             // The log is dropped once read, so this connection does not
