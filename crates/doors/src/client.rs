@@ -90,21 +90,15 @@ impl Conn {
     /// Whether the connection has subscribed: every sink but the
     /// not-yet-subscribed `Direct` one.
     pub(crate) fn subscribed(&self) -> bool {
-        match &self.sink {
-            Sink::Direct { .. } => false,
-            Sink::Writer { .. } => true,
-            Sink::Driven { .. } => true,
-            Sink::Answered { .. } => true,
-        }
+        !matches!(self.sink, Sink::Direct { .. })
     }
 
     /// The subscribed connection's route to its writer, if it has one.
     pub(crate) fn subscription(&self) -> Option<(level::Outbox, mpsc::Sender<level::Switch>)> {
-        match &self.sink {
-            Sink::Writer { outbox, switches } => Some((outbox.clone(), switches.clone())),
-            Sink::Direct { .. } => None,
-            Sink::Driven { .. } => None,
-            Sink::Answered { .. } => None,
+        if let Sink::Writer { outbox, switches } = &self.sink {
+            Some((outbox.clone(), switches.clone()))
+        } else {
+            None
         }
     }
 
@@ -257,29 +251,16 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
         Command::Subscribe(args) => {
-            // `dispatch` pulls the `Direct` halves out of the sink for a
-            // subscribe and passes them to `subscribe` as arguments, so
-            // `subscribe` never re-checks the sink for its halves. Every
-            // arm is named: the non-driven arms put their variant back
-            // unchanged, and the `Driven` arm answers at this call site.
+            // `dispatch` pulls the `Direct` halves out and passes them to
+            // `subscribe` as arguments.
             let origin = conn.origin();
             match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
                 Sink::Direct { direct, writer } => {
                     subscribe(conn, id, args.level, args.credential, direct, writer);
                 }
-                Sink::Writer { outbox, switches } => {
-                    conn.sink = Sink::Writer { outbox, switches };
+                sink @ (Sink::Writer { .. } | Sink::Driven { .. }) => {
+                    conn.sink = sink;
                     level::change(conn, id, args.level, args.credential);
-                }
-                Sink::Driven { answer, origin } => {
-                    conn.sink = Sink::Answered { origin };
-                    // A driven connection is already subscribed: a second
-                    // subscribe is rejected, and a rejection frees the id.
-                    conn.gate.accepted.release(&id);
-                    answer.0(Err(Rejection {
-                        code: ErrorCode::InvalidArguments,
-                        message: ALREADY.to_owned(),
-                    }));
                 }
                 Sink::Answered { origin } => {
                     conn.sink = Sink::Answered { origin };
@@ -490,8 +471,8 @@ fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name:
 }
 
 /// Runs once, on a `Direct` sink: `dispatch` pulls the socket halves out
-/// of the sink and passes them in, then `subscribe` overwrites the
-/// `Answered` placeholder with `Writer` before returning.
+/// of the sink and passes them in, then `subscribe` leaves `Writer` on
+/// success and puts `Direct` back when the acknowledgement cannot be written.
 fn subscribe(
     conn: &mut Conn,
     id: CommandId,
@@ -599,14 +580,23 @@ fn subscribe(
             .note(crate::session::tests::Probe::SubscribeAcknowledged);
     }
     if conn.gone {
+        // The acknowledgement never reached the client: put `Direct` back
+        // so the socket connection's sink is unchanged.
+        conn.sink = Sink::Direct {
+            direct,
+            writer: stream,
+        };
         return;
     }
     if summary {
-        // The halves in hand are the only state this loop writes: no
-        // other sink is reachable here, so the halves' type excludes it.
         for line in [status, extensions].into_iter().flatten() {
             if write_line(&mut direct, &line).is_err() {
                 conn.gone = true;
+                // As above: the snapshot never reached the client.
+                conn.sink = Sink::Direct {
+                    direct,
+                    writer: stream,
+                };
                 return;
             }
         }
@@ -841,8 +831,8 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
     // it and moves the sink to `Answered`; a rejection frees the id.
     let origin = conn.origin();
     match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
-        Sink::Direct { direct, writer } => {
-            conn.sink = Sink::Direct { direct, writer };
+        sink @ (Sink::Direct { .. } | Sink::Answered { .. }) => {
+            conn.sink = sink;
             guard(|_| {})
         }
         Sink::Writer { outbox, switches } => {
@@ -880,10 +870,6 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
                 }
                 answer.0(result);
             })
-        }
-        Sink::Answered { origin } => {
-            conn.sink = Sink::Answered { origin };
-            guard(|_| {})
         }
     }
 }

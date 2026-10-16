@@ -4307,10 +4307,17 @@ fn a_second_send_on_a_driven_connection_writes_nothing() {
 }
 
 fn subscribe_line_for(id: &str) -> contract::commands::CommandLine {
+    subscribe_line_for_level(id, contract::commands::SubscribeLevel::Full)
+}
+
+fn subscribe_line_for_level(
+    id: &str,
+    level: contract::commands::SubscribeLevel,
+) -> contract::commands::CommandLine {
     contract::commands::CommandLine {
         id: CommandId(id.into()),
         command: contract::commands::Command::Subscribe(contract::commands::SubscribeArgs {
-            level: contract::commands::SubscribeLevel::Full,
+            level,
             credential: None,
         }),
     }
@@ -4331,8 +4338,8 @@ fn dispatch_subscribe_on_driven_is_rejected_and_frees_id() {
         })),
         "fiber.test/a",
     );
-    // A driven connection is already subscribed: `dispatch` answers the
-    // subscribe at its call site instead of starting another one.
+    // A driven connection is already subscribed: a same-level subscribe is
+    // rejected through `level::change`, and a rejection frees the id.
     let line = subscribe_line_for("c_9");
     crate::client::dispatch(&mut conn, line, "subscribe");
     let answered = Deadline::after(DEADLINE)
@@ -4370,5 +4377,75 @@ fn dispatch_subscribe_on_answered_writes_nothing_and_frees_id() {
     crate::client::dispatch(&mut conn, line, "subscribe");
     assert!(!conn.gone, "an answered subscribe marks nothing gone");
     assert!(gate.accepted.reserve(&id), "a rejection frees the id");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn dispatch_subscribe_on_driven_at_summary_marks_gone() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn::driven(
+        Arc::clone(&gate),
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // A summary subscribe on a driven connection runs `level::change`, as a
+    // socket's second subscribe does: with no writer to switch it marks the
+    // connection gone and answers nothing at this call site.
+    let line = subscribe_line_for_level("c_9", contract::commands::SubscribeLevel::Summary);
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(
+        conn.gone,
+        "a driven summary subscribe marks the connection gone"
+    );
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a driven summary subscribe answers nothing at this call site"
+    );
+    drop(conn);
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+        "the held driven answer is dropped unanswered"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_failed_summary_write_leaves_the_socket_connection_direct() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    // Dropping the peer makes every write to `direct` fail, so the
+    // acknowledgement never reaches the client.
+    let (direct, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let mut conn = crate::client::Conn {
+        id: 0,
+        gate: Arc::clone(&gate),
+        sink: crate::client::Sink::Direct {
+            direct,
+            writer: Box::new(Vec::<u8>::new()),
+        },
+        full: false,
+        gone: false,
+    };
+    let line = subscribe_line_for_level("c_9", contract::commands::SubscribeLevel::Summary);
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(
+        conn.gone,
+        "a failed acknowledgement marks the connection gone"
+    );
+    assert!(
+        !conn.subscribed(),
+        "a failed summary write leaves the socket connection direct"
+    );
     close_within(opened.session, opened.log);
 }
