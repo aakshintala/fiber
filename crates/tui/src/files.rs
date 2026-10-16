@@ -41,7 +41,7 @@ impl Limits {
 
 /// What a path search resolves against: the workspace for `../`, and
 /// the home directory for `~/`.
-pub(crate) struct Roots {
+pub struct Roots {
     pub(crate) workspace: PathBuf,
     pub(crate) home: Option<PathBuf>,
 }
@@ -50,7 +50,7 @@ impl Roots {
     /// Keeps `home` only when it names an absolute directory, as the
     /// launch and the prompt files rule: an empty or relative `HOME`
     /// is no home, so a `~/` search answers `Err("no home directory")`.
-    pub(crate) fn new(workspace: PathBuf, home: Option<OsString>) -> Self {
+    pub fn new(workspace: PathBuf, home: Option<OsString>) -> Self {
         let home = home.and_then(|home| {
             let home = PathBuf::from(home);
             home.is_absolute().then_some(home)
@@ -309,7 +309,7 @@ const DROPPED: u64 = u64::MAX;
 /// The files git tracks in the repository holding `workspace`, relative to
 /// its root; or why there are none: the first line git wrote to stderr, or
 /// the error running it.
-pub(crate) fn list(workspace: &Path) -> Result<Vec<String>, String> {
+pub fn list(workspace: &Path) -> Result<Vec<String>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workspace)
@@ -368,6 +368,52 @@ pub(crate) fn rank(
     )
 }
 
+type ListFiles = Box<dyn FnOnce() -> Result<Vec<String>, String> + Send>;
+
+/// A lazy workspace listing, retained across queries until its owner drops it.
+pub struct Listing {
+    pending: Option<ListFiles>,
+    listed: Option<Result<Vec<String>, String>>,
+}
+
+impl Listing {
+    /// Defers `listing` until the first workspace query; path queries never run it.
+    pub fn new(listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static) -> Self {
+        Self {
+            pending: Some(Box::new(listing)),
+            listed: None,
+        }
+    }
+}
+
+/// Searches the retained workspace listing or a typed path under `roots`.
+/// Returns no answer when cancelled, otherwise at most fifty rows or an error row.
+pub fn search(
+    listing: &mut Listing,
+    roots: &Roots,
+    typed: &str,
+    cancelled: impl Fn() -> bool,
+) -> Option<Result<Vec<String>, String>> {
+    if cancelled() {
+        return None;
+    }
+    match split(typed) {
+        Query::Workspace(seek) => {
+            if let Some(list) = listing.pending.take() {
+                listing.listed = Some(list());
+            }
+            match listing.listed.as_ref()? {
+                Ok(paths) => rank(paths, seek, cancelled).map(Ok),
+                Err(error) => Some(Err(error.clone())),
+            }
+        }
+        Query::Path { base_text, query } => match resolve(base_text, roots) {
+            Err(reason) => Some(Err(reason)),
+            Ok(base) => find(&base, base_text, query, &Limits::SEARCH, cancelled),
+        },
+    }
+}
+
 /// The search worker: it lists once, then runs each search asked for,
 /// skipping to the newest when several wait. Dropping it ends the worker
 /// and abandons the search in flight.
@@ -403,46 +449,15 @@ impl Search {
         let newest = Arc::clone(&current);
         let failed = out.clone();
         let worker = crate::sources::builder("tui-files").spawn(move || {
-            let mut listing = Some(listing);
-            let mut listed: Option<Result<Vec<String>, String>> = None;
+            let mut listing = Listing::new(listing);
             while let Ok(mut job) = inbox.recv() {
                 while let Ok(next) = inbox.try_recv() {
                     job = next;
                 }
                 let (generation, query) = job;
                 let cancelled = || newest.load(Ordering::Relaxed) != generation;
-                let result = match split(&query) {
-                    Query::Workspace(seek) => {
-                        if listed.is_none()
-                            && let Some(list) = listing.take()
-                        {
-                            listed = Some(list());
-                        }
-                        match &listed {
-                            Some(Ok(paths)) => {
-                                let Some(found) = rank(paths, seek, cancelled) else {
-                                    continue;
-                                };
-                                Ok(found)
-                            }
-                            Some(Err(error)) => Err(error.clone()),
-                            // The listing runs on the first workspace job,
-                            // so it is always held past one.
-                            None => continue,
-                        }
-                    }
-                    Query::Path {
-                        base_text,
-                        query: seek,
-                    } => match resolve(base_text, &roots) {
-                        Err(reason) => Err(reason),
-                        Ok(base) => {
-                            match find(&base, base_text, seek, &Limits::SEARCH, cancelled) {
-                                None => continue,
-                                Some(result) => result,
-                            }
-                        }
-                    },
+                let Some(result) = search(&mut listing, &roots, &query, cancelled) else {
+                    continue;
                 };
                 if out.send(Input::Files { generation, result }).is_err() {
                     return;
