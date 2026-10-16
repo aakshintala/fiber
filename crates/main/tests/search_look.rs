@@ -675,3 +675,128 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     assert_top_row(&grid, "Tools", "/tools");
     esc_closes(&mut run);
 }
+
+/// A held delegate at 65% context and a background job on the same FIFO.
+/// Neither can finish until the test releases its open FIFO or quits.
+fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
+    let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "p3");
+    fs::create_dir_all(root.path().join("h")).unwrap();
+    fs::create_dir_all(root.path().join("w")).unwrap();
+    let setup = Setup { root, deadline: support::Deadline::start() };
+    let hold = setup.workspace().join("hold");
+    let mut make = std::process::Command::new("mkfifo");
+    make.arg(&hold).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    assert!(support::run_to_exit(setup.deadline, "make the hold FIFO", make).status.success());
+    let release = fs::OpenOptions::new().read(true).write(true).open(&hold).unwrap();
+    let command = format!("head -n 1 {}", hold.display());
+    write_json(&setup.workspace().join("d.json"), &json!({"steps": [
+        {"tool_calls": [{"name": "shell", "arguments": {"command": command}}], "usage": {"input": 650000}},
+        {"text": ["Reviewed."]}
+    ]}));
+    write_json(&setup.workspace().join("s.json"), &json!({"steps": [
+        {"tool_calls": [{"name": "delegate_spawn", "arguments": {
+            "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}]},
+        {"tool_calls": [{"name": "shell", "arguments": {"command": command, "run_in_background": true}}]},
+        {"text": [REPLY]}
+    ]}));
+    write_json(&setup.workspace().join("r.json"), &json!({"steps": [
+        {"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}
+    ]}));
+    write_json(&setup.home().join("config.json"), &json!({
+        "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
+        "roles": {"delegate": "fiber:scripted/d.json"},
+        "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 1000}
+    }));
+    fs::write(setup.home().join("rules"), format!("{}\n{}\n",
+        json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+        json!({"decision": "allow", "tool": "shell", "prefix": command}),
+    )).unwrap();
+    let guard = fakes::Watchdog::matching(hold.to_str().unwrap());
+    (setup, release, guard, command)
+}
+
+fn narrow_running(setup: &Setup) -> Run {
+    let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
+    // A 60-column panel plus the rail leaves less than the conversation's
+    // 84-column minimum, so the wanted panel contributes narrow rows.
+    run.wait_screen("the narrow running counts", |grid| grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running"));
+    run
+}
+
+fn open_running(run: &mut Run, count: &str, heading: &str) -> Grid {
+    let grid = run.wait_screen("the running count", |grid| grid.contents.contains(count));
+    let y = row_with(&grid, count);
+    click(run, col_at(&grid, y, count), y);
+    run.wait_screen("the running list", |grid| grid.contents.contains(heading))
+}
+
+/// Durations are normalised to their shape, never compared with real time.
+fn running_duration(text: &str) -> bool {
+    text.strip_suffix(['s', 'm', 'h', 'd']).is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+/// The delegate list's whole promised row, including its colours and inks.
+fn delegate_list_ready(grid: &Grid) -> bool {
+    let Some(y) = row_with_or(&grid.rows, "Delegates · 1 running") else { return false; };
+    let Some(x) = col_at_or(grid, y, "Delegates · 1 running") else { return false; };
+    let Some(desc) = grid.rows.get(usize::from(y + 1)) else { return false; };
+    let Some(duration) = desc.trim().strip_prefix("◆ review the diff · ") else { return false; };
+    if !running_duration(duration) { return false; }
+    if !(0.."Delegates · 1 running".chars().count() as u16).all(|dx| grid.cell(x + dx, y).bold) { return false; }
+    let detail = y + 2;
+    let Some(model) = col_at_or(grid, detail, "scripted/d.json · 1 call · s_") else { return false; };
+    if model != x + 2 { return false; }
+    let Some(bar) = col_at_or(grid, detail, "▆▆▆▆▆▆░░░░ 65%") else { return false; };
+    if !(model..bar).all(|col| grid.cell(col, detail).dim) { return false; }
+    if !(0..6).all(|dx| grid.cell(bar + dx, detail).fg == ATTENTION) { return false; }
+    if !(6..10).all(|dx| grid.cell(bar + dx, detail).fg == Colour::Rgb(58, 58, 74)) { return false; }
+    if !(10..14).all(|dx| grid.cell(bar + dx, detail).dim) { return false; }
+    let Some(hint) = row_with_or(&grid.rows, "a row opens that item's view") else { return false; };
+    let Some(hint_x) = col_at_or(grid, hint, "a row opens that item's view") else { return false; };
+    (0.."a row opens that item's view".chars().count() as u16).all(|dx| grid.cell(hint_x + dx, hint).dim)
+}
+
+#[test]
+fn the_running_lists_match_the_doc() {
+    let (setup, _release, _guard, command) = running_setup();
+    let mut run = narrow_running(&setup);
+    open_running(&mut run, "1 delegate running", "Delegates · 1 running");
+    let grid = run.wait_screen("the delegate list's rows and colours", delegate_list_ready);
+    assert!(delegate_list_ready(&grid));
+    esc_closes(&mut run);
+    let grid = open_running(&mut run, "1 job running", "Jobs · 1 running");
+    let heading = row_with(&grid, "Jobs · 1 running");
+    let x = col_at(&grid, heading, "Jobs · 1 running");
+    for dx in 0.."Jobs · 1 running".chars().count() as u16 { assert!(grid.cell(x + dx, heading).bold); }
+    let row = grid.rows[usize::from(heading + 1)].trim();
+    let tail = row.strip_prefix(&format!("◆ {command} · ")).expect("the job command");
+    let (elapsed, job) = tail.split_once(" · ").expect("the job elapsed and id");
+    assert!(running_duration(elapsed));
+    assert!(job.starts_with("j_"));
+    let hint = row_with(&grid, "a row opens that item's view");
+    let x = col_at(&grid, hint, "a row opens that item's view");
+    for dx in 0.."a row opens that item's view".chars().count() as u16 { assert!(grid.cell(x + dx, hint).dim); }
+}
+
+#[test]
+fn the_item_views_top_row_closes_them() {
+    let (setup, _release, _guard, command) = running_setup();
+    let mut run = narrow_running(&setup);
+    for (count, heading, crumb) in [
+        ("1 delegate running", "Delegates · 1 running", "› ◆ review the diff".to_owned()),
+        ("1 job running", "Jobs · 1 running", format!("› ▸ {command}")),
+    ] {
+        let grid = open_running(&mut run, count, heading);
+        let y = row_with(&grid, heading);
+        let x = col_at(&grid, y, heading);
+        click(&mut run, x, y + 1);
+        let grid = run.wait_screen("the item's breadcrumb without a cross", |grid| grid.rows[0].contains(&crumb) && !grid.rows[0].contains('✕'));
+        assert!(grid.rows[0].contains(&crumb));
+        assert!(!grid.rows[0].contains('✕'));
+        click(&mut run, 80, 0);
+        run.wait_screen("the conversation after clicking the item's top row", |grid| grid.contents.contains(REPLY) && !grid.contents.contains(heading));
+    }
+}
