@@ -973,26 +973,6 @@ fn a_role_naming_a_label_the_provider_lacks_is_refused_naming_the_labels() {
 }
 
 #[test]
-fn a_scripted_provider_role_with_a_label_is_refused() {
-    let (_root, mut providers, config) = stored_rig(
-        json!({"s": {"model": "fiber:scripted/a.json", "credential": "late"}}),
-        &[],
-    );
-    providers.add_scripted("scripted/a.json");
-    let resolve = resolver(&providers, &config);
-    assert_eq!((resolve.lookup)("s").unwrap(), "scripted/a.json");
-    // A scripted provider takes no credential, so any label asked for one
-    // fails with `credential_missing`.
-    assert_eq!(
-        (resolve.credential)("s"),
-        Err(
-            "`scripted` has no credential label `late`. The labels for `scripted` are: none"
-                .to_owned()
-        )
-    );
-}
-
-#[test]
 fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missing() {
     let root = fakes::TempDir::new("fd-scripted-label");
     let (mut providers, config) = rig_loaded(
@@ -1058,7 +1038,7 @@ fn a_repository_layer_role_credential_is_ignored() {
     assert_eq!((resolve.credential)("fast"), Ok(None));
     assert_eq!((resolve.credential)("odd"), Ok(None));
     // The launch then passes no `-c`: the child reads the provider's
-    // configured label as today.
+    // configured label.
     let mut launch = launched();
     launch.credential = (resolve.credential)("fast").unwrap();
     let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
@@ -1086,10 +1066,10 @@ fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    // The override follows `--prompt <text>` as one adjacent pair.
+    // The override travels as one adjacent `-c` pair.
     assert!(
         argv.windows(2)
-            .any(|pair| pair == ["-c", "providers.\"fake\".credential=\"work\"",]),
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"work\"",]),
         "{argv:?}"
     );
 }
@@ -1104,7 +1084,7 @@ fn a_label_that_parses_as_json_is_still_a_string() {
         .collect();
     assert!(
         argv.windows(2)
-            .any(|pair| pair == ["-c", "providers.\"fake\".credential=\"123\"",]),
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"123\"",]),
         "{argv:?}"
     );
 }

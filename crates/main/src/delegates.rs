@@ -392,14 +392,15 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         // records it. The value is a JSON string, so a label that parses
         // as JSON still arrives as a string. Nothing for no label, and
         // nothing on a resume, which continues the recorded session.
-        if let Some(label) = launched.credential.as_deref()
-            && let Ok(value) = serde_json::to_string(label)
-        {
+        if let Some(label) = launched.credential.as_deref() {
             let provider = launched.model.split('/').next().unwrap_or_default();
-            command.args([
-                "-c",
-                &format!("providers.\"{provider}\".credential={value}"),
+            let key = config::path::display(&[
+                "providers".to_owned(),
+                provider.to_owned(),
+                "credential".to_owned(),
             ]);
+            let value = serde_json::Value::String(label.to_owned());
+            command.args(["-c", &format!("{key}={value}")]);
         }
     }
     command.args([
