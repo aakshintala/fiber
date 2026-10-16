@@ -102,6 +102,10 @@ pub(crate) enum QuitChoice {
 /// What the terminal knows about where it was launched.
 #[derive(Default)]
 pub struct Launch {
+    /// The listed hub's name, or `None` for the local hub.
+    pub hub: Option<String>,
+    /// The client's launch directory, for client-owned configuration.
+    pub client_dir: PathBuf,
     /// The launch directory; `start`'s default workspace.
     pub workspace: PathBuf,
     /// Its project key (`docs/state.md`, "Projects").
@@ -169,6 +173,8 @@ pub struct Launch {
 
 /// What home draws, built by [`crate::app::App::home_screen`].
 pub(crate) struct HomeScreen {
+    /// A remote home has no workspace until a person chooses one.
+    pub(crate) no_workspace: bool,
     /// Fiber's version, for the logo.
     pub(crate) version: String,
     /// The glyph before the name in the one-row logo.
@@ -253,6 +259,8 @@ pub(crate) enum ListLine {
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PickerScreen {
+    /// Esc may close the picker because a workspace is already in use.
+    pub(crate) escapes: bool,
     /// The recent workspaces, fixed at open.
     pub(crate) recents: Vec<String>,
     /// The focused row's index over the completions then the recents
@@ -639,6 +647,16 @@ impl Sessions {
         self.recent.last()
     }
 
+    /// The project of the newest row in this workspace, first row on ties.
+    pub(crate) fn project_of(&self, workspace: &str) -> Option<&str> {
+        self.all()
+            .into_iter()
+            .filter(|row| row.workspace == workspace)
+            // min_by_key keeps the first row on equal timestamps.
+            .min_by_key(|row| std::cmp::Reverse(row.status.as_ref().map(|status| status.since)))
+            .map(|row| row.project.as_str())
+    }
+
     /// Whether any row, live or exited, is in `workspace` inside git.
     pub(crate) fn in_git(&self, workspace: &str) -> bool {
         self.feed
@@ -850,8 +868,9 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
 /// A resume line on exit: the session's id and the command resuming
 /// it. The terminal is restored first, and one line prints per live
 /// session.
-pub(crate) fn exit_line(id: &SessionId) -> String {
-    format!("{}  fiber resume {}", id.0, id.0)
+pub(crate) fn exit_line(id: &SessionId, hub: Option<&str>) -> String {
+    let suffix = hub.map(|hub| format!(" --hub {hub}")).unwrap_or_default();
+    format!("{}  fiber resume {}{suffix}", id.0, id.0)
 }
 
 /// The delete question on the foot: the session and that deleting is

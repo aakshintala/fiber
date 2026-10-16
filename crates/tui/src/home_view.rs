@@ -701,6 +701,17 @@ pub(super) fn render(
         placed.inner,
         BOX_TINT,
     );
+    if screen.no_workspace {
+        put(
+            buf,
+            area,
+            text_x,
+            placed.chip,
+            "[no workspace]",
+            placed.inner,
+            BOX_TINT.add_modifier(Modifier::DIM),
+        );
+    }
     let mut chip_x = text_x;
     // A chip past the box's right edge draws nothing and takes no
     // target; a chip cut part-way keeps its visible cells. Without
@@ -739,6 +750,7 @@ pub(super) fn render(
                     typed,
                     &picker.recents,
                     picker.focus,
+                    picker.escapes,
                     area,
                     buf,
                     &mut targets,
@@ -760,7 +772,15 @@ pub(super) fn render(
                 let (off, take) = completions::window(selected.saturating_sub(start), len, room);
                 let at = start.saturating_add(off);
                 if let Some(window) = items.get(at..at.saturating_add(take)) {
-                    draw_picker(window, at, selected, area, buf, &mut targets);
+                    draw_picker(
+                        window,
+                        at,
+                        selected,
+                        picker.escapes,
+                        area,
+                        buf,
+                        &mut targets,
+                    );
                 }
             }
         }
@@ -961,8 +981,12 @@ fn typed_body(
 }
 
 /// The workspace picker's footer: what the mouse does.
-fn picker_footer() -> super::overlay::Row {
-    super::overlay::legend(&[("↑↓", "move"), ("Enter", "open"), ("Esc", "closes")])
+fn picker_footer(escapes: bool) -> super::overlay::Row {
+    let mut legend = vec![("↑↓", "move"), ("Enter", "open")];
+    if escapes {
+        legend.push(("Esc", "closes"));
+    }
+    super::overlay::legend(&legend)
 }
 
 /// Draws the typed workspace picker over `area`: the typed row with
@@ -974,6 +998,7 @@ fn draw_typed_picker(
     typed: &TypedScreen,
     recents: &[String],
     focus: Option<usize>,
+    escapes: bool,
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
@@ -1073,7 +1098,7 @@ fn draw_typed_picker(
         title: Some(("Workspaces".to_owned(), None)),
         close: None,
         body,
-        footer: Some(picker_footer()),
+        footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
     super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
@@ -1086,6 +1111,7 @@ fn draw_picker(
     window: &[String],
     start: usize,
     selected: usize,
+    escapes: bool,
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
@@ -1120,7 +1146,7 @@ fn draw_picker(
         title: Some(("Workspaces".to_owned(), None)),
         close: None,
         body,
-        footer: Some(picker_footer()),
+        footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
     super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);

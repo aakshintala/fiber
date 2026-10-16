@@ -76,7 +76,16 @@ pub(super) struct History {
 impl History {
     /// Sets the project key.
     pub(super) fn set_project(&mut self, project: String) {
-        self.project = project;
+        if self.project != project {
+            self.project = project;
+            self.hub.clear();
+            self.pending = None;
+            self.started = false;
+            self.before = None;
+            self.ended = false;
+            self.browse = None;
+            self.cancel();
+        }
     }
 
     /// Records the prompts `session` took in one `turn_started`: messages a
@@ -133,7 +142,7 @@ impl History {
     /// the last answer said older lines remain.
     fn fetch(&mut self, up: bool) -> Option<String> {
         let more = !self.started || self.before.is_some();
-        if !up || self.pending.is_some() || self.ended || !more {
+        if self.project.is_empty() || !up || self.pending.is_some() || self.ended || !more {
             return None;
         }
         let id = mint();
@@ -206,6 +215,19 @@ impl History {
 }
 
 impl App {
+    fn sync_remote_project(&mut self) {
+        if self.remote_hub().is_some() {
+            let workspace = self.workspace();
+            let project = self
+                .home
+                .as_ref()
+                .and_then(|home| home.sessions.project_of(&workspace.display().to_string()))
+                .unwrap_or_default()
+                .to_owned();
+            self.history.set_project(project);
+        }
+    }
+
     /// Sets the project key `prompt_history` names.
     pub(crate) fn set_project(&mut self, project: String) {
         self.history.set_project(project);
@@ -354,6 +376,7 @@ impl App {
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
+        self.sync_remote_project();
         let up = self.link == Link::Up;
         let line = self
             .history
@@ -406,6 +429,7 @@ impl App {
     /// asked for and the recall waits for it. With no more pages nothing
     /// changes.
     fn older(&mut self) -> Effect {
+        self.sync_remote_project();
         let up = self.link == Link::Up;
         let mut lines = Vec::new();
         if !self.history.started {

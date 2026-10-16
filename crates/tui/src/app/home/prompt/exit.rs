@@ -208,7 +208,7 @@ impl App {
                     .iter()
                     .any(|(session, _)| *session == row.id)
             })
-            .map(|row| crate::home::exit_line(&row.id))
+            .map(|row| crate::home::exit_line(&row.id, home.launch.hub.as_deref()))
             .collect();
         // The attached session is live while attached: it never left,
         // and a resumed session's row still reads exited until the feed
@@ -224,7 +224,7 @@ impl App {
                 .any(|(closed, _)| closed == session)
             && home.left_after_attach.as_ref() != Some(session)
         {
-            lines.push(crate::home::exit_line(session));
+            lines.push(crate::home::exit_line(session, home.launch.hub.as_deref()));
         }
         lines
     }

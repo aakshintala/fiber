@@ -11,6 +11,42 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
 
+#[test]
+fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
+    for typed in [false, true] {
+        let mut app = home(80, 24);
+        app.set_home(Launch {
+            hub: Some("box".to_owned()),
+            workspace: PathBuf::from("/sentinel/launch-dir"),
+            ..Default::default()
+        });
+        if typed {
+            app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
+        }
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        let drawn = text(&buf);
+        assert!(drawn.contains("[no workspace]"), "{drawn}");
+        let footer = drawn
+            .lines()
+            .find(|line| line.contains("↑↓ move · Enter open"))
+            .unwrap();
+        assert!(!footer.contains("Esc"));
+        let y = drawn
+            .lines()
+            .position(|line| line.contains("[no workspace]"))
+            .unwrap();
+        let line = drawn.lines().nth(y).unwrap();
+        let x = line[..line.find("[no workspace]").unwrap()].chars().count();
+        assert!(
+            buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
+                .modifier
+                .contains(ratatui::style::Modifier::DIM)
+        );
+    }
+}
+
 /// An app on home at `width` by `height`.
 fn home(width: u16, height: u16) -> App {
     home_with_glyph(width, height, "⌇")

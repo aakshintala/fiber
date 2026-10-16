@@ -84,12 +84,59 @@ impl Chooser {
 }
 
 impl Home {
+    /// There is no implicit launch workspace on a listed hub.
+    pub(in crate::app) fn no_workspace(&self) -> bool {
+        self.launch.hub.is_some() && self.chooser.chosen.is_none()
+    }
+
+    fn picker_recents(&self) -> Vec<String> {
+        let mut list = if self.launch.hub.is_some() {
+            Vec::new()
+        } else {
+            vec![self.launch.workspace.display().to_string()]
+        };
+        for row in self.sessions.all() {
+            if list.len() == PICKER_CAP {
+                break;
+            }
+            if !row.workspace.starts_with('/') {
+                continue;
+            }
+            if !list.contains(&row.workspace) {
+                list.push(row.workspace.clone());
+            }
+        }
+        list
+    }
+
+    /// A remote picker follows arriving rows until a path is typed.
+    pub(super) fn refill_picker(&mut self) {
+        if self.launch.hub.is_none() {
+            return;
+        }
+        let Some(picker) = self.chooser.picker.as_ref() else {
+            return;
+        };
+        if picker.typing() {
+            return;
+        }
+        let focused = picker.recents.get(picker.selected).cloned();
+        let recents = self.picker_recents();
+        let selected = focused
+            .and_then(|path| recents.iter().position(|row| *row == path))
+            .unwrap_or(0);
+        if let Some(picker) = self.chooser.picker.as_mut() {
+            picker.recents = recents;
+            picker.selected = selected;
+        }
+    }
+
     /// Whether the new worktree switch shows: the workspace in use is
     /// in git. With none chosen that is the launch directory; else the
     /// flag read when the workspace was chosen.
     pub(super) fn in_git(&self) -> bool {
         match &self.chooser.chosen {
-            None => self.launch.git,
+            None => self.launch.hub.is_none() && self.launch.git,
             Some(_) => self.chooser.chosen_git,
         }
     }
@@ -99,7 +146,9 @@ impl Home {
     /// launch flag for the launch directory, else whether some row in
     /// that workspace is then.
     pub(in crate::app) fn choose(&mut self, workspace: String) {
-        self.chooser.chosen_git = if workspace == self.launch.workspace.display().to_string() {
+        self.chooser.chosen_git = if self.launch.hub.is_none()
+            && workspace == self.launch.workspace.display().to_string()
+        {
             self.launch.git
         } else {
             self.sessions.in_git(&workspace)
@@ -137,6 +186,7 @@ impl Home {
             },
         };
         Some(PickerScreen {
+            escapes: !self.no_workspace(),
             recents: picker.recents.clone(),
             focus,
             typed,
@@ -163,6 +213,9 @@ impl App {
             }
             Key::Backspace => {
                 self.backspace_picker();
+                if let Some(home) = self.home.as_mut() {
+                    home.refill_picker();
+                }
                 return Some(self.picker_send());
             }
             Key::Tab => {
@@ -191,25 +244,14 @@ impl App {
         Some(Effect::None)
     }
 
-    /// Opens the workspace picker above the box: the launch directory
-    /// first, then each distinct absolute workspace from the feed rows
-    /// and then the recent rows, at most ten. Its list is fixed at open.
+    /// Opens the workspace picker: the local launch directory, then distinct
+    /// absolute feed and recent workspaces, at most ten. A listed hub has
+    /// no launch directory and refills its rows while nothing is typed.
     pub(super) fn open_picker(&mut self) -> Effect {
         let Some(home) = self.home.as_mut() else {
             return Effect::None;
         };
-        let mut list = vec![home.launch.workspace.display().to_string()];
-        for row in home.sessions.all() {
-            if list.len() == PICKER_CAP {
-                break;
-            }
-            if row.workspace.is_empty() || !row.workspace.starts_with('/') {
-                continue;
-            }
-            if !list.contains(&row.workspace) {
-                list.push(row.workspace.clone());
-            }
-        }
+        let list = home.picker_recents();
         home.chooser.picker = Some(Picker {
             recents: list,
             selected: 0,
@@ -404,7 +446,9 @@ impl App {
 
     /// Closes the picker, keeping the workspace as it was.
     fn close_picker(&mut self) {
-        if let Some(home) = self.home.as_mut() {
+        if let Some(home) = self.home.as_mut()
+            && !home.no_workspace()
+        {
             home.chooser.picker = None;
         }
     }
@@ -444,7 +488,11 @@ impl App {
             if let Some(chosen) = &home.chooser.chosen {
                 return PathBuf::from(chosen);
             }
-            return home.launch.workspace.clone();
+            return if home.launch.hub.is_some() {
+                PathBuf::new()
+            } else {
+                home.launch.workspace.clone()
+            };
         }
         self.workspace.clone()
     }

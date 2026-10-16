@@ -140,6 +140,28 @@ fn with(sessions: &[&str]) -> App {
 }
 
 #[test]
+fn remote_rail_has_no_launch_project() {
+    let mut app = home();
+    app.set_home(Launch {
+        hub: Some("box".to_owned()),
+        project: "sentinel-project".to_owned(),
+        ..Default::default()
+    });
+    linked(&mut app);
+    app.on_line(live(A, json!({"project":"other"})));
+    app.on_line(live(B, json!({"project":"sentinel-project"})));
+    let (cards, project) = app.rail_cards().unwrap();
+    assert_eq!(project, "");
+    assert_eq!(
+        cards
+            .iter()
+            .map(|row| row.id.0.as_str())
+            .collect::<Vec<_>>(),
+        [A, B]
+    );
+}
+
+#[test]
 fn a_new_row_takes_the_smallest_free_number() {
     let app = with(&[A, B, C]);
     assert_eq!(number(&app, A), Some(1));

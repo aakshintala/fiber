@@ -580,6 +580,26 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
 }
 
 #[test]
+fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
+    let mut app = home();
+    app.home.as_mut().unwrap().launch.hub = Some("box".to_owned());
+    linked(&mut app);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", json!("idle"), 0, 0, 0));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa --hub box"]
+    );
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        [
+            "s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa --hub box",
+            "s_bbbbbbbbbbbbbbbb  fiber resume s_bbbbbbbbbbbbbbbb --hub box"
+        ]
+    );
+}
+
+#[test]
 fn exit_lines_name_each_live_session() {
     let mut app = home();
     linked(&mut app);

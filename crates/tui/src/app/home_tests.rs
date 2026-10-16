@@ -63,6 +63,105 @@ fn review() -> Line {
 }
 
 #[test]
+fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
+    let mut app = home();
+    app.set_home(Launch {
+        hub: Some("box".to_owned()),
+        project: "sentinel-project".to_owned(),
+        workspace: PathBuf::from("/sentinel/launch-dir"),
+        ..Default::default()
+    });
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "first",
+        "/a",
+        "other",
+        json!({"state":"idle"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "second",
+        "/b",
+        "sentinel-project",
+        json!({"state":"idle"}),
+    ));
+    let screen = app.home_screen().unwrap();
+    let heads: Vec<_> = screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            crate::home::ListLine::Head { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heads, ["a", "b"]);
+    let row = app.home.as_ref().unwrap().sessions.all()[1].key;
+    let text = app.home_text(Spot::Entry(row)).unwrap();
+    assert!(text.ends_with("  b"), "{text}");
+    assert!(!text.contains("sentinel-project"));
+}
+
+#[test]
+fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
+    for (first_since, second_since, expected) in [(1, 2, "q"), (2, 1, "p"), (2, 2, "p")] {
+        let mut app = home();
+        for (id, project, since) in [
+            ("s_aaaaaaaaaaaaaaaa", "p", first_since),
+            ("s_bbbbbbbbbbbbbbbb", "q", second_since),
+        ] {
+            let mut row = live(id, project, "/remote", project, json!({"state":"idle"}));
+            if let Line::Session(envelope) = &mut row {
+                envelope.payload.insert("since".to_owned(), json!(since));
+            }
+            app.on_line(row);
+        }
+        let sessions = &app.home.as_ref().unwrap().sessions;
+        assert_eq!(sessions.project_of("/remote"), Some(expected));
+        assert_eq!(sessions.project_of("/elsewhere"), None);
+    }
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions":[exited_in("s_aaaaaaaaaaaaaaaa", "old", "/remote", "p")]}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "new",
+        "/remote",
+        "q",
+        json!({"state":"idle"}),
+    ));
+    assert_eq!(
+        app.home.as_ref().unwrap().sessions.project_of("/remote"),
+        Some("q")
+    );
+    for absent_first in [false, true] {
+        let mut sessions = crate::home::Sessions::default();
+        let make = |id: &str, project: &str| {
+            let Line::Session(envelope) =
+                live(id, project, "/remote", project, json!({"state":"idle"}))
+            else {
+                unreachable!()
+            };
+            crate::home::from_status(&envelope)
+        };
+        let mut absent = make("s_aaaaaaaaaaaaaaaa", "absent");
+        absent.status = None;
+        let present = make("s_bbbbbbbbbbbbbbbb", "present");
+        if absent_first {
+            sessions.status(absent);
+            sessions.status(present);
+        } else {
+            sessions.status(present);
+            sessions.status(absent);
+        }
+        assert_eq!(sessions.project_of("/remote"), Some("present"));
+    }
+}
+
+#[test]
 fn an_app_without_home_draws_the_conversation_screen() {
     let app = App::new(PathBuf::from("/w"));
     assert!(!app.on_home());

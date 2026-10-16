@@ -249,6 +249,135 @@ fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
     app.on_line(accepted(id, json!({"directories": names, "path": path})));
 }
 
+fn remote() -> App {
+    let mut app = home();
+    app.set_home(Launch {
+        hub: Some("box".to_owned()),
+        workspace: PathBuf::from("/sentinel/launch-dir"),
+        project: "sentinel-project".to_owned(),
+        git: true,
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
+}
+
+#[test]
+fn remote_starts_with_no_workspace_and_cannot_escape() {
+    let mut app = remote();
+    assert!(picker_open(&app));
+    assert!(recents(&app).is_empty());
+    assert_eq!(app.home_workspace(), PathBuf::new());
+    assert_eq!(chips(&app)[0], "[no workspace]");
+    assert!(app.home_screen().unwrap().no_workspace);
+    assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
+    assert_eq!(key(&mut app, Key::Esc), Effect::None);
+    assert!(picker_open(&app));
+    assert!(!chips(&app).iter().any(|chip| chip.contains("worktree")));
+    linked(&mut app);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "chosen", "/remote/w"));
+    assert_eq!(recents(&app), ["/remote/w"]);
+    key(&mut app, Key::Enter);
+    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+    assert_eq!(chips(&app)[0], "[w]");
+    assert!(!app.home_screen().unwrap().no_workspace);
+    app.home_click(Spot::Workspace);
+    assert!(app.home_screen().unwrap().picker.unwrap().escapes);
+    key(&mut app, Key::Esc);
+    assert!(!picker_open(&app));
+}
+
+#[test]
+fn remote_picker_refills_feed_then_recent_distinct_absolute_rows() {
+    let mut app = remote();
+    let (_, recent) = linked(&mut app);
+    for (i, ws) in ["/a", "/b", "/a", "", "relative"].iter().enumerate() {
+        app.on_line(live(&format!("s_{i:016x}"), "row", ws));
+    }
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [
+            {"session_id":"s_1111111111111111", "workspace":"/c", "project":"p", "how":"exited"},
+            {"session_id":"s_2222222222222222", "workspace":"/b", "project":"p", "how":"exited"}
+        ]}),
+    ));
+    assert_eq!(recents(&app), ["/a", "/b", "/c"]);
+    key(&mut app, Key::Down);
+    assert_eq!(focused(&app).as_deref(), Some("/b"));
+    app.on_line(live("s_0000000000000000", "changed", "/z"));
+    assert_eq!(focused(&app).as_deref(), Some("/b"));
+    app.on_line(live("s_0000000000000001", "changed", "/y"));
+    // The recent row still keeps /b listed.
+    assert_eq!(focused(&app).as_deref(), Some("/b"));
+    for _ in 0..recents(&app).len() {
+        key(&mut app, Key::Up);
+    }
+    assert_eq!(focused(&app).as_deref(), Some("/z"));
+    app.on_line(live("s_0000000000000000", "changed", "/x"));
+    assert_eq!(focused(&app).as_deref(), Some("/x"));
+}
+
+#[test]
+fn remote_refill_focuses_first_when_the_selected_workspace_leaves() {
+    let mut app = remote();
+    linked(&mut app);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "first", "/a"));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", "second", "/b"));
+    key(&mut app, Key::Down);
+    assert_eq!(focused(&app).as_deref(), Some("/b"));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", "moved", "/c"));
+    assert_eq!(recents(&app), ["/a", "/c"]);
+    assert_eq!(focused(&app).as_deref(), Some("/a"));
+}
+
+#[test]
+fn remote_picker_cap_and_typing_refill_boundary() {
+    for count in [9, 10, 11] {
+        let mut app = remote();
+        linked(&mut app);
+        for i in 0..count {
+            app.on_line(live(&format!("s_{i:016x}"), "row", &format!("/w{i}")));
+        }
+        assert_eq!(recents(&app).len(), count.min(10));
+        assert_eq!(recents(&app)[0], "/w0");
+    }
+    let mut app = remote();
+    linked(&mut app);
+    app.on_line(live("s_0000000000000000", "row", "/a"));
+    type_path(&mut app, "x");
+    app.on_line(live("s_1111111111111111", "row", "/b"));
+    assert_eq!(recents(&app), ["/a"]);
+    key(&mut app, Key::Backspace);
+    assert_eq!(recents(&app), ["/a", "/b"]);
+    assert_eq!(typed_text(&app), None);
+}
+
+#[test]
+fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
+    for git in [false, true] {
+        let mut app = remote();
+        linked(&mut app);
+        assert!(recents(&app).is_empty());
+        let mut row = live("s_aaaaaaaaaaaaaaaa", "same path", "/sentinel/launch-dir");
+        if let Line::Session(envelope) = &mut row {
+            if git {
+                envelope
+                    .payload
+                    .insert("git".to_owned(), json!({"branch":"main"}));
+            }
+        }
+        app.on_line(row);
+        assert_eq!(recents(&app), ["/sentinel/launch-dir"]);
+        key(&mut app, Key::Enter);
+        assert_eq!(app.home_workspace(), PathBuf::from("/sentinel/launch-dir"));
+        assert_eq!(
+            chips(&app).iter().any(|chip| chip.contains("worktree")),
+            git
+        );
+        assert_eq!(app.start_args()["workspace"], "/sentinel/launch-dir");
+    }
+}
+
 #[test]
 fn recents_alone_exclude_empty_and_relative_workspaces() {
     let mut app = home();

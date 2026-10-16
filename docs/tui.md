@@ -81,10 +81,18 @@ line says so: "Connecting 2 MCP servers…".
 
 **The workspace chip** defaults to the directory the terminal was launched in.
 Clicking it opens a picker of recent workspaces, from `recent.jsonl`
-(`docs/state.md`). A remote client has no launch directory, so it always
-shows the picker. The picker is an overlay centred over home ("Look",
+(`docs/state.md`). The picker is an overlay centred over home ("Look",
 "Overlays"): the title "Workspaces", one row per recent workspace with the
 first focused, and the footer "↑↓ move · Enter open · Esc closes".
+A remote client has no launch directory. Its home opens with the picker open,
+listing the hub's recent workspaces: the live sessions' workspaces, then the
+exited ones', distinct and absolute, at most ten, with no launch-directory row.
+While nothing is typed the list refills as sessions arrive, keeping the focused
+row while its workspace is still listed, else focusing the first.
+Until a workspace is chosen Esc does not close the picker, its footer is
+"↑↓ move · Enter open", and the chip reads "no workspace", dim.
+Enter on a prompt before a workspace is chosen reopens the picker, sends
+nothing and keeps the prompt.
 
 The picker also takes a typed path, so a workspace never used before can be
 picked:
@@ -1328,8 +1336,9 @@ what it started keeps running.
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
-- **Esc closes whatever is on top,** returns focus to the input box from the
-  conversation, and interrupts the turn only when nothing is open and the
+- **Esc closes whatever is on top,** except a remote home's workspace picker
+  before a workspace is chosen ("Home"). It returns focus to the input box from
+  the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
