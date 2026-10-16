@@ -774,7 +774,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the copy approved before, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
