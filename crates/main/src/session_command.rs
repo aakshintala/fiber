@@ -22,6 +22,7 @@ use crate::{
 };
 
 thread_local! {
+    // debt: the opener reaches run_new_with through a thread-local so run_new keeps its signature for rewind.rs. Upgrade trigger: when rewind.rs passes the opener explicitly, pass it as an argument and delete OPENED and OpenedHold.
     /// The worktree's create-line opener for the `run_new` below.
     /// `run_new_with` holds it here while `run_new` runs, so the session
     /// directory's `events.jsonl` join stays in `fn run_new`: the context the
