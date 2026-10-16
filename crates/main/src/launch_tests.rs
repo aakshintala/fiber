@@ -593,3 +593,23 @@ fn the_terminal_layer_normalizes_model_before_each_dash_c() {
         assert_eq!(bare.overrides, expected, "{overrides:?}");
     }
 }
+
+#[test]
+fn rail_and_panel_defaults_match_config_table() {
+    let dir = fakes::TempDir::new("fiber-launch-defaults-table");
+    let workspace = dir.path().to_path_buf();
+    let plain = config(dir.path(), &workspace, Vec::new());
+    // The key table's built-in defaults are the source the launch
+    // description and the layout constants follow: each default must
+    // parse to its constant, so a table edit that forgets a constant
+    // fails here naming the key.
+    for (key, expected) in [
+        ("tui.rail.width", tui::DEFAULT_RAIL_SHARE),
+        ("tui.panel.width", tui::DEFAULT_PANEL_SHARE),
+    ] {
+        let (value, _) = plain
+            .get(key, None)
+            .unwrap_or_else(|| panic!("{key} has no default"));
+        assert_eq!(value.as_f64(), Some(expected), "{key}");
+    }
+}
