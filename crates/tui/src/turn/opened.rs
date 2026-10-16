@@ -72,6 +72,14 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
     if max == 0 {
         return;
     }
+    // A call with nothing to open draws exactly what main drew for it,
+    // with no view build and no wrap: the search redraw at a new width
+    // renders every closed call, and the full path costs several
+    // allocations per row there.
+    if fast_path(call) {
+        legacy_rows(&call.content, out);
+        return;
+    }
     let room = width.saturating_sub(8);
     let mut bodies: Vec<Body> = Vec::new();
     if !call.headline.is_empty() {
@@ -134,6 +142,60 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
             first_piece = false;
             out.push_text((piece, piece_target), text);
         }
+    }
+}
+
+/// Whether the call draws main's rows: no `details`, no headline, no
+/// kept ranges, never opened, no string `content` argument, and content
+/// that is not JSON. Only the search redraw reaches such a call
+/// unopened; an opened call always takes the full view.
+fn fast_path(call: &Call) -> bool {
+    call.details.is_none()
+        && call.headline.is_empty()
+        && call.kept.is_none()
+        && !call.open
+        && call
+            .arguments
+            .get("content")
+            .and_then(Value::as_str)
+            .is_none()
+        && !starts_json(&call.content)
+}
+
+/// Whether `text` parses to an object or array: its first
+/// non-whitespace character opens one. Anything else draws verbatim.
+fn starts_json(text: &str) -> bool {
+    text.chars()
+        .find(|ch| !ch.is_whitespace())
+        .is_some_and(|ch| ch == '{' || ch == '[')
+}
+
+/// Main's opened rows for content with no view: each line dim under the
+/// indent, at most twenty, then the legacy more row, or dim no output
+/// when empty (`docs/tui.md`, "Tool groups and the ledger" as main drew
+/// it). Nothing wraps and no row carries a target.
+fn legacy_rows(content: &str, out: &mut Rows) {
+    const INDENT: &str = "        ";
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        out.push((dim(format!("{INDENT}no output")), None));
+        return;
+    }
+    for line in lines.iter().take(OPENED_LINES) {
+        // Sanitised like every other view: control-free content draws
+        // exactly what main drew.
+        out.push((dim(format!("{INDENT}{}", safe_line(line))), None));
+    }
+    let more = lines.len().saturating_sub(OPENED_LINES);
+    if more > 0 {
+        let more = u64::try_from(more).unwrap_or(u64::MAX);
+        out.push((
+            dim(format!(
+                "{INDENT}… {}",
+                count(more, "more line", "more lines")
+            )),
+            None,
+        ));
     }
 }
 
