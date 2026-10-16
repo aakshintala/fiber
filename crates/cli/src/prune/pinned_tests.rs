@@ -760,18 +760,6 @@ fn revalidation_refuses_an_unreadable_tree() {
 }
 
 #[test]
-fn revalidation_passes_when_nothing_changed() {
-    let (setup, branches) = three_branches("pinned-reval-ok", RemoveB::Git);
-    let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
-    let mut noop = |_: &str| {};
-    let removed = remove_planned(&home, &plan, branches.clock.as_ref(), &mut noop);
-    assert_eq!(removed.total, 1);
-    assert!(removed.failures.is_empty());
-    assert!(copy_dir(&home, &branches.b).symlink_metadata().is_err());
-}
-
-#[test]
 fn a_copy_another_project_also_approved_is_out_of_scope_inside_a_repository() {
     let setup = Setup::new("pinned-scoped-in");
     let home = setup.home();

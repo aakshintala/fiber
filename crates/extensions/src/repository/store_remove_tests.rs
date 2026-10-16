@@ -607,9 +607,14 @@ fn remove_copy_waits_for_the_pinned_lock_in_both_modes() {
         held.lock().unwrap();
         let (_guard, attempt) = LockAttempt::take();
         let (done, finished) = mpsc::channel();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&ran);
         std::thread::scope(|s| {
             s.spawn(|| {
-                let mut check = || Ok::<(), String>(());
+                let mut check = || {
+                    counting.fetch_add(1, Ordering::SeqCst);
+                    Ok::<(), String>(())
+                };
                 done.send(Store::remove_copy(&home, &digest, dry_run, &mut check))
                     .unwrap();
             });
@@ -624,12 +629,23 @@ fn remove_copy_waits_for_the_pinned_lock_in_both_modes() {
                 "no removal while the pinned lock is held"
             );
             assert!(home.join("pinned").join(&digest).is_dir());
+            // The check has not run while the lock is held.
+            assert_eq!(ran.load(Ordering::SeqCst), 0);
             drop(held);
             let removal = Deadline::after(WAIT).recv_or_fail(&finished, "the removal");
             assert!(
                 matches!(removal, Ok(CopyRemoval::Removed)),
                 "dry_run={dry_run}"
             );
+            if dry_run {
+                assert_eq!(ran.load(Ordering::SeqCst), 0);
+            } else {
+                assert_eq!(
+                    ran.load(Ordering::SeqCst),
+                    1,
+                    "the check runs once after the pinned lock is free"
+                );
+            }
         });
         if dry_run {
             assert!(home.join("pinned").join(&digest).is_dir());
@@ -642,54 +658,6 @@ fn remove_copy_waits_for_the_pinned_lock_in_both_modes() {
             );
         }
     }
-}
-
-#[test]
-fn check_runs_once_after_the_pinned_lock_is_free() {
-    let repo = Repo::new();
-    let item = hook(&repo);
-    let digest = approved(&repo, KEY, &item);
-    let home = repo.home();
-    let held = File::options()
-        .create(true)
-        .append(true)
-        .open(home.join("pinned/.lock"))
-        .unwrap();
-    held.lock().unwrap();
-    let (_guard, attempt) = LockAttempt::take();
-    let (done, finished) = mpsc::channel();
-    let ran = Arc::new(AtomicUsize::new(0));
-    let counting = Arc::clone(&ran);
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let mut check = || {
-                counting.fetch_add(1, Ordering::SeqCst);
-                Ok::<(), String>(())
-            };
-            done.send(Store::remove_copy(&home, &digest, false, &mut check))
-                .unwrap();
-        });
-        Deadline::after(WAIT).recv_or_fail(&attempt, "the lock attempt");
-        assert!(
-            matches!(
-                Deadline::after(HELD).recv(&finished),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ),
-            "no removal while the pinned lock is held"
-        );
-        // The check has not run while the lock is held.
-        assert_eq!(ran.load(Ordering::SeqCst), 0);
-        drop(held);
-        let removal = Deadline::after(WAIT).recv_or_fail(&finished, "the removal");
-        assert!(matches!(removal, Ok(CopyRemoval::Removed)));
-    });
-    assert_eq!(ran.load(Ordering::SeqCst), 1);
-    assert!(
-        home.join("pinned")
-            .join(&digest)
-            .symlink_metadata()
-            .is_err()
-    );
 }
 
 #[test]
