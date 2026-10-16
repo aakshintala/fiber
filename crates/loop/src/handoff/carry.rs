@@ -3,7 +3,9 @@
 use std::collections::HashSet;
 
 use contract::ActionId;
-use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note, SkillLoad};
+use contract::events::{
+    ContextNudged, Control, Event, HandoffCompleted, Note, ShellCommand, SkillLoad,
+};
 use contract::provider::Input;
 use contract::shapes::Question;
 
@@ -49,6 +51,10 @@ pub(crate) struct Carry {
     /// `None` anywhere else: any other rendered event clears it, and only
     /// a `session_start` context honours it.
     pub(crate) after_opening: Option<usize>,
+    /// The `shell_command` lines written since the last turn, with their
+    /// line `seq`s, in written order: the next `turn_started` names each
+    /// one once (`docs/events.md`, `turn_started`).
+    pub(crate) shells: Vec<(u64, ShellCommand)>,
 }
 
 impl Carry {
@@ -58,6 +64,26 @@ impl Carry {
         self.after_opening.take()
     }
 
+    /// Holds a written `shell_command` line under its line `seq` for the
+    /// next `turn_started` to name.
+    pub(crate) fn hold(&mut self, seq: u64, line: &ShellCommand) {
+        self.shells.push((seq, line.clone()));
+    }
+
+    /// The held lines' `seq`s, in held order, which is `seq` order: takes
+    /// hold lines in the order the log wrote them.
+    pub(crate) fn pending(&self) -> Vec<u64> {
+        self.shells.iter().map(|(seq, _)| *seq).collect()
+    }
+
+    /// Takes the held line `seq` names, once: each held line is named by
+    /// exactly one `turn_started`. `None` when no held line has `seq`.
+    pub(crate) fn release(&mut self, seq: u64) -> Option<ShellCommand> {
+        self.shells
+            .iter()
+            .position(|(held, _)| *held == seq)
+            .map(|at| self.shells.remove(at).1)
+    }
     /// The opening message rendered: the next `session_start` context
     /// goes right after it, at index 1.
     pub(crate) fn opened(&mut self) {

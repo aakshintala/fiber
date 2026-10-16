@@ -3532,3 +3532,200 @@ fn a_durable_event_between_the_opening_and_a_context_clears_the_slot() {
     assert_eq!(user_text(&conversation[1]), "early");
     assert_eq!(user_text(&conversation[2]), "late");
 }
+
+fn sent_line(seq: u64, kind: &str, event: &Event) -> Envelope {
+    Envelope {
+        kind: kind.into(),
+        session_id: SessionId("s_test".into()),
+        ts: 1,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+fn sent_message_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text { text: text.into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: None,
+            },
+            changed_by: None,
+        }],
+    })
+}
+
+fn sent_shell(command: &str, output: &str, process: contract::shapes::Process) -> Event {
+    Event::ShellCommand(contract::events::ShellCommand {
+        command: command.into(),
+        output: output.into(),
+        artifact: None,
+        process,
+    })
+}
+
+fn exited(code: Option<i32>, signal: Option<&str>) -> contract::shapes::Process {
+    contract::shapes::Process {
+        exit_code: code,
+        signal: signal.map(str::to_owned),
+        timed_out: false,
+    }
+}
+
+fn shell_turn(seqs: &[u64]) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: seqs
+            .iter()
+            .map(|seq| InputItem::ShellCommand { seq: Seq(*seq) })
+            .collect(),
+    })
+}
+
+#[test]
+fn a_sent_shell_renders_in_the_turn_that_names_it_and_not_before() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(
+            2,
+            "shell_command",
+            &sent_shell("echo hi", "hi\n", exited(Some(0), None)),
+        ),
+        sent_line(3, "turn_started", &shell_turn(&[2])),
+    ];
+    let (conversation, _, _, carry) = super::rebuild_and_sent(
+        &lines,
+        "fake/model-1",
+        &Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(conversation.len(), 2);
+    assert_eq!(user_text(&conversation[0]), "first");
+    assert_eq!(user_text(&conversation[1]), "! echo hi\nhi");
+    assert!(
+        carry.pending().is_empty(),
+        "a named line is released, never held twice"
+    );
+}
+
+#[test]
+fn a_sent_shell_between_turns_is_absent_from_the_first_turn() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(
+            2,
+            "assistant_message_started",
+            &Event::AssistantMessageStarted(contract::events::Empty {}),
+        ),
+        sent_line(
+            3,
+            "text_completed",
+            &Event::TextCompleted(contract::events::TextCompleted {
+                text: "working".into(),
+                provider_item: None,
+            }),
+        ),
+        sent_line(
+            4,
+            "shell_command",
+            &sent_shell("echo hi", "hi\n", exited(Some(0), None)),
+        ),
+        sent_line(5, "turn_started", &shell_turn(&[4])),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 3);
+    assert_eq!(user_text(&rebuilt[0]), "first");
+    assert!(
+        matches!(&rebuilt[1], Input::Assistant { text, .. } if text == "working"),
+        "the first turn's reply reads as before: {:?}",
+        rebuilt[1]
+    );
+    assert_eq!(user_text(&rebuilt[2]), "! echo hi\nhi");
+}
+
+#[test]
+fn two_sent_shells_render_in_seq_order() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(
+            2,
+            "shell_command",
+            &sent_shell("echo b", "b\n", exited(Some(0), None)),
+        ),
+        sent_line(
+            3,
+            "shell_command",
+            &sent_shell("echo a", "a\n", exited(Some(0), None)),
+        ),
+        sent_line(4, "turn_started", &shell_turn(&[2, 3])),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 3);
+    assert_eq!(user_text(&rebuilt[1]), "! echo b\nb");
+    assert_eq!(user_text(&rebuilt[2]), "! echo a\na");
+}
+
+#[test]
+fn a_shell_item_naming_a_missing_seq_renders_nothing() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(2, "turn_started", &shell_turn(&[99])),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(user_text(&rebuilt[0]), "first");
+}
+
+#[test]
+fn a_sent_shell_shows_how_its_process_ended() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(
+            2,
+            "shell_command",
+            &sent_shell("false", "no", exited(Some(2), None)),
+        ),
+        sent_line(
+            3,
+            "shell_command",
+            &sent_shell("killed", "", exited(None, Some("SIGKILL"))),
+        ),
+        sent_line(
+            4,
+            "shell_command",
+            &sent_shell("quiet", "", exited(Some(0), None)),
+        ),
+        sent_line(5, "turn_started", &shell_turn(&[2, 3, 4])),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 4);
+    assert_eq!(user_text(&rebuilt[1]), "! false\nno\nexit 2");
+    assert_eq!(user_text(&rebuilt[2]), "! killed\nsignal SIGKILL");
+    assert_eq!(user_text(&rebuilt[3]), "! quiet");
+}
+
+#[test]
+fn a_sent_shell_never_named_stays_held() {
+    let lines = vec![
+        sent_line(1, "turn_started", &sent_message_turn("first")),
+        sent_line(
+            2,
+            "shell_command",
+            &sent_shell("echo hi", "hi\n", exited(Some(0), None)),
+        ),
+    ];
+    let (conversation, _, _, carry) = super::rebuild_and_sent(
+        &lines,
+        "fake/model-1",
+        &Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(conversation.len(), 1);
+    assert_eq!(user_text(&conversation[0]), "first");
+    assert_eq!(carry.pending(), vec![2]);
+}

@@ -1733,7 +1733,7 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
         command: "true".to_owned(),
         send: false,
     };
-    let Ok(running) = crate::shell::start(&gate, &command) else {
+    let Some(running) = crate::shell::start(&gate, &command) else {
         panic!("the driver shell passed its checks");
     };
     assert_eq!(gate.shells.running_len(), 1);

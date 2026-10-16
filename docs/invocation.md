@@ -449,10 +449,11 @@ the person typed it, and a client that can attach already controls the session
 - With `send` false, the output goes back in the command's
   `command_accepted` to the client that sent it and is never logged. The
   terminal's side panel reads git state this way.
-- With `send` true, the output is logged as `shell_command`
-  (`docs/events.md`) and joins the next turn's input, never the running turn.
-  The terminal sends it for `!command`, and sends `!!command` with `send`
-  false.
+- With `send` true, the loop writes the output as `shell_command`
+  (`docs/events.md`) when it takes the command, after it ends, and the
+  command's `command_accepted` carries no result. It joins the next turn's
+  input, never the running turn. The terminal sends it for `!command`, and
+  sends `!!command` with `send` false.
 
 Settled by
 [#148](https://github.com/aakshintala/fiber/issues/148).

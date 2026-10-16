@@ -183,7 +183,8 @@ impl Loop {
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
             | Delivery::InnerCall(_)
-            | Delivery::Cancelled => false,
+            | Delivery::Cancelled
+            | Delivery::Shell(..) => false,
         })?;
         self.deferred.remove(at)
     }

@@ -406,7 +406,7 @@ Ephemeral. Written whenever the queue changes; the latest wins.
 #### `shell_command`
 
 Durable. A command the person ran with `send` true (`docs/invocation.md`,
-`shell`). It joins the next turn's input.
+`shell`), written when the command ends. It joins the next turn's input.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -1327,7 +1327,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
-| `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
+| `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
 | `pair` | `device` (string), the paired device's name, and `token` (string), its device token, over the hub's port (`docs/invocation.md`, "Remote clients") |

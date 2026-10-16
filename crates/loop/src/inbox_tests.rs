@@ -10,7 +10,7 @@ use contract::SessionId;
 use contract::commands::Name;
 use contract::events::{
     Answer, CallStatus, Control, ExtensionExec, ExtensionLog, Interaction, InteractionRequested,
-    InteractionResolved, NamedBy, ResolvedBy,
+    InteractionResolved, NamedBy, ResolvedBy, ShellCommand,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::shapes::Process;
@@ -680,6 +680,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ExtensionLog(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
+            | Delivery::Shell(..)
             | Delivery::Cancelled => "other",
         })
         .collect()
@@ -971,4 +972,181 @@ fn a_person_name_after_rewound_is_refused_and_writes_nothing() {
         ),
         "a refused name leaves the session unpinned"
     );
+}
+
+fn shell_delivery(
+    command: &str,
+    output: &str,
+) -> (Delivery, mpsc::Receiver<contract::inbox::Answer>) {
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    (
+        Delivery::Shell(
+            ShellCommand {
+                command: command.into(),
+                output: output.into(),
+                artifact: None,
+                process: Process {
+                    exit_code: Some(0),
+                    signal: None,
+                    timed_out: false,
+                },
+            },
+            ack,
+        ),
+        rx,
+    )
+}
+
+#[test]
+fn a_sent_shell_idle_is_written_then_acked_and_starts_no_turn() {
+    let (mut looped, _log, mut watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    let (delivery, rx) = shell_delivery("echo hi", "hi\n");
+    looped.admit_idle(delivery, &mut input).unwrap();
+    assert!(input.pieces.is_empty(), "a sent shell starts no turn idle");
+    assert!(input.prompts.is_empty(), "a sent shell answers at its take");
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a sent shell is accepted with no answer"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("shell_command arrives in time")
+        .expect("the log outlives the drain")
+        .expect("the log ended before shell_command");
+    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.payload["command"], "echo hi");
+    assert_eq!(line.payload["output"], "hi\n");
+    assert_eq!(line.payload["process"]["exit_code"], 0);
+    assert!(
+        line.turn_id.is_none(),
+        "a sent shell_command carries no turn"
+    );
+    assert!(
+        line.action_id.is_none(),
+        "a sent shell_command carries no action"
+    );
+    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+    assert!(
+        looped.conversation.is_empty(),
+        "the take renders nothing into the conversation"
+    );
+}
+
+#[test]
+fn a_sent_shell_mid_turn_is_written_with_no_turn_and_queues_nothing() {
+    let (mut looped, _log, mut watched, home) = started();
+    let turn = TurnId("t_test".into());
+    let (delivery, rx) = shell_delivery("echo hi", "hi\n");
+    looped.admit_running(delivery, &turn).unwrap();
+    assert!(
+        looped.queued.is_empty(),
+        "a sent shell queues nothing mid-turn"
+    );
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a sent shell mid-turn is accepted"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("shell_command arrives in time")
+        .expect("the log outlives the drain")
+        .expect("the log ended before shell_command");
+    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.payload["command"], "echo hi");
+    assert!(
+        line.turn_id.is_none(),
+        "a sent shell_command carries no turn"
+    );
+    assert!(
+        looped.conversation.is_empty(),
+        "a mid-turn take never enters that turn's conversation"
+    );
+    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+}
+
+#[test]
+fn three_sent_shells_are_written_in_inbox_order() {
+    let (mut looped, _log, _watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    for command in ["a", "b", "c"] {
+        let (delivery, rx) = shell_delivery(command, "out\n");
+        looped.admit_idle(delivery, &mut input).unwrap();
+        assert!(
+            matches!(answered(&rx), Ok(None)),
+            "each sent shell is accepted"
+        );
+    }
+    let lines = log::read(&home.path().join("s_test")).unwrap_or_default();
+    let commands: Vec<String> = lines
+        .iter()
+        .filter(|line| line.kind == "shell_command")
+        .map(|line| line.payload["command"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(commands, ["a", "b", "c"]);
+}
+
+#[test]
+fn a_sent_shell_while_an_approval_waits_is_written_and_the_wait_goes_on() {
+    let (mut looped, _log, mut watched, home) = started();
+    let pending = RequestId("r_approval".into());
+    let turn = TurnId("t_test".into());
+    let (delivery, rx) = shell_delivery("echo hi", "hi\n");
+    let waited = looped
+        .take_while_waiting(&pending, delivery, &turn)
+        .unwrap();
+    assert!(matches!(waited, Waited::Again));
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a sent shell during an approval wait is accepted"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("shell_command arrives in time")
+        .expect("the log outlives the wait")
+        .expect("the log ended before shell_command");
+    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.payload["command"], "echo hi");
+    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+}
+
+#[test]
+fn a_sent_shell_queued_at_settle_is_written_and_accepted() {
+    let (mut looped, _log, mut watched, home) = started();
+    looped.cancel.shutdown(143);
+    let (delivery, rx) = shell_delivery("echo hi", "hi\n");
+    looped.deferred.push_back(delivery);
+    looped.settled(Ok(())).unwrap();
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a sent shell at settle is accepted"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("shell_command arrives in time")
+        .expect("the log outlives the settle")
+        .expect("the log ended before shell_command");
+    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.payload["command"], "echo hi");
+    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+}
+
+#[test]
+fn a_sent_shell_after_rewound_is_refused_and_writes_nothing() {
+    let (mut looped, _log, _watched, home) = started();
+    looped.rewound = true;
+    let mut input = TurnInput::of(Vec::new());
+    let (delivery, rx) = shell_delivery("echo hi", "hi\n");
+    looped.admit_idle(delivery, &mut input).unwrap();
+    match answered(&rx) {
+        Err(rejection) => {
+            assert_eq!(rejection.code, ErrorCode::Closing);
+            assert_eq!(rejection.message, REWOUND_CLOSING);
+        }
+        Ok(_) => panic!("a sent shell after rewound is refused"),
+    }
+    assert_eq!(saved_kinds(&home), ["session_started"]);
 }
