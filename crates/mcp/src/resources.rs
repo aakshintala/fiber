@@ -116,7 +116,7 @@ impl Resources {
         let server = slot.spec().name.clone();
         match slot.serve() {
             Served::Failed(failed) => Output {
-                error: Some(failed.error),
+                error: Some(contract::shapes::Failure::from(&failed.error)),
                 servers: failed.records,
                 ..Output::default()
             },

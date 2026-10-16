@@ -10,8 +10,9 @@ use serde_json::{Map, Value, json};
 
 use super::{Call, answer, output};
 use crate::effects::Hints;
+use crate::error::McpError;
 use crate::server_json::{CallResult, Content, Resource};
-use crate::slot::Fault;
+use crate::slot::{Death, Fault};
 use crate::test_support::WITHIN;
 
 fn arguments() -> Map<String, Value> {
@@ -500,15 +501,18 @@ fn binary_failures_report_without_failing_the_call() {
     }
 }
 
-fn died_record() -> McpServerFailed {
-    McpServerFailed {
+fn died_record() -> Death {
+    let error = McpError::ServerExited {
         server: "fx".to_owned(),
-        reason: ServerFailure::Died,
-        will_restart: true,
-        error: crate::fail::failure(
-            ErrorCode::McpServerUnavailable,
-            "The MCP server `fx` exited; Fiber restarts it on the next call.".to_owned(),
-        ),
+    };
+    Death {
+        record: McpServerFailed {
+            server: "fx".to_owned(),
+            reason: ServerFailure::Died,
+            will_restart: true,
+            error: contract::shapes::Failure::from(&error),
+        },
+        error,
     }
 }
 
@@ -608,7 +612,7 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
         incoming.extend(servers);
         let mut expected = vec![ready];
         if name == "died" {
-            expected.push(ServerRecord::Failed(died_record()));
+            expected.push(ServerRecord::Failed(died_record().record));
         }
         let out = output(call, called, incoming, &cancel());
 

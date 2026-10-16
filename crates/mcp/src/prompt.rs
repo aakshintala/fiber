@@ -255,7 +255,7 @@ impl Prompts {
             Served::Failed(failed) => Output {
                 error: Some(fail::failure(
                     ErrorCode::McpPromptFailed,
-                    not_run(server, prompt, &failed.error.message),
+                    not_run(server, prompt, &failed.error.to_string()),
                 )),
                 servers: failed.records,
                 ..Output::default()
@@ -346,13 +346,13 @@ fn output(
             out.servers = servers;
             out
         }
-        Err(Fault::Died(record)) => {
+        Err(Fault::Died(death)) => {
             let mut out = fail::failed(
                 ErrorCode::McpPromptFailed,
-                not_run(server, prompt, &record.error.message),
+                not_run(server, prompt, &death.error.to_string()),
             );
             let mut all = servers;
-            all.push(ServerRecord::Failed(record));
+            all.push(ServerRecord::Failed(death.record));
             out.servers = all;
             out
         }

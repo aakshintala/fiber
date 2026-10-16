@@ -178,7 +178,7 @@ impl McpTool {
                 )
             },
             Run::Failed(failed) => Output {
-                error: Some(failed.error),
+                error: Some(contract::shapes::Failure::from(&failed.error)),
                 servers: failed.records,
                 ..Output::default()
             },
@@ -249,10 +249,10 @@ pub(crate) fn faulted(call: &Call, fault: Fault, servers: Vec<ServerRecord>) -> 
             out.servers = servers;
             out
         }
-        Fault::Died(record) => {
-            let mut out = fail::failed(record.error.code.clone(), record.error.message.clone());
+        Fault::Died(death) => {
+            let mut out = fail::failed(death.error.code(), death.error.to_string());
             let mut all = servers;
-            all.push(ServerRecord::Failed(record));
+            all.push(ServerRecord::Failed(death.record));
             out.servers = all;
             out
         }

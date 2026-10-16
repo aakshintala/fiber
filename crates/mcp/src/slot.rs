@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
@@ -23,14 +22,11 @@ use serde::Serialize;
 
 use crate::cache::{self, Cached};
 use crate::elicit::Asker;
+use crate::error::{McpError, login_sentence};
 use crate::server::{CallError, Server};
 use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
 use serde_json::Value;
-
-pub(crate) fn login_sentence(server: &str, detail: &str) -> String {
-    format!("{detail} Run `fiber mcp login {server}` to log in.")
-}
 
 /// One server's place in the session: what [`Slot::run`] starts, calls,
 /// restarts or refuses, and what [`Slot::stop`] stops.
@@ -86,7 +82,7 @@ enum State {
     /// One death seen and its restart unused: the next call restarts.
     Down { listed: Cached },
     /// A second death, or a stop: every call fails `error`, no spawn again.
-    Dead { error: Failure },
+    Dead { error: McpError },
 }
 
 /// What [`Slot::run`] found, with the server lines the call carries.
@@ -102,7 +98,7 @@ pub(crate) enum Run {
 /// A failed [`Run`]: the call's error and the server lines it carries.
 pub(crate) struct RunFailed {
     /// The call's error.
-    pub error: Failure,
+    pub error: McpError,
     /// The lines this call observed; empty for a call that only found the
     /// server dead.
     pub records: Vec<ServerRecord>,
@@ -120,8 +116,9 @@ pub(crate) enum Fault {
     Cancelled,
     /// The server refused the call, with its message.
     Refused(String),
-    /// This call observed the death and carries its record.
-    Died(McpServerFailed),
+    /// This call observed the death and carries its record with the typed
+    /// error it was built from.
+    Died(Death),
     /// This call saw the remote session expire; nothing is recorded.
     Expired,
     /// The slot had already moved on: it was stopped or replaced, and
@@ -296,14 +293,14 @@ impl Slot {
                         return Served::Up(Arc::clone(server), records);
                     } else {
                         // It died while idle: this call is the first to see it.
-                        let record = died(&self.spec.name, !*restarted, self.spec.remote());
-                        records.push(ServerRecord::Failed(record.clone()));
+                        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+                        records.push(ServerRecord::Failed(death.record.clone()));
                         if *restarted {
                             *state = State::Dead {
-                                error: record.error.clone(),
+                                error: death.error.clone(),
                             };
                             return Served::Failed(Box::new(RunFailed {
-                                error: record.error,
+                                error: death.error,
                                 records,
                             }));
                         }
@@ -382,19 +379,19 @@ impl Slot {
                 // A failed first start is the server's one death; a failed
                 // restart is its second. A failed renewal is a death of
                 // the server it replaces, keeping the restart it held.
-                let mut record = not_started(&name, &error, timeout, false, self.spec.remote());
-                record.will_restart = !restart;
-                let failure = record.error.clone();
-                records.push(ServerRecord::Failed(record));
+                let mut death = not_started(&name, &error, timeout, false, self.spec.remote());
+                death.record.will_restart = !restart;
+                let error = death.error.clone();
+                records.push(ServerRecord::Failed(death.record));
                 *lock(&self.state) = if restart {
                     State::Dead {
-                        error: failure.clone(),
+                        error: error.clone(),
                     }
                 } else {
                     State::Down { listed }
                 };
                 Served::Failed(Box::new(RunFailed {
-                    error: failure,
+                    error,
                     records,
                 }))
             }
@@ -426,10 +423,9 @@ impl Slot {
                     | State::Down { .. }
                     | State::Dead { .. } => {
                         return Run::Failed(Box::new(RunFailed {
-                            error: crate::fail::failure(
-                                ErrorCode::McpServerUnavailable,
-                                unavailable(&self.spec.name),
-                            ),
+                            error: McpError::ServerUnavailable {
+                                server: self.spec.name.clone(),
+                            },
                             records,
                         }));
                     }
@@ -456,7 +452,7 @@ impl Slot {
             CallError::Login(detail) => Fault::Refused(login_sentence(&self.spec.name, &detail)),
             CallError::Expired => Fault::Expired,
             CallError::Gone => match self.died(server) {
-                Some(record) => Fault::Died(record),
+                Some(death) => Fault::Died(death),
                 None => Fault::Gone,
             },
         }
@@ -510,7 +506,7 @@ impl Slot {
     /// record only when the slot still runs that same server, so a death
     /// many calls see is recorded once, and a server the slot already
     /// replaced or stopped records nothing.
-    pub(crate) fn died(&self, gone: &Arc<Server>) -> Option<McpServerFailed> {
+    pub(crate) fn died(&self, gone: &Arc<Server>) -> Option<Death> {
         let mut state = lock(&self.state);
         let State::Running {
             server,
@@ -524,17 +520,17 @@ impl Slot {
         if !Arc::ptr_eq(server, gone) {
             return None;
         }
-        let record = died(&self.spec.name, !*restarted, self.spec.remote());
+        let death = died(&self.spec.name, !*restarted, self.spec.remote());
         *state = if *restarted {
             State::Dead {
-                error: record.error.clone(),
+                error: death.error.clone(),
             }
         } else {
             State::Down {
                 listed: listed.clone(),
             }
         };
-        Some(record)
+        Some(death)
     }
 
     /// Takes the slot's start lease, waiting while another attempt holds
@@ -598,10 +594,9 @@ impl Slot {
         let error = match &*state {
             State::Dead { error } => error.clone(),
             State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => {
-                crate::fail::failure(
-                    ErrorCode::McpServerUnavailable,
-                    unavailable(&self.spec.name),
-                )
+                McpError::ServerUnavailable {
+                    server: self.spec.name.clone(),
+                }
             }
         };
         let previous = std::mem::replace(&mut *state, State::Dead { error });
@@ -617,35 +612,53 @@ fn names(listed: &[ListedTool]) -> HashSet<String> {
     listed.iter().map(|tool| tool.name.clone()).collect()
 }
 
-/// The record of a server that exited: Fiber restarts it on the next call
+/// A server death: the contract record the call carries, and the typed
+/// error the record was built from, so a death and a restart keep one
+/// error in both forms.
+pub(crate) struct Death {
+    /// The `mcp_server_failed` record.
+    pub record: McpServerFailed,
+    /// The typed error the record was built from.
+    pub error: McpError,
+}
+
+/// The death of a server that exited: Fiber restarts it on the next call
 /// when `will_restart`, and otherwise its tools fail for the session. A
 /// remote server stopped answering instead of exiting.
-fn died(server: &str, will_restart: bool, remote: bool) -> McpServerFailed {
-    let message = if remote {
+fn died(server: &str, will_restart: bool, remote: bool) -> Death {
+    let error = if remote {
         if will_restart {
-            format!(
-                "The MCP server `{server}` stopped answering; Fiber reconnects on the next call."
-            )
+            McpError::ServerStoppedAnswering {
+                server: server.to_owned(),
+            }
         } else {
-            format!(
-                "The MCP server `{server}` stopped answering again; its tools fail until the next session."
-            )
+            McpError::ServerStoppedAnsweringAgain {
+                server: server.to_owned(),
+            }
         }
     } else if will_restart {
-        format!("The MCP server `{server}` exited; Fiber restarts it on the next call.")
+        McpError::ServerExited {
+            server: server.to_owned(),
+        }
     } else {
-        format!("The MCP server `{server}` exited again; its tools fail until the next session.")
+        McpError::ServerExitedAgain {
+            server: server.to_owned(),
+        }
     };
-    McpServerFailed {
-        server: server.to_owned(),
-        reason: ServerFailure::Died,
-        will_restart,
-        error: crate::fail::failure(ErrorCode::McpServerUnavailable, message),
+    Death {
+        record: McpServerFailed {
+            server: server.to_owned(),
+            reason: ServerFailure::Died,
+            will_restart,
+            error: Failure::from(&error),
+        },
+        error,
     }
 }
 
 /// The message of a server that is gone: no spawn was tried, or its start
-/// failed, or it has since exited.
+/// failed, or it has since exited. Used by the call sites `tool.rs` and
+/// `prompt.rs` until they pass a case; deleted then.
 pub(crate) fn unavailable(server: &str) -> String {
     format!("The MCP server `{server}` did not start, or it has since exited.")
 }

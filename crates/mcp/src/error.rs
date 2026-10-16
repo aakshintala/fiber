@@ -53,8 +53,9 @@ pub(crate) enum McpError {
     },
     /// The remote server needs a usable OAuth login.
     #[error(
-        "{} failed to start: {detail} Run `fiber mcp login {server}` to log in.",
-        start_subject(.server, *.required)
+        "{} failed to start: {}",
+        start_subject(.server, *.required),
+        login_sentence(.server, .detail)
     )]
     NotLoggedIn {
         server: String,
@@ -303,6 +304,13 @@ fn start_advice(remote: bool) -> &'static str {
     } else {
         "Check its `command` and `args` under `mcp.servers` in your configuration."
     }
+}
+
+/// The sentence a login failure carries: the transport's detail, then
+/// the login to run. Shared by the start case and the mid-call refusal,
+/// so the two cannot drift.
+pub(crate) fn login_sentence(server: &str, detail: &str) -> String {
+    format!("{detail} Run `fiber mcp login {server}` to log in.")
 }
 
 /// The `--secret` key of a stored name: what follows its last dot.
