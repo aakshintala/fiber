@@ -434,10 +434,7 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
     assert!(!hub.lock().router.disposed, "seal alone does not dispose");
     let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
-    assert!(
-        recorder.events().is_empty(),
-        "nothing flushes after seal"
-    );
+    assert!(recorder.events().is_empty(), "nothing flushes after seal");
     assert!(
         hub.lock().router.emitter.is_none(),
         "no emitter is installed after seal"
