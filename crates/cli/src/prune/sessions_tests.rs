@@ -64,6 +64,7 @@ impl Setup {
     fn select(&self, cascade: bool) -> Selected {
         select(
             &self.home(),
+            &log::started_sessions(&self.home()),
             &self.workspace(),
             Some(older_than()),
             cascade,
@@ -357,7 +358,14 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
         None,
         old_ts(),
     );
-    let selected = select(&home, &workspace, Some(older_than()), false, wall());
+    let selected = select(
+        &home,
+        &log::started_sessions(&home),
+        &workspace,
+        Some(older_than()),
+        false,
+        wall(),
+    );
     assert_eq!(
         selected
             .deletes

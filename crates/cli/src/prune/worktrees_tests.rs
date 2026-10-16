@@ -129,7 +129,7 @@ fn clock() -> std::sync::Arc<fakes::clock::FakeClock> {
 }
 
 fn select(setup: &Setup, force: bool) -> Planned {
-    super::select(&setup.home(), &setup.workspace(), force, false, wall())
+    super::select(&setup.home(), &log::started_sessions(&setup.home()), &setup.workspace(), force, false, wall())
 }
 
 fn removable(row: &WorktreeRow) -> (&str, Option<&str>) {
@@ -492,7 +492,7 @@ fn dry_run_drops_each_lock_before_output() {
     let setup = Setup::new("cli-prune-wt-dry-run-locks");
     let dir = setup.worktree("s_00000000000000e1");
     let user = setup.user("s_00000000000000a1", &dir);
-    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    let planned = super::select(&setup.home(), &log::started_sessions(&setup.home()), &setup.workspace(), false, true, wall());
     assert_eq!(planned.removals.len(), 1);
     assert!(
         planned.locks.is_empty(),
@@ -515,7 +515,7 @@ fn dry_run_still_skips_a_running_worktree() {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
     };
-    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    let planned = super::select(&setup.home(), &log::started_sessions(&setup.home()), &setup.workspace(), false, true, wall());
     assert!(planned.removals.is_empty());
     assert!(
         planned
@@ -579,7 +579,7 @@ fn age_comes_from_the_directory_mtime() {
         .unwrap()
         .set_modified(ahead)
         .unwrap();
-    let planned = super::select(&setup.home(), &setup.workspace(), false, false, wall());
+    let planned = super::select(&setup.home(), &log::started_sessions(&setup.home()), &setup.workspace(), false, false, wall());
     assert_eq!(planned.rows.len(), 2);
     assert!(
         line(&planned.rows[0]).contains("  12d  "),
