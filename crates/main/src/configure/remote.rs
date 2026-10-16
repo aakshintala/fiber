@@ -364,19 +364,8 @@ impl Seam {
         if !workspace.is_absolute() || !path.is_absolute() {
             return Err(invalid());
         }
-        if path.file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
-            return Ok(());
-        }
         let (_, project) = cli::project_of(&self.home, workspace)?;
-        let project = self.home.join("projects").join(project.as_str());
-        let paths = [
-            self.home.join("config.json"),
-            project.join("config.json"),
-            workspace.join(".fiber/config.json"),
-            self.home.join("rules"),
-            project.join("rules"),
-        ];
-        if paths.iter().any(|allowed| allowed == path) {
+        if config::is_editable_config_path(&self.home, workspace, &project, path) {
             Ok(())
         } else {
             Err(invalid())
