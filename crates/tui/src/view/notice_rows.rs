@@ -17,6 +17,9 @@ use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
 
+/// The overlay's preferred content width (`docs/tui.md`, "Overlays").
+const PREFER: u16 = 71;
+
 /// Draws the notice rows bottom-up from `bottom`, moving it up past
 /// them: at most the rows above `area.y`, the lowest rows kept, so rows
 /// past the top are dropped from the top. Nothing at width zero.
@@ -92,7 +95,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
     // The text wraps at the preferred width first and the overlay
     // shrinks to what the wrapped content needs (`docs/tui.md`,
     // "Overlays").
-    let room = usize::from(71u16.saturating_sub(4))
+    let room = usize::from(PREFER.saturating_sub(4))
         .min(usize::from(area.width.saturating_sub(4)))
         .max(1);
     let mut body = Vec::new();
@@ -119,7 +122,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
         close: Some(TargetId::CloseOverlay),
         body,
         footer: Some(overlay::legend(&[("Esc", "closes")])),
-        prefer: 71,
+        prefer: PREFER,
     };
     overlay::draw(buf, area, &framed, Place::Centre, targets);
 }

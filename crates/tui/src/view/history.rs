@@ -7,9 +7,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::completions::window;
 use super::notice_rows::wrap_runs;
-use crate::completion_rows::{Completions, Rows};
+use crate::completion_rows::Completions;
 use crate::markdown::Role;
 use crate::mouse::{Target, TargetId};
 use crate::slash;
@@ -106,15 +105,63 @@ fn body(completions: &Completions, wrap: usize, fit: usize) -> Vec<Row> {
         return body;
     }
     // The selected row counts the query line, so the entry index is one
-    // less; the window keeps the selection in view (`docs/tui.md`,
-    // "The input box").
+    // less. The window counts wrapped rows, not matches: one match can
+    // take several rows, and the frame drops body rows from the bottom,
+    // so counting matches lets the matches above push the barred one
+    // out. The window keeps the selected match's rows in view
+    // (`docs/tui.md`, "The input box").
     let selected = completions.selected.unwrap_or(1).saturating_sub(1);
-    let (at, take) = window(
-        selected.min(entries.len().saturating_sub(1)),
-        entries.len(),
-        fit,
-    );
+    let sel = selected.min(entries.len().saturating_sub(1));
     let focused = completions.selected.map(|row| row.saturating_sub(1));
+    let heights: Vec<usize> = entries
+        .iter()
+        .map(|entry| {
+            entry_rows(entry, &completions.query, false, wrap)
+                .len()
+                .max(1)
+        })
+        .collect();
+    let Some(sel_height) = heights.get(sel).copied() else {
+        return body;
+    };
+    if fit == 0 {
+        return body;
+    }
+    if sel_height > fit {
+        // A selected entry taller than the room draws its first rows
+        // and the other entries drop out.
+        let Some(entry) = entries.get(sel) else {
+            return body;
+        };
+        let mut rows = entry_rows(entry, &completions.query, Some(sel) == focused, wrap);
+        rows.truncate(fit);
+        body.extend(rows);
+        return body;
+    }
+    let mut at = sel;
+    let mut take = 1usize;
+    let mut used = sel_height;
+    while at > 0 {
+        let Some(prev) = heights.get(at.saturating_sub(1)).copied() else {
+            break;
+        };
+        if used.saturating_add(prev) > fit {
+            break;
+        }
+        at -= 1;
+        used = used.saturating_add(prev);
+        take = take.saturating_add(1);
+    }
+    while at.saturating_add(take) < entries.len() {
+        let Some(next) = heights.get(at.saturating_add(take)).copied() else {
+            break;
+        };
+        if used.saturating_add(next) > fit {
+            break;
+        }
+        used = used.saturating_add(next);
+        take = take.saturating_add(1);
+    }
     for (n, entry) in entries.iter().skip(at).take(take).enumerate() {
         body.extend(entry_rows(
             entry,
@@ -135,9 +182,6 @@ pub(super) fn draw(
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) -> Rect {
-    if !matches!(completions.rows, Rows::Search(_)) {
-        return Rect::new(area.x, area.y, 0, 0);
-    }
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need. The
     // body holds what fits below the chrome: two edges, two pad rows,

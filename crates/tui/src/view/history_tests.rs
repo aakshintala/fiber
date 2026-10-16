@@ -346,6 +346,28 @@ fn narrow_areas_keep_the_forty_column_floor() {
 }
 
 #[test]
+fn wrapped_matches_before_a_late_selection_keep_the_selection() {
+    // Each match wraps to two rows at 40 columns, so the window must
+    // count rows, not matches: the matches above the late selection
+    // must not push its barred rows out of the frame.
+    let prompts: Vec<String> = (1..=8)
+        .map(|n| format!("fix {n} {}", "word ".repeat(10)))
+        .collect();
+    let refs: Vec<&str> = prompts.iter().map(String::as_str).collect();
+    let mut app = searching(40, 20, &refs, "fix");
+    for _ in 0..7 {
+        press(&mut app, Key::Down);
+    }
+    let completions = panel(&app);
+    assert_eq!(completions.selected, Some(8));
+    let (buf, _, _) = drawn(&completions, 40, 20);
+    let shown = crate::view::text(&buf);
+    let bars = barred(&buf);
+    assert!(!bars.is_empty(), "the selection shows: {shown}");
+    assert!(row_text(&buf, 40, bars[0]).contains("fix 1"), "{shown}");
+}
+
+#[test]
 fn down_past_the_end_holds_the_selection() {
     let mut app = searching(80, 24, &["fix one", "fix two"], "fix");
     for _ in 0..5 {
