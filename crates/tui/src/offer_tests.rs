@@ -1103,15 +1103,31 @@ fn the_diff_colours_draw_on_the_buffer() {
     let marker = row_with(&buf, "the declaration changed", 80);
     let cell = &buf[(2, marker)];
     assert_eq!(cell.fg, Role::Muted.color(), "marker not dim");
+    // The indent, then the dim gutter, then the hunk.
     let hunk = row_with(&buf, "@@ -1 +1 @@", 80);
     assert!(row_text(&buf, hunk, 80).contains("@@ -1 +1 @@"));
-    assert_eq!(buf[(4, hunk)].fg, Role::Muted.color(), "@@ not dim");
+    let gutter = &buf[(4, hunk)];
+    assert_eq!(gutter.fg, Role::Muted.color(), "gutter not dim");
+    assert!(gutter.modifier.contains(Modifier::DIM), "gutter not dim");
+    let head = &buf[(6, hunk)];
+    assert_eq!(head.fg, Role::Muted.color(), "@@ not dim");
+    assert!(head.modifier.contains(Modifier::DIM), "@@ not dim");
+    // The pair differs wholly, so each line draws reversed in its
+    // colour after its gutter.
     let removed = row_with(&buf, "-old()", 80);
     assert!(row_text(&buf, removed, 80).contains("-old()"));
-    assert_eq!(buf[(4, removed)].fg, Role::Removed.color(), "- not removed");
+    for x in 6..12 {
+        let cell = &buf[(x, removed)];
+        assert_eq!(cell.fg, Role::Removed.color(), "- not removed");
+        assert!(cell.modifier.contains(Modifier::REVERSED), "- not marked");
+    }
     let added = row_with(&buf, "+new()", 80);
     assert!(row_text(&buf, added, 80).contains("+new()"));
-    assert_eq!(buf[(4, added)].fg, Role::Added.color(), "+ not added");
+    for x in 6..12 {
+        let cell = &buf[(x, added)];
+        assert_eq!(cell.fg, Role::Added.color(), "+ not added");
+        assert!(cell.modifier.contains(Modifier::REVERSED), "+ not marked");
+    }
 }
 
 #[test]
