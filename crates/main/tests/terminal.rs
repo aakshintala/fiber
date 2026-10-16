@@ -1116,53 +1116,14 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     // wait for the edge at the panel columns and the whole-word `cost` label
     // before snapshotting, never a torn frame. A conversation border also
     // ends in `▀`, so the check pins the edge to the panel: one blank column,
-    // then the edge. `cost on subscription` draws without the row, so its
-    // `cost` prefix does not count.
+    // then the edge.
     run.wait_screen("the card drawn whole", |grid| {
         let n = usize::from(panel);
         let (width, _) = grid.size();
         let Some(left) = width.checked_sub(panel) else {
             return false;
         };
-        let settled = grid.rows.iter().enumerate().any(|(row, _)| {
-            let Some(y) = u16::try_from(row).ok() else {
-                return false;
-            };
-            (left..width.saturating_sub(3)).any(|x| {
-                // Four cells spell `cost`: `x + 3` stays below `width`, so
-                // no cell read leaves the grid.
-                let spells = ["c", "o", "s", "t"]
-                    .iter()
-                    .zip(0..4u16)
-                    .all(|(want, dx)| grid.cell(x + dx, y).symbol == *want);
-                // A whole word: the cells around the match hold no word char.
-                let before_ok = x == 0
-                    || grid
-                        .cell(x - 1, y)
-                        .symbol
-                        .chars()
-                        .last()
-                        .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-                let after_ok = x + 4 >= width
-                    || grid
-                        .cell(x + 4, y)
-                        .symbol
-                        .chars()
-                        .next()
-                        .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-                // The label ends there: the subscription label continues
-                // ` on subscription`, with its value always after it, so
-                // sixteen cells fit while the row is the subscription one;
-                // `&&` short-circuits the cell reads otherwise.
-                let continued = width - x >= 20
-                    && " on subscription"
-                        .chars()
-                        .zip(4..20u16)
-                        .all(|(want, dx)| grid.cell(x + dx, y).symbol == want.to_string());
-                spells && before_ok && after_ok && !continued
-            })
-        });
-        settled
+        support::session_cost_drawn(grid, left)
             && grid.rows.iter().any(|row| {
                 let cells: Vec<char> = row.chars().collect();
                 cells.len() == 160
