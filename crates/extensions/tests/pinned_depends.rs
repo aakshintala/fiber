@@ -470,6 +470,23 @@ fn hold_one_slice<T>(returned: &mpsc::Receiver<T>) {
     panic!("the stall bound never passed a slice");
 }
 
+/// Receives while proving the test's own progress: a bump before every
+/// short poll, so a worker descheduled after a release is never mistaken
+/// for a stall. Only `hold_one_slice` stays silent.
+fn recv_bumping<T>(rx: &mpsc::Receiver<T>, waited_for: &str) -> T {
+    for _ in 0..POLLS {
+        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+        match fakes::Deadline::after(POLL).recv(rx) {
+            Ok(value) => return value,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the sender for {waited_for} hung up")
+            }
+        }
+    }
+    panic!("never received {waited_for}");
+}
+
 #[test]
 fn git_progress_re_arms_the_stall_bound() {
     let (release, gate) = mpsc::channel::<()>();
@@ -491,11 +508,11 @@ fn git_progress_re_arms_the_stall_bound() {
         finished.send(value).unwrap();
     });
     for _ in 0..PACES {
-        fakes::Deadline::after(OUTER).recv_or_fail(&parked, "the paced work to park");
+        recv_bumping(&parked, "the paced work to park");
         hold_one_slice(&returned);
         release.send(()).unwrap();
     }
-    let value = fakes::Deadline::after(OUTER).recv_or_fail(&returned, "the paced answer");
+    let value = recv_bumping(&returned, "the paced answer");
     assert_eq!(value, 42);
 }
 
@@ -565,6 +582,9 @@ fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
     // `hold_one_slice`.
     let mut value = None;
     for _ in 0..POLLS {
+        // The store's git work between fetches is live: the test proves
+        // progress on every poll, outside the holds.
+        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
         // A hangup here means the store dropped its origin when the
         // approval ended: no more fetches, so the answer is next.
         if let Ok(()) = fakes::Deadline::after(POLL).recv(&parked) {
