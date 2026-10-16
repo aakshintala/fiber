@@ -61,7 +61,7 @@ fn malformed_missing_or_unreadable_side_files_add_nothing() {
     }
     fs::write(&path, b"\xff\n").unwrap();
     assert_eq!(read(&path, LIMIT), None);
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
     assert_eq!(read(&path, LIMIT), None);
 }
 

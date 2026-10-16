@@ -580,15 +580,16 @@ fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &
 }
 
 fn details(command: &str, process: Option<&Process>) -> Value {
-    let mut details = json!({"command": command});
+    let mut details = Map::new();
+    details.insert("command".into(), json!(command));
     if let Some(process) = process {
         if let Some(code) = process.exit_code {
-            details["exit_code"] = json!(code);
+            details.insert("exit_code".into(), json!(code));
         } else if let Some(signal) = &process.signal {
-            details["signal"] = json!(signal);
+            details.insert("signal".into(), json!(signal));
         }
     }
-    details
+    Value::Object(details)
 }
 
 /// The result of a finished command: `extra`, when the job could not be
