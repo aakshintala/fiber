@@ -282,9 +282,9 @@ fn an_unreadable_file_is_unreadable() {
 
 #[test]
 fn each_refusal_maps_to_its_stable_code() {
-    use std::io::{Error, ErrorKind};
-    let unreadable = || Refusal::Unreadable(Error::new(ErrorKind::Other, "denied"));
-    let root = || Refusal::RootUnreadable(Error::new(ErrorKind::Other, "looped"));
+    use std::io::Error;
+    let unreadable = || Refusal::Unreadable(Error::other("denied"));
+    let root = || Refusal::RootUnreadable(Error::other("looped"));
     assert_eq!(Refusal::Outside.code(), ErrorCode::InvalidArguments);
     assert_eq!(Refusal::NotRegular.code(), ErrorCode::InvalidArguments);
     assert_eq!(Refusal::NoArtifacts.code(), ErrorCode::NotFound);

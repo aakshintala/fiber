@@ -69,7 +69,7 @@ fn page_at(
     // Past the end first: `checked_sub` leaves `None` there, while an
     // offset at the end answers an empty page below.
     let rest = size.checked_sub(offset).ok_or(PageError::Past)?;
-    let seek = offset.checked_sub(OVERLAP).unwrap_or(0);
+    let seek = offset.saturating_sub(OVERLAP);
     let read_end = offset
         .checked_add(BYTES)
         .and_then(|capped| capped.checked_add(OVERLAP))
@@ -239,10 +239,7 @@ fn lead_len(byte: u8) -> Option<u64> {
 /// Larger than memory on every platform Fiber builds for: unreachable,
 /// carried as `Io` so the shape stays total with no wildcard arm.
 fn too_big() -> PageError {
-    PageError::Io(io::Error::new(
-        io::ErrorKind::Other,
-        "the page does not fit memory",
-    ))
+    PageError::Io(io::Error::other("the page does not fit memory"))
 }
 
 /// `artifact_page`: one page of a file under the session's `artifacts/`.

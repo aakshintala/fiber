@@ -325,7 +325,7 @@ fn two_hundred_lines_page_to_the_end_in_four_pages() {
     let mut offset = 0;
     let mut text = String::new();
     let mut pages = 0;
-    let mut size = 0;
+    let mut size;
     loop {
         let found = page_at_path(&path, offset).unwrap();
         size = found.size;
