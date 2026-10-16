@@ -189,7 +189,7 @@ fn a_turn_end_shares_the_branch_edge_and_is_not_held_during_a_flight() {
 }
 
 #[test]
-fn rejections_stop_queries_until_reattach() {
+fn matching_rejections_mark_query_refused_until_reattach() {
     for hub in [false, true] {
         let mut app = attached();
         let id = first(&mut app);
@@ -206,6 +206,7 @@ fn rejections_stop_queries_until_reattach() {
             session_line("command_rejected", payload)
         };
         assert!(queries(app.on_line(line)).is_empty());
+        assert!(matches!(app.panel_state.quota.ask, super::Ask::Refused));
         assert!(app.quota_focus().is_none());
         app.on_line(live(SESSION, json!({"state": "streaming"})));
         assert!(queries(app.on_line(live(SESSION, json!({"state": "idle"})))).is_empty());
