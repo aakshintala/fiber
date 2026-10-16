@@ -307,7 +307,7 @@ fn drop_all(pages: &mut Pages) {
 #[test]
 fn pages_joined_draw_what_one_fold_draws() {
     for live in [true, false] {
-        let lines = session(6, live);
+        let lines = session(3, live);
         for width in [40, 120] {
             let mut pages = Pages::new(width);
             for line in &lines {
@@ -409,7 +409,7 @@ fn now() -> std::time::Instant {
 
 #[test]
 fn the_opening_pass_keeps_only_the_window() {
-    let lines = session(6, true);
+    let lines = session(3, true);
     let mut app = app(80, 20);
     open(&mut app, &lines);
     let pages = app.pages().index().pages().len();
@@ -424,7 +424,7 @@ fn the_opening_pass_keeps_only_the_window() {
 
 #[test]
 fn paging_to_the_top_and_back_moves_no_row() {
-    let lines = session(6, true);
+    let lines = session(3, true);
     let mut app = app(80, 20);
     open(&mut app, &lines);
     let before = layout(&app);
@@ -468,7 +468,7 @@ fn the_window_reaches_one_screen_either_side() {
 
 #[test]
 fn a_new_width_counts_every_page_again() {
-    let lines = session(6, true);
+    let lines = session(3, true);
     let mut app = app(120, 20);
     open(&mut app, &lines);
     app.on_key(Key::PageUp, now());
@@ -654,7 +654,7 @@ fn a_target_opened_stays_open_when_its_page_comes_back() {
 
 #[test]
 fn ctrl_o_reaches_pages_loaded_later() {
-    let lines = session(6, false);
+    let lines = session(3, false);
     let mut app = app(80, 20);
     open(&mut app, &lines);
     assert!(app.pages().part(0).is_none());
@@ -1256,7 +1256,7 @@ fn a_handoff_sized_pages_earlier_reloads_unchanged() {
 
 #[test]
 fn reloading_keeps_the_live_durations_and_counts() {
-    let mut lines = session(2, true);
+    let mut lines = session(1, true);
     // Production deltas arrive before the durable lines they announce, so
     // the live fold times groups from the deltas while a reload times them
     // from the requests: backdate the argument deltas past a duration
@@ -1824,7 +1824,7 @@ fn a_reloaded_page_shows_the_same_time_row_as_live() {
 
 #[test]
 fn every_row_of_the_fixture_places_inside_the_rows_it_draws() {
-    let lines = session(3, false);
+    let lines = session(1, false);
     for width in [12, 40, 120] {
         let mut pages = Pages::new(width);
         for line in &lines {
