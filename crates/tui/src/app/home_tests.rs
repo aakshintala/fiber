@@ -297,7 +297,7 @@ fn home_screen_header_says_no_sessions_yet_without_live_rows() {
     let screen = app.home_screen().unwrap();
     assert!(screen.header.counts.is_empty());
     assert_eq!(screen.header.spend, None);
-    assert!(!screen.rows.is_empty());
+    assert!(!screen.empty);
 }
 
 #[test]
