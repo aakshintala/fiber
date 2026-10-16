@@ -241,7 +241,9 @@ impl App {
         let row = match spot {
             Spot::Entry(row) | Spot::Stop(row) => Some(row),
             Spot::Toggle => None,
-            Spot::Workspace
+            Spot::Start(_)
+            | Spot::More(_)
+            | Spot::Workspace
             | Spot::Worktree
             | Spot::Model
             | Spot::Thinking

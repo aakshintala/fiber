@@ -634,6 +634,7 @@ impl App {
                 Effect::None
             }
             Spot::Question => Effect::None,
+            Spot::Start(_) | Spot::More(_) => Effect::None,
             Spot::Quit(_) => Effect::None,
         }
     }
@@ -761,6 +762,8 @@ impl App {
             }
             Spot::Stop(_)
             | Spot::Toggle
+            | Spot::Start(_)
+            | Spot::More(_)
             | Spot::Workspace
             | Spot::Worktree
             | Spot::Model

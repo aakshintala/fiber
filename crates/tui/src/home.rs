@@ -26,6 +26,10 @@ pub(crate) enum Spot {
     /// The scope toggle heading the list: clicking it, or Enter on it,
     /// shows every project or only the launch one.
     Toggle,
+    /// Start a session in the section's workspace.
+    Start(u64),
+    /// Reveal the remaining exited sessions in this project.
+    More(u64),
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
     /// The new worktree switch: clicking it, or Enter on it while
@@ -59,6 +63,8 @@ impl Spot {
             Spot::Entry(_)
             | Spot::Stop(_)
             | Spot::Toggle
+            | Spot::Start(_)
+            | Spot::More(_)
             | Spot::Pick(_)
             | Spot::Keep
             | Spot::Question
@@ -343,7 +349,7 @@ pub(crate) struct Row {
     pub(crate) clients: u32,
     /// What a refusal says about the row, in place of its detail.
     pub(crate) note: Option<String>,
-    /// Its latest status; none for an unreadable row or a `recent` row.
+    /// Its latest status; none for an unreadable row.
     pub(crate) status: Option<SessionStatus>,
 }
 
@@ -356,11 +362,110 @@ pub(crate) struct Sessions {
     next_key: u64,
     /// The scope toggle showed every project: unscoped.
     show_all: bool,
+    /// Projects whose loaded exited rows are expanded.
+    expanded: std::collections::BTreeSet<String>,
     /// The last `recent` answer carried rows: an older page may exist.
     more: bool,
 }
 
+/// One project's live sessions and loaded exited sessions, in display order.
+pub(crate) struct Section<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) name: String,
+    pub(crate) start: Option<u64>,
+    pub(crate) live: Vec<&'a Row>,
+    pub(crate) exited: Vec<&'a Row>,
+    pub(crate) shown_exited: usize,
+}
+
+impl Section<'_> {
+    /// Loaded exited rows that the collapsed section hides.
+    pub(crate) fn hidden(&self) -> usize {
+        self.exited.len() - self.shown_exited
+    }
+}
+
 impl Sessions {
+    /// All rows, feed first and then recent, without a project filter.
+    pub(crate) fn all(&self) -> Vec<&Row> {
+        self.feed.iter().chain(self.recent.iter()).collect()
+    }
+
+    /// Reveal every loaded exited row of this project for this terminal run.
+    pub(crate) fn expand(&mut self, project: &str) {
+        self.expanded.insert(project.to_owned());
+    }
+
+    /// Project sections: launch first, live projects in feed order, exited-only
+    /// projects by their earliest loaded start, with loaded order breaking ties.
+    pub(crate) fn sections(&self, launch_project: &str) -> Vec<Section<'_>> {
+        let mut sections: Vec<Section<'_>> = Vec::new();
+        for row in self.all() {
+            if sections
+                .iter()
+                .any(|section| section.project == row.project)
+            {
+                continue;
+            }
+            let live = self
+                .feed
+                .iter()
+                .filter(|r| r.project == row.project && r.left != Some(Left::Exited))
+                .collect();
+            let exited: Vec<&Row> = self
+                .feed
+                .iter()
+                .rev()
+                .filter(|r| r.project == row.project && r.left == Some(Left::Exited))
+                .chain(self.recent.iter().filter(|r| r.project == row.project))
+                .collect();
+            let shown_exited = if self.expanded.contains(&row.project) {
+                exited.len()
+            } else {
+                exited.len().min(3)
+            };
+            let start = self
+                .all()
+                .into_iter()
+                .find(|r| r.project == row.project && !r.workspace.is_empty())
+                .map(|r| r.key);
+            let name = std::path::Path::new(&row.workspace)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&row.project)
+                .to_owned();
+            sections.push(Section {
+                project: &row.project,
+                name,
+                start,
+                live,
+                exited,
+                shown_exited,
+            });
+        }
+        sections.sort_by_key(|section| {
+            let category = if section.project == launch_project {
+                0
+            } else if !section.live.is_empty() {
+                1
+            } else {
+                2
+            };
+            let started = if category == 2 {
+                section
+                    .exited
+                    .iter()
+                    .filter_map(|r| r.status.as_ref().map(|s| s.started))
+                    .min()
+            } else {
+                None
+            };
+            (category, started.is_none(), started)
+        });
+        sections
+    }
+
     /// Folds a `session_status` into the rows: an id already listed keeps
     /// its position and its key, a recent row moves into the feed, and a
     /// new id goes after the rows already there. A status means the
@@ -686,7 +791,7 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                         delegates,
                         clients,
                         note: None,
-                        status: None,
+                        status,
                     })
                 })
                 .collect()

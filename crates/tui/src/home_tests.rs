@@ -75,6 +75,193 @@ fn recent_row(session: &str, name: &str, how: &str, status: Option<Value>) -> Va
     row
 }
 
+fn section_row(id: &str, project: &str, started: u64) -> Row {
+    from_status(&envelope(
+        id,
+        json!({"state": "idle", "project": project,
+        "workspace": format!("/work/{project}"), "started": started}),
+    ))
+}
+
+#[test]
+fn sections_put_the_launch_project_first_then_first_start_order() {
+    let mut sessions = Sessions::default();
+    for (id, project) in [("s_a", "other"), ("s_b", PROJECT), ("s_c", "third")] {
+        sessions.status(section_row(id, project, 0));
+    }
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(
+        sections.iter().map(|s| s.project).collect::<Vec<_>>(),
+        [PROJECT, "other", "third"]
+    );
+    assert_eq!(sections[1].name, "other");
+    assert_eq!(sections[1].start, Some(sections[1].live[0].key));
+    assert_eq!(
+        sessions
+            .sections("absent")
+            .iter()
+            .map(|s| s.project)
+            .collect::<Vec<_>>(),
+        ["other", PROJECT, "third"]
+    );
+    assert_eq!(sessions.all().len(), 3);
+}
+
+#[test]
+fn an_exited_only_project_sorts_after_live_projects_by_earliest_started() {
+    let mut sessions = Sessions::default();
+    for (id, project, started) in [
+        ("s_a", "late", 3),
+        ("s_b", "early", 1),
+        ("s_c", "live", 9),
+        ("s_d", "tie", 3),
+    ] {
+        sessions.status(section_row(id, project, started));
+    }
+    for id in ["s_a", "s_b", "s_d"] {
+        sessions.left(&SessionId(id.into()), Left::Exited);
+    }
+    let mut missing = section_row("s_e", "missing", 0);
+    missing.status = None;
+    sessions.status(missing);
+    sessions.left(&SessionId("s_e".into()), Left::Exited);
+    assert_eq!(
+        sessions
+            .sections("absent")
+            .iter()
+            .map(|s| s.project)
+            .collect::<Vec<_>>(),
+        ["live", "early", "late", "tie", "missing"]
+    );
+    assert_eq!(sessions.sections("late")[0].project, "late");
+}
+
+#[test]
+fn a_crashed_feed_row_is_live_in_counts_and_spend() {
+    let mut sessions = Sessions::default();
+    for (id, spend) in [
+        ("s_a", 1.35),
+        ("s_b", 1.10),
+        ("s_c", 0.05),
+        ("s_d", 0.42),
+        ("s_e", 1.0),
+    ] {
+        let mut row = section_row(id, PROJECT, 0);
+        row.spend = spend;
+        sessions.status(row);
+    }
+    sessions.left(&SessionId("s_c".into()), Left::Crashed);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].live.len(), 5);
+    assert_eq!(
+        crate::format::money(sections[0].live.iter().map(|r| r.spend).sum()),
+        "$3.92"
+    );
+    assert!(sections[0].exited.is_empty());
+}
+
+#[test]
+fn a_feed_row_that_left_exited_joins_the_exited_rows_newest_first() {
+    let mut sessions = Sessions::default();
+    for id in ["s_a", "s_b", "s_c"] {
+        sessions.status(section_row(id, PROJECT, 0));
+    }
+    sessions.left(&SessionId("s_a".into()), Left::Exited);
+    sessions.left(&SessionId("s_c".into()), Left::Exited);
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_d", "recent", "exited", None)])),
+        true,
+    );
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(
+        sections[0]
+            .live
+            .iter()
+            .map(|r| r.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_b"]
+    );
+    assert_eq!(
+        sections[0]
+            .exited
+            .iter()
+            .map(|r| r.id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["s_c", "s_a", "s_d"]
+    );
+}
+
+#[test]
+fn exited_rows_cap_at_three_and_count_the_rest() {
+    for count in [0, 1, 2, 3, 4] {
+        let mut sessions = Sessions::default();
+        sessions.status(section_row("s_live", PROJECT, 0));
+        sessions.recent(
+            recent_rows(&result(
+                (0..count)
+                    .map(|i| recent_row(&format!("s_{i}"), "recent", "exited", None))
+                    .collect(),
+            )),
+            true,
+        );
+        let sections = sessions.sections(PROJECT);
+        assert_eq!(sections[0].shown_exited, count.min(3));
+        assert_eq!(sections[0].hidden(), count.saturating_sub(3));
+    }
+}
+
+#[test]
+fn expanding_a_project_shows_every_loaded_exited_row_and_only_that_project() {
+    let mut sessions = Sessions::default();
+    for project in [PROJECT, OTHER] {
+        for i in 0..4 {
+            let id = format!("s_{project}_{i}");
+            sessions.status(section_row(&id, project, 0));
+            sessions.left(&SessionId(id), Left::Exited);
+        }
+    }
+    sessions.expand(PROJECT);
+    sessions.expand(PROJECT);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].shown_exited, 4);
+    assert_eq!(sections[0].hidden(), 0);
+    assert_eq!(sections[1].shown_exited, 3);
+    assert_eq!(sections[1].hidden(), 1);
+    sessions.recent(Vec::new(), true);
+    assert_eq!(sessions.sections(PROJECT)[0].shown_exited, 4);
+}
+
+#[test]
+fn an_unreadable_row_stays_in_its_stored_project() {
+    let mut sessions = Sessions::default();
+    let mut row = section_row("s_a", "stored", 0);
+    row.state = State::Unreadable;
+    row.status = None;
+    row.workspace.clear();
+    sessions.status(row);
+    let sections = sessions.sections(PROJECT);
+    assert_eq!(sections[0].project, "stored");
+    assert_eq!(sections[0].name, "stored");
+    assert_eq!(sections[0].start, None);
+}
+
+#[test]
+fn a_recent_row_keeps_its_last_status() {
+    let rows = recent_rows(&result(vec![
+        recent_row(
+            "s_a",
+            "present",
+            "exited",
+            Some(payload(json!({"state": "idle", "turns": 5, "since": 123}))),
+        ),
+        recent_row("s_b", "absent", "exited", None),
+    ]));
+    let status = rows[0].status.as_ref().unwrap();
+    assert_eq!(status.turns, Some(5));
+    assert_eq!(status.since, 123);
+    assert_eq!(rows[1].status, None);
+}
+
 #[test]
 fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
     let mut sessions = Sessions::default();
