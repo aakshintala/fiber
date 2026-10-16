@@ -711,3 +711,48 @@ pub(crate) fn close(
     // A row that cannot be written loses only the listing, not the log.
     hub::append(home, &row).unwrap_or(());
 }
+
+#[cfg(test)]
+mod opened_hold_tests {
+    #![allow(clippy::panic, reason = "test assertions")]
+
+    use super::*;
+
+    /// The hold hands the slot back on drop: the inner drop restores the
+    /// outer opener, and the outer drop clears the slot, so a later
+    /// `run_new_with` on the same thread sees no earlier opener.
+    #[test]
+    fn drop_restores_the_previous_opener_then_clears() {
+        let first: doors::WorktreeOpener = Arc::new(|_: &contract::diag::Timing| {});
+        let second: doors::WorktreeOpener = Arc::new(|_: &contract::diag::Timing| {});
+        // Whatever the thread ran before: start known, hand back after.
+        let stash = OPENED.with(|cell| cell.take());
+        {
+            let _outer = OpenedHold::set(Some(Arc::clone(&first)));
+            {
+                let _inner = OpenedHold::set(Some(Arc::clone(&second)));
+                assert!(
+                    OPENED.with(|cell| cell
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|held| Arc::ptr_eq(held, &second))),
+                    "the inner hold sets the slot"
+                );
+            }
+            assert!(
+                OPENED.with(|cell| cell
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|held| Arc::ptr_eq(held, &first))),
+                "the inner drop hands the slot back to the outer opener"
+            );
+        }
+        assert!(
+            OPENED.with(|cell| cell.borrow().is_none()),
+            "the outer drop clears the slot"
+        );
+        OPENED.with(|cell| {
+            cell.replace(stash);
+        });
+    }
+}
