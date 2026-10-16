@@ -223,11 +223,18 @@ impl App {
     }
 
     /// The ✕ on an open overlay: closes the key map when open, else the
-    /// notice overlay, else the search results.
+    /// Ctrl+R panel, else the notice overlay, else the search results.
+    /// The order follows the keys: the topmost overlay, the one that has
+    /// them, closes first.
     pub(super) fn close_overlay(&mut self) {
         if self.keymap_top().is_some() {
             self.keymap_key(&Key::Esc);
-        } else if !self.notices.close() {
+            return;
+        }
+        if self.close_search() {
+            return;
+        }
+        if !self.notices.close() {
             self.close_results();
         }
     }

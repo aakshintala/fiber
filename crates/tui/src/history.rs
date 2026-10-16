@@ -338,6 +338,12 @@ impl App {
         self.more()
     }
 
+    /// Closes the search panel, as Esc does: the draft is unchanged.
+    /// True when a search was open.
+    pub(super) fn close_search(&mut self) -> bool {
+        self.history.search.take().is_some()
+    }
+
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
