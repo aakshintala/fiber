@@ -22,6 +22,7 @@ mod configure;
 #[cfg(test)]
 mod configure_fake;
 mod context_view;
+mod diff;
 mod editor;
 mod event_loop;
 mod files;

@@ -646,8 +646,8 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
 /// one removed line pairs with one added line, as "Changed files"
 /// draws a hunk (`docs/tui.md`, "Swapped views").
 fn diff_rows(diff: &str) -> Vec<Row> {
-    let drawn = crate::turn::opened::diff_lines(diff);
-    let gutter = crate::turn::opened::gutter_width(drawn.iter().filter_map(|line| line.number));
+    let drawn = crate::diff::diff_lines(diff);
+    let gutter = crate::diff::gutter_width(drawn.iter().filter_map(|line| line.number));
     drawn
         .into_iter()
         .map(|line| {
@@ -665,16 +665,16 @@ fn diff_rows(diff: &str) -> Vec<Row> {
                 .map(|(text, _)| text.as_str())
                 .collect();
             match line.kind {
-                crate::turn::opened::DiffKind::Hunk | crate::turn::opened::DiffKind::Note => {
+                crate::diff::DiffKind::Hunk | crate::diff::DiffKind::Note => {
                     spans.push(Span::styled(joined, dim_style()));
                 }
-                crate::turn::opened::DiffKind::Removed => {
+                crate::diff::DiffKind::Removed => {
                     spans.extend(marked_spans(&line.segments, Role::Removed));
                 }
-                crate::turn::opened::DiffKind::Added => {
+                crate::diff::DiffKind::Added => {
                     spans.extend(marked_spans(&line.segments, Role::Added));
                 }
-                crate::turn::opened::DiffKind::Context => {
+                crate::diff::DiffKind::Context => {
                     spans.push(Span::raw(joined));
                 }
             }

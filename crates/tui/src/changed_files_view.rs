@@ -8,7 +8,7 @@ use contract::events::CommandResult;
 use crate::format;
 use crate::swapped::{Frame, Ink, List, Spot};
 use crate::theme::Role;
-use crate::turn::opened::{DiffKind, DiffLine, diff_lines, gutter_width, safe_line};
+use crate::diff::{DiffKind, DiffLine, diff_lines, gutter_width, safe_line};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
