@@ -488,7 +488,7 @@ fn assert_spanned_bound() {
 
 /// Receives while proving the test's own progress: a bump before every
 /// short poll, so a worker descheduled after a release is never mistaken
-/// for a stall. Only `hold_one_slice` stays silent.
+/// for a stall. Only `hold_slices` stays silent.
 fn recv_bumping<T>(rx: &mpsc::Receiver<T>, waited_for: &str) -> T {
     for _ in 0..POLLS {
         GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
@@ -589,7 +589,7 @@ fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
     });
     // Hold every fetch for a slice, then release it, until the approval
     // answers. An answer while a fetch is held, or a hangup, fails inside
-    // `hold_one_slice`.
+    // `hold_slices`.
     let mut value = None;
     for _ in 0..POLLS {
         // The store's git work between fetches is live: the test proves
