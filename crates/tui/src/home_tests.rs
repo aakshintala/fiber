@@ -2,11 +2,39 @@
 //! `recent` pages, keys, glyphs and lines.
 
 use super::{
-    Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, glyph, line,
-    line_with, opening, quit_count, recent_rows,
+    HomeScreen, Left, Level, ListLine, Row, Sessions, State, Subs, delete_line, dependents,
+    from_status, glyph, line, line_with, opening, quit_count, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
+
+/// Session rows in the form test assertions read them.
+#[cfg(test)]
+pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
+    screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            ListLine::Live {
+                key,
+                glyph,
+                name,
+                wait,
+                ..
+            } => {
+                let line = wait.as_ref().filter(|wait| !wait.is_empty()).map_or_else(
+                    || format!("{glyph}  {name}"),
+                    |wait| format!("{glyph}  {name}  {wait}"),
+                );
+                Some((*key, line))
+            }
+            ListLine::Exited {
+                key, glyph, name, ..
+            } => Some((*key, format!("{glyph}  {name}"))),
+            ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
+        })
+        .collect()
+}
 
 const PROJECT: &str = "-Users-a-work-fiber-.git";
 const OTHER: &str = "-Users-a-work-lens-.git";

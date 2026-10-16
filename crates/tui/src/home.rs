@@ -250,34 +250,6 @@ pub(crate) enum ListLine {
     },
 }
 
-/// Session rows in the form test assertions read them.
-#[cfg(test)]
-pub(crate) fn home_test_rows(screen: &HomeScreen) -> Vec<(u64, String)> {
-    screen
-        .list
-        .iter()
-        .filter_map(|line| match line {
-            ListLine::Live {
-                key,
-                glyph,
-                name,
-                wait,
-                ..
-            } => {
-                let line = wait.as_ref().filter(|wait| !wait.is_empty()).map_or_else(
-                    || format!("{glyph}  {name}"),
-                    |wait| format!("{glyph}  {name}  {wait}"),
-                );
-                Some((*key, line))
-            }
-            ListLine::Exited {
-                key, glyph, name, ..
-            } => Some((*key, format!("{glyph}  {name}"))),
-            ListLine::Head { .. } | ListLine::ExitedHead { .. } | ListLine::More { .. } => None,
-        })
-        .collect()
-}
-
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PickerScreen {
@@ -1022,3 +994,5 @@ pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String 
 #[cfg(test)]
 #[path = "home_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::home_test_rows;
