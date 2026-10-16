@@ -357,6 +357,31 @@ fn close_joins_a_reader_that_is_still_connected() {
     drop(client);
 }
 
+/// How long each slice of `wait_reader_published` waits: `push_reader`
+/// publishes without a notify, so the wait re-checks in slices under one
+/// deadline instead of parking on the missed wake.
+const READER_SLICE: Duration = Duration::from_millis(10);
+
+/// Waits for the silent client's reader to be published and blocked: one
+/// deadline across short condvar slices, since the publication carries no
+/// wake. The failure message is the test's own.
+#[track_caller]
+fn wait_reader_published(gate: &Gate) {
+    let deadline = Deadline::after(DEADLINE);
+    loop {
+        if gate
+            .conns
+            .wait_while(READER_SLICE, |state| !state.has_reader_shutdown())
+        {
+            return;
+        }
+        assert!(
+            !deadline.left().is_zero(),
+            "the silent client's reader is published and blocked"
+        );
+    }
+}
+
 #[test]
 fn close_returns_while_a_silent_client_stays_open() {
     reset();
@@ -378,11 +403,7 @@ fn close_returns_while_a_silent_client_stays_open() {
     // The reader is published and blocked: it holds its reader and its
     // shutdown, and the client sends nothing from here on.
     {
-        assert!(
-            gate.conns
-                .wait_while(DEADLINE, |state| !state.has_reader_shutdown()),
-            "the silent client's reader is published and blocked"
-        );
+        wait_reader_published(&gate);
     }
     CONTROL.skip_shutdown.store(true, Ordering::Relaxed);
     close_within(opened.session, opened.log);
