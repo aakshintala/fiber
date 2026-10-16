@@ -376,6 +376,17 @@ fn lifted_light_surface_at_256_takes_the_grey_ramp() {
 }
 
 #[test]
+fn lift_at_the_threshold_goes_darker() {
+    // An input exactly at the threshold: dark `scroll` (#808080)
+    // averages 0x80, so the lift moves darker, not lighter
+    // (`docs/tui.md`, palette, `hover`).
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Scroll.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x6c, 0x6c, 0x6c));
+}
+
+#[test]
 fn literal_rgb_resolves_by_depth() {
     let fg = Style::new()
         .fg(Color::Rgb(0, 0, 0))
