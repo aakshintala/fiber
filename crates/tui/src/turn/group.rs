@@ -572,7 +572,7 @@ const GUTTER_BLANK: &str = "      ";
 
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
-pub(in crate::turn) const INDENT: &str = "        ";
+const INDENT: &str = "        ";
 
 /// A dim span.
 pub(super) fn dim_span(text: String) -> Span<'static> {
