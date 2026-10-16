@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 
 use super::group::{Call, dim_span, fit};
+use crate::app::Target;
 use crate::format::{count, dim};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
@@ -88,9 +89,7 @@ pub(crate) fn diff_lines(diff: &str) -> Vec<DiffLine> {
             });
         } else {
             let number = numbers.map(|(_, new)| new);
-            numbers = numbers.map(|(old, new)| {
-                (old.saturating_add(1), new.saturating_add(1))
-            });
+            numbers = numbers.map(|(old, new)| (old.saturating_add(1), new.saturating_add(1)));
             lines.push(DiffLine {
                 number,
                 kind: DiffKind::Context,
@@ -176,8 +175,7 @@ fn flush_block(block: &mut Vec<usize>, lines: &mut [DiffLine]) {
         let (removed_at, added_at) = (*removed_at, *added_at);
         if removed_at < added_at
             && let (head, tail) = lines.split_at_mut(added_at)
-            && let (Some(removed), Some(added)) =
-                (head.get_mut(removed_at), tail.first_mut())
+            && let (Some(removed), Some(added)) = (head.get_mut(removed_at), tail.first_mut())
         {
             pair_words(removed, added);
         }
@@ -203,8 +201,7 @@ fn pair_words(removed: &mut DiffLine, added: &mut DiffLine) {
     let removed_words = word_ranges(&removed_rest);
     let added_words = word_ranges(&added_rest);
     let mut leading = 0;
-    while let (Some(left), Some(right)) =
-        (removed_words.get(leading), added_words.get(leading))
+    while let (Some(left), Some(right)) = (removed_words.get(leading), added_words.get(leading))
         && word_text(&removed_rest, left) == word_text(&added_rest, right)
     {
         leading += 1;
@@ -217,10 +214,8 @@ fn pair_words(removed: &mut DiffLine, added: &mut DiffLine) {
         if left_at < leading || right_at < leading {
             break;
         }
-        let (Some(left), Some(right)) = (
-            removed_words.get(left_at),
-            added_words.get(right_at),
-        ) else {
+        let (Some(left), Some(right)) = (removed_words.get(left_at), added_words.get(right_at))
+        else {
             break;
         };
         if word_text(&removed_rest, left) != word_text(&added_rest, right) {
@@ -228,9 +223,7 @@ fn pair_words(removed: &mut DiffLine, added: &mut DiffLine) {
         }
         trailing += 1;
     }
-    if removed_words.len() <= leading + trailing
-        && added_words.len() <= leading + trailing
-    {
+    if removed_words.len() <= leading + trailing && added_words.len() <= leading + trailing {
         return;
     }
     mark_range(removed, &removed_rest, &removed_words, leading, trailing);
@@ -240,8 +233,7 @@ fn pair_words(removed: &mut DiffLine, added: &mut DiffLine) {
 /// A paired line's text after its `-` or `+` marker.
 fn rest_of(segments: &[(String, bool)]) -> Option<String> {
     let line: String = segments.iter().map(|(text, _)| text.as_str()).collect();
-    line
-        .strip_prefix('-')
+    line.strip_prefix('-')
         .or_else(|| line.strip_prefix('+'))
         .map(str::to_owned)
 }
@@ -343,8 +335,14 @@ pub(crate) fn safe_line(line: &str) -> String {
 /// ledger").
 enum View<'a> {
     Diff(&'a str),
-    Read { start: u64, text: &'a str },
-    Matches { groups: &'a [Value], end: End<'a> },
+    Read {
+        start: u64,
+        text: &'a str,
+    },
+    Matches {
+        groups: &'a [Value],
+        end: End<'a>,
+    },
     Shell {
         command: &'a str,
         end: End<'a>,
@@ -406,14 +404,14 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
     );
     // The gutter is decoration, not text: copy and search skip it, as
     // they skip the indent the wrap adds.
-    let mut logical: Vec<(Line<'static>, u16)> = Vec::with_capacity(shown + 1);
+    let mut logical: Vec<(Line<'static>, u16, Option<Target>)> = Vec::with_capacity(shown + 1);
     for body in bodies.into_iter().take(shown) {
         let skip = if body.gutter && gutter > 0 {
             u16::try_from(gutter + 1).unwrap_or(u16::MAX)
         } else {
             0
         };
-        logical.push((with_gutter(body, gutter), skip));
+        logical.push((with_gutter(body, gutter), skip, None));
     }
     if left > 0 {
         let more = u64::try_from(left).unwrap_or(u64::MAX);
@@ -423,21 +421,27 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
                 count(more, "more line", "more lines")
             )),
             0,
+            Some(Target::CallView(call.id)),
         ));
     }
     if shown == 0 {
-        logical.push((dim("no output".to_owned()), 0));
+        logical.push((dim("no output".to_owned()), 0, None));
     }
-    for (line, skip) in logical {
+    for (line, skip, target) in logical {
         let mut pieces = wrap(line, usize::from(room));
         if skip > 0
             && let Some((_, first)) = pieces.first_mut()
         {
             first.skip = first.skip.saturating_add(skip);
         }
+        let mut first_piece = true;
         for (mut piece, text) in pieces {
             piece.spans = fit(piece.spans, max);
-            out.push_text((piece, None), text);
+            // The more row opens the call's whole view; every other row
+            // opens nothing here.
+            let piece_target = first_piece.then_some(target).flatten();
+            first_piece = false;
+            out.push_text((piece, piece_target), text);
         }
     }
 }
@@ -593,11 +597,7 @@ fn marked_style(role: Role) -> Style {
 }
 
 /// Lines numbered from `start`, saturating, inside the numbered view.
-fn push_numbered<'a>(
-    start: u64,
-    lines: impl Iterator<Item = &'a str>,
-    bodies: &mut Vec<Body>,
-) {
+fn push_numbered<'a>(start: u64, lines: impl Iterator<Item = &'a str>, bodies: &mut Vec<Body>) {
     let mut number = start;
     for line in lines {
         bodies.push(Body {
@@ -756,9 +756,7 @@ const HELD_OPEN: &str = "Output was still held open.";
 fn push_closing(end: &End, bodies: &mut Vec<Body>) {
     let line = match end {
         End::Exit(0) => dim("exit 0".to_owned()),
-        End::Exit(code) => {
-            Line::from(Span::styled(format!("exit {code}"), style(Role::Removed)))
-        }
+        End::Exit(code) => Line::from(Span::styled(format!("exit {code}"), style(Role::Removed))),
         End::Signal(signal) => Line::from(Span::styled(
             format!("killed by {signal}"),
             style(Role::Removed),
@@ -818,7 +816,6 @@ fn wrap(line: Line<'static>, room: usize) -> Vec<(Line<'static>, RowText)> {
         .map(|((line, _), text)| (line, text))
         .collect()
 }
-
 
 #[cfg(test)]
 #[path = "opened_tests.rs"]

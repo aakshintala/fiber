@@ -131,23 +131,21 @@ fn one_removed_and_one_added_pair_their_words() {
     assert_eq!(paired.len(), 3);
     assert_eq!(
         paired[1],
-        vec![
-            ("-call ".to_owned(), false),
-            ("foo(a);".to_owned(), true),
-        ]
+        vec![("-call ".to_owned(), false), ("foo(a);".to_owned(), true),]
     );
     assert_eq!(
         paired[2],
-        vec![
-            ("+call ".to_owned(), false),
-            ("bar(a);".to_owned(), true),
-        ]
+        vec![("+call ".to_owned(), false), ("bar(a);".to_owned(), true),]
     );
     for (line, raw) in diff_lines("@@ -1 +1 @@\n-call foo(a);\n+call bar(a);\n")
         .iter()
         .zip(["@@ -1 +1 @@", "-call foo(a);", "+call bar(a);"])
     {
-        let joined: String = line.segments.iter().map(|(text, _)| text.as_str()).collect();
+        let joined: String = line
+            .segments
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect();
         assert_eq!(joined, raw);
     }
 }
@@ -361,11 +359,7 @@ fn command_without_exit_or_signal_is_plain() {
 
 #[test]
 fn command_with_a_string_exit_code_is_plain() {
-    let call = made_call(
-        Some(json!({"command": "ls", "exit_code": "0"})),
-        "",
-        "a",
-    );
+    let call = made_call(Some(json!({"command": "ls", "exit_code": "0"})), "", "a");
     let parts = drawn(&call, 76);
     assert_eq!(lines(&parts), vec!["        a"]);
 }
@@ -389,11 +383,7 @@ fn a_diff_that_is_not_a_string_shows_content() {
 
 #[test]
 fn a_malformed_diff_does_not_fall_through_to_a_later_key() {
-    let call = made_call(
-        Some(json!({"diff": 7, "start_line": 3})),
-        "",
-        "result",
-    );
+    let call = made_call(Some(json!({"diff": 7, "start_line": 3})), "", "result");
     let parts = drawn(&call, 76);
     assert_eq!(lines(&parts), vec!["        result"]);
 }
@@ -431,16 +421,17 @@ fn gutter_width_is_the_largest_drawn_number() {
     assert_eq!(texts[3], "        101 d");
     // The gutter span is right-aligned in three columns and one space.
     assert_eq!(parts.0[0].0.spans[1].content.as_ref(), " 98 ");
-    assert!(parts.0[0].0.spans[1].style.add_modifier.contains(Modifier::DIM));
+    assert!(
+        parts.0[0].0.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
 }
 
 #[test]
 fn start_line_u64_max_does_not_overflow() {
-    let call = made_call(
-        Some(json!({"start_line": u64::MAX})),
-        "",
-        "a\nb",
-    );
+    let call = made_call(Some(json!({"start_line": u64::MAX})), "", "a\nb");
     let parts = drawn(&call, 100);
     let texts = lines(&parts);
     assert_eq!(texts.len(), 2);
@@ -482,7 +473,10 @@ fn search_groups_keep_printed_order_with_bold_paths() {
     assert_eq!(texts[2], "        a");
     for path in [0, 2] {
         assert!(
-            parts.0[path].0.spans[1].style.add_modifier.contains(Modifier::BOLD),
+            parts.0[path].0.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD),
             "{:?} bold",
             parts.0[path].0
         );
@@ -505,7 +499,11 @@ fn a_context_line_has_no_match_tint() {
     let parts = drawn(&call, 76);
     assert_eq!(lines(&parts)[1], "        1 before");
     assert!(
-        parts.0[1].0.spans.iter().all(|span| span.style.bg.is_none()),
+        parts.0[1]
+            .0
+            .spans
+            .iter()
+            .all(|span| span.style.bg.is_none()),
         "{:?}",
         parts.0[1].0
     );
@@ -983,7 +981,11 @@ fn the_cap_counts_the_headline_and_the_closing_line() {
     assert_eq!(texts.len(), 21);
     assert_eq!(texts[0], "        nonzero_exit: exit 1");
     assert_eq!(texts[20], "        … 1 more line (Enter to view)");
-    assert!(!texts.iter().any(|row| row.contains("exit 1") && !row.contains("nonzero")));
+    assert!(
+        !texts
+            .iter()
+            .any(|row| row.contains("exit 1") && !row.contains("nonzero"))
+    );
 }
 
 #[test]
@@ -1001,9 +1003,10 @@ fn the_gutter_and_more_row_are_dim_and_body_text_is_not() {
             "{line:?} gutter dim"
         );
         assert!(
-            line.spans.iter().skip(2).all(|span| {
-                !span.style.add_modifier.contains(Modifier::DIM)
-            }),
+            line.spans
+                .iter()
+                .skip(2)
+                .all(|span| { !span.style.add_modifier.contains(Modifier::DIM) }),
             "{line:?} body not dim"
         );
     }
@@ -1019,4 +1022,40 @@ fn controls_are_stripped_and_tabs_expand_in_inline_text() {
     let call = made_call(None, "", "a\u{1b}b\tc\u{0}d");
     let parts = drawn(&call, 76);
     assert_eq!(lines(&parts), vec!["        ab    cd"]);
+}
+
+#[test]
+fn the_more_row_targets_the_call_view() {
+    let text = (1..=21)
+        .map(|n| format!("L{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let call = Call {
+        id: 42,
+        ..made_call(Some(json!({"start_line": 1})), "", &text)
+    };
+    let parts = drawn(&call, 76);
+    assert_eq!(parts.0.len(), 21);
+    assert_eq!(
+        parts.0[20].1,
+        Some(crate::app::Target::CallView(42)),
+        "the more row"
+    );
+    assert!(
+        parts.0[..20].iter().all(|(_, target)| target.is_none()),
+        "no other row"
+    );
+    // Narrow enough to wrap the more row, its target stays on the
+    // first piece alone.
+    let parts = drawn(&call, 30);
+    let aimed: Vec<usize> = parts
+        .0
+        .iter()
+        .enumerate()
+        .filter_map(|(at, (_, target))| {
+            matches!(target, Some(crate::app::Target::CallView(42))).then_some(at)
+        })
+        .collect();
+    assert_eq!(aimed.len(), 1);
+    assert!(lines(&parts)[aimed[0]].contains("…"));
 }
