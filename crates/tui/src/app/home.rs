@@ -242,11 +242,11 @@ impl App {
                     spend: crate::format::money(row.spend),
                     context: status.and_then(|status| {
                         status.context.as_ref().map(|context| {
-                            if context.window == 0 {
-                                0
-                            } else {
-                                context.tokens.saturating_mul(100) / context.window
-                            }
+                            context
+                                .tokens
+                                .saturating_mul(100)
+                                .checked_div(context.window)
+                                .unwrap_or(0)
                         })
                     }),
                     wait: row.note.clone().or_else(|| row.waiting.clone()),
@@ -736,7 +736,21 @@ impl App {
                 Effect::None
             }
             Spot::Question => Effect::None,
-            Spot::Start(_) => Effect::None,
+            Spot::Start(key) => {
+                let workspace = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.sessions.by_key(key))
+                    .map(|row| row.workspace.clone())
+                    .filter(|workspace| !workspace.is_empty());
+                if let Some(workspace) = workspace
+                    && let Some(home) = self.home.as_mut()
+                {
+                    home.choose(workspace);
+                    self.focus = None;
+                }
+                Effect::None
+            }
             Spot::Quit(_) => Effect::None,
         }
     }

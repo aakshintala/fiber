@@ -529,13 +529,13 @@ fn draw_list(
                 }
             }
         }
-        if let Some((key, offset)) = row.plus {
-            if offset < placed.width {
-                targets.push(Target {
-                    id: TargetId::Home(Spot::Start(key)),
-                    rect: Rect::new(placed.x.saturating_add(offset), y, 1, 1),
-                });
-            }
+        if let Some((key, offset)) = row.plus
+            && offset < placed.width
+        {
+            targets.push(Target {
+                id: TargetId::Home(Spot::Start(key)),
+                rect: Rect::new(placed.x.saturating_add(offset), y, 1, 1),
+            });
         }
     }
 }

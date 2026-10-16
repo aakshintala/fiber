@@ -2043,6 +2043,62 @@ fn ctrl_c_passes_through_the_picker() {
 }
 
 #[test]
+fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "other project work",
+        "/other",
+        "-other",
+        json!({"state": "idle", "git": {"branch": "main"}}),
+    ));
+    let key = app
+        .home_screen()
+        .and_then(|screen| {
+            screen.list.into_iter().find_map(|line| match line {
+                crate::home::ListLine::Head {
+                    name,
+                    start: Some(key),
+                    ..
+                } if name == "other" => Some(key),
+                crate::home::ListLine::Head { .. }
+                | crate::home::ListLine::Live { .. }
+                | crate::home::ListLine::ExitedHead { .. }
+                | crate::home::ListLine::Exited { .. }
+                | crate::home::ListLine::More { .. } => None,
+            })
+        })
+        .unwrap_or_else(|| panic!("the other project's plus target"));
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == crate::mouse::TargetId::Home(Spot::Start(key)) })
+    );
+    app.drawn(&targets);
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    assert!(chips(&app).contains(&"[x] new worktree".to_owned()));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Worktree));
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Start(key))),
+        Effect::None
+    );
+    assert_eq!(app.focused(), None, "the entry bar has focus");
+    assert!(chips(&app).contains(&"[ ] new worktree".to_owned()));
+
+    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    let start = commands(lines)[0].clone();
+    assert_eq!(start["command"], "start");
+    assert_eq!(start["args"]["workspace"], "/other");
+    assert!(start["args"].get("worktree").is_none());
+}
+
+#[test]
 fn start_names_the_chosen_workspace() {
     let mut app = home();
     three_workspaces(&mut app);

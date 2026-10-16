@@ -312,6 +312,33 @@ fn home_with_live_and_exited_rows() {
 }
 
 #[test]
+fn a_section_with_no_workspace_draws_no_plus_target() {
+    let mut app = home(80, 24);
+    let outgoing: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    let mut row = recent_row("s_aaaaaaaaaaaaaaaa", "orphan", "exited");
+    row["workspace"] = serde_json::json!("");
+    row["project"] = serde_json::json!("-empty");
+    app.on_line(accepted(recent, serde_json::json!({"sessions": [row]})));
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    assert!(screen(&app, 80, 24).contains("-empty"));
+    assert!(
+        !targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Start(_))))
+    );
+}
+
+#[test]
 fn a_name_with_control_characters_draws_as_spaces_on_the_frame() {
     // No snapshot: the drawn frame holds the name with spaces, and no
     // raw control character. The printables around each control stay,
