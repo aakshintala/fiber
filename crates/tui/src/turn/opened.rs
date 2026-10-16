@@ -7,8 +7,8 @@ use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 
 use super::group::{Call, dim_span, fit};
-use crate::diff::{diff_lines, gutter_text, gutter_width, safe_line, styled_spans};
 use crate::app::Target;
+use crate::diff::{diff_lines, gutter_text, gutter_width, safe_line, styled_spans};
 use crate::format::{count, dim};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
@@ -18,7 +18,6 @@ use crate::theme::Role;
 /// "… N more lines (Enter to view)" row (`docs/tui.md`, "Tool groups
 /// and the ledger").
 pub(crate) const OPENED_LINES: usize = 20;
-
 
 /// What an opened call shows, chosen from the shape of its `details`,
 /// never the tool name: an edit's diff, a read's lines, a shell `grep`'s

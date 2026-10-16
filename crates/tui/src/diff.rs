@@ -165,12 +165,7 @@ fn pair_runs(lines: &mut [DiffLine]) {
 /// Marks one finished run when it holds exactly one removed line then
 /// one added line: the removed index always precedes the added one,
 /// because a `-` after a `+` starts a new run.
-fn flush_pair(
-    removed: Option<usize>,
-    added: Option<usize>,
-    exact: bool,
-    lines: &mut [DiffLine],
-) {
+fn flush_pair(removed: Option<usize>, added: Option<usize>, exact: bool, lines: &mut [DiffLine]) {
     if !exact {
         return;
     }

@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use contract::events::CommandResult;
 
+use crate::diff::{DiffLine, diff_lines, gutter_text, gutter_width, ink_spans, safe_line};
 use crate::format;
 use crate::swapped::{Frame, Ink, List, Spot};
-use crate::diff::{DiffLine, diff_lines, gutter_text, gutter_width, ink_spans, safe_line};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
