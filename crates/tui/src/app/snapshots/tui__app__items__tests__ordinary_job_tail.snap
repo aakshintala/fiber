@@ -2,7 +2,7 @@
 source: crates/tui/src/app/items_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
- fix the parser › ▸ build the workspace                                        ✕
+ fix the parser › ▸ build the workspace
  ⠋ running · harness — · model — · — · 11s · session — · ■ stop
  Output since this terminal attached · /tmp/out
  compiling one
