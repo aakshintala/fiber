@@ -1042,6 +1042,13 @@ fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
     })
 }
 
+/// A card's first item, not a matching subject in another card's progress row.
+fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16, u16)> {
+    let (_, heading) = panel_item_at(grid, card)?;
+    let y = heading.checked_add(1)?;
+    Some((col_at_or(grid, y, description)?, y))
+}
+
 #[test]
 fn the_item_views_top_row_closes_them() {
     let (setup, _release, _guard, command) = running_setup();
@@ -1058,14 +1065,25 @@ fn the_item_views_top_row_closes_them() {
     run.wait_screen("the expanded Jobs card", |grid| {
         panel_item_at(grid, "head -n 1").is_some()
     });
-    for (description, crumb) in [
-        ("review the diff", "› ◆ review the diff".to_owned()),
-        ("head -n 1", format!("› ▸ {command}")),
+    for (card, description, crumb) in [
+        (
+            "Delegates",
+            "review the diff",
+            "› ◆ review the diff".to_owned(),
+        ),
+        ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
-        let grid = run.wait_screen("the running panel item", |grid| {
-            panel_item_at(grid, description).is_some()
+        let grid = run.wait_screen("the running panel card's first item", |grid| {
+            panel_card_item_at(grid, card, description).is_some()
         });
-        let (x, y) = panel_item_at(&grid, description).unwrap();
+        let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
+        // The hover frame acknowledges this cell as a live click target.
+        // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
+        run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+        run.wait_screen("the running item's hover acknowledgement", |grid| {
+            panel_card_item_at(grid, card, description) == Some((x, y))
+                && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)
+        });
         click(&mut run, x, y);
         let grid = run.wait_screen("the item's breadcrumb without a cross", |grid| {
             grid.rows[0].contains(&crumb) && !grid.rows[0].contains('✕')
