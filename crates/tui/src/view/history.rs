@@ -127,17 +127,9 @@ fn body(completions: &Completions, wrap: usize, fit: usize) -> Vec<Row> {
     if fit == 0 {
         return body;
     }
-    if sel_height > fit {
-        // A selected entry taller than the room draws its first rows
-        // and the other entries drop out.
-        let Some(entry) = entries.get(sel) else {
-            return body;
-        };
-        let mut rows = entry_rows(entry, &completions.query, Some(sel) == focused, wrap);
-        rows.truncate(fit);
-        body.extend(rows);
-        return body;
-    }
+    // A selected entry taller than the room takes the window alone: the
+    // frame clips its rows from the bottom, so its first rows show and
+    // the others drop out.
     let mut at = sel;
     let mut take = 1usize;
     let mut used = sel_height;
@@ -152,10 +144,7 @@ fn body(completions: &Completions, wrap: usize, fit: usize) -> Vec<Row> {
         used = used.saturating_add(prev);
         take = take.saturating_add(1);
     }
-    while at.saturating_add(take) < entries.len() {
-        let Some(next) = heights.get(at.saturating_add(take)).copied() else {
-            break;
-        };
+    while let Some(next) = heights.get(at.saturating_add(take)).copied() {
         if used.saturating_add(next) > fit {
             break;
         }

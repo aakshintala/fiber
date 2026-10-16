@@ -210,11 +210,9 @@ pub(super) fn wrap_runs(runs: &[(String, Style)], room: usize) -> Vec<Vec<Span<'
             if *taken > 0 {
                 rows.push(Vec::new());
                 *taken = 0;
-                leading = false;
-                continue;
             }
-            // At the row's start a word wider than the row breaks at
-            // the edge.
+            // At the row's start a word that fits takes the whole rest,
+            // and a wider one breaks at the edge.
             let mut chunk = format::cut(rest, room);
             if chunk.is_empty() {
                 // A single grapheme wider than the row still moves:

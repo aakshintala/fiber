@@ -512,3 +512,39 @@ fn wrap_runs_joins_split_runs_with_no_space() {
     let text: String = rows[0].iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(text, "how do I backfill it");
 }
+
+/// Each row of `rows` as its text.
+fn row_texts(rows: &[Vec<ratatui::text::Span<'static>>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.iter().map(|span| span.content.as_ref()).collect())
+        .collect()
+}
+
+#[test]
+fn wrap_runs_fills_a_row_with_a_word_exactly_as_wide() {
+    use ratatui::style::Style;
+    // After the newline "abcd" is exactly the room, so it fills its row
+    // and "ef" must wrap: a row short by one column would take "ef".
+    let rows = super::wrap_runs(&[("x\n abcd ef".to_owned(), Style::new())], 4);
+    assert_eq!(row_texts(&rows), ["x", "abcd", "ef"]);
+}
+
+#[test]
+fn wrap_runs_drops_a_paragraph_space_left_by_an_empty_run() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // The first run is one space: the paragraph has not started, so the
+    // next run's first word takes no space before it.
+    let rows = super::wrap_runs(&[(" ".to_owned(), plain), ("abc".to_owned(), plain)], 10);
+    assert_eq!(row_texts(&rows), ["abc"]);
+}
+
+#[test]
+fn wrap_runs_drops_a_space_before_a_word_after_a_newline() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // The run before ends with a space, but the newline starts a row, so
+    // the word after it takes no space.
+    let rows = super::wrap_runs(&[("x ".to_owned(), plain), ("\nabc".to_owned(), plain)], 10);
+    assert_eq!(row_texts(&rows), ["x", "abc"]);
+}

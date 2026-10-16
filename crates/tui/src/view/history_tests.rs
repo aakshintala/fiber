@@ -377,3 +377,36 @@ fn down_past_the_end_holds_the_selection() {
     press(&mut app, Key::Up);
     assert_eq!(panel(&app).selected, Some(1));
 }
+
+#[test]
+fn the_window_fills_its_rows_down_from_the_first_match() {
+    // Twelve rows leave two entry rows. The first match takes both
+    // rows exactly, so the second match shows beneath it.
+    let app = searching(80, 12, &["fix one", "fix two", "fix three"], "fix");
+    let completions = panel(&app);
+    let (buf, _, _) = drawn(&completions, 80, 12);
+    let shown = crate::view::text(&buf);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    assert!(row_text(&buf, 80, bars[0]).contains("fix three"), "{shown}");
+    assert!(shown.contains("fix two"), "{shown}");
+}
+
+#[test]
+fn the_window_fills_its_rows_up_to_a_late_selection() {
+    // The late selection and the match above it fill the two entry
+    // rows exactly, so the match above shows.
+    let prompts: Vec<String> = (1..=8).map(|n| format!("fix {n}")).collect();
+    let refs: Vec<&str> = prompts.iter().map(String::as_str).collect();
+    let mut app = searching(80, 12, &refs, "fix");
+    for _ in 0..7 {
+        press(&mut app, Key::Down);
+    }
+    let completions = panel(&app);
+    let (buf, _, _) = drawn(&completions, 80, 12);
+    let shown = crate::view::text(&buf);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    assert!(row_text(&buf, 80, bars[0]).contains("fix 1"), "{shown}");
+    assert!(shown.contains("fix 2"), "{shown}");
+}
