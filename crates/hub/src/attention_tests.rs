@@ -1279,8 +1279,9 @@ fn two_listeners_take_distinct_ids_and_unlistening_the_second_ends_only_that_one
 /// The outer `Deadline::after(DEADLINE)` still bounds the wait.
 const EOF_POLL: Duration = Duration::from_millis(100);
 
-/// Reads EOF from `read`, retrying a wake-up that arrived before the close.
-/// A single read can end after a wake-up that is not the close, so each
+/// Reads EOF from `read`, retrying after a lost shutdown wake-up.
+/// A shutdown's wake-up can be lost, and the read then ends only at its
+/// timeout, so each
 /// `WouldBlock` or `TimedOut` reads again; any other answer, data included,
 /// returns at once. At most `DEADLINE / EOF_POLL` polls: the caller's own
 /// deadline already bounds the wait, and the count only stops this thread
@@ -1387,7 +1388,7 @@ fn read_until_eof_stops_polling_after_its_tick_count() {
     assert_eq!(error.kind(), ErrorKind::WouldBlock);
     assert_eq!(
         read.calls, polls,
-        "the count bounds the polls: past the edge, never past it"
+        "exactly DEADLINE / EOF_POLL polls, then the timeout error"
     );
 }
 
