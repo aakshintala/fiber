@@ -306,8 +306,7 @@ impl Log {
     /// driver `shell` the same way the loop cuts a tool call, and doors
     /// cannot depend on the loop (`docs/architecture.md`, "The call rules").
     pub fn cut_output(&self, full: &str, bound: Bound, name: &str) -> (String, Option<String>) {
-        let head = full.floor_char_boundary(bound.start);
-        let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
+        let (head, tail) = Self::cut_points(full, bound);
         let removed = tail.saturating_sub(head);
         let removed = u64::try_from(removed).unwrap_or(u64::MAX);
         let (notice, artifact) = match self.write_artifact(name, full.as_bytes()) {
@@ -320,6 +319,13 @@ impl Log {
             full.get(tail..).unwrap_or_default(),
         );
         (kept, artifact)
+    }
+
+    /// The exclusive head end and inclusive tail start of a UTF-8-safe cut.
+    pub fn cut_points(full: &str, bound: Bound) -> (usize, usize) {
+        let head = full.floor_char_boundary(bound.start);
+        let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
+        (head, tail)
     }
 
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,

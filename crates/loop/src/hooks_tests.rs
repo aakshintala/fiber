@@ -50,12 +50,14 @@ struct Seen {
 struct FakeHooks {
     seen: Mutex<Vec<Seen>>,
     answer: AfterToolAnswer,
+    before: Option<BeforeToolOutcome>,
 }
 
 impl FakeHooks {
     fn new(outcome: AfterToolOutcome, changed_by: &[&str], notices: Vec<Notice>) -> Arc<Self> {
         Arc::new(Self {
             seen: Mutex::new(Vec::new()),
+            before: None,
             answer: AfterToolAnswer {
                 outcome,
                 changed_by: changed_by.iter().map(|s| (*s).to_owned()).collect(),
@@ -85,7 +87,7 @@ impl Hooks for FakeHooks {
 
     fn before_tool(&self, _call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
         BeforeToolAnswer {
-            outcome: BeforeToolOutcome::Unchanged,
+            outcome: self.before.clone().unwrap_or(BeforeToolOutcome::Unchanged),
             notices: Vec::new(),
         }
     }
@@ -868,6 +870,85 @@ fn a_denied_call_calls_no_hook() {
     );
     assert!(hooks.seen().is_empty());
     assert_eq!(ran.completed().payload["status"], "denied");
+}
+
+#[test]
+fn whole_output_kept_ranges_follow_the_cut_and_utf8_boundaries() {
+    for (full, bound, expected) in [
+        ("abcdefghijklmnopqrst", Bound { start: 4, end: 3 }, Some(json!([[0,4],[17,20]]))),
+        ("abcdefghijklmnopqrst", Bound { start: 4, end: 0 }, Some(json!([[0,4]]))),
+        ("abc", Bound { start: 4, end: 0 }, None),
+        ("abcd", Bound { start: 4, end: 0 }, None),
+        ("abcde", Bound { start: 4, end: 0 }, Some(json!([[0,4]]))),
+        ("abcde", Bound { start: 0, end: 0 }, Some(json!([]))),
+        ("aébcéz", Bound { start: 2, end: 2 }, Some(json!([[0,1],[7,8]]))),
+    ] {
+        let ran = run(Fixed { bound, ..fixed(text(full)) }, script("probe", json!({})),
+            None, Arc::new(TurnCancel::default()));
+        let payload = &ran.completed().payload;
+        assert_eq!(payload.get("kept"), expected.as_ref(), "{full:?}, {bound:?}");
+        if let Some(ranges) = expected {
+            let artifact = payload["artifact"].as_str().unwrap();
+            let saved = std::fs::read_to_string(ran.session.join(artifact)).unwrap();
+            assert_eq!(saved, full);
+            let shown = payload["content"][0]["text"].as_str().unwrap();
+            for range in ranges.as_array().unwrap() {
+                let start = usize::try_from(range[0].as_u64().unwrap()).unwrap();
+                let end = usize::try_from(range[1].as_u64().unwrap()).unwrap();
+                assert!(shown.contains(&saved[start..end]));
+            }
+        }
+    }
+}
+
+#[test]
+fn kept_ranges_count_the_before_tool_rewrite_line() {
+    let mut hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    Arc::get_mut(&mut hooks).unwrap().before = Some(BeforeToolOutcome::Rewritten {
+        arguments: Map::new(), changed_by: vec!["acme".into()],
+    });
+    let ran = run(Fixed { bound: Bound { start: 4, end: 3 }, ..fixed(text("abcdefghijklmnopqrst")) },
+        script("probe", json!({})), Some(hooks), Arc::new(TurnCancel::default()));
+    let payload = &ran.completed().payload;
+    let artifact = payload["artifact"].as_str().unwrap();
+    let saved = std::fs::read_to_string(ran.session.join(artifact)).unwrap();
+    let expected = "Extension acme rewrote this call's arguments; it ran with {}.\nabcdefghijklmnopqrst";
+    assert_eq!(saved, expected);
+    assert_eq!(payload["kept"], json!([[0,4],[expected.len()-3,expected.len()]]));
+    assert!(ran.result_sent().starts_with("Exte\n["));
+    assert!(ran.result_sent().ends_with("rst"));
+}
+
+#[test]
+fn hook_content_ranges_index_the_replacement_not_the_artifact() {
+    let hooks = FakeHooks::new(changed(Some("abcdefghijklmnopqrst"), None, Some("artifact")),
+        &["acme"], Vec::new());
+    let ran = run(Fixed { bound: Bound { start: 4, end: 3 }, ..fixed(text("raw")) },
+        script("probe", json!({})), Some(hooks), Arc::new(TurnCancel::default()));
+    let payload = &ran.completed().payload;
+    assert_eq!(payload["kept"], json!([[0,4],[17,20]]));
+    let path = payload["artifact"].as_str().unwrap();
+    assert_eq!(std::fs::read_to_string(ran.session.join(path)).unwrap(), "artifact");
+}
+
+#[test]
+fn discarded_output_has_no_kept_ranges() {
+    for outcome in [
+        AfterToolOutcome::Withheld { extension: "acme".into() },
+        AfterToolOutcome::Failed(contract::hook::HookFailure {
+            extension: "acme".into(), message: "broken".into(),
+        }),
+    ] {
+        let ran = run(Fixed { bound: Bound { start: 1, end: 0 }, ..fixed(text("raw")) },
+            script("probe", json!({})), Some(FakeHooks::new(outcome, &[], Vec::new())),
+            Arc::new(TurnCancel::default()));
+        assert!(ran.completed().payload.get("kept").is_none());
+    }
+    let cancel = Arc::new(TurnCancel::default());
+    let ran = run(Fixed { shutdown: Some(Arc::clone(&cancel)),
+        bound: Bound { start: 1, end: 0 }, ..fixed(text("raw")) },
+        script("probe", json!({})), None, cancel);
+    assert!(ran.completed().payload.get("kept").is_none());
 }
 
 #[test]

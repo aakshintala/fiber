@@ -49,6 +49,7 @@ pub(crate) struct Shaped {
     pub(crate) content: Vec<ContentPart>,
     pub(crate) details: Option<Value>,
     pub(crate) artifact: Option<String>,
+    pub(crate) kept: Option<Vec<[u64; 2]>>,
     pub(crate) changed_by: Option<Vec<String>>,
     pub(crate) error: Option<contract::shapes::Failure>,
 }
@@ -84,6 +85,7 @@ impl Loop {
                 content: Vec::new(),
                 details: None,
                 artifact: None,
+                kept: None,
                 changed_by: None,
                 error: None,
             });
@@ -140,6 +142,7 @@ impl Loop {
                 }],
                 details: None,
                 artifact: None,
+                kept: None,
                 changed_by: None,
                 error: None,
             },
@@ -179,12 +182,15 @@ impl Loop {
     ) -> Result<Shaped, Error> {
         let name = format!("{}.txt", id.0);
         let cap = bound.start.saturating_add(bound.end);
-        let (content, cut) = if full.len() > cap {
-            let (kept, artifact) = self.log.cut_output(&full, bound, &name);
-            (vec![ContentPart::Text { text: kept }], artifact)
+        let (content, cut, kept) = if full.len() > cap {
+            let (head, tail) = Log::cut_points(&full, bound);
+            let ranges = kept_ranges(head as u64, tail as u64, full.len() as u64);
+            let (text, artifact) = self.log.cut_output(&full, bound, &name);
+            (vec![ContentPart::Text { text }], artifact, Some(ranges))
         } else {
             (
                 parts.unwrap_or_else(|| vec![ContentPart::Text { text: full }]),
+                None,
                 None,
             )
         };
@@ -198,6 +204,7 @@ impl Loop {
             content,
             details,
             artifact,
+            kept,
             changed_by: None,
             error: None,
         })
@@ -302,6 +309,7 @@ impl Loop {
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: Some(artifact),
+                kept: None,
                 changed_by: None,
                 error: None,
             },
@@ -322,6 +330,7 @@ impl Loop {
                     content: vec![ContentPart::Text { text: withheld }],
                     details: None,
                     artifact: None,
+                    kept: None,
                     changed_by: None,
                     error: None,
                 }
@@ -345,14 +354,13 @@ impl Loop {
                 // text keeps its notice: cutting it again would report the
                 // notice's bytes as the removed count instead of the
                 // command's missing bytes.
-                let content = if full.is_empty() {
-                    Vec::new()
+                let (content, kept) = if full.is_empty() {
+                    (Vec::new(), None)
                 } else if replaces && full.len() > cap {
-                    vec![ContentPart::Text {
-                        text: cut_hook_content(&full, bound, &path),
-                    }]
+                    let (text, ranges) = cut_hook_content(&full, bound, &path);
+                    (vec![ContentPart::Text { text }], Some(ranges))
                 } else {
-                    vec![ContentPart::Text { text: full }]
+                    (vec![ContentPart::Text { text: full }], None)
                 };
                 if let Some(hook_artifact) = hook_artifact {
                     replace_spilled(&self.log, &path, hook_artifact.as_bytes())?;
@@ -361,6 +369,7 @@ impl Loop {
                     content,
                     details,
                     artifact: Some(artifact),
+                    kept,
                     changed_by: None,
                     error: None,
                 }
@@ -436,6 +445,7 @@ impl Loop {
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: None,
+                kept: None,
                 changed_by: None,
                 error: None,
             },
@@ -449,6 +459,7 @@ impl Loop {
                 }],
                 details: None,
                 artifact: None,
+                kept: None,
                 changed_by: None,
                 error: None,
             },
@@ -487,6 +498,7 @@ impl Loop {
                             content: vec![ContentPart::Text { text: shown }],
                             details,
                             artifact,
+                            kept: None,
                             changed_by: None,
                             error: None,
                         }
@@ -539,15 +551,26 @@ fn replace_spilled(log: &Log, path: &std::path::Path, bytes: &[u8]) -> Result<()
 /// `content` a hook returned over the cap, cut with a notice naming the
 /// spilled file at `path`. Nothing is written for it: the file stays the
 /// artifact.
-fn cut_hook_content(content: &str, bound: Bound, path: &std::path::Path) -> String {
-    let head = content.floor_char_boundary(bound.start);
-    let tail = content.ceil_char_boundary(content.len().saturating_sub(bound.end).max(head));
+fn cut_hook_content(content: &str, bound: Bound, path: &std::path::Path) -> (String, Vec<[u64; 2]>) {
+    let (head, tail) = Log::cut_points(content, bound);
     let removed = u64::try_from(tail.saturating_sub(head)).unwrap_or(u64::MAX);
-    cut_joined(
+    let text = cut_joined(
         content.get(..head).unwrap_or_default(),
         &cut_notice(removed, Ok(path)),
         content.get(tail..).unwrap_or_default(),
-    )
+    );
+    (text, kept_ranges(head as u64, tail as u64, content.len() as u64))
+}
+
+fn kept_ranges(head: u64, tail: u64, len: u64) -> Vec<[u64; 2]> {
+    let mut ranges = Vec::new();
+    if head > 0 {
+        ranges.push([0, head]);
+    }
+    if len > tail {
+        ranges.push([tail, len]);
+    }
+    ranges
 }
 
 /// Removes a spilled file the loop must not keep: the kept file, or a
@@ -595,6 +618,7 @@ impl Shaped {
             }],
             details: None,
             artifact: None,
+            kept: None,
             changed_by: None,
             error: Some(contract::shapes::Failure {
                 code: contract::ErrorCode::HookFailed,
