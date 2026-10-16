@@ -55,6 +55,7 @@ type Make = Box<dyn Fn(&ActionId) -> Asking + Send + Sync>;
 struct Asks {
     asks: Vec<Make>,
     before: Option<Arc<Gate>>,
+    after: Option<Arc<Gate>>,
     told: Mutex<mpsc::Sender<Answered>>,
 }
 
@@ -68,6 +69,18 @@ impl Asks {
         let tool = Self {
             asks,
             before,
+            after: None,
+            told: Mutex::new(tx),
+        };
+        (Arc::new(tool), rx)
+    }
+
+    fn held(asks: Vec<Make>, after: Arc<Gate>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
+        let (tx, rx) = mpsc::channel();
+        let tool = Self {
+            asks,
+            before: None,
+            after: Some(after),
             told: Mutex::new(tx),
         };
         (Arc::new(tool), rx)
@@ -118,6 +131,9 @@ impl Tool for Asks {
             let answered = ask.ask(make(&own));
             said.push(format!("{answered:?}"));
             let _sent = self.told.lock().unwrap().send(answered);
+        }
+        if let Some(gate) = &self.after {
+            gate.wait();
         }
         Output {
             content: vec![ContentPart::Text {
@@ -448,7 +464,8 @@ fn the_askers_check_rejects_a_reply_and_never_sees_a_decline() {
 
 #[test]
 fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
-    let (tool, answers) = Asks::new(vec![plain(confirm())]);
+    let hold = Arc::new(Gate::default());
+    let (tool, answers) = Asks::held(vec![plain(confirm())], Arc::clone(&hold));
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();
@@ -458,11 +475,34 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
     assert_eq!(answer(&session, &request, yes()), Ok(None));
     let wait = Deadline::after(DEADLINE);
     told(&answers, &wait);
-    rejected(&answer(&session, &request, yes()), ErrorCode::StaleRequest);
+    // The tool holds its call open until the hold releases, so the turn is
+    // still draining when the queued reply lands: the ack below comes from
+    // a drain inside the held turn, not from the test's own timing. Queue
+    // the reply first and read its ack only after opening the hold; waiting
+    // on the ack first would deadlock until DEADLINE.
+    let (ack, acked) = acked();
+    session
+        .inbox
+        .send(Delivery::Reply(
+            Reply {
+                request_id: RequestId(request.clone()),
+                answer: yes(),
+            },
+            ack,
+        ))
+        .unwrap();
+    hold.open();
+    rejected(
+        &Deadline::after(DEADLINE)
+            .recv(&acked)
+            .expect("the reply is answered"),
+        ErrorCode::StaleRequest,
+    );
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
     );
+    hold.check("after");
     let lines = session.lines();
     assert_kinds(
         &lines,
