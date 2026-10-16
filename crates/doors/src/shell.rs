@@ -29,8 +29,14 @@ pub(crate) enum Refused {
     Unknown,
     // No reader check rejects this way since `send` true was built;
     // the variant stays so the reader's answer shape does not change.
-    #[allow(dead_code, reason = "no reader check rejects since `send` true was built")]
-    Rejected { code: ErrorCode, message: String },
+    #[allow(
+        dead_code,
+        reason = "no reader check rejects since `send` true was built"
+    )]
+    Rejected {
+        code: ErrorCode,
+        message: String,
+    },
 }
 
 /// A driver shell that passed its checks, with its cancel registered.

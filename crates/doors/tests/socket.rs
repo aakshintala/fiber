@@ -197,8 +197,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
-        Delivery::Cancelled
-        | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
+        Delivery::Cancelled | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
