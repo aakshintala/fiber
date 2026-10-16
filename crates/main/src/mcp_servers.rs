@@ -472,11 +472,7 @@ fn spec(config: &Config, name: &str) -> Entry {
     let spec = mcp::ServerSpec {
         name: name.to_owned(),
         transport,
-        startup_timeout: Duration::from_millis(
-            config
-                .count(&server_key(name, "startup_timeout_ms"), None)
-                .unwrap_or_default(),
-        ),
+        startup_timeout: millis(config, name, "startup_timeout_ms", Duration::ZERO),
         call_timeout: millis(config, name, "timeout_ms", mcp::DEFAULT_CALL_TIMEOUT),
         enabled: server_field(config, name, "tools.enabled").map(|(value, _)| strings(&value)),
         disabled: config.list(&server_key(name, "tools.disabled"), None),
@@ -514,7 +510,7 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
 
 /// The merged value of `mcp.servers."<name>".<field>` and its layer.
 fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
-    config.get(&format!("mcp.servers.{}.{field}", quoted(server)), None)
+    config.get(&server_key(server, field), None)
 }
 
 /// Whether the merged value of one field effectively comes from the
@@ -557,6 +553,8 @@ fn server_key(name: &str, field: &str) -> String {
     format!("mcp.servers.{}.{field}", quoted(name))
 }
 
+/// The `field` timeout in milliseconds: the schema default when the key
+/// has one, else `default`.
 fn millis(config: &Config, server: &str, field: &str, default: Duration) -> Duration {
     config
         .count(&server_key(server, field), None)

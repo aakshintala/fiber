@@ -3,9 +3,9 @@
 use config::Config;
 use r#loop::HandoffSettings;
 
-/// The `handoff.*` settings for `model`, with the documented defaults for
-/// any key absent or of another type. A per-model key wins over the same
-/// key at the top level.
+/// The `handoff.*` settings for `model`. The config schema supplies the
+/// defaults and refuses a value of another type. A per-model key wins
+/// over the same key at the top level.
 pub(crate) fn handoff_settings(config: &Config, model: &str) -> HandoffSettings {
     HandoffSettings {
         enabled: config

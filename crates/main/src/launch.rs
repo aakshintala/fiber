@@ -42,7 +42,8 @@ pub(crate) fn launch(
         .canonicalize()
         .unwrap_or_else(|_| workspace.clone());
     let git = canonical.as_path() != identity;
-    // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
+    // `tui.hover` (`docs/configuration.md`, "Keys"): the default, on,
+    // comes from the config schema.
     let hover = config.flag("tui.hover", None).unwrap_or_default();
     // `tui.reduced_motion`, defaulting to off (`docs/configuration.md`).
     // Unlike the `on` helper's keys, an absent key means stillness is
@@ -142,13 +143,11 @@ fn override_value(value: &str) -> String {
     serde_json::from_str(value).unwrap_or_else(|_| value.to_owned())
 }
 
-/// The boolean at `key`, true when absent (`docs/configuration.md`,
-/// "Keys").
+/// The boolean at `key` (`docs/configuration.md`, "Keys"). Every key
+/// read here defaults to true in the config schema, so the fallback is
+/// unreachable.
 fn on(config: &Config, key: &str) -> bool {
-    config
-        .get(key, None)
-        .and_then(|(value, _)| value.as_bool())
-        .unwrap_or(true)
+    config.flag(key, None).unwrap_or_default()
 }
 
 /// A share of the screen's width, in percent, from `key`; `default` when
