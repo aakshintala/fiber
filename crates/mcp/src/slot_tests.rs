@@ -419,7 +419,7 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .parse()
         .expect("a pid");
     setup.stop(started.servers);
-    setup.await_reaped(pid);
+    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
 }
 
 #[test]
