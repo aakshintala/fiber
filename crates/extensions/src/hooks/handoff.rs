@@ -35,6 +35,7 @@ pub(super) fn before_handoff(
     }
     let mut note: Option<(String, String)> = None;
     let mut notices = Vec::new();
+    let messages = render(handoff.conversation);
     for (at, entry) in chain.iter().enumerate() {
         if at > 0 && handoff.cancel.is_cancelled() {
             return BeforeHandoffAnswer {
@@ -46,7 +47,11 @@ pub(super) fn before_handoff(
             continue;
         };
         let name = extension.name();
-        let arg = shown(handoff, note.as_ref().map(|(_, text)| text.as_str()));
+        let arg = shown(
+            &messages,
+            handoff,
+            note.as_ref().map(|(_, text)| text.as_str()),
+        );
         let returned = extension
             .hook(BEFORE_HANDOFF, entry.index, arg)
             .and_then(|value| decode(name, value));
@@ -77,7 +82,7 @@ pub(super) fn before_handoff(
 /// What a `before_handoff` hook is shown: what started the handoff, the
 /// person's instructions when there were any, the conversation as Fiber's
 /// neutral messages, and the note a hook before it returned, when one did.
-fn shown(handoff: &BeforeHandoff<'_>, note: Option<&str>) -> Value {
+fn shown(messages: &Value, handoff: &BeforeHandoff<'_>, note: Option<&str>) -> Value {
     let trigger = match handoff.trigger {
         contract::events::HandoffTrigger::Auto => "auto",
         contract::events::HandoffTrigger::Person => "person",
@@ -91,7 +96,7 @@ fn shown(handoff: &BeforeHandoff<'_>, note: Option<&str>) -> Value {
             Value::String(instructions.to_owned()),
         );
     }
-    shown.insert("messages".into(), render(handoff.conversation));
+    shown.insert("messages".into(), messages.clone());
     if let Some(note) = note {
         shown.insert("note".into(), Value::String(note.to_owned()));
     }

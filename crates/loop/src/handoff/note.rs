@@ -72,6 +72,48 @@ pub(crate) fn reply_note(reply: &Reply) -> String {
         .join("\n")
 }
 
+/// One handoff's completion from its note: `Completed` keeps the note,
+/// a `session_start` failure or cancel drops it.
+fn finished(
+    note: Option<Note>,
+    tokens_before: u64,
+    instructions: Option<String>,
+    started: Started,
+) -> (HandoffCompleted, Vec<ContextAdded>) {
+    match started {
+        Started::Contexts(contexts) => (
+            HandoffCompleted {
+                outcome: Outcome::Completed,
+                error: None,
+                note,
+                tokens_before,
+                instructions,
+            },
+            contexts,
+        ),
+        Started::Failed(failure) => (
+            HandoffCompleted {
+                outcome: Outcome::Failed,
+                error: Some(failure),
+                note: None,
+                tokens_before,
+                instructions,
+            },
+            Vec::new(),
+        ),
+        Started::Cancelled => (
+            HandoffCompleted {
+                outcome: Outcome::Cancelled,
+                error: None,
+                note: None,
+                tokens_before,
+                instructions,
+            },
+            Vec::new(),
+        ),
+    }
+}
+
 /// What one handoff runs from: a requested note, or the tool calls'
 /// own arguments as the note (`docs/handoff.md`, "A tool").
 pub(super) enum Source {
@@ -217,22 +259,21 @@ impl Loop {
             turn,
             None,
         )?;
-        // The conversation the note request would use, built once: the
-        // hook chain sees it, and the note request, when one is made, is
-        // built from the same conversation, so the overflow hook and the
-        // request see the same moved results and no artifact is written
-        // twice. The hook sees it without the note request, which belongs
-        // to Fiber's own request.
+        // The conversation the note request uses, built once: the
+        // hook chain sees it without the note request, which belongs
+        // to Fiber's own request, and the note request, when one is made,
+        // is built from the same conversation, so the overflow hook and
+        // the request see the same moved results and no artifact is written
+        // twice.
         let has_preamble = self.preamble.is_some();
         let mut request_timer = has_preamble
             .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
             .flatten();
-        let conversation = if trigger == HandoffTrigger::Overflow {
+        let mut full = if trigger == HandoffTrigger::Overflow {
             self.moved_results()
         } else {
             self.conversation.clone()
         };
-        let mut full = conversation.clone();
         full.push(Input::User {
             text: note_request_text(&self.handoff.carry.session_log, instructions.as_deref()),
             images: Vec::new(),
@@ -249,8 +290,17 @@ impl Loop {
         let noted = match request {
             Some(request) => {
                 // The hook runs before the budget check: a hook's note needs
-                // no model call, so the budget never stops it.
-                match self.hook_note(turn, trigger, instructions.as_deref(), &conversation)? {
+                // no model call, so the budget never stops it. It sees the
+                // conversation without the note request, borrowed from the
+                // built request, so no second copy is made.
+                let hooked = {
+                    let conversation: &[Input] = request
+                        .conversation
+                        .split_last()
+                        .map_or(&[], |(_, init)| init);
+                    self.hook_note(turn, trigger, instructions.as_deref(), conversation)?
+                };
+                match hooked {
                     Some(noted) => {
                         // A hook note, a hook failure and a cancel write no
                         // `turn.request` line, because no request is made.
@@ -279,108 +329,24 @@ impl Loop {
                 ))
             }
         };
-        match noted {
-            // The hook runs once the note is ready, with the reason and
-            // not the note; its contexts follow the new opening message.
-            // A `blocking` failure ends the handoff `failed` with
-            // `hook_failed`, and the session goes on. The automatic
-            // trigger does not fire again in that turn.
-            Noted::Note(id) => {
-                let note = Some(Note::Actions { note: vec![id] });
-                // debt: the same three-case map from `Started` to `HandoffCompleted`
-                // is written here and in the tool path; one helper would take the note,
-                // token count and instructions. Upgrade when a third handoff path needs it.
-                let (done, contexts) = match self.handoff_start(turn)? {
-                    Started::Contexts(contexts) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Completed,
-                            error: None,
-                            note,
-                            tokens_before,
-                            instructions,
-                        },
-                        contexts,
-                    ),
-                    Started::Failed(failure) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Failed,
-                            error: Some(failure),
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
-                    Started::Cancelled => (
-                        HandoffCompleted {
-                            outcome: Outcome::Cancelled,
-                            error: None,
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
-                };
-                let outcome = self.restarted(turn, done, contexts)?;
-                if outcome == Outcome::Failed {
-                    self.handoff.blocked = true;
-                }
-                Ok(outcome)
-            }
-            // A hook's note completes like the model's: `handoff_start`
-            // maps it the same way, so a `session_start` failure or cancel
-            // after it ends the handoff `failed` or `cancelled` with no
-            // note, as after the model's.
+        // The hook runs once the note is ready, with the reason and
+        // not the note; its contexts follow the new opening message.
+        // A `blocking` failure ends the handoff `failed` with
+        // `hook_failed`, and the session goes on. The automatic
+        // trigger does not fire again in that turn. A hook's note
+        // completes like the model's: `handoff_start` maps it the same
+        // way, so a `session_start` failure or cancel after it ends the
+        // handoff `failed` or `cancelled` with no note, as after the
+        // model's.
+        let note = match noted {
+            Noted::Note(id) => Note::Actions { note: vec![id] },
             Noted::Hook {
                 note_text,
                 extension,
-            } => {
-                let note = Some(Note::Hook {
-                    note_text,
-                    extension,
-                });
-                // debt: the same three-case map from `Started` to `HandoffCompleted`
-                // is written here and in the tool path; one helper would take the note,
-                // token count and instructions. Upgrade when a third handoff path needs it.
-                let (done, contexts) = match self.handoff_start(turn)? {
-                    Started::Contexts(contexts) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Completed,
-                            error: None,
-                            note,
-                            tokens_before,
-                            instructions,
-                        },
-                        contexts,
-                    ),
-                    Started::Failed(failure) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Failed,
-                            error: Some(failure),
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
-                    Started::Cancelled => (
-                        HandoffCompleted {
-                            outcome: Outcome::Cancelled,
-                            error: None,
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
-                };
-                let outcome = self.restarted(turn, done, contexts)?;
-                if outcome == Outcome::Failed {
-                    self.handoff.blocked = true;
-                }
-                Ok(outcome)
-            }
+            } => Note::Hook {
+                note_text,
+                extension,
+            },
             Noted::Failed(failure) => {
                 #[cfg(test)]
                 if crate::timing_tests::take_fail_handoff_completed() {
@@ -398,7 +364,7 @@ impl Loop {
                     None,
                 )?;
                 self.handoff.blocked = true;
-                Ok(Outcome::Failed)
+                return Ok(Outcome::Failed);
             }
             Noted::Cancelled => {
                 #[cfg(test)]
@@ -416,9 +382,20 @@ impl Loop {
                     turn,
                     None,
                 )?;
-                Ok(Outcome::Cancelled)
+                return Ok(Outcome::Cancelled);
             }
+        };
+        let (done, contexts) = finished(
+            Some(note),
+            tokens_before,
+            instructions,
+            self.handoff_start(turn)?,
+        );
+        let outcome = self.restarted(turn, done, contexts)?;
+        if outcome == Outcome::Failed {
+            self.handoff.blocked = true;
         }
+        Ok(outcome)
     }
 
     /// A tool-started handoff: no `started` and no note request, with the
@@ -433,41 +410,7 @@ impl Loop {
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         let taken = Some(Note::Actions { note });
-        // debt: the same three-case map from `Started` to `HandoffCompleted` is
-        // written here and in the tool path; one helper would take the note,
-        // token count and instructions. Upgrade when a third handoff path needs it.
-        let (done, contexts) = match self.handoff_start(turn)? {
-            Started::Contexts(contexts) => (
-                HandoffCompleted {
-                    outcome: Outcome::Completed,
-                    error: None,
-                    note: taken,
-                    tokens_before,
-                    instructions: None,
-                },
-                contexts,
-            ),
-            Started::Failed(failure) => (
-                HandoffCompleted {
-                    outcome: Outcome::Failed,
-                    error: Some(failure),
-                    note: None,
-                    tokens_before,
-                    instructions: None,
-                },
-                Vec::new(),
-            ),
-            Started::Cancelled => (
-                HandoffCompleted {
-                    outcome: Outcome::Cancelled,
-                    error: None,
-                    note: None,
-                    tokens_before,
-                    instructions: None,
-                },
-                Vec::new(),
-            ),
-        };
+        let (done, contexts) = finished(taken, tokens_before, None, self.handoff_start(turn)?);
         let outcome = self.restarted(turn, done, contexts)?;
         if outcome != Outcome::Completed {
             self.handoff.step_ran = true;
