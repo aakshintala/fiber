@@ -1,5 +1,5 @@
 //! Handoff (`docs/handoff.md`): the context's restart from a note the
-//! session's own model writes. This module holds the settings, context size
+//! session's own model or a `before_handoff` hook writes. This module holds the settings, context size
 //! and automatic check. Its child modules hold the note request, recording,
 //! handoff run, and render state that makes the live conversation and a
 //! resume's rebuild agree.
@@ -16,7 +16,11 @@ use contract::{ActionId, ErrorCode, TurnId};
 use crate::{Error, Loop, Step};
 
 mod carry;
+mod hook;
 mod note;
+
+#[cfg(test)]
+mod hook_tests;
 
 use note::cancelled;
 #[cfg(test)]

@@ -634,6 +634,34 @@ fn stop_stamps_completion_and_drop_emits_it() {
 }
 
 #[test]
+fn a_discarded_timer_writes_no_line() {
+    let home = Home::new("ld-timed-discard");
+    let (inner, spy) = SpyClock::new();
+    let diag = debug_diag(&home, &spy);
+    // Stopped, then discarded: no line, though an end was stamped.
+    let start = inner.now();
+    inner.advance(Duration::from_millis(5));
+    let mut timer = timed(&diag, Op::TurnRequest, None, Some(start)).expect("debug guard");
+    inner.advance(Duration::from_millis(100));
+    timer.stop();
+    timer.discard();
+    // Discarded without a stop: no line either.
+    let timer = timed(&diag, Op::TurnRequest, None, None).expect("debug guard");
+    timer.discard();
+    assert!(!home.path().join("logs").exists(), "no line yet");
+    // Stopped, then dropped: one line with the stamped `ms`.
+    let start = inner.now();
+    inner.advance(Duration::from_millis(5));
+    let mut timer = timed(&diag, Op::TurnRequest, None, Some(start)).expect("debug guard");
+    inner.advance(Duration::from_millis(100));
+    timer.stop();
+    drop(timer);
+    let line = op_line(&home, "hub.log");
+    assert_eq!(line["data"]["op"], "turn.request");
+    assert_eq!(line["data"]["ms"], 105);
+}
+
+#[test]
 fn a_failed_timing_write_is_silent() {
     let home = Home::new("ld-timed-unwritable");
     fs::write(home.path().join("logs"), b"not a directory").unwrap();

@@ -1536,6 +1536,12 @@ impl Session {
         self
     }
 
+    /// Runs the session's hooks.
+    pub(crate) fn hooks(mut self, hooks: Arc<dyn contract::hook::Hooks>) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.hooks(hooks));
+        self
+    }
+
     /// Retries a failed model call with `retry`.
     pub(crate) fn retry(mut self, retry: r#loop::Retry) -> Self {
         self.looped = self.looped.take().map(|looped| looped.retry(retry));

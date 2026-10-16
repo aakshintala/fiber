@@ -409,6 +409,10 @@ pub struct Timer {
     tool: Option<String>,
     start: Instant,
     end: Option<Instant>,
+    /// Dropped without a line when set: the operation's span is held
+    /// across work its line must never cover, and written only on the
+    /// path that made the call the span names.
+    disarmed: bool,
 }
 
 /// Starts an operation's timer on `diag`: the one function every timed
@@ -458,6 +462,7 @@ fn start_timer(
         tool: tool.map(str::to_owned),
         start,
         end: None,
+        disarmed: false,
     })
 }
 
@@ -468,6 +473,13 @@ impl Timer {
         if self.end.is_none() {
             self.end = Some(self.clock.now());
         }
+    }
+
+    /// Disarms the timer: dropping it writes no line. The operation's
+    /// span is held across work its line must never cover, and dropped
+    /// on the path that made the call the span names.
+    pub fn discard(mut self) {
+        self.disarmed = true;
     }
 }
 
@@ -482,6 +494,9 @@ const FRAME_BUDGET: Duration = Duration::from_millis(16);
 
 impl Drop for Timer {
     fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
         let end = self.end.unwrap_or_else(|| self.clock.now());
         // A clock that runs backwards contributes zero: no panic, and no
         // fabricated duration. A stamp from another clock reads zero too.
