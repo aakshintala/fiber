@@ -98,7 +98,7 @@ impl Login {
         let command = id.clone();
         #[cfg(test)]
         let after_finish = self.after_finish.clone();
-        let spawned = spawn(hub, move || {
+        let spawned = crate::connection::spawn(hub, "hub-login", move || {
             let outcome = login.run();
             let outcome = if !answered.swap(true, Ordering::SeqCst) {
                 let error = match outcome {
@@ -264,18 +264,7 @@ fn stale() -> Refused {
         message: "There is no pending device login for this command.".into(),
     }
 }
-fn spawn(hub: &Hub, run: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
-    #[cfg(not(test))]
-    let _ = hub;
-    #[cfg(test)]
-    if lock(&hub.fail_spawn).as_deref() == Some("hub-login") {
-        return Err(std::io::Error::other("the test refused to spawn hub-login"));
-    }
-    std::thread::Builder::new()
-        .name("hub-login".into())
-        .spawn(run)
-        .map(|_| ())
-}
+
 #[cfg(test)]
 #[path = "device_login_tests.rs"]
 mod tests;

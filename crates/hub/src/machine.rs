@@ -9,7 +9,8 @@ use serde_json::{Map, Value, json};
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
 
-type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+/// Callback that shows a device login's URL and code.
+pub type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Configuration on the machine running the hub, not the terminal.
 pub trait Machine: Send + Sync {

@@ -182,7 +182,7 @@ impl hub::FileSearch for FileSearch {
         tui::files::search(&mut self.listing, &self.roots, text, cancelled)
     }
 }
-type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+use hub::ShowCode;
 struct DeviceShow {
     shown: ShowCode,
     opened: Arc<AtomicBool>,

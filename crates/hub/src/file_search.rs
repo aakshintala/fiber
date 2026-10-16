@@ -71,10 +71,11 @@ impl Search {
             let h = hub.clone();
             let w = writer.clone();
             let newest = self.newest.clone();
-            spawn(hub, move || work(inbox, newest, h, w)).map_err(|error| Refused {
-                code: ErrorCode::IoFailed,
-                message: format!("The search could not start: {error}."),
-            })?;
+            crate::connection::spawn(hub, "hub-search", move || work(inbox, newest, h, w))
+                .map_err(|error| Refused {
+                    code: ErrorCode::IoFailed,
+                    message: format!("The search could not start: {error}."),
+                })?;
             self.jobs = Some(out);
         }
         let generation = self.newest.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
@@ -100,20 +101,7 @@ impl Drop for Search {
         self.newest.store(u64::MAX, Ordering::SeqCst);
     }
 }
-fn spawn(hub: &Hub, run: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
-    #[cfg(not(test))]
-    let _ = hub;
-    #[cfg(test)]
-    if crate::connection::lock(&hub.fail_spawn).as_deref() == Some("hub-search") {
-        return Err(std::io::Error::other(
-            "the test refused to spawn hub-search",
-        ));
-    }
-    std::thread::Builder::new()
-        .name("hub-search".into())
-        .spawn(run)
-        .map(|_| ())
-}
+
 fn work(
     inbox: mpsc::Receiver<Job>,
     newest: Arc<AtomicU64>,

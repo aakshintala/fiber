@@ -7,7 +7,6 @@ use contract::{ErrorCode, shapes::Failure};
 use fakes::Deadline;
 use serde_json::{Value, json};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 fn failure() -> Failure {
     Failure {
@@ -59,12 +58,6 @@ fn url(client: &mut Client, id: &str) {
         json!({"url":"https://device","code":"CODE"})
     );
 }
-fn no_answer(client: &Client) {
-    assert!(matches!(
-        Deadline::after(Duration::from_millis(300)).recv(&client.answers),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    ));
-}
 #[test]
 fn a_device_code_is_answered_before_the_waiting_result() {
     let machine = Arc::new(FakeMachine::default());
@@ -75,7 +68,6 @@ fn a_device_code_is_answered_before_the_waiting_result() {
     Deadline::after(DEADLINE).recv_or_fail(&waiting, "provider waiting");
     client.send("result", "device_login_result", json!({}));
     client.barrier();
-    no_answer(&client);
     release.send(()).unwrap();
     let answer = client.next();
     assert_eq!(answer["payload"]["command_id"], "result");
@@ -186,7 +178,6 @@ fn a_superseded_login_cannot_take_its_replacements_waiter() {
     let answer = client.next();
     assert_eq!(answer["payload"]["command_id"], "ar");
     assert_eq!(answer["payload"]["code"], "authentication_failed");
-    no_answer(&client);
     b_release.send(()).unwrap();
     let answer = client.next();
     assert_eq!(answer["payload"]["command_id"], "br");

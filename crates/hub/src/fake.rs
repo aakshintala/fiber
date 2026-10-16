@@ -856,7 +856,7 @@ pub(crate) struct FakeLogin {
     pub(crate) cancelled: std::sync::mpsc::Sender<()>,
     pub(crate) stopped: std::sync::atomic::AtomicBool,
 }
-type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+use crate::ShowCode;
 struct FakeDeviceLogin {
     script: Option<Arc<FakeLogin>>,
     shown: ShowCode,

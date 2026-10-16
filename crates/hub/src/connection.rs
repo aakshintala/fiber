@@ -1051,6 +1051,25 @@ fn contains_null(value: &Value) -> bool {
     }
 }
 
+pub(crate) fn spawn(
+    hub: &Hub,
+    name: &str,
+    run: impl FnOnce() + Send + 'static,
+) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = hub;
+    #[cfg(test)]
+    if lock(&hub.fail_spawn).as_deref() == Some(name) {
+        return Err(std::io::Error::other(format!(
+            "the test refused to spawn {name}"
+        )));
+    }
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(run)
+        .map(|_| ())
+}
+
 pub(crate) fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
