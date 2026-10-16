@@ -1025,13 +1025,22 @@ fn the_changed_files_rows_match_the_doc() {
     );
     let mut run = turned(&setup, "go");
     let grid = run.wait_screen("the changed-files panel card", |grid| {
-        panel_item_at(grid, "changed.txt").is_some()
+        session_settled(grid) && panel_item_at(grid, "changed.txt").is_some()
     });
     let (_, y) = panel_item_at(&grid, "changed.txt").unwrap();
     let x = col_at(&grid, y + 1, "+2");
     click(&mut run, x, y + 1);
     let grid = run.wait_screen("the changed-file row and inks", changed_file_row_ready);
     assert!(changed_file_row_ready(&grid));
+}
+
+/// The Session card once its `cost` row is drawn: while spend is
+/// still settling the row is absent and the cards below it sit one row
+/// higher, so a wait that supplies coordinates for a later click or
+/// hover holds until the row lands (`crates/tui/src/view/panel.rs`,
+/// `session_rows`). The `cost` label draws only with the row.
+fn session_settled(grid: &Grid) -> bool {
+    panel_item_at(grid, "cost").is_some()
 }
 
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
@@ -1059,6 +1068,7 @@ fn the_item_views_top_row_closes_them() {
         grid.contents.contains(REPLY)
             && panel_item_at(grid, "review the diff").is_some()
             && panel_item_at(grid, "Jobs").is_some()
+            && session_settled(grid)
     });
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
@@ -1074,14 +1084,15 @@ fn the_item_views_top_row_closes_them() {
         ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
-            panel_card_item_at(grid, card, description).is_some()
+            session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
         });
         let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
         // The hover frame acknowledges this cell as a live click target.
         // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
         run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
         run.wait_screen("the running item's hover acknowledgement", |grid| {
-            panel_card_item_at(grid, card, description) == Some((x, y))
+            session_settled(grid)
+                && panel_card_item_at(grid, card, description) == Some((x, y))
                 && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)
         });
         click(&mut run, x, y);
