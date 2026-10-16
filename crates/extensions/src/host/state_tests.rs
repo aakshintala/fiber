@@ -33,6 +33,46 @@ fn store_landings_count_only_accepted_writes_and_admission_is_monotone() {
     }
 }
 
+#[test]
+fn store_close_preserves_reads_and_outbox_but_refuses_every_write() {
+    let registry = registry();
+    let store = registry.store("goal");
+    store
+        .set(Scope::Other, "k", json!(1), OnFork::AtPoint)
+        .unwrap();
+    let oversize = Value::String("x".repeat(MAX_BYTES - 1));
+    assert!(matches!(
+        store.set(Scope::Other, "k", oversize.clone(), OnFork::Latest),
+        Err(StateError::TooLarge { .. })
+    ));
+    registry.close();
+    registry.close();
+    assert_eq!(
+        store.set(Scope::Other, "k", json!(2), OnFork::Fresh),
+        Err(StateError::Closing)
+    );
+    assert_eq!(store.unset(Scope::Other, "k"), Err(StateError::Closing));
+    assert_eq!(
+        store.unset(Scope::Other, "missing"),
+        Err(StateError::Closing)
+    );
+    assert_eq!(
+        store.set(Scope::Other, "k", oversize, OnFork::Latest),
+        Err(StateError::Closing)
+    );
+    assert_eq!(store.get("k"), Some(json!(1)));
+    assert_eq!(store.keys(), ["k"]);
+    assert_eq!(registry.take_outbox().len(), 1);
+    assert!(registry.take_outbox().is_empty());
+    let other = registry.store("other");
+    assert_eq!(
+        other.set(Scope::Other, "k", json!(1), OnFork::AtPoint),
+        Err(StateError::Closing)
+    );
+    assert_eq!(other.get("k"), None);
+    assert!(registry.take_outbox().is_empty());
+}
+
 fn registry() -> std::sync::Arc<StateRegistry> {
     StateRegistry::new(StateSeed::new())
 }

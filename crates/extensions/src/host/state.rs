@@ -17,6 +17,7 @@ pub(crate) enum Scope {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum StateError {
     TooLarge { bytes: usize },
+    Closing,
 }
 
 #[derive(Default)]
@@ -29,6 +30,7 @@ struct Key {
 struct Inner {
     extensions: BTreeMap<String, BTreeMap<String, Key>>,
     landing: u64,
+    closed: bool,
     outbox: Vec<StateLine>,
 }
 
@@ -88,6 +90,10 @@ impl StateRegistry {
 
     pub(crate) fn admit(&self, lines: Vec<StateLine>) -> Vec<Event> {
         admit(&mut self.lock(), lines)
+    }
+
+    pub(crate) fn close(&self) {
+        self.lock().closed = true;
     }
 }
 
@@ -157,6 +163,9 @@ impl ExtensionState {
     ) -> Result<(), StateError> {
         let bytes = value.to_string().len();
         let mut inner = self.lock();
+        if inner.closed {
+            return Err(StateError::Closing);
+        }
         if bytes > MAX_BYTES {
             return Err(StateError::TooLarge { bytes });
         }
@@ -186,6 +195,9 @@ impl ExtensionState {
 
     pub(crate) fn unset(&self, _scope: Scope, key: &str) -> Result<(), StateError> {
         let mut inner = self.lock();
+        if inner.closed {
+            return Err(StateError::Closing);
+        }
         let entry = inner
             .extensions
             .entry(self.extension.clone())
