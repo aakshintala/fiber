@@ -1617,7 +1617,7 @@ fn many_groups() -> String {
             push(
                 "text_completed",
                 Some(&message),
-                json!({"text": "the session holds every line in order ".repeat(1)}),
+                json!({"text": "the session holds every line in order ".to_owned()}),
             );
             push(
                 "assistant_message_completed",
