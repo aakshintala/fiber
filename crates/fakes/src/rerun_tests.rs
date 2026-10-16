@@ -155,11 +155,15 @@ fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_
     }
     let dir = crate::TempDir::new("fiber-rerun-leftover");
     let pid_file = dir.path().join("sleeper.pid");
+    // The group-empty wait is half of this, and the kill's own reap
+    // needs the other half on a loaded host.
+    const REAP: Duration = Duration::from_secs(4);
     let outcome = std::panic::catch_unwind(|| {
-        rerun_prepared(
+        rerun_bounded(
             TEST,
             &[(CHILD, "1"), (PID_FILE, pid_file.to_str().unwrap())],
             Duration::from_secs(10),
+            REAP,
             |_| {},
         )
     });

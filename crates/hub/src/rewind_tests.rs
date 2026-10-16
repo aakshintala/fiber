@@ -39,6 +39,11 @@ const DEADLINE: Duration = Duration::from_secs(10);
 /// so a stalled opener fails the test instead of hanging the suite.
 const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 
+/// How long the negative wait in `race_openers` holds the second opener's
+/// pause unreached: the same 200 ms bound the fakes hold tests use for
+/// the same kind of wait.
+const GATE_QUIET: Duration = Duration::from_millis(200);
+
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -1634,7 +1639,11 @@ fn race_openers(
         Deadline::after(OPEN_DEADLINE).recv(&reached).is_ok(),
         "the second opener reached the gate"
     );
-    if Deadline::after(OPEN_DEADLINE).recv(&paused_second).is_err() {
+    // The second opener queues behind the first on the gate instead of
+    // pausing: the 200 ms bound holds the pause unreached with no signal,
+    // and a late signal only takes the gated branch, where the test still
+    // fails on the two relays it then finds.
+    if Deadline::after(GATE_QUIET).recv(&paused_second).is_err() {
         drop(release_first);
         assert!(
             Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
