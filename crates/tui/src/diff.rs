@@ -121,8 +121,9 @@ fn parse_hunk(line: &str) -> Option<(u64, u64)> {
 /// block of consecutive removed lines then consecutive added lines, so a
 /// removed line after an added one starts a new run.
 fn pair_runs(lines: &mut [DiffLine]) {
-    let mut block: Vec<usize> = Vec::new();
-    let mut saw_added = false;
+    let mut first_removed: Option<usize> = None;
+    let mut first_added: Option<usize> = None;
+    let mut exact = true;
     for index in 0..lines.len() {
         let kind = lines
             .get(index)
@@ -130,41 +131,53 @@ fn pair_runs(lines: &mut [DiffLine]) {
             .unwrap_or(DiffKind::Note);
         match kind {
             DiffKind::Removed => {
-                if saw_added {
-                    flush_block(&mut block, lines);
-                    saw_added = false;
+                if first_added.is_some() {
+                    flush_pair(first_removed, first_added, exact, lines);
+                    (first_removed, first_added, exact) = (None, None, true);
                 }
-                block.push(index);
+                if first_removed.is_some() {
+                    exact = false;
+                } else {
+                    first_removed = Some(index);
+                }
             }
             DiffKind::Added => {
-                saw_added = true;
-                block.push(index);
+                if first_added.is_some() {
+                    exact = false;
+                } else {
+                    first_added = Some(index);
+                }
             }
             DiffKind::Hunk | DiffKind::Context | DiffKind::Note => {
-                flush_block(&mut block, lines);
-                saw_added = false;
+                flush_pair(first_removed, first_added, exact, lines);
+                (first_removed, first_added, exact) = (None, None, true);
             }
         }
     }
-    flush_block(&mut block, lines);
+    flush_pair(first_removed, first_added, exact, lines);
 }
 
-/// Marks one finished block when it holds exactly one removed line then
-/// one added line. The two indices arrive in order, the removed first:
-///
-/// a `-` after a `+` flushes before it is pushed, so a block longer than
-/// two never holds the 1-and-1 shape.
-fn flush_block(block: &mut Vec<usize>, lines: &mut [DiffLine]) {
-    if let [removed_at, added_at] = block.as_slice() {
-        let (removed_at, added_at) = (*removed_at, *added_at);
-        if removed_at < added_at
-            && let (head, tail) = lines.split_at_mut(added_at)
-            && let (Some(removed), Some(added)) = (head.get_mut(removed_at), tail.first_mut())
-        {
-            pair_words(removed, added);
-        }
+/// Marks one finished run when it holds exactly one removed line then
+/// one added line: the removed index always precedes the added one,
+/// because a `-` after a `+` starts a new run.
+fn flush_pair(
+    removed: Option<usize>,
+    added: Option<usize>,
+    exact: bool,
+    lines: &mut [DiffLine],
+) {
+    if !exact {
+        return;
     }
-    block.clear();
+    let (Some(first), Some(second)) = (removed, added) else {
+        return;
+    };
+    if first < second
+        && let (head, tail) = lines.split_at_mut(second)
+        && let (Some(removed), Some(added)) = (head.get_mut(first), tail.first_mut())
+    {
+        pair_words(removed, added);
+    }
 }
 
 /// A word's text, or none when its range left the line.
