@@ -93,12 +93,30 @@ fn pdf_bytes(pages: usize) -> Vec<u8> {
 }
 
 fn load(bytes: &[u8]) -> lopdf::Result<lopdf::Document> {
-    lopdf::Document::load_mem_with_options(bytes, super::load_options())
+    load_within(bytes, super::MAX_DECOMPRESSED_BYTES)
 }
+
+fn load_within(bytes: &[u8], limit: usize) -> lopdf::Result<lopdf::Document> {
+    lopdf::Document::load_mem_with_options(bytes, super::load_options(limit))
+}
+
+/// A lowered object-stream limit the fixed tests run at: 1 MiB builds in
+/// milliseconds while still reaching the limit from both sides.
+const LIMIT: usize = 1 << 20;
 
 fn child(arguments: &[OsString]) -> (i32, String, String) {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let code = run(arguments, &mut stdout, &mut stderr);
+    (
+        code,
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
+fn child_within(arguments: &[OsString], limit: usize) -> (i32, String, String) {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let code = super::run_within(arguments, &mut stdout, &mut stderr, limit);
     (
         code,
         String::from_utf8(stdout).unwrap(),
@@ -624,6 +642,15 @@ fn non_pdf_truncated_and_zero_page_pdfs_exit_1() {
 }
 
 #[test]
+fn the_production_limit_is_64_mib() {
+    assert_eq!(super::MAX_DECOMPRESSED_BYTES, 64 << 20);
+    assert_eq!(
+        super::load_options(super::MAX_DECOMPRESSED_BYTES).max_decompressed_size,
+        Some(64 << 20)
+    );
+}
+
+#[test]
 fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-over");
     let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES + 1);
@@ -645,7 +672,7 @@ fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
 #[test]
 fn an_object_stream_at_the_limit_loads_and_writes_the_input_bytes() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-at");
-    let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES);
+    let bytes = objstm_pdf(LIMIT);
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
         OsString::from("pdf"),
@@ -654,7 +681,7 @@ fn an_object_stream_at_the_limit_loads_and_writes_the_input_bytes() {
         OsString::from("p_at"),
         OsString::from("whole=10"),
     ];
-    let (code, stdout, stderr) = child(&arguments);
+    let (code, stdout, stderr) = child_within(&arguments, LIMIT);
     assert_eq!((code, stderr.as_str()), (0, ""));
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
@@ -682,10 +709,10 @@ fn an_object_stream_under_the_limit_loads_and_cuts() {
 
 #[test]
 fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_nothing() {
-    let bytes = objstm_pdf_with_plain_pages(super::MAX_DECOMPRESSED_BYTES + 1);
+    let bytes = objstm_pdf_with_plain_pages(LIMIT + 1);
     // Both pages survive the lenient load: without the refusal the file
     // would run with objects silently missing.
-    assert_eq!(load(&bytes).unwrap().get_pages().len(), 2);
+    assert_eq!(load_within(&bytes, LIMIT).unwrap().get_pages().len(), 2);
     let dir = fakes::TempDir::new("fiber-pdf-objstm-over-beside");
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
@@ -695,7 +722,7 @@ fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_noth
         OsString::from("p_over_beside"),
         OsString::from("whole=10"),
     ];
-    let (code, stdout, stderr) = child(&arguments);
+    let (code, stdout, stderr) = child_within(&arguments, LIMIT);
     assert_eq!(code, 1);
     assert!(stdout.is_empty());
     assert!(!stderr.is_empty());
@@ -704,7 +731,7 @@ fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_noth
 
 #[test]
 fn an_object_stream_at_the_limit_beside_two_plain_pages_loads_two_pages() {
-    let bytes = objstm_pdf_with_plain_pages(super::MAX_DECOMPRESSED_BYTES);
+    let bytes = objstm_pdf_with_plain_pages(LIMIT);
     let dir = fakes::TempDir::new("fiber-pdf-objstm-at-beside");
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
@@ -714,12 +741,36 @@ fn an_object_stream_at_the_limit_beside_two_plain_pages_loads_two_pages() {
         OsString::from("p_at_beside"),
         OsString::from("whole=10"),
     ];
-    let (code, stdout, stderr) = child(&arguments);
+    let (code, stdout, stderr) = child_within(&arguments, LIMIT);
     assert_eq!((code, stderr.as_str()), (0, ""));
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(value.get("page_count"), Some(&serde_json::json!(2)));
     assert_eq!(
         std::fs::read(dir.path().join("p_at_beside.pdf")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn run_loads_an_object_stream_past_the_lowered_limit() {
+    // The production path passes a limit above LIMIT: a stream twice the
+    // lowered limit still loads and writes through `run`.
+    let dir = fakes::TempDir::new("fiber-pdf-objstm-above-lowered");
+    let bytes = objstm_pdf(2 * LIMIT);
+    let input = write_input(dir.path(), "in.pdf", &bytes);
+    let arguments = vec![
+        OsString::from("pdf"),
+        input.into_os_string(),
+        dir.path().as_os_str().to_owned(),
+        OsString::from("p_above"),
+        OsString::from("whole=10"),
+    ];
+    let (code, stdout, stderr) = child(&arguments);
+    assert_eq!((code, stderr.as_str()), (0, ""));
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(value.get("page_count"), Some(&serde_json::json!(1)));
+    assert_eq!(
+        std::fs::read(dir.path().join("p_above.pdf")).unwrap(),
         bytes
     );
 }

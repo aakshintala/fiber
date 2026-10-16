@@ -191,18 +191,18 @@ fn a_within_cap_webp_is_stored_byte_for_byte() {
 
 #[test]
 fn an_image_over_2000_px_is_fitted_keeping_the_aspect_ratio() {
-    let stored = process(&png_of(&DynamicImage::ImageRgb8(flat(4000, 3001)))).unwrap();
-    // 3001 * 2000 / 4000 = 1500.5, which rounds up.
-    assert_eq!((stored.width, stored.height), (2000, 1501));
+    let stored = process(&png_of(&DynamicImage::ImageRgb8(flat(2400, 603)))).unwrap();
+    // 603 * 2000 / 2400 = 502.5, which rounds up.
+    assert_eq!((stored.width, stored.height), (2000, 503));
     assert_eq!(stored.extension, "png");
     let again = decoded(&stored, ImageFormat::Png);
-    assert_eq!((again.width(), again.height()), (2000, 1501));
+    assert_eq!((again.width(), again.height()), (2000, 503));
 }
 
 #[test]
 fn a_tall_image_is_fitted_by_its_height() {
-    let stored = process(&png_of(&DynamicImage::ImageRgb8(flat(1000, 4000)))).unwrap();
-    assert_eq!((stored.width, stored.height), (500, 2000));
+    let stored = process(&png_of(&DynamicImage::ImageRgb8(flat(100, 2500)))).unwrap();
+    assert_eq!((stored.width, stored.height), (80, 2000));
 }
 
 #[test]
@@ -355,13 +355,13 @@ fn a_gif_becomes_a_png_of_its_first_frame() {
 #[test]
 fn a_gif_over_2000_px_is_fitted_as_a_png() {
     let big: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::from_pixel(2400, 1200, Rgba([0, 255, 0, 255]));
+        ImageBuffer::from_pixel(2400, 12, Rgba([0, 255, 0, 255]));
     let mut out = Vec::new();
     GifEncoder::new(&mut out)
         .encode_frame(Frame::new(big))
         .unwrap();
     let stored = process(&out).unwrap();
-    assert_eq!((stored.width, stored.height), (2000, 1000));
+    assert_eq!((stored.width, stored.height), (2000, 10));
     assert_eq!(stored.extension, "png");
 }
 

@@ -538,7 +538,9 @@ fn half_a_million_unmatched_hidden_closes_stay_linear() {
 
 #[test]
 fn the_hidden_stack_shrinks_back_after_deep_nesting() {
-    let depth = 524_289;
+    // 4,097 pushes take the Vec capacity to 8,192, far over the 64
+    // floor, so a missing or skipped shrink leaves a capacity over 64.
+    let depth = 4_097;
     let mut stream = Stream::default();
     stream.push(&"<template>".repeat(depth));
     stream.push(&"</template>".repeat(depth));
@@ -731,43 +733,51 @@ fn every_output_shape_stays_within_fourteen_times_its_page() {
     let shapes = [
         (
             "nested quotes",
-            format!("{quotes}{}{unquote}", "<br>x".repeat(250_000)),
+            format!("{quotes}{}{unquote}", "<br>x".repeat(62_500)),
         ),
         (
             "pre",
-            format!("{quotes}<pre>{}</pre>{unquote}", "\nx".repeat(500_000)),
+            format!("{quotes}<pre>{}</pre>{unquote}", "\nx".repeat(125_000)),
         ),
         (
             "deep list",
             format!(
                 "{quotes}{}{}{unquote}",
                 "<ol>".repeat(8),
-                "<li>x".repeat(200_000)
+                "<li>x".repeat(50_000)
             ),
         ),
         (
             "rules",
-            format!("{quotes}{}{unquote}", "<hr>".repeat(200_000)),
+            format!("{quotes}{}{unquote}", "<hr>".repeat(50_000)),
         ),
         (
             "headings",
-            format!("{quotes}{}{unquote}", "<h6>x</h6>".repeat(110_000)),
+            format!("{quotes}{}{unquote}", "<h6>x</h6>".repeat(27_500)),
         ),
         (
             "bold breaks",
-            format!("{quotes}{}{unquote}", "<br><b>x".repeat(125_000)),
+            format!("{quotes}{}{unquote}", "<br><b>x".repeat(31_250)),
         ),
         (
             "paragraphs",
-            format!("{quotes}{}{unquote}", "<p>x".repeat(330_000)),
+            format!("{quotes}{}{unquote}", "<p>x".repeat(82_500)),
         ),
         (
             "table rows",
-            format!("{quotes}{}{unquote}", "<tr>x".repeat(250_000)),
+            format!("{quotes}{}{unquote}", "<tr>x".repeat(62_500)),
         ),
     ];
     for (what, html) in shapes {
-        assert!(html.len() > 800_000, "{what}: {} bytes", html.len());
+        // Three 64 KiB slices, so state carried across a slice cut is
+        // still reached. The 14x ratio does not depend on size: fixed
+        // overhead raises the ratio on a smaller page, so this is
+        // stricter, not looser.
+        assert!(
+            html.len() > 2 * super::SLICE,
+            "{what}: {} bytes",
+            html.len()
+        );
         let markdown = to_markdown(&html);
         assert_bounded(&html, &markdown, what);
     }

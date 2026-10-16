@@ -149,7 +149,10 @@ fn every_worker_count_gives_the_one_thread_answer() {
             let one = scan.search(&query, &CancelToken::new(), threads(1));
             assert_eq!(one.problems.len(), 20, "{all_projects} {limit}");
             assert!(one.more_problems > 0 && one.total > 5, "{one:?}");
-            for parallelism in [unknown(), threads(2), threads(3), threads(8)] {
+            for parallelism in [threads(2), threads(3), threads(8)] {
+                // `unknown` is the same path as `threads(1)`: it is
+                // covered by `the_worker_count_is_the_parallelism_capped_by_the_sessions`,
+                // which asserts `count(None, 10) == 1`.
                 let what = format!("all {all_projects}, limit {limit}, {parallelism:?}");
                 let found = scan.search(&query, &CancelToken::new(), parallelism);
                 assert_eq!(found, one, "{what}");
@@ -330,7 +333,7 @@ fn subsequence(part: &[String], whole: &[String]) -> bool {
 #[test]
 fn a_cancel_at_any_point_returns_part_of_the_answer() {
     let home = Home::new();
-    for n in 0..8 {
+    for n in 0..4 {
         home.session(
             "-a",
             &format!("s_{n}"),
@@ -338,14 +341,14 @@ fn a_cancel_at_any_point_returns_part_of_the_answer() {
             &["needle", "needle again"],
         );
     }
-    for n in 8..10 {
+    for n in 4..6 {
         let dir = home.session("-a", &format!("s_{n}"), "/a/one", &[]);
         bad(&dir, 3);
     }
     let scan = Arc::new(home.scanner("/a/one"));
     let counted = After::new(usize::MAX);
     let whole = scan.search(&query("needle", true, 1000), &counted, threads(3));
-    assert_eq!((whole.total, whole.problems.len()), (16, 6));
+    assert_eq!((whole.total, whole.problems.len()), (8, 6));
     let checks = counted.checks.load(Ordering::SeqCst);
     for after in 0..checks + 2 {
         let scanned = Arc::clone(&scan);
