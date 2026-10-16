@@ -225,6 +225,8 @@ impl Spill {
         Spilled {
             head,
             tail,
+            head_bytes: head_used,
+            tail_bytes: tail_used,
             removed,
             file,
         }

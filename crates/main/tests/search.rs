@@ -201,6 +201,51 @@ fn find_lists_the_tree() {
 }
 
 #[test]
+fn shell_grep_details_reach_the_built_binary_without_a_second_search() {
+    use serde_json::json;
+    let setup = Setup::new_with_workspace();
+    setup.write(
+        "src/a.rs",
+        &("plain\n".repeat(10) + "fn f() {\nlet needle = 1;\n"),
+    );
+    let fiber = PathBuf::from(env!("CARGO_BIN_EXE_fiber"));
+    let shell = Arc::new(tools::Shell::new(setup.workspace(), FakeClock::new()).with_search(fiber));
+    let token = CancelToken::new();
+    let _cancel = CancelOnDrop(token.clone());
+    let run = |command: &str| {
+        let shell = Arc::clone(&shell);
+        let token = token.clone();
+        let command = command.to_owned();
+        support::bounded(setup.deadline, "shell grep details", move || {
+            let mut arguments = Map::new();
+            arguments.insert("command".into(), Value::String(command));
+            shell.run(&arguments, &token, &fakes::emit::Recorder::default())
+        })
+    };
+    let output = run("grep -n -C1 needle src/a.rs");
+    assert_eq!(
+        output.details,
+        Some(json!({
+            "command":"grep -n -C1 needle src/a.rs", "exit_code":0,
+            "matches":[{"path":"src/a.rs", "lines":[
+                {"line":11,"text":"fn f() {","spans":[]},
+                {"line":12,"text":"let needle = 1;","spans":[[4,10]]}
+            ]}]
+        }))
+    );
+    for command in [
+        "printf 'needle\\n' | grep needle",
+        "grep -c needle src/a.rs",
+    ] {
+        let output = run(command);
+        assert_eq!(
+            output.details,
+            Some(json!({"command":command, "exit_code":0}))
+        );
+    }
+}
+
+#[test]
 fn shell_functions_reach_the_built_binary() {
     let setup = Setup::new_with_workspace();
     setup.write(".gitignore", "target/\n");

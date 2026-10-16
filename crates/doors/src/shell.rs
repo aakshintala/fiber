@@ -159,6 +159,7 @@ fn answered_spilled(
         tail,
         removed,
         file,
+        ..
     } = spilled;
     match file {
         Ok(kept) => {

@@ -126,6 +126,103 @@ fn text(dir: &fakes::TempDir, args: &[&str], stdin: &str) -> (i32, String, Strin
 }
 
 #[test]
+fn recording_matches_leaves_the_search_output_unchanged() {
+    use super::run_recording;
+    use crate::search::matches::LIMIT;
+    use serde_json::{Value, json};
+    let dir = text_tree(&BTreeMap::from([(
+        "a.txt",
+        "before\nneedle needle\nafter\n",
+    )]));
+    let side_dir = fakes::TempDir::new("fiber-grep-side");
+    for words in [
+        vec!["-n", "-C1", "needle", "a.txt"],
+        vec!["needle", "a.txt"],
+        vec!["-r", "needle"],
+    ] {
+        let side = side_dir.path().join("matches");
+        let args: Vec<OsString> = words.iter().map(OsString::from).collect();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = run_recording(
+            dir.path(),
+            &args,
+            &mut Cursor::new(b""),
+            &mut stdout,
+            &mut stderr,
+            Some((&side, LIMIT)),
+        );
+        let Outcome::Done(code) = outcome else {
+            panic!("recorded search fell back");
+        };
+        assert_eq!((code, stdout, stderr), search(&dir, &words, b""));
+        let records: Vec<Value> = fs::read_to_string(&side)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let matched = json!({"path":"a.txt","line":2,"text":"needle needle","spans":[[0,6],[7,13]],"context":false});
+        let expected = if words.contains(&"-C1") {
+            vec![
+                json!({"path":"a.txt","line":1,"text":"before","spans":[],"context":true}),
+                matched,
+                json!({"path":"a.txt","line":3,"text":"after","spans":[],"context":true}),
+            ]
+        } else {
+            vec![matched]
+        };
+        assert_eq!(records, expected);
+        fs::remove_file(side).unwrap();
+    }
+}
+
+#[test]
+fn modes_without_match_lines_and_fallbacks_write_no_side_file() {
+    use super::run_recording;
+    use crate::search::matches::LIMIT;
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\nother\n")]));
+    let side = dir.path().join("matches");
+    for words in [
+        vec!["-c", "needle", "a.txt"],
+        vec!["-l", "needle", "a.txt"],
+        vec!["-o", "needle", "a.txt"],
+        vec!["-v", "needle", "a.txt"],
+        vec!["needle"],
+        vec!["needle", "-"],
+        vec!["needle", "a.txt", "-"],
+        vec![r"\(needle\)\1", "a.txt"],
+        vec!["--unknown", "needle", "a.txt"],
+        vec!["-l", "-c", "needle", "a.txt"],
+        vec!["-o", "-v", "needle", "a.txt"],
+        vec!["-o", "-C1", "needle", "a.txt"],
+    ] {
+        let args: Vec<OsString> = words.iter().map(OsString::from).collect();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let _outcome = run_recording(
+            dir.path(),
+            &args,
+            &mut Cursor::new(b"needle\n"),
+            &mut stdout,
+            &mut stderr,
+            Some((&side, LIMIT)),
+        );
+        assert!(!side.exists(), "{words:?}");
+    }
+    let args: Vec<OsString> = ["absent", "a.txt"].iter().map(OsString::from).collect();
+    let outcome = run_recording(
+        dir.path(),
+        &args,
+        &mut Cursor::new(b""),
+        &mut Vec::new(),
+        &mut Vec::new(),
+        Some((&side, LIMIT)),
+    );
+    assert!(matches!(outcome, Outcome::Done(1)));
+    assert_eq!(fs::read(&side).unwrap(), b"");
+}
+
+#[test]
 fn a_filter_reads_standard_input() {
     let dir = text_tree(&BTreeMap::from([("a.txt", "a\n")]));
     let (code, stdout, stderr) = text(&dir, &["b"], "a\nb\nc\n");

@@ -789,6 +789,7 @@ impl Loop {
             changes,
             control,
             artifact: shaped.artifact,
+            kept: shaped.kept,
             content: shaped.content,
             changed_by: shaped.changed_by,
             ..completed(String::new(), None)

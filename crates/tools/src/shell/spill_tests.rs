@@ -76,6 +76,27 @@ fn a_crossing_chunk_spills_from_the_first_byte() {
 }
 
 #[test]
+fn spilled_raw_counts_do_not_count_lossy_replacement_bytes() {
+    let dir = TempDir::new("fiber-spill-raw-counts");
+    let mut bytes = vec![b'a'; 200];
+    bytes[0] = 0xff;
+    bytes[195] = 0xff;
+    let spilled = Spill::start(config(&dir, 8, 24), bytes).close(None, "Exit code 0.");
+    let file = std::fs::read(dir.path().join("s_test.txt")).unwrap();
+    assert_eq!(spilled.head_bytes, 6);
+    assert_eq!(spilled.tail_bytes, 22);
+    assert_eq!(
+        spilled.head_bytes + spilled.removed + spilled.tail_bytes,
+        file.len() as u64
+    );
+    assert_eq!(String::from_utf8_lossy(&file[..6]), spilled.head);
+    assert_eq!(
+        String::from_utf8_lossy(&file[file.len() - 22..]),
+        spilled.tail
+    );
+}
+
+#[test]
 fn close_holds_only_the_two_ends_and_accounts_every_byte() {
     let dir = TempDir::new("fiber-spill-ends");
     let spill = Spill::start(config(&dir, 8192, 8192), vec![b'a'; SPILL_AT]);

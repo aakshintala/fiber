@@ -281,6 +281,10 @@ pub struct Spilled {
     pub head: String,
     /// The last bytes, decoded.
     pub tail: String,
+    /// Raw bytes decoded into `head`.
+    pub head_bytes: u64,
+    /// Raw bytes decoded into `tail`.
+    pub tail_bytes: u64,
     /// Raw bytes neither holds.
     pub removed: u64,
     /// The kept file, or why it was not kept.

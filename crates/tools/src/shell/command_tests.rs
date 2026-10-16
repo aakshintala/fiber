@@ -312,6 +312,7 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
             MovePolicy::Stay,
             None,
             None,
+            None,
         )
         .unwrap();
         let super::Ran::Finished(finished) = ran else {
@@ -960,6 +961,7 @@ impl Job {
             MovePolicy::Background,
             None,
             None,
+            None,
         )
         .unwrap();
         let super::Ran::Moved(mut moved) = ran else {
@@ -1171,6 +1173,7 @@ fn a_foreground_command_past_a_mebibyte_spills() {
                 MovePolicy::Foreground,
                 None,
                 Some(spill_config(&artifacts)),
+                None,
             )
             .unwrap()
         },
@@ -1220,6 +1223,7 @@ fn a_command_moved_at_once_never_spills() {
                 MovePolicy::Background,
                 None,
                 Some(spill_config(&artifacts)),
+                None,
             )
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
@@ -1278,6 +1282,7 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
                 MovePolicy::Background,
                 None,
                 Some(spill_config(&artifacts)),
+                None,
             )
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
@@ -1340,6 +1345,7 @@ fn a_resumed_command_arms_the_spill() {
                 MovePolicy::Background,
                 None,
                 Some(spill_config(&artifacts)),
+                None,
             )
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
