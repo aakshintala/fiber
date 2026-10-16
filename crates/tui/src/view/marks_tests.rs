@@ -886,8 +886,10 @@ fn the_bar_hides_while_the_results_are_open() {
     let (buf, targets) = draw(&app, 40, 12);
     let text = super::super::text(&buf);
     assert!(
-        !text.contains("⌕"),
-        "the bar draws nothing over the results"
+        text.lines().next().is_some_and(|row| {
+            row.starts_with(" Search  ⌕ needle") && row.ends_with("Esc returns")
+        }),
+        "the results top row draws without the bar over it: {text:?}"
     );
     assert!(
         targets
