@@ -2037,21 +2037,15 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     session_peer
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_unknown\"}}\n")
         .unwrap();
-    session_peer.flush().unwrap();
-    let mut unknown = String::new();
-    let suppressed = match read.read_line(&mut unknown) {
-        Err(error) => matches!(
-            error.kind(),
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-        ),
-        Ok(_) => false,
-    };
     session_peer
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_known\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    let mut known = String::new();
-    read.read_line(&mut known).unwrap();
+    // The relay forwards in stream order, so a forwarded unknown
+    // acknowledgement would be the first line: the first line is the
+    // known one. The read keeps the 4 s socket deadline.
+    let mut first = String::new();
+    read.read_line(&mut first).unwrap();
     // Closing the session's end ends the relay's read, as a session's
     // exit does: a shutdown on macOS can leave the blocked read waiting.
     drop(session_peer);
@@ -2063,9 +2057,11 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         "the relay thread ends once the session closes"
     );
 
-    let known: Value = serde_json::from_str(known.trim_end()).unwrap();
-    assert!(suppressed, "an unknown acknowledgement is not forwarded");
-    assert_eq!(known["payload"]["command_id"], "c_known");
+    let first: Value = serde_json::from_str(first.trim_end()).unwrap();
+    assert_eq!(
+        first["payload"]["command_id"], "c_known",
+        "an unknown acknowledgement is not forwarded"
+    );
 }
 
 #[test]
