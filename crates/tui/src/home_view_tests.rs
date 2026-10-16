@@ -1070,6 +1070,68 @@ fn home_chips() {
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
 }
 
+/// A remote home before a choice, with the same four workspaces as the
+/// prototype's remote picker, expressed as absolute paths on the hub.
+fn remote_picker_frame(recents: bool) -> String {
+    let mut app = home(80, 24);
+    app.set_home(Launch {
+        hub: Some("box".to_owned()),
+        workspace: PathBuf::from("/sentinel/launch-dir"),
+        version: "0.0.1".to_owned(),
+        logo_glyph: "⌇".to_owned(),
+        model: Some("test/model".to_owned()),
+        thinking: Some("high".to_owned()),
+        ..Default::default()
+    });
+    app.on_line(hello());
+    if recents {
+        for (i, workspace) in [
+            "/hub/work/fiber",
+            "/hub/work/fiber-worktrees",
+            "/hub/work/beacon",
+            "/hub/work/pi-rig",
+        ]
+        .iter()
+        .enumerate()
+        {
+            app.on_line(status_in(&format!("s_{i:016x}"), "hub session", workspace));
+        }
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let frame = text(&buf);
+    let (y, line) = frame
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[no workspace]"))
+        .unwrap();
+    let x = line[..line.find("[no workspace]").unwrap()].chars().count();
+    assert!(
+        buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    assert!(frame.contains("Workspaces"));
+    let footer = frame
+        .lines()
+        .find(|line| line.contains("↑↓ move · Enter open"))
+        .unwrap();
+    assert!(!footer.contains("Esc"));
+    assert!(!frame.contains("/sentinel/launch-dir"));
+    frame
+}
+
+#[test]
+fn home_remote_picker_empty() {
+    insta::assert_snapshot!("home_remote_picker_empty", remote_picker_frame(false));
+}
+
+#[test]
+fn home_remote_picker_recent() {
+    insta::assert_snapshot!("home_remote_picker_recent", remote_picker_frame(true));
+}
+
 #[test]
 fn home_picker_open() {
     let mut app = home(80, 24);
