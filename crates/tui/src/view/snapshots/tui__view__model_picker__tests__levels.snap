@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 208
+assertion_line: 217
 expression: "screen(&app, 160, 48)"
 ---
  Models  /model                                                                                                                                      Esc returns
@@ -17,7 +17,7 @@ expression: "screen(&app, 160, 48)"
                                    zeta
                                      z1                                                                          ~201k tokens
                                          thinking [low]
-                                     z2 [chat]                                                           ~201k tokens · $0.60
+                                     z2 [chat]                                                                  ~201k · $0.60
                                          thinking low [high]
 
                                    ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close

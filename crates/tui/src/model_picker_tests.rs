@@ -1594,6 +1594,24 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
 }
 
 #[test]
+fn a_tier_in_force_shortens_the_switch_size() {
+    let price = crate::catalogue::Price {
+        micros_per_mtok: 2_000_000,
+        input: 2_000_000,
+        output: 8_000_000,
+        tiers: vec![crate::catalogue::PriceTier {
+            input_tokens_above: 100_000,
+            micros_per_mtok: 3_000_000,
+            input: 3_000_000,
+            output: 12_000_000,
+        }],
+    };
+    assert_eq!(rebuild_cost(99_999, Some(&price)), "~100k tokens · $0.20");
+    assert_eq!(rebuild_cost(100_000, Some(&price)), "~100k tokens · $0.20");
+    assert_eq!(rebuild_cost(100_001, Some(&price)), "~100k · $0.30");
+}
+
+#[test]
 fn age_says_seconds_minutes_hours_then_days() {
     assert_eq!(age(0), "0s");
     assert_eq!(age(999), "0s");

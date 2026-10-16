@@ -1016,8 +1016,13 @@ pub(crate) fn rebuild_cost(tokens: u64, price: Option<&Price>) -> String {
     let Some(price) = price else {
         return size;
     };
-    let micros = price
-        .tier_at(tokens)
+    let tier = price.tier_at(tokens);
+    let size = if tier.is_some() {
+        size.trim_end_matches(" tokens")
+    } else {
+        &size
+    };
+    let micros = tier
         .map(|tier| tier.micros_per_mtok)
         .unwrap_or(price.micros_per_mtok);
     let dollars = tokens as f64 * micros as f64 / 1_000_000_000_000.0;
