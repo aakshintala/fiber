@@ -167,9 +167,6 @@ fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answe
     }))
 }
 
-/// A shell that already spilled its output past 1 MiB: the spilled file is
-/// the artifact, shaped without a second write or cut. Text parts beside
-/// the spill are ignored; the command's process is kept as it ended.
 /// A shell whose tool never started a process and reports no error: the
 /// tool's `cancelled_before`, whose cancel token fired before `Tool::run`
 /// (a real failure to start carries its error). Admission closes before
@@ -189,6 +186,9 @@ fn stopped_before_start(gate: &Gate) -> Rejection {
     }
 }
 
+/// A shell that already spilled its output past 1 MiB: the spilled file is
+/// the artifact, shaped without a second write or cut. Text parts beside
+/// the spill are ignored; the command's process is kept as it ended.
 fn answered_spilled(
     gate: &Gate,
     spilled: contract::tool::Spilled,
