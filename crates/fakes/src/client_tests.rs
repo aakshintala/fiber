@@ -343,6 +343,18 @@ fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
     result.expect("a full write stays written when the peer closes before the reset");
 }
 
+#[test]
+fn send_by_returns_the_write_error_when_the_peer_is_gone() {
+    let (_dir, client, server) = pair();
+    drop(server);
+    let (result, client) = within("send_by", MUST, move || {
+        let result = client.send_by("{}", &|| MUST);
+        (result, client)
+    });
+    drop(client);
+    result.expect_err("a send to a closed peer fails");
+}
+
 /// A reader thread that finishes only once the returned sender drops.
 fn held_reader() -> (JoinHandle<()>, mpsc::Sender<()>) {
     let (release, released) = mpsc::channel::<()>();
