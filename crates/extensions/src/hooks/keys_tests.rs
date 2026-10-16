@@ -22,8 +22,8 @@ use contract::SessionId;
 use contract::clock::Wake;
 use contract::events::{CallStatus, HandoffTrigger, InputItem, Notice};
 use contract::hook::{
-    AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks, SessionStart,
-    StartReason, TurnEnd, TurnStart,
+    AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
+    SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
 use contract::tool::Cancel;
