@@ -660,7 +660,11 @@ fn down_walks_live_then_exited_rows_across_sections_and_more() {
                 ListLine::Head {
                     start: Some(key), ..
                 } => Some(key),
-                _ => None,
+                ListLine::Head { start: None, .. }
+                | ListLine::Live { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::Exited { .. }
+                | ListLine::More { .. } => None,
             })
         })
         .expect("workspace-bearing project header");

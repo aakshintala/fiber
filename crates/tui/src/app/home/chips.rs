@@ -95,10 +95,21 @@ impl App {
     pub(super) fn list_stops(&self) -> Vec<Spot> {
         let mut stops = Vec::new();
         for id in order(&self.stops, &self.regions, Area::Conversation) {
-            let spot = match id {
-                TargetId::Home(Spot::Entry(key) | Spot::Stop(key)) => Some(Spot::Entry(key)),
-                TargetId::Home(Spot::More(key)) => Some(Spot::More(key)),
-                _ => None,
+            let TargetId::Home(spot) = id else {
+                continue;
+            };
+            let spot = match spot {
+                Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
+                Spot::More(key) => Some(Spot::More(key)),
+                Spot::Start(_)
+                | Spot::Workspace
+                | Spot::Worktree
+                | Spot::Model
+                | Spot::Thinking
+                | Spot::Pick(_)
+                | Spot::Quit(_)
+                | Spot::Keep
+                | Spot::Question => None,
             };
             if let Some(spot) = spot
                 && stops.last() != Some(&spot)

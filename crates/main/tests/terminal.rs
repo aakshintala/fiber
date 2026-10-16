@@ -585,18 +585,18 @@ fn resize_redraws_the_grid_at_the_new_size() {
     // The footer's last word proves the last row drew before the resize.
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
     run.resize(40, 10);
-    // The redrawn home at 40 by 10: the input line sits on row 4
-    // with the cursor parked on it, and the footer hint closes row 9.
-    // Only a redraw at the new size lays the frame out this way.
-    run.wait_screen("the redrawn grid at the new size", |grid| {
+    // The redrawn home at 40 by 10: the box moves to the bottom, with
+    // the input line on row 5 and the footer hint on row 9. Only a redraw
+    // at the new size lays the frame out this way.
+    let grid = run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 10
             && grid
                 .rows
-                .get(4)
-                .is_some_and(|row| row.trim_end() == "› █? for shortcuts")
+                .get(5)
+                .is_some_and(|row| row.trim() == "› █? for shortcuts")
             && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
-            && grid.cursor == (4, 2)
     });
+    assert_eq!(grid.cursor, (5, 4));
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
     until_socket(
@@ -1997,14 +1997,17 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
             .expect("the notice row"),
     )
     .expect("the notice row fits in u16");
-    // Home draws the notice rows from the foot upward with nothing but
-    // the reconnect banner below them, which this refused open never
-    // raises, and the foot hint sits on the last row: the notice stays
-    // directly above it, so the click below cannot land elsewhere.
+    // Home draws notice rows directly above the bottom input box. The
+    // box's all-▄ top edge gives the row the click must hit.
+    let box_top = grid
+        .rows
+        .iter()
+        .position(|line| !line.is_empty() && line.chars().all(|ch| ch == '▄'))
+        .expect("the input box top edge");
     assert_eq!(
         usize::from(row) + 1,
-        grid.rows.len() - 1,
-        "the notice stays on the row above the last one"
+        box_top,
+        "the notice stays directly above the input box"
     );
     run.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
     run.wait_screen("the notice overlay", |grid| {

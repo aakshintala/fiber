@@ -682,7 +682,15 @@ impl App {
         let current = match spot {
             Spot::Entry(key) | Spot::Stop(key) => Spot::Entry(key),
             Spot::More(key) => Spot::More(key),
-            _ => unreachable!(),
+            Spot::Start(_)
+            | Spot::Workspace
+            | Spot::Worktree
+            | Spot::Model
+            | Spot::Thinking
+            | Spot::Pick(_)
+            | Spot::Quit(_)
+            | Spot::Keep
+            | Spot::Question => unreachable!(),
         };
         if matches!(spot, Spot::Entry(key) if self.stops.iter().any(|target| target.id == TargetId::Home(Spot::Stop(key))))
             || self.list_stops().last().copied() != Some(current)
@@ -690,9 +698,7 @@ impl App {
             return None;
         }
         let stops = self.all_list_stops();
-        let Some(at) = stops.iter().position(|stop| *stop == current) else {
-            return None;
-        };
+        let at = stops.iter().position(|stop| *stop == current)?;
         if let Some(next) = stops.get(at.saturating_add(1)) {
             self.focus = Some(TargetId::Home(*next));
             return Some(Effect::None);
