@@ -79,7 +79,7 @@ fn rail_cards_match_the_doc() {
     setup.provider(&server);
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
     );
     // One reply each: all three turns complete, leaving their sessions
     // live and idle with their usage recorded, so their cards draw
@@ -246,7 +246,7 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     // wait on approval.
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
     );
     // Headless sessions allow shell without asking; a standing ask
     // rule keeps the other two waiting on approval

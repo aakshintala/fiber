@@ -134,11 +134,11 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    // The hub idles out a second after its last client leaves, so no
+    // The hub idles out 200 ms after its last client leaves, so no
     // hub lingers past the run's wait.
     write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
     );
     // The session stays running on its held response while the log is
     // damaged and the terminal attaches, as a held session does.

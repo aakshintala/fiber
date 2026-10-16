@@ -662,7 +662,7 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
             "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], env);
@@ -952,7 +952,7 @@ fn started_run(rail_shown: bool) -> (Setup, Run) {
         &setup.workspace().join("s.json"),
         &serde_json::json!({"steps": [{"text": ["Hel", "lo."]}]}),
     );
-    let mut config = serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}});
+    let mut config = serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}});
     if !rail_shown {
         config["tui"] = serde_json::json!({"rail": {"shown": false}});
     }
@@ -1315,7 +1315,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     .unwrap();
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
             "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
