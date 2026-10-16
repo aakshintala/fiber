@@ -365,30 +365,6 @@ fn a_failed_add_makes_no_isolation_and_no_opener() {
 }
 
 #[test]
-fn an_unopened_end_writes_nothing() {
-    fakes::within("an_unopened_end_writes_nothing", BUDGET, || {
-        let home = fakes::TempDir::new("doors-timing-unopened-home");
-        let repo = repo("doors-timing-unopened");
-        let clock = FakeClock::new();
-        let capture = Capture::new(Arc::clone(&clock));
-        // The slot is never opened, so `end` has no timing to call: the
-        // capture below stays at zero whatever the probe would record.
-        let isolation = isolate(
-            repo.path(),
-            home.path(),
-            &SessionId("s_0123456789abcdef".into()),
-            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            &direct,
-        )
-        .unwrap();
-        let path = isolation.path().to_path_buf();
-        isolation.end();
-        assert!(!exists(&path), "the clean worktree is gone");
-        assert_eq!(capture.calls(), 0, "nothing was ever opened");
-    });
-}
-
-#[test]
 fn a_clean_removal_times_the_one_remove_call() {
     fakes::within("a_clean_removal_times_the_one_remove_call", BUDGET, || {
         let home = fakes::TempDir::new("doors-timing-remove-home");

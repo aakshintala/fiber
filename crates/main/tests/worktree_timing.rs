@@ -284,6 +284,7 @@ fn a_debug_worktree_run_outside_a_repository_writes_no_worktree_line() {
 }
 
 #[test]
+// debt: this clean-setup repeats the test at :205. Upgrade trigger: fold the two into one helper when a third clean-setup test is added.
 fn a_debug_worktree_run_writes_one_remove_in_the_session_file() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
