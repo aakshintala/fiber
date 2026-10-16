@@ -208,7 +208,16 @@ impl Setup {
         let cache = self.cache();
         let clock = self.clock();
         let images: std::sync::Arc<dyn contract::images::Images> = images;
-        fakes::within("the start", WITHIN, move || {
+        // The start answers only after every server reports, so when
+        // the guard fires none did: the wait names every server in the
+        // start, and a repeat names the server whose child stalled.
+        let waiting = specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let what = format!("the start of [{waiting}]");
+        fakes::within(&what, WITHIN, move || {
             crate::start::start(
                 specs, &workspace, &artifacts, images, &cache, &clock, "0.0.0",
             )
