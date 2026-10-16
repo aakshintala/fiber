@@ -17,6 +17,7 @@ mod overlays;
 mod paged;
 mod panel;
 mod rail;
+mod reviewer_setup;
 mod theme;
 mod views;
 
@@ -5428,6 +5429,7 @@ const SURFACES: &[cases::Surface] = &[
     model_picker::SURFACE,
     completions::SURFACE,
     login::SURFACE,
+    reviewer_setup::SURFACE,
     rail::SURFACE,
     views::SURFACE,
     offers::SURFACE,
@@ -5491,6 +5493,8 @@ struct Args {
     completions: Option<String>,
     /// the login case (`--login`), drawn instead of the conversation
     login: Option<String>,
+    /// the reviewer-setup case (`--reviewer-setup`), drawn instead of the conversation
+    reviewer_setup: Option<String>,
 }
 /// The `--home` case to consume: the next argument, but only when it
 /// exists and does not start with `-`. Otherwise the case is `live` and
@@ -5555,6 +5559,7 @@ fn args() -> Args {
         picker: None,
         completions: None,
         login: None,
+        reviewer_setup: None,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(x) = it.next() {
@@ -5643,9 +5648,10 @@ fn args() -> Args {
             "--picker" => a.picker = it.next(),
             "--completions" => a.completions = it.next(),
             "--login" => a.login = it.next(),
+            "--reviewer-setup" => a.reviewer_setup = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--reviewer-setup CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5841,6 +5847,8 @@ fn main() -> io::Result<()> {
         overlays::run_overlay(&a, &mut term)
     } else if a.login.is_some() {
         login::run_login(&a, &mut term)
+    } else if a.reviewer_setup.is_some() {
+        reviewer_setup::run_reviewer_setup(&a, &mut term)
     } else if a.rail_case.is_some() {
         rail::run_rail(&a, &mut term)
     } else if a.view_case.is_some() {
@@ -5870,12 +5878,13 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login, the rail cases, the swapped views, the offers, the images
+    // Home, the overlays, the login, the reviewer setup, the rail cases, the swapped views, the offers, the images
     // and the failures draw no session, so there is nothing to resume, unless home switched to
     // the conversation, whose replayed session resumes as usual.
     if a.home.is_none()
         && a.overlay.is_none()
         && a.login.is_none()
+        && a.reviewer_setup.is_none()
         && a.rail_case.is_none()
         && a.view_case.is_none()
         && a.offer_case.is_none()
@@ -8077,6 +8086,7 @@ mod tests {
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
+                "--reviewer-setup first, outside, rerun, struck, flipped, diff, notice",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills, opened-edit, opened-read, opened-search, opened-shell, opened-mcp, cut-shell",
                 "--offer-case offer, confirm, select, multi_select, text_input",
@@ -9518,6 +9528,7 @@ mod tests {
             picker: None,
             completions: None,
             login: None,
+            reviewer_setup: None,
         };
         assert!(flat_replay(&base()));
         // Flipping any one condition replays the conversation instead.
