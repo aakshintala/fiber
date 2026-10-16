@@ -50,7 +50,7 @@ const ROWS: u16 = 48;
 /// The pointer's 0-based cell: inside the conversation.
 // debt: the cell is picked, not measured; a measured pointer rest position
 // would set it.
-const POINTER: (u16, u16) = (20, 10);
+const POINTER: (u16, u16) = (60, 10);
 
 /// Lines in the read session's file.
 // debt: 300 lines is picked, not measured; the owner's "a few hundred
@@ -63,9 +63,9 @@ const READ_LINES: usize = 300;
 /// lines. The filler reply, the prompt and the ledger row hold no "L0".
 const OUTPUT_MARK: &str = "L0";
 
-/// Conversation columns kept for compares: everything left of the panel,
-/// which is 21% of 160, so 34 columns plus its edge (`docs/tui.md`,
-/// "Layout").
+/// Conversation columns kept for compares: every column left of the panel,
+/// the rail's columns included. The panel is 21% of 160, so 34 columns
+/// plus its edge (`docs/tui.md`, "Layout").
 const CONV: usize = COLS as usize - 35;
 
 /// Silence proving the terminal settled: no new frame for this long.
