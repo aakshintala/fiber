@@ -738,27 +738,76 @@ fn a_client_that_left_keeps_its_level() {
     drop(bound);
 }
 
-#[test]
-fn a_disconnected_connection_skips_the_check() {
-    let fixture = Fixture::new("cs8");
-    let bound = FakeSession::bind(&fixture.home, SID);
-    let (rig, client_peer, _session_peer, reader, _park) =
-        rig(&fixture.home, FakeStarter::hang(&fixture.home), SID, false);
-    lock(&rig.relays)
-        .subscribed
-        .push((SID.to_owned(), subscribe("c_sub", "full")));
-    let thread = spawn(&rig, SID, reader);
-    lock(&rig.relays).close_all();
-    join(thread, "the relay thread to end");
+/// A disconnected connection keeps its level and sends nothing: the
+/// closing assertions both orders share, so the tests differ only in
+/// sequence.
+#[track_caller]
+fn assert_disconnected_keeps_level(rig: &Rig, client_peer: &UnixStream) {
     assert_eq!(
         lock(&rig.relays).subscription(SID),
         Some(subscribe("c_sub", "full")),
         "the disconnected connection keeps its level"
     );
     assert!(
-        drain_now(&client_peer).is_empty(),
+        drain_now(client_peer).is_empty(),
         "the gone client receives nothing"
     );
+}
+
+#[test]
+fn a_disconnected_connection_skips_the_check() {
+    let fixture = Fixture::new("cs8");
+    let bound = FakeSession::bind(&fixture.home, SID);
+    let (rig, client_peer, session_peer, reader, _park) =
+        rig(&fixture.home, FakeStarter::hang(&fixture.home), SID, false);
+    lock(&rig.relays)
+        .subscribed
+        .push((SID.to_owned(), subscribe("c_sub", "full")));
+    // Hold the relay thread before its first read, so `close_all` lands
+    // first and the read runs only on an already shut-down socket.
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&lock(&rig.relays).order.before_read) = Some(Box::new(move || {
+        reached_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let thread = spawn(&rig, SID, reader);
+    Deadline::after(DEADLINE).recv_or_fail(&reached, "the relay paused before its first read");
+    lock(&rig.relays).close_all();
+    drop(session_peer);
+    drop(release_tx);
+    join(thread, "the relay thread to end");
+    assert_disconnected_keeps_level(&rig, &client_peer);
+    drop(bound);
+}
+
+#[test]
+fn a_close_while_the_relay_is_blocked_in_read_wakes_it() {
+    let fixture = Fixture::new("cs8b");
+    let bound = FakeSession::bind(&fixture.home, SID);
+    let (rig, client_peer, mut session_peer, reader, _park) =
+        rig(&fixture.home, FakeStarter::hang(&fixture.home), SID, false);
+    lock(&rig.relays)
+        .subscribed
+        .push((SID.to_owned(), subscribe("c_sub", "full")));
+    let thread = spawn(&rig, SID, reader);
+    // One forwarded line proves the thread read once and is back at its
+    // next read; the session peer stays open across `close_all`, so the
+    // shutdown alone must wake that read, with the dropped peer as the
+    // backup wake.
+    let first = durable(1, "idle");
+    session_peer.write_all(first.as_bytes()).unwrap();
+    session_peer.flush().unwrap();
+    let lines = collect_until(
+        client_peer.try_clone().unwrap(),
+        "the forwarded line",
+        |_| true,
+    );
+    assert_eq!(lines, [first], "the one line arrives byte for byte");
+    lock(&rig.relays).close_all();
+    drop(session_peer);
+    join(thread, "the relay thread to end");
+    assert_disconnected_keeps_level(&rig, &client_peer);
     drop(bound);
 }
 
