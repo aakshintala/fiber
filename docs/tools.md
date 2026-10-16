@@ -1361,7 +1361,7 @@ without `quota()`, or whose every label's key read failed, is unloaded at once.
 A failed read reports `unreachable`, while the other labels still answer.
 Shutdown ends the reads; a read already in flight finishes and its result is
 dropped. The loader starts a quota fetch for each label whose read succeeded.
-The command answers from the caches at once, without waiting for loading,
+Without `fetch`, the command answers from the caches at once, without waiting for loading,
 credential reads or fetches.
 
 A fetch runs off the request path when the cache is older than 5 minutes and
