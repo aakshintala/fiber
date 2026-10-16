@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use contract::events::{AskStep, Event, PermissionRequested, ToolCallCompleted, ToolCallRequested};
-use contract::hook::{BeforeToolCall, BeforeToolOutcome, CheckOutcome};
+use contract::hook::{BeforeToolCall, BeforeToolOutcome, CheckOutcome, StateLine};
 use contract::tool::{Effects, Tool};
 use contract::{ErrorCode, TurnId};
 use serde_json::{Map, Value};
@@ -89,7 +89,7 @@ pub(crate) enum Again {
     /// The prepared call, and the request to raise again: the recorded
     /// `request_id` and step kind, with `declared` and any rule offer
     /// rebuilt from the prepared call.
-    Ready(Prepared, PermissionRequested),
+    Ready(Prepared, PermissionRequested, Vec<StateLine>),
 }
 
 impl Loop {
@@ -139,13 +139,13 @@ impl Loop {
         &mut self,
         call: &ToolCallRequested,
         turn: Option<&TurnId>,
-    ) -> Result<Decided, Error> {
+    ) -> Result<(Decided, Vec<StateLine>), Error> {
         let checked = match self.checked(call) {
             Ok(checked) => checked,
-            Err(failed) => return Ok(Err(failed)),
+            Err(failed) => return Ok((Err(failed), Vec::new())),
         };
         let Some(hooks) = self.hooks.clone() else {
-            return Ok(Ok(Prepared::from(checked)));
+            return Ok((Ok(Prepared::from(checked)), Vec::new()));
         };
         self.hooked(&call.name, checked, hooks, turn)
     }
@@ -160,123 +160,133 @@ impl Loop {
         checked: Checked,
         hooks: Arc<dyn contract::hook::Hooks>,
         turn: Option<&TurnId>,
-    ) -> Result<Decided, Error> {
-        let (tool, arguments, effects) = checked;
-        if self.shutting_down() {
-            return Ok(Err(self.cancelled_before_ran()));
-        }
-        let answer = {
-            // One actual `before_tool` dispatch: the guard closes before
-            // the notices, so classification and cap work stay outside.
-            // `tool_name` names the registered tool `checked` admitted.
-            let _dispatch = self
-                .diag
-                .timed_tool(contract::diag::Op::ToolHooks, tool_name);
-            hooks.before_tool(&BeforeToolCall {
-                tool: tool_name,
-                arguments: &arguments,
-                declared: &effects.declared,
-            })
-        };
-        for notice in answer.notices {
-            self.write(&Event::Notice(notice), turn, None)?;
-        }
-        let (arguments, effects, rewritten) = match answer.outcome {
-            BeforeToolOutcome::Unchanged => (arguments, effects, None),
-            BeforeToolOutcome::Rewritten {
-                arguments: rewritten_arguments,
-                changed_by,
-            } => {
-                let names = changed_by.join(", ");
-                match classify(&tool, &rewritten_arguments) {
-                    Ok(rewritten_effects) => {
-                        (rewritten_arguments, rewritten_effects, Some(changed_by))
-                    }
-                    Err(ClassifyFailure::Schema(errors)) => {
-                        return Ok(Err(Box::new(crate::completion::failed(
-                            ErrorCode::InvalidArguments,
-                            format!(
-                                "Extension {names} rewrote this call's arguments, and they do not match the tool's schema:\n{}",
-                                errors.join("\n")
-                            ),
-                        ))));
-                    }
-                    Err(ClassifyFailure::Effects(message)) => {
-                        return Ok(Err(Box::new(crate::completion::failed(
-                            ErrorCode::ToolError,
-                            format!(
-                                "Extension {names} rewrote this call's arguments, and the tool could not classify them: {message}"
-                            ),
-                        ))));
+    ) -> Result<(Decided, Vec<StateLine>), Error> {
+        let mut state = Vec::new();
+        let decided = (|| -> Result<Decided, Error> {
+            let (tool, arguments, effects) = checked;
+            if self.shutting_down() {
+                return Ok(Err(self.cancelled_before_ran()));
+            }
+            let answer = {
+                // One actual `before_tool` dispatch: the guard closes before
+                // the notices, so classification and cap work stay outside.
+                // `tool_name` names the registered tool `checked` admitted.
+                let _dispatch = self
+                    .diag
+                    .timed_tool(contract::diag::Op::ToolHooks, tool_name);
+                hooks.before_tool(&BeforeToolCall {
+                    tool: tool_name,
+                    arguments: &arguments,
+                    declared: &effects.declared,
+                })
+            };
+            state = hooks.take_change_state();
+            self.drain_state(&hooks, turn)?;
+            for notice in answer.notices {
+                self.write(&Event::Notice(notice), turn, None)?;
+            }
+            let (arguments, effects, rewritten) = match answer.outcome {
+                BeforeToolOutcome::Unchanged => (arguments, effects, None),
+                BeforeToolOutcome::Rewritten {
+                    arguments: rewritten_arguments,
+                    changed_by,
+                } => {
+                    let names = changed_by.join(", ");
+                    match classify(&tool, &rewritten_arguments) {
+                        Ok(rewritten_effects) => {
+                            (rewritten_arguments, rewritten_effects, Some(changed_by))
+                        }
+                        Err(ClassifyFailure::Schema(errors)) => {
+                            return Ok(Err(Box::new(crate::completion::failed(
+                                ErrorCode::InvalidArguments,
+                                format!(
+                                    "Extension {names} rewrote this call's arguments, and they do not match the tool's schema:\n{}",
+                                    errors.join("\n")
+                                ),
+                            ))));
+                        }
+                        Err(ClassifyFailure::Effects(message)) => {
+                            return Ok(Err(Box::new(crate::completion::failed(
+                                ErrorCode::ToolError,
+                                format!(
+                                    "Extension {names} rewrote this call's arguments, and the tool could not classify them: {message}"
+                                ),
+                            ))));
+                        }
                     }
                 }
+                BeforeToolOutcome::Refused(refusal) => {
+                    return Ok(Err(crate::completion::denied(
+                        "hook",
+                        format!(
+                            "Extension {} refused this call: {}. It did not run.",
+                            refusal.extension, refusal.reason
+                        ),
+                    )));
+                }
+                BeforeToolOutcome::Failed(failure) => {
+                    return Ok(Err(Box::new(crate::completion::failed(
+                        ErrorCode::HookFailed,
+                        format!(
+                            "The `before_tool` hook of extension {} failed, so the call did not run: {}",
+                            failure.extension, failure.message
+                        ),
+                    ))));
+                }
+            };
+            if self.shutting_down() {
+                return Ok(Err(self.cancelled_before_ran()));
             }
-            BeforeToolOutcome::Refused(refusal) => {
-                return Ok(Err(crate::completion::denied(
+            let check = {
+                // One actual `check` dispatch: the guard closes before the
+                // notices, as the `before_tool` one does.
+                let _dispatch = self
+                    .diag
+                    .timed_tool(contract::diag::Op::ToolHooks, tool_name);
+                hooks.check_tool(&BeforeToolCall {
+                    tool: tool_name,
+                    arguments: &arguments,
+                    declared: &effects.declared,
+                })
+            };
+            self.drain_state(&hooks, turn)?;
+            for notice in check.notices {
+                self.write(&Event::Notice(notice), turn, None)?;
+            }
+            match check.outcome {
+                CheckOutcome::Passed => Ok(Ok(Prepared {
+                    tool,
+                    arguments,
+                    effects,
+                    rewritten,
+                })),
+                CheckOutcome::Refused(refusal) => Ok(Err(crate::completion::denied(
                     "hook",
                     format!(
                         "Extension {} refused this call: {}. It did not run.",
                         refusal.extension, refusal.reason
                     ),
-                )));
-            }
-            BeforeToolOutcome::Failed(failure) => {
-                return Ok(Err(Box::new(crate::completion::failed(
+                ))),
+                CheckOutcome::Failed(failure) => Ok(Err(Box::new(crate::completion::failed(
                     ErrorCode::HookFailed,
                     format!(
                         "The `before_tool` hook of extension {} failed, so the call did not run: {}",
                         failure.extension, failure.message
                     ),
-                ))));
+                )))),
             }
-        };
-        if self.shutting_down() {
-            return Ok(Err(self.cancelled_before_ran()));
+        })()?;
+        if decided.is_err() {
+            state.clear();
         }
-        let check = {
-            // One actual `check` dispatch: the guard closes before the
-            // notices, as the `before_tool` one does.
-            let _dispatch = self
-                .diag
-                .timed_tool(contract::diag::Op::ToolHooks, tool_name);
-            hooks.check_tool(&BeforeToolCall {
-                tool: tool_name,
-                arguments: &arguments,
-                declared: &effects.declared,
-            })
-        };
-        for notice in check.notices {
-            self.write(&Event::Notice(notice), turn, None)?;
-        }
-        match check.outcome {
-            CheckOutcome::Passed => Ok(Ok(Prepared {
-                tool,
-                arguments,
-                effects,
-                rewritten,
-            })),
-            CheckOutcome::Refused(refusal) => Ok(Err(crate::completion::denied(
-                "hook",
-                format!(
-                    "Extension {} refused this call: {}. It did not run.",
-                    refusal.extension, refusal.reason
-                ),
-            ))),
-            CheckOutcome::Failed(failure) => Ok(Err(Box::new(crate::completion::failed(
-                ErrorCode::HookFailed,
-                format!(
-                    "The `before_tool` hook of extension {} failed, so the call did not run: {}",
-                    failure.extension, failure.message
-                ),
-            )))),
-        }
+        Ok((decided, state))
     }
 }
 
 /// `Ready` for `prepared`: the recorded `request_id` and step kind, with
 /// `declared` and any rule offer rebuilt from the prepared call, so the
 /// person judges the call that will run.
-fn ready(prepared: Prepared, recorded: &PermissionRequested) -> Again {
+fn ready(prepared: Prepared, recorded: &PermissionRequested, state: Vec<StateLine>) -> Again {
     let step = match &recorded.step {
         AskStep::StandingAsk { standing_rule } => AskStep::StandingAsk {
             standing_rule: standing_rule.clone(),
@@ -292,7 +302,7 @@ fn ready(prepared: Prepared, recorded: &PermissionRequested) -> Again {
         declared: prepared.effects.declared.clone(),
         step,
     };
-    Again::Ready(prepared, request)
+    Again::Ready(prepared, request, state)
 }
 
 /// The failed completion of a call naming no registered tool, as
@@ -344,10 +354,11 @@ impl Loop {
             Err(failed) => return Ok(Again::Unchecked(failed)),
         };
         let Some(hooks) = self.hooks.clone() else {
-            return Ok(ready(Prepared::from(checked), recorded));
+            return Ok(ready(Prepared::from(checked), recorded, Vec::new()));
         };
-        match self.hooked(&call.name, checked, hooks, Some(turn))? {
-            Ok(prepared) => Ok(ready(prepared, recorded)),
+        let (decided, state) = self.hooked(&call.name, checked, hooks, Some(turn))?;
+        match decided {
+            Ok(prepared) => Ok(ready(prepared, recorded, state)),
             Err(settled) => Ok(Again::Settled(settled)),
         }
     }

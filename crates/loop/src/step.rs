@@ -39,6 +39,7 @@ impl Loop {
             // A refused commit drops what `turn_end` returned unwritten, so
             // its messages never join a later turn.
             self.lifecycle.continued.clear();
+            self.lifecycle.continued_state.clear();
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         };
         written?;

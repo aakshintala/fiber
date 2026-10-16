@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use contract::events::{CallStatus, Event};
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, StateLine};
 use contract::shapes::{ContentPart, Process};
 use contract::tool::{Bound, SpillFile, Spilled};
 use contract::{ActionId, TurnId};
@@ -46,6 +46,7 @@ pub(crate) struct Ran<'a> {
 /// What the completion carries of the output, once the hooks have answered
 /// and the cap is applied.
 pub(crate) struct Shaped {
+    pub(crate) state: Vec<StateLine>,
     pub(crate) content: Vec<ContentPart>,
     pub(crate) details: Option<Value>,
     pub(crate) artifact: Option<String>,
@@ -54,7 +55,52 @@ pub(crate) struct Shaped {
     pub(crate) error: Option<contract::shapes::Failure>,
 }
 
+pub(crate) fn split_state(
+    state: Vec<StateLine>,
+    count: usize,
+) -> (Vec<StateLine>, Vec<Vec<StateLine>>) {
+    let mut other = Vec::new();
+    let mut contexts = vec![Vec::new(); count];
+    for line in state {
+        if let Some(index) = line.context
+            && let Some(lines) = contexts.get_mut(index.min(count.saturating_sub(1)))
+        {
+            lines.push(line);
+        } else {
+            other.push(line);
+        }
+    }
+    (other, contexts)
+}
+
 impl Loop {
+    pub(crate) fn drain_state(
+        &mut self,
+        hooks: &Arc<dyn Hooks>,
+        turn: Option<&TurnId>,
+    ) -> Result<(), Error> {
+        for event in hooks.take_state_lines() {
+            self.write(&event, turn, None)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_carried(
+        &mut self,
+        state: Vec<StateLine>,
+        turn: Option<&TurnId>,
+    ) -> Result<(), Error> {
+        if let Some(hooks) = self.hooks.clone() {
+            for event in hooks.admit_state_lines(state) {
+                match turn {
+                    Some(turn) => self.append(&event, turn, None)?,
+                    None => self.write(&event, None, None)?,
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the session's `after_tool` hooks on every call that ran
     /// (`docs/extensions.md`, "The hook points"). Without hooks the tool's
     /// output is the output.
@@ -82,6 +128,7 @@ impl Loop {
                 remove_spilled(&spilled)?;
             }
             return Ok(Shaped {
+                state: Vec::new(),
                 content: Vec::new(),
                 details: None,
                 artifact: None,
@@ -118,6 +165,8 @@ impl Loop {
                 spilled: None,
             })
         };
+        let state = hooks.take_change_state();
+        self.drain_state(&hooks, turn)?;
         // Test-only boundary past the closed timer: later work the timer
         // must already have left out.
         #[cfg(test)]
@@ -126,6 +175,7 @@ impl Loop {
             self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
+        let changed = matches!(&answer.outcome, AfterToolOutcome::Changed { .. });
         let mut shaped = match answer.outcome {
             AfterToolOutcome::Unchanged => {
                 let (parts, full) = with_line(parts, full, &line);
@@ -135,6 +185,7 @@ impl Loop {
             AfterToolOutcome::Failed(failure) => Shaped::failed(failure),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
+                state: Vec::new(),
                 content: vec![ContentPart::Text {
                     text: format!(
                         "Output withheld: the `after_tool` hook of extension {extension} failed."
@@ -169,6 +220,9 @@ impl Loop {
             }
         };
         shaped.changed_by = changed_by;
+        if changed {
+            shaped.state = state;
+        }
         Ok(shaped)
     }
 
@@ -207,6 +261,7 @@ impl Loop {
             None => cut,
         };
         Ok(Shaped {
+            state: Vec::new(),
             content,
             details,
             artifact,
@@ -282,6 +337,7 @@ impl Loop {
             cut_joined(&spilled.head, &notice, &spilled.tail)
         };
         let shown = lined(&cut);
+        let mut state = Vec::new();
         let answer = match self.hooks.clone() {
             Some(hooks) => {
                 // The one actual `after_tool` dispatch on spilled output.
@@ -300,6 +356,8 @@ impl Loop {
                         }),
                     })
                 };
+                state = hooks.take_change_state();
+                self.drain_state(&hooks, turn)?;
                 #[cfg(test)]
                 crate::tool_timing_tests::after_dispatch_exit(self.log.clock().as_ref());
                 answer
@@ -314,8 +372,10 @@ impl Loop {
             self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
+        let changed = matches!(&answer.outcome, AfterToolOutcome::Changed { .. });
         let mut shaped = match answer.outcome {
             AfterToolOutcome::Unchanged => Shaped {
+                state: Vec::new(),
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: Some(artifact),
@@ -337,6 +397,7 @@ impl Loop {
                 );
                 replace_spilled(&self.log, &path, format!("{withheld}\n").as_bytes())?;
                 Shaped {
+                    state: Vec::new(),
                     content: vec![ContentPart::Text { text: withheld }],
                     details: None,
                     artifact: None,
@@ -383,6 +444,7 @@ impl Loop {
                     replace_spilled(&self.log, &path, hook_artifact.as_bytes())?;
                 }
                 Shaped {
+                    state: Vec::new(),
                     content,
                     details,
                     artifact: Some(artifact),
@@ -393,6 +455,9 @@ impl Loop {
             }
         };
         shaped.changed_by = changed_by;
+        if changed {
+            shaped.state = state;
+        }
         Ok(shaped.with(images))
     }
 
@@ -429,6 +494,7 @@ impl Loop {
         }
         let notice = cut_notice(removed, Err(&message));
         let shown = lined(&cut_joined(&head, &notice, &tail));
+        let mut state = Vec::new();
         let answer = match self.hooks.clone() {
             Some(hooks) => {
                 // The one actual `after_tool` dispatch on unsaved output.
@@ -444,6 +510,8 @@ impl Loop {
                         spilled: None,
                     })
                 };
+                state = hooks.take_change_state();
+                self.drain_state(&hooks, turn)?;
                 #[cfg(test)]
                 crate::tool_timing_tests::after_dispatch_exit(self.log.clock().as_ref());
                 answer
@@ -458,8 +526,10 @@ impl Loop {
             self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
+        let changed = matches!(&answer.outcome, AfterToolOutcome::Changed { .. });
         let mut shaped = match answer.outcome {
             AfterToolOutcome::Unchanged => Shaped {
+                state: Vec::new(),
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: None,
@@ -470,6 +540,7 @@ impl Loop {
             AfterToolOutcome::Failed(failure) => return Ok(Shaped::failed(failure)),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
+                state: Vec::new(),
                 content: vec![ContentPart::Text {
                     text: format!(
                         "Output withheld: the `after_tool` hook of extension {extension} failed."
@@ -519,6 +590,7 @@ impl Loop {
                             })
                             .transpose()?;
                         Shaped {
+                            state: Vec::new(),
                             content: vec![ContentPart::Text { text: shown }],
                             details,
                             artifact,
@@ -531,6 +603,9 @@ impl Loop {
             }
         };
         shaped.changed_by = changed_by;
+        if changed {
+            shaped.state = state;
+        }
         Ok(shaped.with(images))
     }
 }
@@ -651,6 +726,7 @@ impl Shaped {
             failure.extension, failure.message
         );
         Self {
+            state: Vec::new(),
             content: vec![ContentPart::Text {
                 text: message.clone(),
             }],

@@ -68,7 +68,8 @@ impl Loop {
         let start_contexts = self.session_start_once()?;
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        let (input, contexts) = self.turn_input(started.pieces);
+        let (input, contexts, state) = self.turn_input(started.pieces);
+        let (state, context_state) = crate::hooks::split_state(state, contexts.len());
         let person = input
             .iter()
             .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
@@ -82,11 +83,14 @@ impl Loop {
             // reads `opening_message`, `context_added`, `turn_started`;
             // the `before_message` contexts still follow it. A shutdown
             // lands before all of them or after.
-            for added in &start_contexts {
+            for (added, state) in &start_contexts {
+                self.write_carried(state.clone(), None)?;
                 self.write(&Event::ContextAdded(added.clone()), None, None)?;
             }
+            self.write_carried(state, Some(&turn))?;
             self.append(&event, &turn, None)?;
-            for added in &contexts {
+            for (added, state) in contexts.iter().zip(context_state) {
+                self.write_carried(state, Some(&turn))?;
                 self.append(&Event::ContextAdded(added.clone()), &turn, None)?;
             }
             Ok(())

@@ -475,10 +475,10 @@ impl Loop {
                     || Err(self.cancelled_before_ran()),
                     |_| decision,
                 );
-                let cancelled = self.run_batch(calls, &turn, None)?;
+                let cancelled = self.run_batch(calls, &turn, None, None)?;
                 self.finish_batch(&turn, cancelled)
             }
-            crate::before_tool::Again::Ready(prepared, rebuilt) => {
+            crate::before_tool::Again::Ready(prepared, rebuilt, state) => {
                 let allow: Decided = Ok(prepared);
                 // The resumed approval re-enters the permission order:
                 // its fresh segment starts here, with the current
@@ -490,11 +490,11 @@ impl Loop {
                     .timed_tool(contract::diag::Op::ToolPermission, &call.name)
                     .map(|timer| Box::new(timer) as Box<dyn Send>);
                 suspended.permission = permission;
-                self.finish_ready(suspended, allow, rebuilt)
+                self.finish_ready(suspended, allow, rebuilt, state)
             }
             crate::before_tool::Again::Unchecked(failed) => {
                 let allow: Decided = Err(failed);
-                self.finish_ready(suspended, allow, request)
+                self.finish_ready(suspended, allow, request, Vec::new())
             }
         }
     }
@@ -510,6 +510,7 @@ impl Loop {
         mut suspended: Suspended,
         allow: Decided,
         request: contract::events::PermissionRequested,
+        state: Vec<contract::hook::StateLine>,
     ) -> Result<Option<TurnOutcome>, Error> {
         let turn = suspended.turn.clone();
         // The credential deny applies to every call, including one
@@ -566,7 +567,7 @@ impl Loop {
                 || Err(self.cancelled_before_ran()),
                 |_| decision,
             );
-            let cancelled = self.run_batch(calls, &turn, None)?;
+            let cancelled = self.run_batch(calls, &turn, None, None)?;
             return self.finish_batch(&turn, cancelled);
         }
         // Armed with the re-raise: a shutdown before it leaves the request
@@ -588,7 +589,7 @@ impl Loop {
         };
         raised?;
         if self.answerable {
-            return self.answer_suspended(suspended, &request, allow);
+            return self.answer_suspended(suspended, &request, allow, state);
         }
         // Nobody decided the re-raised request, review or standing ask: the
         // resume denies it by `cancel` (`docs/events.md`, `permission_resolved`).
@@ -630,6 +631,7 @@ impl Loop {
         suspended: Suspended,
         request: &contract::events::PermissionRequested,
         allow: Decided,
+        state: Vec<contract::hook::StateLine>,
     ) -> Result<Option<TurnOutcome>, Error> {
         let Suspended {
             turn,
@@ -670,7 +672,7 @@ impl Loop {
             || Err(self.cancelled_before_ran()),
             |_| decision,
         );
-        let cancelled = self.run_batch(calls, &turn, None)?;
+        let cancelled = self.run_batch(calls, &turn, None, Some((action, state)))?;
         self.finish_batch(&turn, cancelled)
     }
 

@@ -211,7 +211,7 @@ impl Loop {
         turn: &TurnId,
     ) -> Result<bool, Error> {
         let calls = calls.into_iter().map(|(id, call)| (id, call, None));
-        self.run_batch(calls.collect(), turn, None)
+        self.run_batch(calls.collect(), turn, None, None)
     }
 
     /// [`Loop::run_calls`] over a batch some of whose calls are already
@@ -226,6 +226,7 @@ impl Loop {
         calls: Vec<(ActionId, ToolCallRequested, Option<Decided>)>,
         turn: &TurnId,
         reraise: Option<(ActionId, RequestId)>,
+        mut carried: Option<(ActionId, Vec<contract::hook::StateLine>)>,
     ) -> Result<bool, Error> {
         let mut decided = Vec::with_capacity(calls.len());
         for (id, call, already) in calls {
@@ -234,11 +235,18 @@ impl Loop {
             // `cancelled` with no `tool_call_started` and no permission
             // lines. A decision line already written stays.
             if self.turn_cancelled() {
-                decided.push((id, call.name, Err(self.cancelled_before_ran())));
+                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
                 continue;
             }
-            let decision = match already {
-                Some(decision) => decision,
+            let (decision, state) = match already {
+                Some(decision) => {
+                    let state = if carried.as_ref().is_some_and(|(action, _)| *action == id) {
+                        carried.take().map(|(_, state)| state).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    (decision, state)
+                }
                 None => self.decide(&call, &id, turn)?,
             };
             // An idle deadline ended the approval. Drop the decision: no
@@ -247,10 +255,10 @@ impl Loop {
                 return Ok(false);
             }
             if self.turn_cancelled() {
-                decided.push((id, call.name, Err(self.cancelled_before_ran())));
+                decided.push((id, call.name, Err(self.cancelled_before_ran()), Vec::new()));
                 continue;
             }
-            decided.push((id, call.name, decision));
+            decided.push((id, call.name, decision, state));
         }
         let cancel = Arc::clone(&self.cancel);
         thread::scope(|scope| {
@@ -273,7 +281,7 @@ impl Loop {
             let mut release = Release::default();
             let mut suspend = Suspend::default();
             let mut reraised = false;
-            for (id, name, decision) in decided {
+            for (id, name, decision, carried) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
                     // A cancel that landed while a later call was decided
@@ -288,6 +296,7 @@ impl Loop {
                             .map(|(_, request)| request.clone());
                         if again.is_none() {
                             let (arguments, changed_by) = prepared.rewrite();
+                            self.write_carried(carried, Some(turn))?;
                             self.append(
                                 &Event::ToolCallStarted(ToolCallStarted {
                                     always_reviewed: prepared.effects.always_reviewed,
@@ -484,10 +493,11 @@ impl Loop {
         call: &ToolCallRequested,
         id: &ActionId,
         turn: &TurnId,
-    ) -> Result<Decided, Error> {
-        let prepared = match self.prepared(call, Some(turn))? {
+    ) -> Result<(Decided, Vec<contract::hook::StateLine>), Error> {
+        let (prepared, state) = self.prepared(call, Some(turn))?;
+        let prepared = match prepared {
             Ok(prepared) => prepared,
-            Err(failed) => return Ok(Err(failed)),
+            Err(failed) => return Ok((Err(failed), Vec::new())),
         };
         // The permission order starts once the call names a registered
         // tool and fits its schema: the guard spans the judge, the
@@ -503,7 +513,7 @@ impl Loop {
         // it looks at them, so an unreadable rules file never stops that
         // deny.
         let rules = self.rules.read();
-        match super::permission::judge(
+        let decided = match super::permission::judge(
             &call.name,
             &prepared.effects,
             &rules,
@@ -551,7 +561,8 @@ impl Loop {
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
             super::permission::Verdict::Review => self.review(call, id, turn, prepared),
-        }
+        };
+        decided.map(|decision| (decision, state))
     }
 
     /// Writes a `permission_resolved` line for `id`.
@@ -689,7 +700,7 @@ impl Loop {
         cancelled: bool,
         id: &ActionId,
         turn: Option<&TurnId>,
-    ) -> Result<ToolCallCompleted, Error> {
+    ) -> Result<(ToolCallCompleted, Vec<contract::hook::StateLine>), Error> {
         let Output {
             content,
             error,
@@ -781,19 +792,22 @@ impl Loop {
         {
             self.write(&Event::SessionNamed(named), turn, Some(id))?;
         }
-        Ok(ToolCallCompleted {
-            status,
-            error,
-            process,
-            details: shaped.details,
-            changes,
-            control,
-            artifact: shaped.artifact,
-            kept: shaped.kept,
-            content: shaped.content,
-            changed_by: shaped.changed_by,
-            ..completed(String::new(), None)
-        })
+        Ok((
+            ToolCallCompleted {
+                status,
+                error,
+                process,
+                details: shaped.details,
+                changes,
+                control,
+                artifact: shaped.artifact,
+                kept: shaped.kept,
+                content: shaped.content,
+                changed_by: shaped.changed_by,
+                ..completed(String::new(), None)
+            },
+            shaped.state,
+        ))
     }
 }
 
@@ -831,14 +845,14 @@ impl Loop {
         if Self::inner_anchored(inner, &call.id) {
             return Ok(false);
         }
-        let mut completed = match &call.state {
+        let (mut completed, state) = match &call.state {
             State::Done => return Ok(false),
             // A decided call the cancel reached before its completion was
             // written completes `cancelled`: a denial or failure decided
             // but not yet written, or a call approved but never started. A
             // `permission_resolved` line already written stays.
-            State::Ready(_) if self.turn_cancelled() => self.cancelled_before_ran(),
-            State::Ready(completed) => completed.clone(),
+            State::Ready(_) if self.turn_cancelled() => (self.cancelled_before_ran(), Vec::new()),
+            State::Ready(completed) => (completed.clone(), Vec::new()),
             State::Running {
                 stream,
                 bound,
@@ -856,7 +870,7 @@ impl Loop {
                     if let Some(slot) = stream.inner_slot() {
                         slot.close();
                     }
-                    Box::new(self.finish(
+                    let (completed, state) = self.finish(
                         output,
                         call_of,
                         rewritten,
@@ -864,7 +878,8 @@ impl Loop {
                         self.turn_cancelled(),
                         &call.id,
                         Some(turn),
-                    )?)
+                    )?;
+                    (Box::new(completed), state)
                 }
                 None => return Ok(false),
             },
@@ -874,7 +889,13 @@ impl Loop {
             State::Ready(_) | State::Done => None,
         };
         call.state = State::Done;
-        self.after_completed(declared.as_ref(), &mut completed, &call.id, Some(turn))?;
+        self.after_completed(
+            declared.as_ref(),
+            &mut completed,
+            &call.id,
+            Some(turn),
+            state,
+        )?;
         Ok(true)
     }
 
@@ -886,6 +907,7 @@ impl Loop {
         completed: &mut ToolCallCompleted,
         id: &ActionId,
         turn: Option<&TurnId>,
+        state: Vec<contract::hook::StateLine>,
     ) -> Result<(), Error> {
         // An over-budget section a completed call that declared a write
         // touched ends its result with the prune line, before the line is
@@ -897,6 +919,7 @@ impl Loop {
                 completed.content.push(ContentPart::Text { text: line });
             }
         }
+        self.write_carried(state, turn)?;
         self.write(&Event::ToolCallCompleted(completed.clone()), turn, Some(id))?;
         // The session's own edits and subdirectory files: a call that ran
         // re-reads each declared path that is a tracked instruction file,

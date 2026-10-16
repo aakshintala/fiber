@@ -232,7 +232,11 @@ impl Loop {
     pub(crate) fn turn_input(
         &mut self,
         pieces: Vec<Queued>,
-    ) -> (Vec<InputItem>, Vec<ContextAdded>) {
+    ) -> (
+        Vec<InputItem>,
+        Vec<ContextAdded>,
+        Vec<contract::hook::StateLine>,
+    ) {
         let mut input: Vec<InputItem> = Vec::new();
         // Every held `shell_command` line joins this turn first, in `seq`
         // order: the `turn_started` naming them releases them.
@@ -240,9 +244,16 @@ impl Loop {
             input.push(InputItem::ShellCommand { seq: Seq(seq) });
         }
         let mut contexts: Vec<ContextAdded> = Vec::new();
+        let mut state = Vec::new();
         for piece in pieces {
             match piece {
-                Queued::Steer(message, hooked) => {
+                Queued::Steer(message, mut hooked) => {
+                    for line in &mut hooked.state {
+                        if let Some(index) = line.context.as_mut() {
+                            *index += contexts.len();
+                        }
+                    }
+                    state.extend(hooked.state);
                     contexts.extend(hooked.context);
                     input.push(InputItem::Message {
                         content: message.content,
@@ -276,7 +287,7 @@ impl Loop {
                 Queued::Pending(ids, reason) => self.queued.push_back(Queued::Pending(ids, reason)),
             }
         }
-        (input, contexts)
+        (input, contexts, state)
     }
 
     /// Writes each `jobs_pending_notified` at the front of the queue: the
@@ -304,6 +315,9 @@ impl Loop {
             let event = match piece {
                 Queued::Steer(message, hooked) => {
                     steered = true;
+                    let (state, contexts) =
+                        crate::hooks::split_state(hooked.state, hooked.context.len());
+                    self.write_carried(state, Some(turn))?;
                     self.append(
                         &Event::SteeringApplied(contract::events::SteeringApplied {
                             content: message.content,
@@ -313,7 +327,8 @@ impl Loop {
                         turn,
                         None,
                     )?;
-                    for added in hooked.context {
+                    for (added, state) in hooked.context.into_iter().zip(contexts) {
+                        self.write_carried(state, Some(turn))?;
                         self.append(&Event::ContextAdded(added), turn, None)?;
                     }
                     continue;

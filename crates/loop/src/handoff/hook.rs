@@ -46,6 +46,8 @@ impl Loop {
             conversation,
             cancel: &*self.cancel,
         });
+        let state = hooks.take_change_state();
+        self.drain_state(&hooks, Some(turn))?;
         for notice in answer.notices {
             self.write(&Event::Notice(notice), Some(turn), None)?;
         }
@@ -59,6 +61,7 @@ impl Loop {
             BeforeHandoffOutcome::Note { text, extension } => Ok(Some(Noted::Hook {
                 note_text: text,
                 extension,
+                state,
             })),
             BeforeHandoffOutcome::Failed(hook_failure) => Ok(Some(Noted::Failed(failure(
                 ErrorCode::HookFailed,

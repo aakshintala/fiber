@@ -36,6 +36,1290 @@ use crate::{Loop, Model};
 /// a stuck hook fails the test instead of hanging it.
 const TURN_DEADLINE: Duration = Duration::from_secs(10);
 
+#[derive(Default)]
+struct StateCases {
+    before: Option<BeforeToolOutcome>,
+    check: Option<CheckOutcome>,
+    after: Option<AfterToolOutcome>,
+    counts: std::collections::BTreeMap<&'static str, usize>,
+    replacement_only: bool,
+    reject_carried: bool,
+    supersede_note: bool,
+}
+
+struct StateHooks {
+    cases: StateCases,
+    inner: Arc<FakeHooks>,
+    watcher: Mutex<log::Watcher>,
+    trace: Mutex<Vec<String>>,
+    pending: Mutex<Option<(&'static str, bool)>>,
+    outbox: Mutex<Vec<contract::events::Event>>,
+}
+
+fn state_attached(world: &mut World, inner: Arc<FakeHooks>, cases: StateCases) -> Arc<StateHooks> {
+    let hooks = Arc::new(StateHooks {
+        cases,
+        inner,
+        watcher: Mutex::new(world.watcher.take().unwrap()),
+        trace: Mutex::new(Vec::new()),
+        pending: Mutex::new(None),
+        outbox: Mutex::new(Vec::new()),
+    });
+    world.looped = Some(world.looped.take().unwrap().hooks(hooks.clone()));
+    hooks
+}
+
+impl StateHooks {
+    fn flush(&self) {
+        let mut watcher = self.watcher.lock().unwrap();
+        while let Some(line) = watcher.try_recv().unwrap() {
+            self.trace
+                .lock()
+                .unwrap()
+                .push(format!("write:{}", line.kind));
+        }
+    }
+
+    fn called(&self, point: &'static str) {
+        self.flush();
+        assert!(
+            self.pending
+                .lock()
+                .unwrap()
+                .replace((point, false))
+                .is_none(),
+            "previous hook was not drained"
+        );
+        self.trace.lock().unwrap().push(point.into());
+        self.outbox
+            .lock()
+            .unwrap()
+            .push(state_event(&format!("timer-{point}")));
+        if self.cases.supersede_note
+            && point == "session_start"
+            && self
+                .trace
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == "before_handoff")
+        {
+            let mut event = state_event("before_handoff");
+            if let contract::events::Event::ExtensionStateSet(set) = &mut event {
+                set.value = serde_json::json!("B");
+            }
+            self.outbox.lock().unwrap().push(event);
+        }
+    }
+}
+
+macro_rules! state_forward {
+    ($method:ident, $argument:ident, $answer:ident) => {
+        fn $method(&self, argument: &contract::hook::$argument<'_>) -> contract::hook::$answer {
+            self.called(stringify!($method));
+            let mut answer = self.inner.$method(argument);
+            answer.notices.push(state_notice());
+            answer
+        }
+    };
+}
+
+impl Hooks for StateHooks {
+    state_forward!(before_message, BeforeMessage, BeforeMessageAnswer);
+    state_forward!(session_start, SessionStart, ContextAnswer);
+    state_forward!(turn_start, TurnStart, ContextAnswer);
+    state_forward!(turn_end, TurnEnd, ContextAnswer);
+    state_forward!(before_model_call, BeforeModelCall, CheckAnswer);
+    fn check_tool(&self, call: &BeforeToolCall<'_>) -> CheckAnswer {
+        self.called("check_tool");
+        let mut answer = self.inner.check_tool(call);
+        answer.notices.push(state_notice());
+        if let Some(outcome) = &self.cases.check {
+            answer.outcome = outcome.clone();
+        }
+        answer
+    }
+
+    fn before_tool(&self, call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        self.called("before_tool");
+        BeforeToolAnswer {
+            outcome: self
+                .cases
+                .before
+                .clone()
+                .unwrap_or_else(|| BeforeToolOutcome::Rewritten {
+                    arguments: call.arguments.clone(),
+                    changed_by: vec!["state".into()],
+                }),
+            notices: vec![state_notice()],
+        }
+    }
+    fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> AfterToolAnswer {
+        self.called("after_tool");
+        AfterToolAnswer {
+            outcome: self
+                .cases
+                .after
+                .clone()
+                .unwrap_or_else(|| AfterToolOutcome::Changed {
+                    content: Some("changed".into()),
+                    details: None,
+                    artifact: None,
+                }),
+            changed_by: vec!["state".into()],
+            notices: vec![state_notice()],
+        }
+    }
+    fn before_handoff(
+        &self,
+        _: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        self.called("before_handoff");
+        contract::hook::BeforeHandoffAnswer {
+            outcome: contract::hook::BeforeHandoffOutcome::Note {
+                text: "note".into(),
+                extension: "state".into(),
+            },
+            notices: vec![state_notice()],
+        }
+    }
+    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
+    fn take_change_state(&self) -> Vec<contract::hook::StateLine> {
+        self.flush();
+        self.trace.lock().unwrap().push("take".into());
+        let mut pending = self.pending.lock().unwrap();
+        let (point, taken) = pending.as_mut().expect("a hook returned");
+        assert!(!*taken, "taken once");
+        *taken = true;
+        let count = self.cases.counts.get(point).copied().unwrap_or(1);
+        (0..count)
+            .map(|index| {
+                let context = if self.cases.replacement_only && *point == "before_message" {
+                    None
+                } else {
+                    matches!(
+                        *point,
+                        "before_message" | "session_start" | "turn_start" | "turn_end"
+                    )
+                    .then_some(index)
+                };
+                contract::hook::StateLine {
+                    event: state_event(point),
+                    extension: "state".into(),
+                    key: (*point).into(),
+                    landing: 1,
+                    context,
+                }
+            })
+            .collect()
+    }
+    fn take_state_lines(&self) -> Vec<contract::events::Event> {
+        self.flush();
+        self.trace.lock().unwrap().push("drain".into());
+        if let Some((point, taken)) = self.pending.lock().unwrap().take() {
+            assert!(
+                taken || matches!(point, "check_tool" | "before_model_call"),
+                "take precedes drain: {point}"
+            );
+        }
+        std::mem::take(&mut *self.outbox.lock().unwrap())
+    }
+    fn admit_state_lines(
+        &self,
+        lines: Vec<contract::hook::StateLine>,
+    ) -> Vec<contract::events::Event> {
+        self.flush();
+        self.trace.lock().unwrap().push("admit".into());
+        if self.cases.reject_carried {
+            Vec::new()
+        } else {
+            lines
+                .into_iter()
+                .filter(|line| !self.cases.supersede_note || line.key != "before_handoff")
+                .map(|line| line.event)
+                .collect()
+        }
+    }
+}
+
+fn state_notice() -> contract::events::Notice {
+    contract::events::Notice {
+        code: ErrorCode::HookFailed,
+        message: "state hook notice".into(),
+        extension: Some("state".into()),
+    }
+}
+
+fn state_event(key: &str) -> contract::events::Event {
+    contract::events::Event::ExtensionStateSet(contract::events::ExtensionStateSet {
+        extension: "state".into(),
+        key: key.into(),
+        value: serde_json::json!(true),
+        on_fork: contract::events::OnFork::AtPoint,
+    })
+}
+
+#[test]
+fn state_lines_take_follows_every_hook_call() {
+    let inner = Arc::new(FakeHooks::new());
+    inner.answer_before_message(passed_message_with_context(vec![(
+        "state",
+        "message context",
+    )]));
+    inner.answer_session_start(added(vec![("state", "start context")]));
+    inner.answer_session_start(added(vec![("state", "handoff context")]));
+    inner.answer_turn_start(added(vec![("state", "turn context")]));
+    inner.answer_turn_end(added(vec![("state", "continue")]));
+    let mut world = started_with_tools(
+        vec![
+            with_tokens(
+                tool_call_reply("", "probe", serde_json::json!({}), 0.0),
+                999,
+                0,
+            ),
+            fakes::Scripted::text("first"),
+            fakes::Scripted::text("done"),
+        ],
+        None,
+        vec![Arc::new(Probe)],
+    );
+    let hooks = state_attached(&mut world, inner, StateCases::default());
+    world.looped = Some(world.looped.take().unwrap().hooks(hooks.clone()).handoff(
+        crate::HandoffSettings {
+            tokens: 1000,
+            nudge: false,
+            ..Default::default()
+        },
+    ));
+    let (ack, answered) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("state", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv_or_fail(&answered, "state prompt accepted")
+            .is_ok()
+    );
+    hooks.flush();
+    let trace = hooks.trace.lock().unwrap();
+    for point in [
+        "before_message",
+        "session_start",
+        "turn_start",
+        "before_tool",
+        "check_tool",
+        "after_tool",
+        "before_handoff",
+        "before_model_call",
+        "turn_end",
+    ] {
+        let positions: Vec<_> = trace
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| (item == point).then_some(index))
+            .collect();
+        assert!(!positions.is_empty(), "{point}: {trace:?}");
+        for index in positions {
+            let expected = if matches!(point, "check_tool" | "before_model_call") {
+                vec!["drain"]
+            } else {
+                vec!["take", "drain"]
+            };
+            assert_eq!(
+                trace[index + 1..index + 1 + expected.len()],
+                expected,
+                "{point}: {trace:?}"
+            );
+        }
+    }
+    let all = lines(&world);
+    for (index, line) in all.iter().enumerate() {
+        if line.kind == "extension_state_set" {
+            match line.payload["key"].as_str().unwrap() {
+                "before_message" | "session_start" | "turn_start" => {
+                    assert_eq!(all[index + 1].kind, "context_added")
+                }
+                "turn_end" => assert_eq!(all[index + 1].kind, "steering_applied"),
+                "before_tool" => assert_eq!(all[index + 1].kind, "tool_call_started"),
+                "after_tool" => assert_eq!(all[index + 1].kind, "tool_call_completed"),
+                "before_handoff" => assert_eq!(all[index + 1].kind, "handoff_completed"),
+                key => assert!(key.starts_with("timer-")),
+            }
+        }
+    }
+}
+
+#[test]
+fn state_lines_split_context_edges_keep_every_line() {
+    for count in 0..=2 {
+        for index in 0..=2 {
+            let mut line = contract::hook::StateLine {
+                event: state_event("context"),
+                extension: "state".into(),
+                key: "context".into(),
+                landing: 1,
+                context: Some(index),
+            };
+            let (other, grouped) = crate::hooks::split_state(vec![line.clone()], count);
+            if count == 0 {
+                assert_eq!(other, vec![line.clone()]);
+            } else {
+                assert_eq!(grouped[index.min(count - 1)], vec![line.clone()]);
+                assert!(other.is_empty());
+            }
+            line.context = None;
+            let (other, grouped) = crate::hooks::split_state(vec![line.clone()], count);
+            assert_eq!(other, vec![line]);
+            assert!(grouped.iter().all(Vec::is_empty));
+        }
+    }
+}
+
+fn state_written(world: &World, key: &str) -> Vec<Envelope> {
+    lines(world)
+        .into_iter()
+        .filter(|line| line.kind == "extension_state_set" && line.payload["key"] == key)
+        .collect()
+}
+
+fn state_adjacent(world: &World, key: &str, next: &str) {
+    let all = lines(world);
+    let positions: Vec<_> = all
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            (line.kind == "extension_state_set" && line.payload["key"] == key).then_some(index)
+        })
+        .collect();
+    assert!(!positions.is_empty(), "{key}");
+    for index in positions {
+        assert_eq!(all[index + 1].kind, next, "{key}");
+    }
+}
+
+#[test]
+fn state_lines_prompt_replacements_and_contexts_write_at_their_own_lines() {
+    for (rewrite, count) in [(true, 0), (false, 1), (true, 1), (false, 2)] {
+        let inner = Arc::new(FakeHooks::new());
+        for _ in 0..2 {
+            inner.answer_before_message(BeforeMessageAnswer {
+                outcome: BeforeMessageOutcome::Passed {
+                    replaced: rewrite.then(|| contract::hook::Replaced {
+                        content: vec![ContentPart::Text {
+                            text: "rewritten".into(),
+                        }],
+                        changed_by: vec!["state".into()],
+                    }),
+                    context: (0..count)
+                        .map(|i| Context {
+                            extension: "state".into(),
+                            text: format!("context-{i}"),
+                        })
+                        .collect(),
+                },
+                notices: Vec::new(),
+            });
+        }
+        let mut world = started(vec![fakes::Scripted::text("done")], None);
+        let mut cases = StateCases {
+            replacement_only: count == 0,
+            ..Default::default()
+        };
+        cases.counts.insert("before_message", count.max(1));
+        state_attached(&mut world, inner, cases);
+        for id in ["a", "b"] {
+            let (ack, _) = capture();
+            world
+                .inbox
+                .send(Delivery::Prompt(driver(id, "hello"), ack))
+                .unwrap();
+        }
+        let done = run_turn(&mut world);
+        assert_eq!(finish_turn(&mut world, &done), Some(TurnOutcome::Completed));
+        let all = lines(&world);
+        let turn = all
+            .iter()
+            .position(|line| line.kind == "turn_started")
+            .unwrap();
+        let state: Vec<_> = all
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                (line.kind == "extension_state_set" && line.payload["key"] == "before_message")
+                    .then_some(i)
+            })
+            .collect();
+        assert_eq!(state.len(), 2 * count.max(1));
+        if count == 0 {
+            assert_eq!(*state.last().unwrap(), turn - 1);
+            assert!(state.iter().all(|i| *i < turn));
+        } else {
+            assert!(state.iter().all(|i| *i > turn));
+            state_adjacent(&world, "before_message", "context_added");
+        }
+    }
+}
+
+#[test]
+fn state_lines_queued_steer_is_written_or_dropped_with_its_state() {
+    for shutdown in [false, true] {
+        let inner = Arc::new(FakeHooks::new());
+        inner.answer_before_message(passed_message_with_context(vec![("state", "extra")]));
+        let mut world = started(Vec::new(), None);
+        state_attached(&mut world, inner, StateCases::default());
+        let mut looped = world.looped.take().unwrap();
+        let turn = TurnId("state".into());
+        let (ack, answered) = capture();
+        looped
+            .take_steer_running(driver("steer", "hello"), ack, &turn)
+            .unwrap();
+        assert!(
+            Deadline::after(TURN_DEADLINE)
+                .recv_or_fail(&answered, "steer admitted")
+                .is_ok()
+        );
+        assert!(state_written(&world, "before_message").is_empty());
+        if shutdown {
+            looped.cancel.shutdown(143);
+            looped.settled(Ok(())).unwrap();
+        } else {
+            looped.write_queued(&turn).unwrap();
+        }
+        if shutdown {
+            assert!(state_written(&world, "before_message").is_empty());
+            assert!(
+                !lines(&world)
+                    .iter()
+                    .any(|line| line.kind == "steering_applied")
+            );
+        } else {
+            state_adjacent(&world, "before_message", "context_added");
+        }
+    }
+}
+
+#[test]
+fn state_lines_cancelled_hook_answers_still_drain_other_writes() {
+    for point in [
+        "session_start",
+        "turn_start",
+        "before_model_call",
+        "turn_end",
+    ] {
+        let inner = Arc::new(FakeHooks::new());
+        inner.answer_session_start(added(vec![("state", "start")]));
+        inner.answer_turn_start(added(vec![("state", "turn")]));
+        inner.answer_turn_end(added(vec![("state", "end")]));
+        let mut world = started(vec![fakes::Scripted::text("done")], None);
+        let cancel = world.looped.as_ref().unwrap().cancel.clone();
+        match point {
+            "session_start" => {
+                *inner.shutdown_in_session.lock().unwrap() = Some(cancel);
+            }
+            "turn_start" => {
+                *inner.cancel_in_hook.lock().unwrap() = Some(cancel);
+            }
+            "before_model_call" => {
+                *inner.cancel_in_call.lock().unwrap() = Some(cancel);
+            }
+            "turn_end" => {
+                *inner.cancel_in_end.lock().unwrap() = Some(cancel);
+            }
+            _ => unreachable!(),
+        }
+        state_attached(&mut world, inner, StateCases::default());
+        let (ack, _) = capture();
+        world
+            .inbox
+            .send(Delivery::Prompt(driver("cancel", "hello"), ack))
+            .unwrap();
+        let done = run_turn(&mut world);
+        let _outcome = finish_turn(&mut world, &done);
+        assert!(state_written(&world, point).is_empty(), "{point}");
+        assert_eq!(
+            state_written(&world, &format!("timer-{point}")).len(),
+            1,
+            "{point}"
+        );
+    }
+}
+
+#[test]
+fn state_lines_held_contexts_and_continuations_share_their_commits() {
+    for refuse in [false, true] {
+        let inner = Arc::new(FakeHooks::new());
+        let mut world = started(Vec::new(), None);
+        state_attached(&mut world, inner, StateCases::default());
+        let mut looped = world.looped.take().unwrap();
+        let turn = TurnId("held".into());
+        for key in ["a", "b"] {
+            looped.lifecycle.start_contexts.push((
+                contract::events::ContextAdded {
+                    text: key.into(),
+                    extension: "state".into(),
+                    hook: "session_start".into(),
+                },
+                vec![contract::hook::StateLine {
+                    event: state_event(key),
+                    extension: "state".into(),
+                    key: key.into(),
+                    landing: 1,
+                    context: Some(0),
+                }],
+            ));
+            looped.lifecycle.continued.push(Context {
+                extension: "state".into(),
+                text: key.into(),
+            });
+            looped
+                .lifecycle
+                .continued_state
+                .push(contract::hook::StateLine {
+                    event: state_event(&format!("end-{key}")),
+                    extension: "state".into(),
+                    key: format!("end-{key}"),
+                    landing: 1,
+                    context: Some(looped.lifecycle.continued.len() - 1),
+                });
+        }
+        if refuse {
+            looped.cancel.shutdown(143);
+        }
+        looped.write_held(&turn).unwrap();
+        if refuse {
+            assert_eq!(looped.lifecycle.start_contexts.len(), 2);
+            assert!(state_written(&world, "a").is_empty());
+            assert!(state_written(&world, "end-a").is_empty());
+        } else {
+            assert!(looped.lifecycle.start_contexts.is_empty());
+            assert!(looped.lifecycle.continued_state.is_empty());
+            for key in ["a", "b"] {
+                state_adjacent(&world, key, "context_added");
+                state_adjacent(&world, &format!("end-{key}"), "steering_applied");
+            }
+        }
+    }
+}
+
+#[test]
+fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
+    for mode in ["completed", "failed", "refused"] {
+        let inner = Arc::new(FakeHooks::new());
+        inner.answer_session_start(added(Vec::new()));
+        inner.answer_session_start(if mode == "failed" {
+            failed("state", "failure")
+        } else {
+            added(vec![("state", "one"), ("state", "two")])
+        });
+        let mut world = started_with_tools(
+            vec![
+                with_tokens(
+                    tool_call_reply("", "probe", serde_json::json!({}), 0.0),
+                    999,
+                    0,
+                ),
+                fakes::Scripted::text("done"),
+            ],
+            None,
+            vec![Arc::new(Probe)],
+        );
+        if mode == "refused" {
+            *inner.shutdown_after_handoff_check.lock().unwrap() =
+                Some(world.looped.as_ref().unwrap().cancel.clone());
+        }
+        let mut cases = StateCases::default();
+        cases.counts.insert("session_start", 2);
+        state_attached(&mut world, inner, cases);
+        world.looped = Some(
+            world
+                .looped
+                .take()
+                .unwrap()
+                .handoff(crate::HandoffSettings {
+                    tokens: 1000,
+                    nudge: false,
+                    ..Default::default()
+                }),
+        );
+        let (ack, _) = capture();
+        world
+            .inbox
+            .send(Delivery::Prompt(driver("handoff", "hello"), ack))
+            .unwrap();
+        let done = run_turn(&mut world);
+        let _outcome = finish_turn(&mut world, &done);
+        if mode == "completed" {
+            state_adjacent(&world, "before_handoff", "handoff_completed");
+            state_adjacent(&world, "session_start", "context_added");
+            assert_eq!(state_written(&world, "session_start").len(), 2);
+        } else {
+            assert!(state_written(&world, "before_handoff").is_empty());
+            assert!(state_written(&world, "session_start").is_empty());
+        }
+    }
+}
+
+#[test]
+fn state_lines_all_output_shapes_are_carried_to_the_completion_writer() {
+    for shape in ["ordinary", "spilled", "unsaved"] {
+        for reject in [false, true] {
+            let inner = Arc::new(FakeHooks::new());
+            let mut world = started(Vec::new(), None);
+            let hooks = state_attached(
+                &mut world,
+                inner,
+                StateCases {
+                    reject_carried: reject,
+                    ..Default::default()
+                },
+            );
+            let mut looped = world.looped.take().unwrap();
+            let turn = TurnId("output".into());
+            let id = contract::ActionId("output".into());
+            let spilled = if shape == "ordinary" {
+                None
+            } else {
+                let file = if shape == "spilled" {
+                    let path = world.dir.join("artifacts/output.txt");
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(&path, b"raw").unwrap();
+                    Ok(contract::tool::SpillFile { path, size: 3 })
+                } else {
+                    Err(contract::tool::Unsaved {
+                        message: "unsaved".into(),
+                        left: None,
+                    })
+                };
+                Some(contract::tool::Spilled {
+                    head: "raw".into(),
+                    tail: String::new(),
+                    head_bytes: 3,
+                    tail_bytes: 0,
+                    removed: 0,
+                    file,
+                })
+            };
+            let (mut done, state) = looped
+                .finish(
+                    Output {
+                        content: vec![ContentPart::Text { text: "raw".into() }],
+                        spilled,
+                        control: Some(contract::events::Control {
+                            name: Some("state output".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ("probe", &serde_json::Map::new()),
+                    None,
+                    Bound::DEFAULT,
+                    false,
+                    &id,
+                    Some(&turn),
+                )
+                .unwrap();
+            assert!(state_written(&world, "after_tool").is_empty());
+            looped
+                .after_completed(None, &mut done, &id, Some(&turn), state)
+                .unwrap();
+            hooks.flush();
+            let trace = hooks.trace.lock().unwrap();
+            let at = trace.iter().position(|item| item == "after_tool").unwrap();
+            assert_eq!(&trace[at + 1..at + 3], ["take", "drain"]);
+            assert_eq!(
+                state_written(&world, "after_tool").len(),
+                usize::from(!reject)
+            );
+            if !reject {
+                state_adjacent(&world, "after_tool", "tool_call_completed");
+                let all = lines(&world);
+                let named = all
+                    .iter()
+                    .position(|line| line.kind == "session_named")
+                    .unwrap();
+                let carried = all
+                    .iter()
+                    .position(|line| {
+                        line.kind == "extension_state_set" && line.payload["key"] == "after_tool"
+                    })
+                    .unwrap();
+                assert!(named < carried);
+            }
+        }
+    }
+    for outcome in [
+        AfterToolOutcome::Withheld {
+            extension: "state".into(),
+        },
+        AfterToolOutcome::Failed(contract::hook::HookFailure {
+            extension: "state".into(),
+            message: "own command".into(),
+        }),
+    ] {
+        let inner = Arc::new(FakeHooks::new());
+        let mut world = started_with_tools(
+            vec![
+                tool_call_reply("", "probe", serde_json::json!({}), 0.0),
+                fakes::Scripted::text("done"),
+            ],
+            None,
+            vec![Arc::new(Probe)],
+        );
+        state_attached(
+            &mut world,
+            inner,
+            StateCases {
+                after: Some(outcome),
+                ..Default::default()
+            },
+        );
+        let (ack, _) = capture();
+        world
+            .inbox
+            .send(Delivery::Prompt(driver("withheld", "hello"), ack))
+            .unwrap();
+        let done = run_turn(&mut world);
+        finish_turn(&mut world, &done);
+        assert!(state_written(&world, "after_tool").is_empty());
+    }
+}
+
+struct StateProbe;
+impl Tool for StateProbe {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        let mut definition = Probe.definition();
+        definition.input_schema = serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}}});
+        definition
+    }
+    fn effects(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        Probe.effects(args)
+    }
+    fn run(
+        &self,
+        args: &serde_json::Map<String, serde_json::Value>,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+    ) -> Output {
+        Probe.run(args, cancel, emit)
+    }
+    fn bound(&self) -> Bound {
+        Probe.bound()
+    }
+}
+struct StateRules {
+    decision: Option<contract::rules::RuleDecision>,
+    cancel: Option<Arc<crate::TurnCancel>>,
+}
+impl contract::rules::Rules for StateRules {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        if let Some(cancel) = &self.cancel {
+            cancel.shutdown(143);
+        }
+        Ok(contract::rules::StandingRules {
+            global: self
+                .decision
+                .map(|decision| contract::rules::Rule {
+                    decision,
+                    tool: "probe".into(),
+                    prefix: String::new(),
+                    added: None,
+                    session_id: None,
+                })
+                .into_iter()
+                .collect(),
+            project: Vec::new(),
+        })
+    }
+    fn remember(&self, _: &str, _: &str, _: &SessionId) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn state_lines_tool_rewrites_survive_only_accepted_model_and_inner_calls() {
+    for inner_call in [false, true] {
+        for mode in ["allow", "schema", "check", "deny", "cancel", "failed"] {
+            let inner = Arc::new(FakeHooks::new());
+            let mut world = started_with_tools(
+                vec![
+                    tool_call_reply("", "probe", serde_json::json!({"path":"x"}), 0.0),
+                    fakes::Scripted::text("done"),
+                ],
+                None,
+                vec![Arc::new(StateProbe)],
+            );
+            let mut cases = StateCases::default();
+            match mode {
+                "schema" => {
+                    cases.before = Some(BeforeToolOutcome::Rewritten {
+                        arguments: serde_json::Map::new(),
+                        changed_by: vec!["state".into()],
+                    })
+                }
+                "check" => {
+                    cases.check = Some(CheckOutcome::Refused(contract::hook::Refusal {
+                        extension: "state".into(),
+                        reason: "refused".into(),
+                    }))
+                }
+                "failed" => {
+                    cases.before = Some(BeforeToolOutcome::Failed(contract::hook::HookFailure {
+                        extension: "state".into(),
+                        message: "own command".into(),
+                    }))
+                }
+                _ => {}
+            }
+            state_attached(&mut world, inner, cases);
+            if mode == "deny" || mode == "cancel" {
+                let looped = world.looped.as_mut().unwrap();
+                looped.rules = Arc::new(StateRules {
+                    decision: (mode == "deny").then_some(contract::rules::RuleDecision::Deny),
+                    cancel: (mode == "cancel").then(|| looped.cancel.clone()),
+                });
+            }
+            if inner_call {
+                let mut looped = world.looped.take().unwrap();
+                let (tx, rx) = mpsc::channel();
+                looped = fakes::within("state inner call returned", TURN_DEADLINE, move || {
+                    looped
+                        .run_alone(contract::inbox::InnerCallRequest {
+                            extension: "other".into(),
+                            command: CommandId("state-inner".into()),
+                            name: "probe".into(),
+                            arguments: serde_json::json!({"path":"x"}),
+                            cancel: Arc::new(fakes::CancelToken::new()),
+                            taken: Box::new(|| {}),
+                            answer: Box::new(move |done| {
+                                let _sent = tx.send(done);
+                            }),
+                        })
+                        .unwrap();
+                    looped
+                });
+                assert!(rx.try_recv().is_ok(), "inner completion: {mode}");
+                world.looped = Some(looped);
+            } else {
+                let (ack, _) = capture();
+                world
+                    .inbox
+                    .send(Delivery::Prompt(driver("call", "hello"), ack))
+                    .unwrap();
+                let done = run_turn(&mut world);
+                finish_turn(&mut world, &done);
+            }
+            if mode == "allow" {
+                state_adjacent(&world, "before_tool", "tool_call_started");
+                state_adjacent(&world, "after_tool", "tool_call_completed");
+            } else {
+                assert!(state_written(&world, "before_tool").is_empty(), "{mode}");
+                assert!(
+                    !lines(&world)
+                        .iter()
+                        .any(|line| line.kind == "tool_call_started"),
+                    "{mode}"
+                );
+            }
+            assert_eq!(
+                state_written(&world, "timer-before_tool").len(),
+                1,
+                "{mode}"
+            );
+            if mode == "deny" {
+                assert!(
+                    lines(&world)
+                        .iter()
+                        .any(|line| line.kind == "permission_resolved")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn state_lines_resumed_approval_carries_only_the_matching_calls_rewrite() {
+    use contract::events::{AskStep, Decision, PermissionRequested};
+    for allow in [false, true] {
+        let inner = Arc::new(FakeHooks::new());
+        let mut world = started_with_tools(
+            vec![fakes::Scripted::text("done")],
+            None,
+            vec![Arc::new(StateProbe)],
+        );
+        state_attached(&mut world, inner, StateCases::default());
+        let turn = TurnId("resumed".into());
+        let ids = ["a_before", "a_middle", "a_after"];
+        let batch: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                (
+                    contract::ActionId((*id).into()),
+                    ToolCallRequested {
+                        name: "probe".into(),
+                        arguments: serde_json::json!({"path":"x"}),
+                        provider_id: None,
+                        repair: None,
+                        ran_by: None,
+                        provider_item: None,
+                    },
+                )
+            })
+            .collect();
+        let request_id = contract::RequestId("r_state".into());
+        let request = PermissionRequested {
+            request_id: request_id.clone(),
+            always_reviewed: false,
+            declared: StateProbe
+                .effects(&serde_json::Map::new())
+                .unwrap()
+                .declared,
+            step: AskStep::Review {
+                escalation: None,
+                rule: None,
+            },
+        };
+        let mut looped = world.looped.take().unwrap().answerable(true);
+        looped.ensure_preamble().unwrap();
+        looped
+            .append(
+                &contract::events::Event::TurnStarted(TurnStarted { input: Vec::new() }),
+                &turn,
+                None,
+            )
+            .unwrap();
+        for (id, call) in &batch {
+            looped
+                .append(
+                    &contract::events::Event::ToolCallRequested(call.clone()),
+                    &turn,
+                    Some(id),
+                )
+                .unwrap();
+        }
+        looped.suspended = Some(crate::resume::Suspended {
+            turn: turn.clone(),
+            pending: crate::suspend::Pending::Approval(request),
+            action: batch[1].0.clone(),
+            batch,
+            started: None,
+            permission: None,
+        });
+        world.looped = Some(looped);
+        let (ack, answered) = capture();
+        world
+            .inbox
+            .send(Delivery::Reply(
+                contract::commands::Reply {
+                    request_id,
+                    answer: contract::commands::ReplyAnswer::Approval {
+                        decision: if allow {
+                            Decision::Allow
+                        } else {
+                            Decision::Deny
+                        },
+                        feedback: None,
+                        remember: None,
+                    },
+                },
+                ack,
+            ))
+            .unwrap();
+        let done = run_turn(&mut world);
+        assert_eq!(finish_turn(&mut world, &done), Some(TurnOutcome::Completed));
+        assert!(
+            Deadline::after(TURN_DEADLINE)
+                .recv_or_fail(&answered, "resumed approval answered")
+                .is_ok()
+        );
+        let all = lines(&world);
+        let mut actions = Vec::new();
+        for (index, line) in all.iter().enumerate() {
+            if line.kind == "extension_state_set" && line.payload["key"] == "before_tool" {
+                assert_eq!(all[index + 1].kind, "tool_call_started");
+                actions.push(all[index + 1].action_id.as_ref().unwrap().0.as_str());
+            }
+        }
+        assert_eq!(
+            actions,
+            if allow {
+                vec!["a_middle", "a_after"]
+            } else {
+                vec!["a_after"]
+            }
+        );
+        let requested = all
+            .iter()
+            .position(|line| line.kind == "permission_requested")
+            .unwrap();
+        let resolved = all
+            .iter()
+            .position(|line| line.kind == "permission_resolved")
+            .unwrap();
+        assert!(requested < resolved);
+        let first_state = all
+            .iter()
+            .position(|line| {
+                line.kind == "extension_state_set" && line.payload["key"] == "before_tool"
+            })
+            .unwrap();
+        assert!(resolved < first_state);
+    }
+}
+
+thread_local! {static STATE_CONTEXT_COMMIT:std::cell::RefCell<Option<Box<dyn FnMut()>>>=std::cell::RefCell::new(None);}
+pub(super) fn before_state_context_commit() {
+    STATE_CONTEXT_COMMIT.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook();
+        }
+    });
+}
+
+#[test]
+fn state_lines_shutdown_between_held_context_commits_keeps_the_second_pair() {
+    let inner = Arc::new(FakeHooks::new());
+    let mut world = started(Vec::new(), None);
+    state_attached(&mut world, inner, StateCases::default());
+    let mut looped = world.looped.take().unwrap();
+    for key in ["a", "b"] {
+        looped.lifecycle.start_contexts.push((
+            contract::events::ContextAdded {
+                text: key.into(),
+                extension: "state".into(),
+                hook: "session_start".into(),
+            },
+            vec![contract::hook::StateLine {
+                event: state_event(key),
+                extension: "state".into(),
+                key: key.into(),
+                landing: 1,
+                context: Some(0),
+            }],
+        ));
+    }
+    let cancel = looped.cancel.clone();
+    let mut commits = 0;
+    STATE_CONTEXT_COMMIT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            commits += 1;
+            if commits == 2 {
+                cancel.shutdown(143);
+            }
+        }))
+    });
+    looped.write_held(&TurnId("held".into())).unwrap();
+    STATE_CONTEXT_COMMIT.with(|hook| *hook.borrow_mut() = None);
+    state_adjacent(&world, "a", "context_added");
+    assert!(state_written(&world, "b").is_empty());
+    assert_eq!(looped.lifecycle.start_contexts.len(), 1);
+    assert_eq!(looped.lifecycle.start_contexts[0].0.text, "b");
+    assert_eq!(looped.lifecycle.start_contexts[0].1.len(), 1);
+}
+
+#[test]
+fn state_lines_refused_continuation_commit_drops_its_carried_lines() {
+    let inner = Arc::new(FakeHooks::new());
+    let mut world = started(Vec::new(), None);
+    state_attached(&mut world, inner, StateCases::default());
+    let mut looped = world.looped.take().unwrap();
+    looped.lifecycle.continued.push(Context {
+        extension: "state".into(),
+        text: "continue".into(),
+    });
+    looped
+        .lifecycle
+        .continued_state
+        .push(contract::hook::StateLine {
+            event: state_event("end"),
+            extension: "state".into(),
+            key: "end".into(),
+            landing: 1,
+            context: Some(0),
+        });
+    let cancel = looped.cancel.clone();
+    super::BEFORE_HELD_WRITE
+        .with(|hook| *hook.borrow_mut() = Some(Box::new(move || cancel.shutdown(143))));
+    looped.write_held(&TurnId("held".into())).unwrap();
+    assert!(looped.lifecycle.continued.is_empty());
+    assert!(looped.lifecycle.continued_state.is_empty());
+    assert!(state_written(&world, "end").is_empty());
+}
+
+#[test]
+fn state_lines_non_hook_sender_drains_without_a_registered_hook() {
+    for boundary in ["drain", "delivery", "kept"] {
+        let inner = Arc::new(FakeHooks::new());
+        let mut world = started(vec![fakes::Scripted::text("done")], None);
+        let hooks = state_attached(&mut world, inner, StateCases::default());
+        hooks.outbox.lock().unwrap().push(state_event("outside"));
+        if boundary == "drain" {
+            world
+                .looped
+                .as_mut()
+                .unwrap()
+                .drain(&TurnId("drain".into()))
+                .unwrap();
+        } else {
+            if boundary == "kept" {
+                world
+                    .looped
+                    .as_mut()
+                    .unwrap()
+                    .queued
+                    .push_back(crate::jobs::Queued::Steer(
+                        driver("kept", "hello"),
+                        crate::before_message::Hooked::default(),
+                    ));
+            } else {
+                let (ack, _) = capture();
+                world
+                    .inbox
+                    .send(Delivery::Prompt(driver("delivery", "hello"), ack))
+                    .unwrap();
+            }
+            let done = run_turn(&mut world);
+            finish_turn(&mut world, &done);
+        }
+        let all = lines(&world);
+        assert_eq!(all[1].kind, "extension_state_set", "{boundary}");
+        assert_eq!(all[1].payload["key"], "outside", "{boundary}");
+        assert_eq!(state_written(&world, "outside").len(), 1);
+    }
+}
+
+#[test]
+fn state_lines_slash_rejection_drops_the_prompt_and_its_carried_state() {
+    let inner = Arc::new(FakeHooks::new());
+    inner.answer_before_message(passed_message_with_context(vec![("state", "context")]));
+    let mut world = started(Vec::new(), None);
+    state_attached(&mut world, inner, StateCases::default());
+    let mut looped = world
+        .looped
+        .take()
+        .unwrap()
+        .server_prompts(crate::ServerPrompts {
+            rows: vec![contract::events::CommandInfo {
+                name: "broken".into(),
+                description: String::new(),
+                argument_hint: None,
+                tag: "server".into(),
+            }],
+            fetch: Arc::new(|_, _, _, _| Output::default()),
+        });
+    let (ack, answered) = capture();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped
+        .take_prompt(driver("slash", "/broken"), ack, &mut input)
+        .unwrap();
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv_or_fail(&answered, "slash rejected")
+            .is_err()
+    );
+    assert!(input.pieces.is_empty());
+    assert!(state_written(&world, "before_message").is_empty());
+    assert!(!lines(&world).iter().any(|line| line.kind == "turn_started"));
+    assert_eq!(state_written(&world, "timer-before_message").len(), 1);
+}
+
+#[test]
+fn state_lines_cap_failure_never_writes_the_changed_outputs_state() {
+    let inner = Arc::new(FakeHooks::new());
+    let mut world = started(Vec::new(), None);
+    state_attached(
+        &mut world,
+        inner,
+        StateCases {
+            after: Some(AfterToolOutcome::Changed {
+                content: Some("changed".into()),
+                details: None,
+                artifact: Some("artifact".into()),
+            }),
+            ..Default::default()
+        },
+    );
+    let artifacts = world.dir.join("artifacts");
+    if artifacts.is_dir() {
+        std::fs::remove_dir(&artifacts).unwrap();
+    }
+    std::fs::write(&artifacts, b"not a directory").unwrap();
+    let result = world.looped.as_mut().unwrap().finish(
+        Output {
+            content: vec![ContentPart::Text { text: "raw".into() }],
+            ..Default::default()
+        },
+        ("probe", &serde_json::Map::new()),
+        None,
+        Bound::DEFAULT,
+        false,
+        &contract::ActionId("output".into()),
+        None,
+    );
+    assert!(result.is_err());
+    assert!(state_written(&world, "after_tool").is_empty());
+    assert_eq!(state_written(&world, "timer-after_tool").len(), 1);
+}
+
+#[test]
+fn state_lines_later_unchanged_start_write_supersedes_a_carried_handoff_note() {
+    let inner = Arc::new(FakeHooks::new());
+    let mut world = started_with_tools(
+        vec![
+            with_tokens(
+                tool_call_reply("", "probe", serde_json::json!({}), 0.0),
+                999,
+                0,
+            ),
+            fakes::Scripted::text("done"),
+        ],
+        None,
+        vec![Arc::new(Probe)],
+    );
+    state_attached(
+        &mut world,
+        inner,
+        StateCases {
+            supersede_note: true,
+            ..Default::default()
+        },
+    );
+    world.looped = Some(
+        world
+            .looped
+            .take()
+            .unwrap()
+            .handoff(crate::HandoffSettings {
+                tokens: 1000,
+                nudge: false,
+                ..Default::default()
+            }),
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("handoff", "hello"), ack))
+        .unwrap();
+    let done = run_turn(&mut world);
+    assert_eq!(finish_turn(&mut world, &done), Some(TurnOutcome::Completed));
+    let state = state_written(&world, "before_handoff");
+    assert_eq!(state.len(), 1);
+    assert_eq!(state[0].payload["value"], "B");
+    assert!(
+        lines(&world)
+            .iter()
+            .any(|line| line.kind == "handoff_completed")
+    );
+}
+
 /// A scripted `Hooks` fake: a queue of answers per lifecycle point, what
 /// each call was shown, and an optional cancel or shutdown to start inside
 /// `turn_start`'s own call.
@@ -979,7 +2263,10 @@ fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
     let turn = TurnId("t_1".into());
     {
         let mut looped = world.looped.take().unwrap();
-        looped.lifecycle.start_contexts.push(held("kept"));
+        looped
+            .lifecycle
+            .start_contexts
+            .push((held("kept"), Vec::new()));
         looped.cancel.shutdown(143);
         looped.write_held(&turn).unwrap();
         assert_eq!(
@@ -1000,8 +2287,14 @@ fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
     let mut world = started(vec![fakes::Scripted::text("Done.")], None);
     {
         let mut looped = world.looped.take().unwrap();
-        looped.lifecycle.start_contexts.push(held("one"));
-        looped.lifecycle.start_contexts.push(held("two"));
+        looped
+            .lifecycle
+            .start_contexts
+            .push((held("one"), Vec::new()));
+        looped
+            .lifecycle
+            .start_contexts
+            .push((held("two"), Vec::new()));
         looped.write_held(&turn).unwrap();
         assert!(
             looped.lifecycle.start_contexts.is_empty(),
