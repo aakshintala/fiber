@@ -827,27 +827,3 @@ fn terminal_wheel(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Str
 #[cfg(test)]
 #[path = "wheel_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-mod session_layout_tests {
-    use super::{POINTER, RAIL, ROWS};
-
-    /// The wheel scenario's rail and pointer match the TUI's session
-    /// layout at the benchmark's terminal size: changing the default
-    /// rail share or placement fails this test without a release build.
-    #[test]
-    fn the_rail_and_pointer_match_the_session_layout() {
-        let (rail, conversation) = tui::session_columns(160, 48);
-        assert_eq!(usize::from(rail), RAIL, "the rail's columns");
-        assert!(
-            conversation.contains(&POINTER.0),
-            "the pointer column {} is inside the conversation {conversation:?}",
-            POINTER.0
-        );
-        assert!(
-            POINTER.1 < ROWS,
-            "the pointer row {} is inside the conversation's {ROWS} rows",
-            POINTER.1
-        );
-    }
-}

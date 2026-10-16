@@ -10,7 +10,8 @@ use serde_json::json;
 use std::time::Duration;
 
 use super::{
-    conversation, distinct, latencies, position, send_stamped, session_samples, sgr_wheel, typed,
+    POINTER, RAIL, ROWS, conversation, distinct, latencies, position, send_stamped,
+    session_samples, sgr_wheel, typed,
 };
 use crate::pty::Frame;
 use crate::run::System;
@@ -269,4 +270,23 @@ fn recorded_frames_keep_their_bytes_and_text() {
     );
     assert_eq!(rows[1].1["frames"][0]["bytes"], json!(1736));
     assert_eq!(rows[1].1["frames"][0]["index"], json!(2));
+}
+
+/// The wheel scenario's rail and pointer match the TUI's session
+/// layout at the benchmark's terminal size: changing the default
+/// rail share or placement fails this test without a release build.
+#[test]
+fn the_rail_and_pointer_match_the_session_layout() {
+    let (rail, conversation) = tui::session_columns(160, 48);
+    assert_eq!(usize::from(rail), RAIL, "the rail's columns");
+    assert!(
+        conversation.contains(&POINTER.0),
+        "the pointer column {} is inside the conversation {conversation:?}",
+        POINTER.0
+    );
+    assert!(
+        POINTER.1 < ROWS,
+        "the pointer row {} is on screen ({ROWS} rows)",
+        POINTER.1
+    );
 }
