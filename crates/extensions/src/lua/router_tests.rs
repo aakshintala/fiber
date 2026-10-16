@@ -392,17 +392,6 @@ fn a_buffered_flush_holds_the_lock_past_seal() {
     );
 }
 
-#[derive(Default)]
-struct Recorder {
-    events: std::sync::Mutex<Vec<Event>>,
-}
-
-impl Emit for Recorder {
-    fn emit(&self, event: &Event) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-}
-
 #[test]
 fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
     // Disposed but not sealed: `set_emit` installs no emitter and flushes
@@ -412,10 +401,10 @@ fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
     assert_eq!(hub.lock().router.emit_buffer.len(), 1);
     hub.dispose("ext");
     assert!(!hub.lock().router.sealed, "dispose alone does not seal");
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     assert!(
-        recorder.events.lock().unwrap().is_empty(),
+        recorder.events().is_empty(),
         "nothing flushes after dispose"
     );
     assert!(
@@ -429,7 +418,7 @@ fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
     );
     hub.emit(status("late"));
     assert!(
-        recorder.events.lock().unwrap().is_empty(),
+        recorder.events().is_empty(),
         "nothing is emitted after dispose"
     );
 }
@@ -443,10 +432,10 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
     assert_eq!(hub.lock().router.emit_buffer.len(), 1);
     hub.seal();
     assert!(!hub.lock().router.disposed, "seal alone does not dispose");
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     assert!(
-        recorder.events.lock().unwrap().is_empty(),
+        recorder.events().is_empty(),
         "nothing flushes after seal"
     );
     assert!(
@@ -460,7 +449,7 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
     );
     hub.emit(status("late"));
     assert!(
-        recorder.events.lock().unwrap().is_empty(),
+        recorder.events().is_empty(),
         "nothing is emitted after seal"
     );
 }
@@ -564,12 +553,10 @@ fn buffered_events_keep_at_most_the_cap() {
     for n in 0..MAX_PENDING_EVENTS {
         hub.emit(status(&format!("n-{n}")));
     }
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     let flushed: Vec<String> = recorder
-        .events
-        .lock()
-        .unwrap()
+        .events()
         .iter()
         .filter_map(status_text)
         .map(str::to_owned)
@@ -581,12 +568,10 @@ fn buffered_events_keep_at_most_the_cap() {
     for n in 0..=MAX_PENDING_EVENTS {
         hub.emit(status(&format!("m-{n}")));
     }
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     let flushed: Vec<String> = recorder
-        .events
-        .lock()
-        .unwrap()
+        .events()
         .iter()
         .filter_map(status_text)
         .map(str::to_owned)
