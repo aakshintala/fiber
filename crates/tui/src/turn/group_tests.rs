@@ -434,14 +434,14 @@ fn an_empty_body_draws_no_summary_row() {
     assert!(rows.is_empty());
 }
 
-fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, detail: &str) -> Call {
+fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, content: &str) -> Call {
     Call {
         id,
         action: format!("a_{id}"),
         name: "shell".to_owned(),
         arguments: json!({"command": command}),
         status: Some(CallStatus::Completed),
-        detail: detail.to_owned(),
+        content: content.to_owned(),
         exit,
         lines,
         started: true,
@@ -456,7 +456,7 @@ fn failed_call(id: usize) -> Call {
         name: "shell".to_owned(),
         arguments: json!({"command": "cargo t"}),
         status: Some(CallStatus::Failed),
-        detail: "nonzero_exit: exit 101".to_owned(),
+        headline: "nonzero_exit: exit 101".to_owned(),
         started: true,
         ..Call::default()
     }
@@ -469,7 +469,7 @@ fn denied_call(id: usize) -> Call {
         name: "web_fetch".to_owned(),
         arguments: json!({"url": "u"}),
         status: Some(CallStatus::Denied),
-        detail: "not allowed".to_owned(),
+        headline: "not allowed".to_owned(),
         started: true,
         ..Call::default()
     }
@@ -482,7 +482,7 @@ fn cancelled_call(id: usize) -> Call {
         name: "custom".to_owned(),
         arguments: json!("raw text"),
         status: Some(CallStatus::Cancelled),
-        detail: "x".to_owned(),
+        content: "x".to_owned(),
         started: true,
         ..Call::default()
     }
@@ -713,7 +713,7 @@ fn ledger_results_name_what_each_call_did() {
             shell_call(6, "echo hi", None, 0, "a\nb"),
             shell_call(7, "true", None, 0, ""),
             Call {
-                detail: "\n\nfirst\nsecond".to_owned(),
+                content: "\n\nfirst\nsecond".to_owned(),
                 ..shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond")
             },
             failed_call(9),
@@ -724,7 +724,7 @@ fn ledger_results_name_what_each_call_did() {
             // An edit with no changes shows its first line like any
             // other call.
             Call {
-                detail: "wrote it".to_owned(),
+                content: "wrote it".to_owned(),
                 changes: vec![],
                 ..edit_call(14, "f.rs", 0, 0)
             },
@@ -777,6 +777,34 @@ fn ledger_results_name_what_each_call_did() {
         rows[11].spans[6].style.fg,
         crate::markdown::style(Role::Attention).fg
     );
+}
+
+/// A failed call with no error names no headline, so its ledger row
+/// falls back to the first line of its content.
+#[test]
+fn a_failed_call_with_no_error_falls_back_to_its_content_on_the_ledger_row() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                headline: String::new(),
+                content: "boom\nsecond".to_owned(),
+                status: Some(CallStatus::Failed),
+                ..failed_call(1)
+            }],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 100);
+    assert_eq!(rows.len(), 1);
+    let result: String = rows[0].spans[6..]
+        .iter()
+        .map(|span| span.content.as_ref().to_owned())
+        .collect();
+    assert_eq!(result.trim_end(), "boom");
 }
 
 /// The target is cut with "…" to what the result leaves: one column more
@@ -1042,7 +1070,7 @@ fn thinking_rows_without_a_heading_show_the_bare_form() {
 }
 
 fn open_read_call(id: usize, lines: usize) -> Call {
-    let detail = (1..=lines)
+    let content = (1..=lines)
         .map(|n| format!("L{n:04}"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -1052,7 +1080,7 @@ fn open_read_call(id: usize, lines: usize) -> Call {
         name: "read".to_owned(),
         arguments: json!({"path": "notes.txt"}),
         status: Some(CallStatus::Completed),
-        detail,
+        content,
         lines: lines as u64,
         started: true,
         open: true,
@@ -1115,7 +1143,7 @@ fn an_opened_call_is_capped_at_twenty_lines() {
 /// An opened diff of 25 lines is capped with its colours kept.
 #[test]
 fn an_opened_diff_is_capped_with_its_colours() {
-    let detail = (1..=25)
+    let diff = (1..=25)
         .map(|n| {
             if n % 2 == 0 {
                 format!("+added {n}")
@@ -1126,7 +1154,7 @@ fn an_opened_diff_is_capped_with_its_colours() {
         .collect::<Vec<_>>()
         .join("\n");
     let call = Call {
-        detail,
+        details: Some(json!({"diff": diff})),
         changes: vec![contract::events::FileChange {
             path: "a.rs".to_owned(),
             added: 13,
@@ -1152,14 +1180,14 @@ fn an_opened_diff_is_capped_with_its_colours() {
 #[test]
 fn an_opened_call_shows_its_error_or_no_output() {
     let call = Call {
-        detail: "ambiguous_match: boom".to_owned(),
+        headline: "ambiguous_match: boom".to_owned(),
         open: true,
         ..failed_call(1)
     };
     let rows = opened_rows(&opened_group(call), 76);
     assert_eq!(rows, vec!["        ambiguous_match: boom".to_owned()]);
     let call = Call {
-        detail: "".to_owned(),
+        content: "".to_owned(),
         open: true,
         ..shell_call(2, "true", Some(0), 0, "")
     };

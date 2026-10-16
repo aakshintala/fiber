@@ -2310,3 +2310,64 @@ fn a_finished_group_line_is_not_marked() {
     assert!(texts(&app).iter().any(|line| line.starts_with(" ● ")));
     assert_eq!(app.shown(0, usize::MAX).spins, Vec::new());
 }
+
+#[test]
+fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
+    use contract::events::{CallStatus, ToolCallCompleted, ToolCallRequested};
+    use contract::shapes::{ContentPart, Process};
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    turn.call_requested(
+        "a_1",
+        ToolCallRequested {
+            name: "shell".to_owned(),
+            arguments: json!({"command": "cargo t"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+        0,
+        &mut fold,
+    );
+    assert!(turn.call_completed(
+        "a_1",
+        &ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: Some(Process {
+                exit_code: Some(3),
+                signal: Some("SIGKILL".to_owned()),
+                timed_out: false,
+            }),
+            content: vec![ContentPart::Text {
+                text: "x\ny".to_owned(),
+            }],
+            details: Some(json!({"command": "cargo t", "exit_code": 3})),
+            artifact: Some("artifacts/out.txt".to_owned()),
+            kept: Some(vec![[0, 2]]),
+            changes: None,
+            control: None,
+            changed_by: None,
+            provider_item: None,
+        },
+        0,
+    ));
+    let call = turn
+        .groups()
+        .flat_map(|group| group.calls())
+        .next()
+        .expect("the completed call");
+    assert_eq!(
+        call.details,
+        Some(json!({"command": "cargo t", "exit_code": 3}))
+    );
+    assert_eq!(call.artifact.as_deref(), Some("artifacts/out.txt"));
+    assert_eq!(call.kept, Some(vec![[0, 2]]));
+    assert_eq!(call.signal.as_deref(), Some("SIGKILL"));
+    assert_eq!(call.exit, Some(3));
+    assert_eq!(call.headline, "");
+    assert_eq!(call.content, "x\ny");
+    assert_eq!(call.lines, 2);
+}

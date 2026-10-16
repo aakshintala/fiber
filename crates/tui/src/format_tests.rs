@@ -6,8 +6,8 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use super::{
-    Kind, Kinds, count, cut, detail, duration, heading, kind, money, seconds, summary, tokens,
-    wrap, wrap_joined,
+    Kind, Kinds, content_text, count, cut, duration, headline, heading, kind, money, seconds,
+    summary, tokens, wrap, wrap_joined,
 };
 
 fn text(kinds: &Kinds) -> String {
@@ -52,7 +52,7 @@ fn shell_kinds_follow_the_command_first_word() {
 }
 
 #[test]
-fn a_failed_call_details_its_code_and_message() {
+fn headline_of_a_failed_call_is_code_and_message() {
     use contract::events::{CallStatus, ToolCallCompleted};
     use contract::shapes::Failure;
     let done = ToolCallCompleted {
@@ -74,7 +74,82 @@ fn a_failed_call_details_its_code_and_message() {
         changed_by: None,
         provider_item: None,
     };
-    assert_eq!(detail(&done), "ambiguous_match: boom");
+    assert_eq!(headline(&done), "ambiguous_match: boom");
+}
+
+#[test]
+fn headline_of_a_denied_call_is_its_reason() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    let done = ToolCallCompleted {
+        status: CallStatus::Denied,
+        reason: Some("not allowed".to_owned()),
+        error: None,
+        process: None,
+        content: vec![],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    };
+    assert_eq!(headline(&done), "not allowed");
+}
+
+#[test]
+fn headline_is_empty_for_a_completed_call() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    let done = ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    };
+    assert_eq!(headline(&done), "");
+}
+
+#[test]
+fn content_text_joins_text_parts_and_skips_images() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::shapes::ContentPart;
+    let done = ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![
+            ContentPart::Text {
+                text: "a".to_owned(),
+            },
+            ContentPart::Image {
+                path: "shot.png".to_owned(),
+                mime_type: "image/png".to_owned(),
+                width: 1,
+                height: 1,
+            },
+            ContentPart::Text {
+                text: "b".to_owned(),
+            },
+            ContentPart::Unknown,
+        ],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    };
+    assert_eq!(content_text(&done), "a\nb");
 }
 
 #[test]

@@ -62,8 +62,23 @@ pub(crate) struct Call {
     /// How it ended; `None` while it runs.
     pub(crate) status: Option<CallStatus>,
     pub(crate) changes: Vec<FileChange>,
-    /// What opening the call shows.
-    pub(crate) detail: String,
+    /// The result's `details`: JSON for clients, such as an edit's diff
+    /// for the terminal to draw (`docs/tools.md`, "What a result
+    /// carries"). A `null` on the wire is stored as none.
+    pub(crate) details: Option<Value>,
+    /// The full output's path, when the result was cut or a hook
+    /// returned text for it; kept, never drawn inline.
+    pub(crate) artifact: Option<String>,
+    /// On a cut result, ordered byte ranges of the full output held in
+    /// `content`; kept, never drawn inline.
+    pub(crate) kept: Option<Vec<[u64; 2]>>,
+    /// The signal's name when a signal ended the call's process.
+    pub(crate) signal: Option<String>,
+    /// A failed call's "<code>: <message>" or a denial's reason, else
+    /// empty: the first row an opened call draws.
+    pub(crate) headline: String,
+    /// The result's text parts joined with "\n".
+    pub(crate) content: String,
     /// The process's exit code, when it ran one
     /// (`tool_call_completed`'s `process.exit_code`).
     pub(crate) exit: Option<i32>,
@@ -523,7 +538,7 @@ impl Group {
                 out.push((Line::from(row), Some(Target::Call(call.id))));
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
-                    opened_call(&call.detail, !call.changes.is_empty(), out);
+                    opened_call(&legacy_text(call), !call.changes.is_empty(), out);
                 }
                 out.end_scope();
             }
@@ -554,8 +569,10 @@ impl Group {
             Some(CallStatus::Cancelled) => return vec![dim_span("cancelled".to_owned())],
             Some(CallStatus::Denied) => return vec![dim_span("denied".to_owned())],
             Some(CallStatus::Failed) => {
-                let first = call.detail.lines().next().unwrap_or("").to_owned();
-                return vec![dim_span(first)];
+                if call.headline.is_empty() {
+                    return vec![dim_span(first_result_line(&call.content))];
+                }
+                return vec![dim_span(call.headline.clone())];
             }
             Some(CallStatus::Completed) => {}
         }
@@ -588,7 +605,7 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
-            | Kind::Other => vec![dim_span(first_result_line(&call.detail))],
+            | Kind::Other => vec![dim_span(first_result_line(&call.content))],
         }
     }
 }
@@ -598,7 +615,25 @@ const GUTTER_BLANK: &str = "      ";
 
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
-const INDENT: &str = "        ";
+pub(in crate::turn) const INDENT: &str = "        ";
+
+/// What the ledger's opened rows show until the per-kind views draw
+/// them: the `diff` string when `details` holds one, else the headline
+/// when it names the failure, else the content.
+fn legacy_text(call: &Call) -> String {
+    if let Some(diff) = call
+        .details
+        .as_ref()
+        .and_then(|details| details.get("diff"))
+        .and_then(Value::as_str)
+    {
+        return diff.to_owned();
+    }
+    if !call.headline.is_empty() {
+        return call.headline.clone();
+    }
+    call.content.clone()
+}
 
 /// A dim span.
 pub(super) fn dim_span(text: String) -> Span<'static> {
