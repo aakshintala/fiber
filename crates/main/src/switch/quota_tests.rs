@@ -184,11 +184,14 @@ fn a_switch_racing_the_loader_reuses_its_instance() {
     switching.started.pause_at_lock("qp", tx);
     assert!(store.answer().0.is_empty());
     ack(&rx, Point::P, "fiber-switch-read");
+    // The test owns the only release sender: unwinding drops it and
+    // releases the loader at Q, including when the next checkpoint fails.
     let loader_release = ack(&rx, Point::Q, "fiber-switch-read").release.unwrap();
     let (tx, got) = mpsc::channel();
     let other = switching.clone();
     let thread = std::thread::Builder::new().name("switch".into()).spawn(move || tx.send(other.read(other.want("qp", Some("work")))).unwrap()).unwrap();
-    ack(&rx, Point::P, "switch");
+    let switch_p = receive(&rx, "step 6: switch P before taking the start lock held by the loader at Q");
+    assert_eq!((&switch_p.point, switch_p.thread.as_str()), (&Point::P, "switch"));
     loader_release.send(()).unwrap();
     let switch_release = ack(&rx, Point::Q, "switch").release.unwrap();
     switch_release.send(()).unwrap();

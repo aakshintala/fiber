@@ -461,8 +461,9 @@ runs in the background and never holds a list back. The generator leaves out ids
 - **At start,** Fiber refreshes each provider that has a credential and whose
   cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
   one day by default. Each provider that ran is unloaded once its list is
-  written. Only the extensions the session uses stay loaded, and a provider
-  with no credential never runs.
+  written. Only the extensions the session uses stay loaded, among them each
+  provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
+  a provider with no credential never runs.
 - **When no cached copy exists,** `models()` runs when the list is first
   needed.
 - **The model picker** refreshes, in the background, any provider whose list
