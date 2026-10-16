@@ -1189,6 +1189,75 @@ fn worker_emits_only_after_the_guard_releases() {
 }
 
 #[test]
+fn an_unreached_gate_names_its_wait_and_releases_both_pauses() {
+    let fake = FakeClock::new();
+    let clock = GatedClock::new(Arc::clone(&fake));
+    let mark = fake.now();
+    // No caller ever parks at the armed target, so the gated wait below
+    // expires instead of settling.
+    let (gated_arrived, _gate_release) = clock.arm(Some(mark + Duration::from_secs(61)));
+    // Stand-ins for the parked worker and hook threads: each blocks until
+    // its pause releases, then reports. Each blocks on a channel this test
+    // owns, so neither needs a deadline of its own: the guard releases
+    // them, and the test ending drops the senders.
+    let (worker_release_tx, worker_release_rx) = mpsc::channel();
+    let (worker_done_tx, worker_done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ignored = worker_release_rx.recv();
+        let _ignored = worker_done_tx.send(());
+    });
+    let (hook_release_tx, hook_release_rx) = mpsc::channel();
+    let (hook_done_tx, hook_done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ignored = hook_release_rx.recv();
+        let _ignored = hook_done_tx.send(());
+    });
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        // Releases both pauses while the wait below unwinds, ignoring send
+        // errors: the failure reports its own message instead of hanging
+        // on a parked thread. The expiry bound stays under `WAIT`, so
+        // every `WAIT`-bounded observation below keeps its margin.
+        let _pauses = PauseGuard::holding(vec![worker_release_tx, hook_release_tx]);
+        let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Deadline::after(WAIT / 2)
+                .recv_or_fail(&gated_arrived, "the caller reached the gated park window");
+        }));
+        let message = match message {
+            Ok(()) => "the gate let its wait through".to_owned(),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_owned())
+                })
+                .unwrap_or_else(|| "the gate panicked without a message".to_owned()),
+        };
+        let _ignored = outcome_tx.send(message);
+    });
+    // Both pauses released during the unwind: each waiter reports, so a
+    // missing release fails here at its deadline instead of hanging.
+    Deadline::after(WAIT)
+        .recv(&worker_done_rx)
+        .expect("the worker pause released on unwind");
+    Deadline::after(WAIT)
+        .recv(&hook_done_rx)
+        .expect("the hook pause released on unwind");
+    // The outcome arrives with the reports above, so by the time both
+    // landed this receive is immediate. The expired wait names the signal
+    // it stood for.
+    let message = Deadline::after(WAIT)
+        .recv(&outcome_rx)
+        .expect("the expired wait reported");
+    assert!(
+        message.contains("the caller reached the gated park window"),
+        "the expired wait names its signal: {message}"
+    );
+}
+
+#[test]
 fn spawn_failure_starts_no_request_or_record() {
     let server =
         ProviderServer::start_responding(|_| Response::status(200, "{\"data\":[]}")).unwrap();
