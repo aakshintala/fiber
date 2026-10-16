@@ -97,6 +97,7 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
             session.workspace.display().to_string()
         );
         assert_eq!(line.payload["model"], MODEL);
+        assert!(!line.payload.contains_key("thinking"));
         assert_eq!(line.payload["delegates"], 0);
         assert_eq!(line.payload["jobs"], 0);
     }
@@ -111,6 +112,24 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         .map(|line| line.kind)
         .collect();
     assert!(!kinds.iter().any(|k| k == "session_status"));
+}
+
+#[test]
+fn a_session_with_a_thinking_level_names_it_in_its_status() {
+    let mut session = Session::with_thinking(
+        vec![Scripted::text("Done.")],
+        Some(contract::ThinkingLevel::High),
+    );
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, idle_named("go"));
+    assert_eq!(seen.last().unwrap().payload["thinking"], "high");
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
 }
 
 #[test]

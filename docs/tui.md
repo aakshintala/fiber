@@ -606,8 +606,9 @@ a click on it returns too. The views are:
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
   The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it
-  under a path row ending in `turn N`, dim, right-aligned, the
-  match on the `match` tint and the
+  under a row with the file of the tool call it sits in, ending in `turn N`,
+  dim and right-aligned. A match with no such file has `turn N` alone.
+  The match is on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
@@ -1244,8 +1245,10 @@ the lines around it. Each match's first row ends with `turn N`, dim and
 right-aligned, where N is the number of the turn the match is in, counted
 from 1 as the usage view counts turns; a match outside any turn, or a row
 too narrow to hold it after the path, has no label, and the path is never
-cut for it. Enter, or a click on a row, jumps to that match in the
-conversation and closes the view.
+cut for it. A match's path is the file of the tool call it sits in; a match
+with no such file, in a prompt, a reply or another call, has no path, and
+its row is `turn N` alone. Enter, or a click on a row, jumps to that match
+in the conversation and closes the view.
 
 Search is Ctrl+F, and Cmd+F where the terminal forwards it. Ghostty binds
 `super+f=start_search` by default; the line that frees it is:

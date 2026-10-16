@@ -116,6 +116,19 @@ impl Part {
     }
 }
 
+fn call_paths(part: &Part) -> CallPaths {
+    part.turns
+        .iter()
+        .flat_map(Turn::groups)
+        .flat_map(|group| group.calls())
+        .filter(|call| matches!(call.name.as_str(), "read" | "edit" | "write"))
+        .filter_map(|call| {
+            let path = call.arguments.get("path")?.as_str()?;
+            Some((Target::Call(call.id), path.to_owned()))
+        })
+        .collect()
+}
+
 /// One turn's totals for its ▣ line, kept for the whole session.
 #[derive(Debug, Default)]
 struct Summary {
@@ -193,7 +206,9 @@ pub(crate) struct Applied {
     pub(crate) busy: Option<bool>,
 }
 
-type TurnRanges = Vec<(usize, Range<usize>)>;
+pub(crate) type TurnRanges = Vec<(usize, Range<usize>)>;
+/// File paths of the calls in a page's own fold, keyed by their section target.
+pub(crate) type CallPaths = Vec<(Target, String)>;
 type DrawData = (Vec<Row>, Vec<RowText>, FocusItems, TurnRanges);
 
 /// The lines shown from a row on: the first shown page's first row, each
@@ -755,18 +770,29 @@ impl Pages {
     /// (`docs/tui.md`, "History and paging": search renders each page
     /// to text and keeps only its matches). `None` for the open page,
     /// which holds the live fold, and for an unknown one.
+    #[cfg(test)]
     pub(crate) fn fold_text(
         &self,
         at: usize,
         lines: &[Envelope],
     ) -> Option<(Vec<Row>, Vec<RowText>)> {
+        self.fold_text_turns(at, lines)
+            .map(|(rows, texts, _, _)| (rows, texts))
+    }
+
+    /// A scratch draw and its turn ranges from the same draw.
+    pub(crate) fn fold_text_turns(
+        &self,
+        at: usize,
+        lines: &[Envelope],
+    ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
         let mut part = self.begin(at)?;
         for line in lines {
             fold(&mut part, line);
         }
         self.finish(at, &mut part);
-        let (rows, texts, _, _) = self.draw_data(at, &part, Draw::AllOpen);
-        Some((rows, texts))
+        let (rows, texts, _, turns) = self.draw_data(at, &part, Draw::AllOpen);
+        Some((rows, texts, turns, call_paths(&part)))
     }
 
     /// The page holding `seq` could not be loaded: it is not asked for
@@ -864,10 +890,20 @@ impl Pages {
 
     /// A resident page's rows and texts drawn with every section open;
     /// `None` while it is dropped.
+    #[cfg(test)]
     pub(crate) fn page_text_open(&self, at: usize) -> Option<(Vec<Row>, Vec<RowText>)> {
+        self.page_text_open_turns(at)
+            .map(|(rows, texts, _, _)| (rows, texts))
+    }
+
+    /// A resident all-open draw and its turn ranges from the same draw.
+    pub(crate) fn page_text_open_turns(
+        &self,
+        at: usize,
+    ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
         let part = self.part(at)?;
-        let (rows, texts, _, _) = self.draw_data(at, part, Draw::AllOpen);
-        Some((rows, texts))
+        let (rows, texts, _, turns) = self.draw_data(at, part, Draw::AllOpen);
+        Some((rows, texts, turns, call_paths(part)))
     }
 
     /// Re-counts every page at `width`: a resident page in place, a dropped

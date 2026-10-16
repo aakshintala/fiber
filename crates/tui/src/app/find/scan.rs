@@ -67,6 +67,10 @@ pub(crate) struct Snippet {
     pub(crate) at: Range<usize>,
     /// The nearest line with text after the match's, or none.
     pub(crate) after: String,
+    /// The file of its read, edit or write call; empty outside such a call.
+    pub(crate) path: String,
+    /// The zero-based turn index from the page's draw, if inside a turn.
+    pub(crate) turn: Option<usize>,
 }
 
 /// One logical line's hash: what identifies it across rescans.
@@ -138,11 +142,14 @@ pub(super) fn resident(
     at: usize,
     query: &str,
 ) -> Option<Vec<(Anchor, usize, bool, Snippet)>> {
-    let (open_rows, open_texts) = pages.page_text_open(at)?;
+    let (open_rows, open_texts, turns, paths) = pages.page_text_open_turns(at)?;
     let (mut placed, start) = placed_for(pages, at)?;
+    let paths = line_paths(&open_rows, &open_texts, &paths);
     Some(search_shown(
         at,
         &logical::logical(&open_rows, &open_texts),
+        &turns,
+        &paths,
         query,
         &mut placed,
         start,
@@ -157,11 +164,46 @@ pub(super) fn scratch(
     at: usize,
     rows: &[Row],
     texts: &[RowText],
+    turns: &[(usize, Range<usize>)],
+    paths: &crate::window::CallPaths,
     query: &str,
 ) -> Vec<(Anchor, usize, bool, Snippet)> {
     let offsets = row_offsets(rows, pages.wrap_width());
+    let paths = line_paths(rows, texts, paths);
     let start = pages.index().start(at);
-    search_scratch(at, &logical::logical(rows, texts), &offsets, query, start)
+    search_scratch(
+        at,
+        &logical::logical(rows, texts),
+        &offsets,
+        turns,
+        &paths,
+        query,
+        start,
+    )
+}
+
+/// A call's own ledger row names its target before its detail scope opens.
+/// Both that row and rows inside the scope belong to the call's file.
+fn line_paths(
+    rows: &[Row],
+    texts: &[RowText],
+    calls: &crate::window::CallPaths,
+) -> Vec<(usize, String)> {
+    rows.iter()
+        .zip(texts)
+        .enumerate()
+        .filter_map(|(row, ((_, target), text))| {
+            target
+                .iter()
+                .chain(text.scopes.iter().rev())
+                .find_map(|scope| {
+                    calls
+                        .iter()
+                        .find(|(call, _)| call == scope)
+                        .map(|(_, path)| (row, path.clone()))
+                })
+        })
+        .collect()
 }
 
 /// Cuts `text` to [`SNIPPET`] characters around `hit`, its char range:
@@ -200,6 +242,8 @@ fn snippet_for(
     hit: &Range<usize>,
     before: Option<&str>,
     after: Option<&str>,
+    turns: &[(usize, Range<usize>)],
+    paths: &[(usize, String)],
 ) -> Snippet {
     let (cut, rel) = cut_around(&line.text, hit);
     Snippet {
@@ -207,6 +251,14 @@ fn snippet_for(
         line: cut,
         at: rel,
         after: after.map(cut_head).unwrap_or_default(),
+        path: paths
+            .iter()
+            .find(|(row, _)| *row == line.row)
+            .map(|(_, path)| path.clone())
+            .unwrap_or_default(),
+        turn: turns
+            .iter()
+            .find_map(|(turn, range)| range.contains(&line.row).then_some(*turn)),
     }
 }
 
@@ -240,6 +292,8 @@ fn sides(lines: &[Logical], at: usize) -> (Option<&str>, Option<&str>) {
 fn search_shown(
     page: usize,
     lines: &[Logical],
+    turns: &[(usize, Range<usize>)],
+    paths: &[(usize, String)],
     query: &str,
     placed: &mut Placed,
     start: usize,
@@ -250,7 +304,7 @@ fn search_shown(
         let hash = line_hash(&line.text);
         let len = line.text.chars().count();
         for hit in logical::matches(&line.text, query) {
-            let snippet = snippet_for(line, &hit, before, after);
+            let snippet = snippet_for(line, &hit, before, after, turns, paths);
             let anchor = Anchor::new(page, line, hit);
             let (row, hidden) = match placed
                 .0
@@ -281,6 +335,8 @@ fn search_scratch(
     page: usize,
     lines: &[Logical],
     offsets: &[usize],
+    turns: &[(usize, Range<usize>)],
+    paths: &[(usize, String)],
     query: &str,
     start: usize,
 ) -> Vec<(Anchor, usize, bool, Snippet)> {
@@ -288,7 +344,7 @@ fn search_scratch(
     for (at, line) in lines.iter().enumerate() {
         let (before, after) = sides(lines, at);
         for hit in logical::matches(&line.text, query) {
-            let snippet = snippet_for(line, &hit, before, after);
+            let snippet = snippet_for(line, &hit, before, after, turns, paths);
             out.push((
                 Anchor::new(page, line, hit),
                 start.saturating_add(offsets.get(line.row).copied().unwrap_or(0)),
