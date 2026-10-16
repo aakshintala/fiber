@@ -1,5 +1,6 @@
 //! Device login answers and cancellation, with provider progress held by channels.
 use crate::connection::lock;
+use crate::error::DeviceLoginError;
 use crate::fake::{FakeLogin, FakeMachine};
 use crate::file_search::tests::Client;
 use crate::testkit::DEADLINE;
@@ -8,17 +9,17 @@ use fakes::Deadline;
 use serde_json::{Value, json};
 use std::sync::{Arc, mpsc};
 
-fn failure() -> Failure {
-    Failure {
+fn failure() -> DeviceLoginError {
+    DeviceLoginError::Forwarded(Failure {
         code: ErrorCode::AuthenticationFailed,
         message: "cancelled".into(),
         provider: None,
         retry_after_ms: None,
-    }
+    })
 }
 fn login(
     shows: bool,
-    outcome: Result<String, Failure>,
+    outcome: Result<String, DeviceLoginError>,
     hold_cancel: bool,
 ) -> (
     Arc<FakeLogin>,
@@ -32,7 +33,15 @@ fn login(
     (
         Arc::new(FakeLogin {
             shows,
-            outcome,
+            outcome: outcome.map_err(|error| match error {
+                DeviceLoginError::Forwarded(failure) => failure,
+                other @ DeviceLoginError::NoDeviceCodeForm { .. } => Failure {
+                    code: other.code(),
+                    message: other.to_string(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            }),
             hold_cancel,
             waiting,
             gate: std::sync::Mutex::new(gate),
@@ -229,7 +238,7 @@ fn a_provider_that_never_shows_a_code_rejects_start_exactly_once() {
         assert_eq!(answer["payload"]["code"], "authentication_failed");
         let message = match outcome {
             Ok(_) => "`test` has no device-code form.".to_owned(),
-            Err(error) => error.message,
+            Err(error) => error.to_string(),
         };
         assert_eq!(answer["payload"]["message"], message);
         client.send("result", "device_login_result", json!({}));

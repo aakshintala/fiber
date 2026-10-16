@@ -34,7 +34,9 @@ pub enum StartError {
         /// Why the bind failed.
         source: io::Error,
     },
-    /// Reading the configuration failed: the failure as the caller built it.
+    /// Reading the configuration failed. The failure is the caller's:
+    /// `main` built it, and the hub forwards its code and message as
+    /// data, unchanged.
     #[error("{}", .0.message)]
     Configure(Failure),
 }
@@ -50,3 +52,35 @@ impl StartError {
         }
     }
 }
+
+/// A device login's failure: either the provider answered without
+/// showing a device code, or the login itself failed in `main`.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub(crate) enum DeviceLoginError {
+    /// The provider answered without showing a device code, so there is
+    /// nothing to wait on.
+    #[error("`{name}` has no device-code form.")]
+    NoDeviceCodeForm {
+        /// The login's name, as the person typed it.
+        name: String,
+    },
+    /// The login's own failure. `DeviceLogin::run` made it in `main`, so
+    /// the hub forwards it as data: the code is the caller's.
+    #[error("{}", .0.message)]
+    Forwarded(Failure),
+}
+
+impl DeviceLoginError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::NoDeviceCodeForm { .. } => ErrorCode::AuthenticationFailed,
+            Self::Forwarded(failure) => failure.code.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;
