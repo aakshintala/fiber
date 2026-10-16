@@ -8,7 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::callback::{MAX_HEAD, Served, answer, decode, wait_callback};
+use super::callback::{MAX_HEAD, SILENT_POLLS, Served, answer, decode};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
@@ -2020,7 +2020,7 @@ fn send_raw(addr: std::net::SocketAddr, head: &[u8]) -> String {
     reply
 }
 
-/// Drives one [`wait_callback`] wait to its end: the wait runs on a scoped
+/// Drives one callback wait to its end: the wait runs on a scoped
 /// thread while `interact` works the listener's address, then the result
 /// is received with a bound, advancing the fake clock past the deadline
 /// when the bound expires, so a mutant that never answers still ends the
@@ -2031,7 +2031,7 @@ fn drive_wait(
     clock: &Arc<fakes::clock::FakeClock>,
     deadline: std::time::Instant,
     state: &str,
-    silent_polls: Option<u32>,
+    silent_polls: u32,
     interact: impl FnOnce(std::net::SocketAddr) -> String,
 ) -> (Result<String, LoginError>, String) {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -2042,12 +2042,13 @@ fn drive_wait(
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
         let waiter = scope.spawn(|| {
-            let result = match silent_polls {
-                Some(polls) => super::callback::wait_callback_within(
-                    &listener, &**clock, deadline, state, polls,
-                ),
-                None => wait_callback(&listener, &**clock, deadline, state),
-            };
+            let result = super::callback::wait_callback_within(
+                &listener,
+                &**clock,
+                deadline,
+                state,
+                silent_polls,
+            );
             sent.send(result).unwrap();
         });
         // The wait parks on the fake clock between accepts: only after
@@ -2081,7 +2082,7 @@ fn driven_wait(
     state: &str,
     interact: impl FnOnce(std::net::SocketAddr) -> String,
 ) -> (Result<String, LoginError>, String) {
-    drive_wait(clock, deadline, state, None, interact)
+    driven_wait_within(clock, deadline, state, SILENT_POLLS, interact)
 }
 
 /// [`drive_wait`] with the silent-poll count as a parameter, so the idle
@@ -2093,7 +2094,7 @@ fn driven_wait_within(
     silent_polls: u32,
     interact: impl FnOnce(std::net::SocketAddr) -> String,
 ) -> (Result<String, LoginError>, String) {
-    drive_wait(clock, deadline, state, Some(silent_polls), interact)
+    drive_wait(clock, deadline, state, silent_polls, interact)
 }
 
 #[test]

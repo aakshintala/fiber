@@ -21,7 +21,7 @@ pub(crate) const MAX_HEAD: usize = 8 * 1024;
 /// the listener drops it and serves the next. Browsers open idle
 /// speculative connections, so silence on one cannot end the wait. The
 /// count restarts whenever bytes arrive.
-const SILENT_POLLS: u32 = 100;
+pub(crate) const SILENT_POLLS: u32 = 100;
 
 /// One callback socket read's kernel timeout: short, so the injected
 /// 900 s deadline is checked between reads and an idle or slow-drip

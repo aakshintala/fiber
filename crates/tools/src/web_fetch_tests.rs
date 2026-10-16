@@ -1625,10 +1625,6 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     }
     page.truncate(3 * DOWNLOAD_PIECE);
     let announced = TEN_MIB - 1024;
-    assert!(
-        announced < TEN_MIB,
-        "the announced page is under the download cap"
-    );
 
     let bytes = page.into_bytes();
     let server =

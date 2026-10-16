@@ -138,7 +138,7 @@ fn write_input(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::Pa
 // loads leniently, so a stream past the limit is dropped instead of failing
 // the load, and without its page the file counts zero pages, which `run`
 // refuses.
-fn objstm_pdf(decompressed: usize, limit: usize) -> Vec<u8> {
+fn objstm_pdf(decompressed: usize) -> Vec<u8> {
     use lopdf::{Document, Object, SaveOptions, dictionary};
     fn build(pad: usize) -> Vec<u8> {
         let mut document = Document::with_version("1.5");
@@ -206,7 +206,7 @@ fn objstm_pdf(decompressed: usize, limit: usize) -> Vec<u8> {
     let probe_pad = 16;
     let overhead = packed_size(&build(probe_pad)) - probe_pad;
     let bytes = build(decompressed - overhead);
-    if decompressed <= limit {
+    if decompressed <= super::MAX_DECOMPRESSED_BYTES {
         assert_eq!(packed_size(&bytes), decompressed);
     }
     bytes
@@ -220,7 +220,7 @@ fn objstm_pdf(decompressed: usize, limit: usize) -> Vec<u8> {
 // offset and the sizing overhead stays fixed. A lenient load drops an
 // over-limit second stream and keeps both pages, so without a refusal the
 // file would run with objects silently missing.
-fn objstm_pdf_with_plain_pages(decompressed: usize, limit: usize) -> Vec<u8> {
+fn objstm_pdf_with_plain_pages(decompressed: usize) -> Vec<u8> {
     use lopdf::{Document, Object, SaveOptions, dictionary};
     fn build(pad: usize) -> Vec<u8> {
         let mut document = Document::with_version("1.5");
@@ -327,7 +327,7 @@ fn objstm_pdf_with_plain_pages(decompressed: usize, limit: usize) -> Vec<u8> {
     let (_, probe_padded) = stream_sizes(&build(probe_pad), probe_pad);
     let overhead = probe_padded - probe_pad;
     let bytes = build(decompressed - overhead);
-    if decompressed <= limit {
+    if decompressed <= super::MAX_DECOMPRESSED_BYTES {
         let (_, padded) = stream_sizes(&bytes, decompressed - overhead);
         assert_eq!(padded, decompressed);
     }
@@ -653,10 +653,7 @@ fn the_production_limit_is_64_mib() {
 #[test]
 fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-over");
-    let bytes = objstm_pdf(
-        super::MAX_DECOMPRESSED_BYTES + 1,
-        super::MAX_DECOMPRESSED_BYTES,
-    );
+    let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES + 1);
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
         OsString::from("pdf"),
@@ -675,7 +672,7 @@ fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
 #[test]
 fn an_object_stream_at_the_limit_loads_and_writes_the_input_bytes() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-at");
-    let bytes = objstm_pdf(LIMIT, LIMIT);
+    let bytes = objstm_pdf(LIMIT);
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
         OsString::from("pdf"),
@@ -694,7 +691,7 @@ fn an_object_stream_at_the_limit_loads_and_writes_the_input_bytes() {
 #[test]
 fn an_object_stream_under_the_limit_loads_and_cuts() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-under");
-    let input = write_input(dir.path(), "in.pdf", &objstm_pdf(1024, LIMIT));
+    let input = write_input(dir.path(), "in.pdf", &objstm_pdf(1024));
     let arguments = vec![
         OsString::from("pdf"),
         input.into_os_string(),
@@ -712,7 +709,7 @@ fn an_object_stream_under_the_limit_loads_and_cuts() {
 
 #[test]
 fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_nothing() {
-    let bytes = objstm_pdf_with_plain_pages(LIMIT + 1, LIMIT);
+    let bytes = objstm_pdf_with_plain_pages(LIMIT + 1);
     // Both pages survive the lenient load: without the refusal the file
     // would run with objects silently missing.
     assert_eq!(load_within(&bytes, LIMIT).unwrap().get_pages().len(), 2);
@@ -734,7 +731,7 @@ fn an_over_limit_object_stream_beside_two_plain_pages_is_refused_and_writes_noth
 
 #[test]
 fn an_object_stream_at_the_limit_beside_two_plain_pages_loads_two_pages() {
-    let bytes = objstm_pdf_with_plain_pages(LIMIT, LIMIT);
+    let bytes = objstm_pdf_with_plain_pages(LIMIT);
     let dir = fakes::TempDir::new("fiber-pdf-objstm-at-beside");
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
@@ -759,7 +756,7 @@ fn run_loads_an_object_stream_past_the_lowered_limit() {
     // The production path passes a limit above LIMIT: a stream twice the
     // lowered limit still loads and writes through `run`.
     let dir = fakes::TempDir::new("fiber-pdf-objstm-above-lowered");
-    let bytes = objstm_pdf(2 * LIMIT, LIMIT);
+    let bytes = objstm_pdf(2 * LIMIT);
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
         OsString::from("pdf"),
