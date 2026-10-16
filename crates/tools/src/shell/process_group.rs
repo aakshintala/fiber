@@ -4,16 +4,11 @@
 use rustix::process::Signal;
 
 pub(super) fn send_term(pgid: u32, sent: bool, seen_empty: bool) -> bool {
-    if suppress_term(sent, seen_empty) {
+    if sent || seen_empty {
         return sent;
     }
     match support::group::signal(pgid, Signal::TERM) {
         Ok(()) | Err(_) => {}
     }
     true
-}
-
-/// Do not signal a group that was already signalled, or one seen empty.
-pub(super) fn suppress_term(sent: bool, seen_empty: bool) -> bool {
-    sent || seen_empty
 }
