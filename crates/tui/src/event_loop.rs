@@ -441,11 +441,14 @@ impl<B: Backend> Loop<B> {
         );
         let before = self.app.session().cloned();
         for event in events {
-            if matches!(
-                event,
-                Event::Stroke(_) | Event::Key(_) | Event::Edit(_) | Event::Focus(true)
-            ) && let Some(line) = self.app.quota_poke(matches!(event, Event::Focus(true)))
-            {
+            let quota = if let Event::Focus(true) = event {
+                self.app.quota_focus()
+            } else if matches!(event, Event::Stroke(_) | Event::Key(_) | Event::Edit(_)) {
+                self.app.quota_keypress()
+            } else {
+                None
+            };
+            if let Some(line) = quota {
                 self.hub.send(&[line], &mut self.app);
             }
             let effect = match event {

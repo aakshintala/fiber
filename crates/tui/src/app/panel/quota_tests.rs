@@ -48,11 +48,11 @@ fn attach_and_focus_send_once_and_never_enter_pending() {
     let mut app = attached();
     let id = first(&mut app);
     assert!(!app.pending.contains_key(&id));
-    assert!(app.quota_poke(false).is_none());
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_keypress().is_none());
+    assert!(app.quota_focus().is_none());
     answer(&mut app, &id);
-    assert!(app.quota_poke(true).is_some());
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_some());
+    assert!(app.quota_focus().is_none());
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn keypress_uses_the_answer_age_at_the_five_minute_boundary() {
         let id = first(&mut app);
         answer(&mut app, &id);
         app.set_now(now + Duration::from_millis(millis), millis);
-        assert_eq!(app.quota_poke(false).is_some(), sends, "{millis}");
+        assert_eq!(app.quota_keypress().is_some(), sends, "{millis}");
     }
 }
 
@@ -95,8 +95,8 @@ fn focus_sends_even_with_a_fresh_answer() {
     app.set_now(clock.now(), 0);
     let id = first(&mut app);
     answer(&mut app, &id);
-    assert!(app.quota_poke(false).is_none());
-    assert!(app.quota_poke(true).is_some());
+    assert!(app.quota_keypress().is_none());
+    assert!(app.quota_focus().is_some());
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn an_answer_without_a_clock_never_makes_keypress_due() {
     let id = first(&mut app);
     answer(&mut app, &id);
     app.set_now(FakeClock::new().now() + Duration::from_secs(600), 600_000);
-    assert!(app.quota_poke(false).is_none());
-    assert!(app.quota_poke(true).is_some());
+    assert!(app.quota_keypress().is_none());
+    assert!(app.quota_focus().is_some());
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn only_the_matching_answer_on_this_session_clears_the_flight() {
     let mut app = attached();
     let id = first(&mut app);
     answer(&mut app, "c_other");
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     let mut other = session_line(
         "command_accepted",
         json!({
@@ -125,9 +125,22 @@ fn only_the_matching_answer_on_this_session_clears_the_flight() {
         envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     }
     app.on_line(other);
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     answer(&mut app, &id);
-    assert!(app.quota_poke(true).is_some());
+    assert!(app.quota_focus().is_some());
+}
+
+#[test]
+fn an_unrelated_rejection_does_not_refuse_the_quota_query() {
+    let mut app = attached();
+    let id = first(&mut app);
+    app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": "c_other", "code": "unknown_command", "message": "other"}),
+    ));
+    assert!(app.quota_focus().is_none());
+    answer(&mut app, &id);
+    assert!(app.quota_focus().is_some());
 }
 
 #[test]
@@ -193,7 +206,7 @@ fn rejections_stop_queries_until_reattach() {
             session_line("command_rejected", payload)
         };
         assert!(queries(app.on_line(line)).is_empty());
-        assert!(app.quota_poke(true).is_none());
+        assert!(app.quota_focus().is_none());
         app.on_line(live(SESSION, json!({"state": "streaming"})));
         assert!(queries(app.on_line(live(SESSION, json!({"state": "idle"})))).is_empty());
         app.attach(contract::SessionId(SESSION.to_owned()));
@@ -205,7 +218,10 @@ fn rejections_stop_queries_until_reattach() {
 fn a_left_row_sends_nothing_and_reattach_discards_a_lost_answer() {
     let mut app = home();
     crate::app::items::testkit::opened(&mut app);
-    let old = app.panel_state.quota.asked.clone().unwrap();
+    let super::Ask::Asked(old) = &app.panel_state.quota.ask else {
+        panic!("attach must send a quota query");
+    };
+    let old = old.0.clone();
     answer(&mut app, &old);
     let payload = json!({"session_id": SESSION, "how": "exited"});
     app.on_line(Line::Hub(contract::HubLine {
@@ -214,30 +230,30 @@ fn a_left_row_sends_nothing_and_reattach_discards_a_lost_answer() {
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().unwrap().clone(),
     }));
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     app.on_line(live(SESSION, json!({"state": "idle"})));
-    let lost = app.quota_poke(true).unwrap();
+    let lost = app.quota_focus().unwrap();
     app.attach(contract::SessionId(SESSION.to_owned()));
     let new = first(&mut app);
     assert_ne!(serde_json::from_str::<Value>(&lost).unwrap()["id"], new);
     answer(&mut app, &old);
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     answer(&mut app, &new);
-    assert!(app.quota_poke(true).is_some());
+    assert!(app.quota_focus().is_some());
 }
 
 #[test]
 fn no_queries_without_a_card_session_or_live_link() {
     let mut app = home();
     app.link = Link::Up;
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     let mut app = attached();
     app.home.as_mut().unwrap().launch.panel_cards = vec!["session".to_owned()];
     assert!(queries(app.on_line(session_line("clients", json!({"clients": []})))).is_empty());
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     let mut app = attached();
     app.link = Link::Down;
-    assert!(app.quota_poke(true).is_none());
+    assert!(app.quota_focus().is_none());
     app.link = Link::Up;
     first(&mut app);
 }

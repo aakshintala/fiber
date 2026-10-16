@@ -19,7 +19,12 @@ fn focus_and_stale_keypress_send_quota_through_the_loop() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    for (bytes, age) in [(b"\x1b[I".as_slice(), 0), (b"x".as_slice(), 300)] {
+    for (bytes, age, sends) in [
+        (b"\x1b[I".as_slice(), 0, true),
+        (b"x".as_slice(), 300, true),
+        (b"x".as_slice(), 0, false),
+        (b"\x1b[O".as_slice(), 300, false),
+    ] {
         let (mut lp, _) = new_loop(TestBackend::new(80, 24), None);
         lp.app = crate::app::items::testkit::home();
         lp.app.on_line(hello());
@@ -58,9 +63,11 @@ fn focus_and_stale_keypress_send_quota_through_the_loop() {
             .recv_or_fail(&rx, "the loop's quota command");
         reader.join().unwrap();
         let out = commands(text.lines().map(str::to_owned).collect());
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["command"], "quota");
-        assert_eq!(out[0]["session_id"], SESSION);
+        assert_eq!(out.len(), usize::from(sends), "{bytes:?}, age {age}");
+        if sends {
+            assert_eq!(out[0]["command"], "quota");
+            assert_eq!(out[0]["session_id"], SESSION);
+        }
     }
 }
 
