@@ -70,6 +70,11 @@ pub struct Launched {
     /// Whether this launch resumes the delegate: a new run of the same
     /// job, continuing its own session.
     pub resume: bool,
+    /// The credential label the child session runs under, as a run
+    /// override: `Some` on a new launch whose role names a stored label,
+    /// `None` on a resume, which continues the recorded session, and on a
+    /// launch without one.
+    pub credential: Option<String>,
 }
 
 /// The first retry waits this long after a refused or dropped watch.

@@ -36,6 +36,18 @@ pub struct Resolve {
     /// The full text `delegate_models` returns and every model refusal
     /// lists.
     pub catalogue: Arc<str>,
+    /// Resolves the `credential` label a role names for the same `model`
+    /// argument `lookup` took, after `lookup` was `Ok`: `Ok(Some(label))`
+    /// when the role names a label the provider has, `Ok(None)` for a
+    /// full reference or a role without one, and `Err` with the full
+    /// `credential_missing` message when the label names no credential.
+    /// The label set is read at call time, so a `fiber login` before the
+    /// spawn changes the answer.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the resolver seam: one closure type shared by the session resolver and every test stub"
+    )]
+    pub credential: Arc<dyn Fn(&str) -> Result<Option<String>, String> + Send + Sync>,
 }
 
 /// Returns the catalogue: the configured roles, what each maps to now,

@@ -272,6 +272,7 @@ impl Rig {
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
             resume: false,
+            credential: None,
         };
         let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
@@ -2179,6 +2180,7 @@ fn the_fold_starts_from_the_run_boundary() {
         prompt: "hi".into(),
         workspace: rig.events.parent().unwrap().to_path_buf(),
         resume: false,
+        credential: None,
     };
     let (child, listing) = runner.spawn(&launch, &launched).unwrap();
     let (_started, finish) = rig.registry.open_started(

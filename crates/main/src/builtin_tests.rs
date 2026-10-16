@@ -46,6 +46,7 @@ pub(super) fn delegates() -> crate::delegates::Delegates {
         jobs::Resolve {
             lookup: Arc::new(|_| Err(String::new())),
             catalogue: Arc::from(""),
+            credential: Arc::new(|_| Ok(None)),
         },
     )
 }

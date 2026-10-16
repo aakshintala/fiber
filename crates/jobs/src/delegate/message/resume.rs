@@ -137,6 +137,9 @@ impl DelegateMessage {
                 prompt: message.clone(),
                 workspace: PathBuf::from(&resumable.delegate.workspace),
                 resume: true,
+                // A resume continues the recorded session and passes no
+                // `-c`: the label stays what the log recorded.
+                credential: None,
             };
             let log = resumable.output_path.clone();
             // The stamp covers building the runner and spawning the

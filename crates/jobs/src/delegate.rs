@@ -268,6 +268,20 @@ impl Tool for DelegateSpawn {
                 );
             }
         };
+        // Checked after the model resolved and before anything starts:
+        // a role naming a label the provider lacks fails with
+        // `credential_missing`, naming the labels, and lists no
+        // catalogue: a label is never added to it.
+        let credential = match (self.resolve.credential)(&model) {
+            Ok(credential) => credential,
+            Err(message) => {
+                return crate::registry::failed(
+                    ErrorCode::CredentialMissing,
+                    message.clone(),
+                    message,
+                );
+            }
+        };
         let admitted = self.registry.admit(|| {
             let job_id = mint_job_id();
             let session_id = run::mint_session_id();
@@ -286,6 +300,7 @@ impl Tool for DelegateSpawn {
                 prompt,
                 workspace: self.workspace.clone(),
                 resume: false,
+                credential,
             };
             // The stamp covers building the runner, spawning and listing the
             // child, and recording the job. No clock is read without an
