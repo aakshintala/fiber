@@ -311,6 +311,17 @@ fn release_child(path: &std::path::Path) {
     file.write_all(b"go\n").expect("the release line");
 }
 
+/// Holds `path` open read-write, so a line written before the child opens
+/// the fifo for reading waits in the buffer instead of being lost when
+/// the last descriptor closes.
+fn hold_release_fifo(path: &std::path::Path) -> std::fs::File {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("the release fifo opens")
+}
+
 /// One record, failing the test when the scope never closed.
 fn closed(records: &mpsc::Receiver<Record>, deadline: Deadline) -> Record {
     deadline.recv_or_fail(records, "the closed scope")
@@ -718,27 +729,34 @@ fn failures_and_foreground_ends_write_nothing() {
         let (tx, rx) = mpsc::channel();
         let probe = Probe::recording(Arc::clone(&clock), Arc::clone(&jobs), tx);
         let _watchdog = Watchdog::matching("fiber-p10-openfail");
+        let release_path = release_fifo(dir.path());
+        // Opened before the shell runs and kept until the write below,
+        // so the buffered line survives until the child reads it.
+        let mut release_file = hold_release_fifo(&release_path);
+        let (holding, reached, release) = Holding::wrap(Arc::clone(&jobs));
+        holding.arm();
         let shell = Arc::new(
             Shell::new(dir.path().to_path_buf(), Arc::clone(&clock) as _)
-                .with_jobs(jobs as _)
+                .with_jobs(holding as _)
                 .with_timing(probe.timing()),
         );
-        let shell_clone = Arc::clone(&shell);
-        let command = ": fiber-p10-openfail; echo done".to_owned();
-        let (out_tx, out_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let mut arguments = Map::new();
-            arguments.insert("command".into(), json!(command));
-            arguments.insert("run_in_background".into(), json!(true));
-            match out_tx.send(shell_clone.run(
-                &arguments,
-                &CancelToken::new(),
-                &Recorder::default(),
-            )) {
-                Ok(()) | Err(_) => {}
-            }
-        });
-        let output = Deadline::after(STEP).recv_or_fail(&out_rx, "the foreground result");
+        // The child blocks on the release fifo from spawn, so its group
+        // is live whenever the first drive pass checks it.
+        let command = ": fiber-p10-openfail; read -r _ < release.fifo; echo done".to_owned();
+        let (_, output_rx) = run_async(
+            shell,
+            args(&command, "run_in_background"),
+            CancelToken::new(),
+        );
+        Deadline::after(STEP).recv_or_fail(&reached, "the call inside the refused open");
+        {
+            use std::io::Write as _;
+            release_file.write_all(b"go\n").expect("the release line");
+        }
+        match release.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the foreground result");
         assert!(
             text(&output).contains("It could not move to the background"),
             "{}",
