@@ -743,9 +743,11 @@ impl Loop {
     }
 
     /// Takes a sent driver shell: written as `shell_command` at this drain,
-    /// then accepted with no result, starting no turn.
+    /// then accepted with no result, starting no turn. A failed append
+    /// returns before acknowledging, as every other take does.
     pub(crate) fn take_shell(&mut self, line: ShellCommand, ack: Ack) -> Result<(), Error> {
-        let _ = line;
+        let event = Event::ShellCommand(line);
+        self.write(&event, None, None)?;
         accept(ack);
         Ok(())
     }
