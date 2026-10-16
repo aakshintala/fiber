@@ -242,9 +242,9 @@ impl McpError {
             Self::SecretUnreadable { .. } => ErrorCode::CredentialFailed,
             Self::CallTimedOut { .. } => ErrorCode::Timeout,
             Self::CallCancelled { .. } => ErrorCode::McpCancelRequested,
-            Self::CallRefused { .. } | Self::ToolReportedError { .. } | Self::ImageFailed { .. } => {
-                ErrorCode::ToolError
-            }
+            Self::CallRefused { .. }
+            | Self::ToolReportedError { .. }
+            | Self::ImageFailed { .. } => ErrorCode::ToolError,
             Self::ToolRemoved { .. } => ErrorCode::McpToolRemoved,
             Self::ImageNoData
             | Self::ImageNotBase64String

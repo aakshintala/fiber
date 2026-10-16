@@ -74,7 +74,11 @@ fn each_start_error_maps_to_its_code_sentence_and_record() {
     }
     let forwarded = failure(ErrorCode::AuthenticationFailed, "denied");
     let configure = StartError::Configure(forwarded);
-    assert_ne!(configure.code(), ErrorCode::Usage, "a forwarded code is not usage");
+    assert_ne!(
+        configure.code(),
+        ErrorCode::Usage,
+        "a forwarded code is not usage"
+    );
     assert_ne!(
         configure.code(),
         ErrorCode::IoFailed,

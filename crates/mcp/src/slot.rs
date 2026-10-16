@@ -391,10 +391,7 @@ impl Slot {
                 } else {
                     State::Down { listed }
                 };
-                Served::Failed(Box::new(RunFailed {
-                    error,
-                    records,
-                }))
+                Served::Failed(Box::new(RunFailed { error, records }))
             }
         }
     }

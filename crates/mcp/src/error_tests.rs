@@ -38,8 +38,7 @@ fn rows() -> Vec<Row> {
                 server: "fx".to_owned(),
             },
             code: ErrorCode::McpServerUnavailable,
-            message:
-                "The MCP server `fx` ended its session; Fiber starts a new one on the next call.",
+            message: "The MCP server `fx` ended its session; Fiber starts a new one on the next call.",
         },
         Row {
             name: "exited",
@@ -71,8 +70,7 @@ fn rows() -> Vec<Row> {
                 server: "fx".to_owned(),
             },
             code: ErrorCode::McpServerUnavailable,
-            message:
-                "The MCP server `fx` stopped answering again; its tools fail until the next session.",
+            message: "The MCP server `fx` stopped answering again; its tools fail until the next session.",
         },
         Row {
             name: "start failed, optional stdio",
@@ -490,12 +488,25 @@ fn rows() -> Vec<Row> {
 fn each_case_maps_to_its_code_sentence_and_record() {
     for row in rows() {
         assert_eq!(row.error.code(), row.code, "code, row: {}", row.name);
-        assert_eq!(row.error.to_string(), row.message, "message, row: {}", row.name);
+        assert_eq!(
+            row.error.to_string(),
+            row.message,
+            "message, row: {}",
+            row.name
+        );
         assert_eq!(row.error.clone(), row.error, "clone, row: {}", row.name);
         let record = Failure::from(&row.error);
         assert_eq!(record.code, row.code, "record code, row: {}", row.name);
-        assert_eq!(record.message, row.message, "record message, row: {}", row.name);
-        assert_eq!(record.retry_after_ms, None, "record retry, row: {}", row.name);
+        assert_eq!(
+            record.message, row.message,
+            "record message, row: {}",
+            row.name
+        );
+        assert_eq!(
+            record.retry_after_ms, None,
+            "record retry, row: {}",
+            row.name
+        );
         assert_eq!(record.provider, None, "record provider, row: {}", row.name);
         let owned = Failure::from(row.error.clone());
         assert_eq!(owned, record, "owned record, row: {}", row.name);

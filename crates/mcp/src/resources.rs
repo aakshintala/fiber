@@ -152,11 +152,10 @@ impl Resources {
                                     answered
                                 }
                                 None => {
-                                    let mut out = fail::failed(
-                                        &McpError::ResourceContentsMissing {
+                                    let mut out =
+                                        fail::failed(&McpError::ResourceContentsMissing {
                                             server: server.clone(),
-                                        },
-                                    );
+                                        });
                                     out.servers = records;
                                     out
                                 }
