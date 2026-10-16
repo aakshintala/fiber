@@ -173,17 +173,28 @@ fn a_lock_reason_with_a_newline_does_not_shift_the_next_entry() {
 fn a_non_utf8_worktree_name_round_trips_as_bytes() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
-    use std::process::Command;
+    use std::os::unix::process::CommandExt as _;
+    use std::process::{Command, Stdio};
     let home = repo("worktree-list-nonutf8");
     let linked = home.path().join(OsStr::from_bytes(b"w\xff"));
-    let status = Command::new("git")
+    let child = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(["worktree", "add", "-b", "fiber/x"])
         .arg(linked.as_os_str())
         .current_dir(home.path())
-        .status()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
-    assert!(status.success());
+    let out = fakes::finished(
+        "git worktree add with a non-UTF-8 name",
+        child,
+        &[],
+        fakes::MUST_SUCCEED_WITHIN,
+    );
+    assert!(out.status.success(), "{out:?}");
     let listed = list(home.path()).unwrap();
     assert_eq!(listed.len(), 2);
     assert_eq!(

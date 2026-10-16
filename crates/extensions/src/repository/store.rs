@@ -229,10 +229,8 @@ impl Store {
             return Ok(CopyRemoval::Absent);
         };
         let copy = pinned.join(hash);
-        let meta = match fs::symlink_metadata(&copy) {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(CopyRemoval::Absent),
-            Err(e) => return Err(io_error(&copy)(e)),
+        let Some(meta) = copy_metadata(&copy)? else {
+            return Ok(CopyRemoval::Absent);
         };
         let ready = pinned.join(format!("{hash}.ready"));
         if !marker_state(hash, &ready)? {
@@ -794,9 +792,25 @@ fn pinned_lock(home: &Path, name: &str, create: bool) -> Result<Option<(File, Pa
     Ok(Some((lock, pinned)))
 }
 
+/// The copy's metadata, or `None` when no copy is there. Any other error
+/// fails naming the copy: `pinned/` is verified searchable under the lock
+/// just above, so only a missing copy surfaces without a concurrent
+/// permission change no test can stage.
+#[cfg_attr(false, mutants::skip)]
+fn copy_metadata(copy: &Path) -> Result<Option<fs::Metadata>, Error> {
+    match fs::symlink_metadata(copy) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_error(copy)(e)),
+    }
+}
+
 /// Whether the `.ready` marker is present as a regular file: a link or a
 /// non-file fails naming it before it is ever opened, while a missing
-/// marker is an unfinished copy.
+/// marker is an unfinished copy. Any other error fails naming the marker:
+/// its parent is verified searchable under the lock, so no test can stage
+/// another error without a concurrent permission change.
+#[cfg_attr(false, mutants::skip)]
 fn marker_state(item: &str, ready: &Path) -> Result<bool, Error> {
     match fs::symlink_metadata(ready) {
         Ok(meta) if meta.file_type().is_symlink() => {

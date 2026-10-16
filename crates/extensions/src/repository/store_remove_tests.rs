@@ -533,6 +533,37 @@ fn kept_copies_is_empty_without_records_and_fails_closed_on_unreadable_ones() {
 }
 
 #[test]
+fn a_project_without_an_approvals_dir_is_skipped() {
+    let tmp = fakes::TempDir::new("kept-copies-no-approvals");
+    let home = tmp.path().join("home");
+    // A project with no `approvals/` names no owner: a missing directory
+    // means no records.
+    fs::create_dir_all(home.join("projects").join("lonely")).unwrap();
+    let kept = Store::kept_copies(&home).unwrap();
+    assert!(kept.is_empty());
+}
+
+#[test]
+fn kept_copies_fails_closed_on_an_unreadable_projects_dir() {
+    let tmp = fakes::TempDir::new("kept-copies-projects-unreadable");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(home.join("projects")).unwrap();
+    let _guard = RestoreMode::set(&home.join("projects"), 0o000);
+    let err = Store::kept_copies(&home).unwrap_err();
+    assert!(err.to_string().contains("projects"), "{err}");
+}
+
+#[test]
+fn kept_copies_fails_closed_on_an_unreadable_machine_wide_dir() {
+    let tmp = fakes::TempDir::new("kept-copies-global-unreadable");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(home.join("approvals")).unwrap();
+    let _guard = RestoreMode::set(&home.join("approvals"), 0o000);
+    let err = Store::kept_copies(&home).unwrap_err();
+    assert!(err.to_string().contains("approvals"), "{err}");
+}
+
+#[test]
 fn remove_copy_waits_for_the_pinned_lock_in_both_modes() {
     for dry_run in [false, true] {
         let repo = Repo::new();

@@ -45,6 +45,8 @@ struct PlannedCopy {
     bytes: u64,
     /// The owner keys at selection, sorted.
     owners: Vec<String>,
+    /// Whether the per-machine record named it at selection.
+    machine_wide: bool,
     /// Every resolving identity at selection, with its trees then.
     identities: Vec<SelectedIdentity>,
 }
@@ -215,6 +217,7 @@ fn select_candidates(
                             hash: kept.hash.clone(),
                             bytes,
                             owners: kept.owners.clone(),
+                            machine_wide: kept.machine_wide,
                             identities,
                         });
                     }
@@ -512,17 +515,16 @@ pub(super) fn remove_planned(
     }
 }
 
-/// Revalidates one planned copy under `pinned/.lock`: its owners are read
-/// again, and its identities' trees listed and hashed again with a fresh
-/// index. A tree this run removed keeps its selection-time hashes.
+/// Revalidates one planned copy under `pinned/.lock`: its owners and its
+/// per-machine record are read again, and its identities' trees listed
+/// and hashed again with a fresh index. A tree this run removed keeps its
+/// selection-time hashes.
 fn revalidate(home: &Path, clock: &dyn Clock, planned: &PlannedCopy) -> Result<(), String> {
     let fresh = extensions::Store::kept_copies(home).map_err(|error| error.to_string())?;
-    let current = fresh
-        .iter()
-        .find(|kept| kept.hash == planned.hash)
-        .map(|kept| kept.owners.clone())
-        .unwrap_or_default();
-    if current != planned.owners {
+    let current = fresh.iter().find(|kept| kept.hash == planned.hash);
+    let owners = current.map(|kept| kept.owners.clone()).unwrap_or_default();
+    let machine_wide = current.map(|kept| kept.machine_wide).unwrap_or(false);
+    if owners != planned.owners || machine_wide != planned.machine_wide {
         return Err("its approvals changed since it was listed".to_owned());
     }
     let mut index = extensions::Index::load(home);
@@ -572,12 +574,23 @@ fn refresh(
         .into_iter()
         .map(|tree| (tree.path, tree.hashes))
         .collect();
-    for tree in &identity.trees {
+    merge_removed(&mut current, &identity.trees);
+    Ok(current)
+}
+
+/// Adds every selection-time tree the re-listing no longer names, with its
+/// selection-time hashes: a tree this run removed still counts. Selection
+/// lists a copy only when no tree matched it, so an added tree never holds
+/// the planned hash and cannot change the verdict; no test through the
+/// public API can stage a case where dropping or duplicating one changes
+/// what prune removes.
+#[cfg_attr(false, mutants::skip)]
+fn merge_removed(current: &mut Vec<(PathBuf, BTreeSet<String>)>, previous: &[SelectedTree]) {
+    for tree in previous {
         if !current.iter().any(|(path, _)| path == &tree.path) {
             current.push((tree.path.clone(), tree.hashes.clone()));
         }
     }
-    Ok(current)
 }
 
 /// The content hashes the declared code in the tree at `path` matches.

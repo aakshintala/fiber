@@ -12,9 +12,10 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::BufRead;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::OfferedKind;
@@ -490,6 +491,90 @@ fn a_failed_worktree_list_keeps_every_candidate() {
     assert!(copy_dir(&home, &branches.b).is_dir());
 }
 
+/// A path resolving through two symlink names that point at each other:
+/// any metadata read through it fails with an error other than missing.
+fn error_loop(root: &Path) -> (PathBuf, String) {
+    let first = root.join("loop-a");
+    let second = root.join("loop-b");
+    symlink("loop-b", &first).unwrap();
+    symlink("loop-a", &second).unwrap();
+    let through = first.join("inner");
+    let err = fs::symlink_metadata(&through).unwrap_err();
+    assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+    (through, err.to_string())
+}
+
+#[test]
+fn an_unreadable_listed_worktree_keeps_every_candidate() {
+    let (setup, branches) = three_branches("pinned-eloop-entry", RemoveB::Git);
+    let home = setup.home();
+    // A listed worktree whose metadata fails with an error other than
+    // missing: every candidate is uncertain, never removable.
+    let (listed, err) = error_loop(setup.root.path());
+    let expected = format!(
+        "pinned  {}  skipped: the worktree {} cannot be read: {err}",
+        branches.b,
+        listed.display()
+    );
+    let list = |_: &Path| -> Result<Vec<worktree::Listed>, worktree::Error> {
+        Ok(vec![worktree::Listed {
+            path: listed.clone(),
+            bare: false,
+            locked: false,
+        }])
+    };
+    let plan = select_with(
+        &home,
+        &branches.repo,
+        branches.clock.as_ref(),
+        &|_| None,
+        &list,
+    );
+    assert_eq!(plan.rows.len(), 3);
+    assert!(
+        plan.rows.iter().any(|row| pinned_line(row) == expected),
+        "{expected}"
+    );
+    let mut noop = |_: &str| {};
+    let removed = remove_planned(&home, &plan, branches.clock.as_ref(), &mut noop);
+    assert_eq!(removed.total, 0);
+    assert!(copy_dir(&home, &branches.b).is_dir());
+}
+
+#[test]
+fn an_unreadable_recorded_identity_keeps_its_copy() {
+    let setup = Setup::new("pinned-eloop-identity");
+    let home = setup.home();
+    let repo = setup.repo("repo", "main\n");
+    let key = key_of(&repo);
+    let clock = FakeClock::new();
+    let hash = approve(&home, &key, &repo, clock.as_ref());
+    // No tree matches any more, but the recorded identity cannot even be
+    // read: the copy is uncertain, never removable.
+    write_hook(&repo, "changed\n");
+    let (identity, err) = error_loop(setup.root.path());
+    session(
+        &home,
+        &key,
+        "s_aaaaaaaaaaaaaaaa",
+        identity.to_str().unwrap(),
+        None,
+    );
+    let plan = select(&home, &repo, clock.as_ref());
+    assert_eq!(plan.rows.len(), 1);
+    assert_eq!(
+        pinned_line(&plan.rows[0]),
+        format!(
+            "pinned  {hash}  skipped: the worktree {} cannot be read: {err}",
+            identity.display()
+        )
+    );
+    let mut noop = |_: &str| {};
+    let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
+    assert_eq!(removed.total, 0);
+    assert!(copy_dir(&home, &hash).is_dir());
+}
+
 #[test]
 fn a_held_copy_is_listed_as_skipped_and_frees_nothing() {
     let setup = Setup::new("pinned-held");
@@ -574,6 +659,33 @@ fn revalidation_refuses_changed_owners() {
     assert_ne!(other_key, branches.key);
     let mut before_remove = |_: &str| {
         approve(&home, &other_key, &other, branches.clock.as_ref());
+    };
+    let removed = remove_planned(&home, &plan, branches.clock.as_ref(), &mut before_remove);
+    assert_eq!(removed.total, 1);
+    assert_eq!(removed.freed, 0);
+    assert_eq!(
+        removed.failures,
+        vec![(
+            format!("pinned {}", branches.b),
+            ErrorCode::IoFailed,
+            "its approvals changed since it was listed".to_owned()
+        )]
+    );
+    assert!(copy_dir(&home, &branches.b).is_dir());
+}
+
+#[test]
+fn revalidation_refuses_a_new_machine_wide_record() {
+    let (setup, branches) = three_branches("pinned-reval-machine", RemoveB::Git);
+    let home = setup.home();
+    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    assert_eq!(removable(&plan).len(), 1);
+    // A per-machine record for the planned hash appears after the
+    // listing: the copy is kept, even though its project owners did not
+    // change.
+    let mut before_remove = |_: &str| {
+        fs::create_dir_all(home.join("approvals")).unwrap();
+        fs::write(home.join("approvals").join(&branches.b), "{}").unwrap();
     };
     let removed = remove_planned(&home, &plan, branches.clock.as_ref(), &mut before_remove);
     assert_eq!(removed.total, 1);
@@ -1194,6 +1306,34 @@ fn a_run_with_only_pinned_copies_prints_the_exact_freed() {
         out,
         format!("pinned  {}  {size}\nfreed {size}\n", branches.b)
     );
+}
+
+#[test]
+fn pinned_and_diagnostic_totals_add_up_on_failure() {
+    let (setup, branches) = three_branches("pinned-diag-total", RemoveB::Git);
+    let home = setup.home();
+    // An old diagnostic log in a directory that cannot be written: its
+    // removal fails while the pinned copy still deletes, so the failure
+    // count adds both totals.
+    let logs = home.join("logs");
+    fs::create_dir_all(&logs).unwrap();
+    fs::write(logs.join("old.log"), b"0123456789").unwrap();
+    let wall = contract::clock::Clock::wall(branches.clock.as_ref());
+    fs::File::options()
+        .write(true)
+        .open(logs.join("old.log"))
+        .unwrap()
+        .set_modified(wall - Duration::from_secs(31 * 24 * 60 * 60))
+        .unwrap();
+    let _guard = RestoreMode::set(&logs, 0o555);
+    let mut input: &[u8] = b"";
+    let (out, err, got) = run_prune(&home, &branches.repo, false, true, false, false, &mut input);
+    let failure = got.unwrap_err();
+    assert_eq!(failure.message, "1 of 2 could not be deleted");
+    assert!(err.contains("old.log could not be deleted"), "{err}");
+    assert!(copy_dir(&home, &branches.b).symlink_metadata().is_err());
+    assert!(logs.join("old.log").is_file());
+    assert!(out.contains(&format!("pinned  {}", branches.b)), "{out}");
 }
 
 #[test]
