@@ -217,7 +217,7 @@ impl Fold {
             .map(str::to_owned);
         self.pending_subject = Some((call.clone(), subject.clone()));
         if let Some((name, payload)) = &self.latest
-            && call == &serde_json::Value::Object(payload.clone())
+            && call.as_object() == Some(payload)
         {
             self.step = Some(call_step(name, subject.as_deref()));
         }
@@ -284,7 +284,7 @@ impl Fold {
                 self.step = Some(one_line(&call.name));
                 self.latest = Some((call.name.clone(), line.payload.clone()));
                 if let Some((payload, subject)) = &self.pending_subject
-                    && payload == &serde_json::Value::Object(line.payload.clone())
+                    && payload.as_object() == Some(&line.payload)
                 {
                     self.step = Some(call_step(&call.name, subject.as_deref()));
                 }
