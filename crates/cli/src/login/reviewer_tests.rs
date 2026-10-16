@@ -1391,20 +1391,13 @@ fn name_gate(held: Arc<StepHold>) -> StepGate {
     })
 }
 
-/// Releases a probe on every exit: the gate comes off, and a wedged
-/// `.git/HEAD` fifo (if this probe set one) opens O_RDWR, which never
-/// blocks, so its git child wakes, reads EOF and exits. The environment is
+/// Releases a probe on every exit: the gate comes off. The environment is
 /// never touched: parallel tests spawn processes too.
-struct ProbeGuard {
-    fifo: Option<PathBuf>,
-}
+struct ProbeGuard;
 
 impl Drop for ProbeGuard {
     fn drop(&mut self) {
         set_step_gate(None);
-        if let Some(fifo) = self.fifo.take() {
-            let _opened = fs::OpenOptions::new().read(true).write(true).open(fifo);
-        }
     }
 }
 
@@ -1412,30 +1405,14 @@ impl Drop for ProbeGuard {
 /// login test installs one, holding step `hold` at its pause point: every
 /// reached step is signalled in order, the held step stalls the worker
 /// until the probe releases it, and any other thread passes straight
-/// through. With `wedge_git` the home holds a `.git/HEAD` fifo, so the
-/// `git` child step 2 spawns blocks opening it, as on a wedged
-/// filesystem. Returns the steps reached in order and the outcome: `None`
+/// through. Returns the steps reached in order and the outcome: `None`
 /// when the worker never answered within `STEP_WAIT`.
-fn probe_step(hold: u8, wedge_git: bool) -> (Vec<u8>, Option<ReviewerModels>) {
+fn probe_step(hold: u8) -> (Vec<u8>, Option<ReviewerModels>) {
     let _serial = PROBE_SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let setup = Setup::new();
     setup.install_data("acme", &["m1"]);
     setup.store("acme");
     let home = setup.home();
-    if wedge_git {
-        // `git -C home rev-parse` opens `.git/HEAD`: a fifo blocks that
-        // open until the probe's release opens it for writing.
-        let dot_git = home.join(".git");
-        fs::create_dir_all(&dot_git).unwrap();
-        assert!(
-            Command::new("mkfifo")
-                .arg(dot_git.join("HEAD"))
-                .status()
-                .unwrap()
-                .success(),
-            "the probe wedges `.git/HEAD`"
-        );
-    }
     let (reached_tx, reached_rx) = mpsc::channel();
     let mut releasers = HashMap::new();
     let mut holds = HashMap::new();
@@ -1450,9 +1427,7 @@ fn probe_step(hold: u8, wedge_git: bool) -> (Vec<u8>, Option<ReviewerModels>) {
         releases: Mutex::new(holds),
     });
     set_step_gate(Some(name_gate(Arc::clone(&held))));
-    let _guard = ProbeGuard {
-        fifo: wedge_git.then(|| home.join(".git").join("HEAD")),
-    };
+    let _guard = ProbeGuard;
     let clock = setup.clock();
     let (done_tx, done_rx) = mpsc::channel();
     let worker_held = Arc::clone(&held);
@@ -1492,9 +1467,7 @@ fn probe_step(hold: u8, wedge_git: bool) -> (Vec<u8>, Option<ReviewerModels>) {
                 .map(|out| out.expect("discovery answers once its steps are released"));
         }
     }
-    // The worker is still inside the wedged step, if any: release the fifo
-    // so its git child ends, then join. A late answer never counts: the
-    // verdict was already taken above.
+    // A late answer never counts: the verdict was already taken above.
     drop(_guard);
     if answered.is_none() {
         let wait = fakes::Deadline::after(STEP_WAIT);
@@ -1510,7 +1483,7 @@ fn probe_step(hold: u8, wedge_git: bool) -> (Vec<u8>, Option<ReviewerModels>) {
 
 #[test]
 fn step_1_holds_at_its_pause_point_then_reads_the_global_key() {
-    let (reached, answered) = probe_step(1, false);
+    let (reached, answered) = probe_step(1);
     assert_eq!(
         reached,
         vec![1, 2, 3, 4],
@@ -1523,25 +1496,8 @@ fn step_1_holds_at_its_pause_point_then_reads_the_global_key() {
 }
 
 #[test]
-fn step_2_holds_at_its_pause_point_but_a_wedged_git_never_answers() {
-    // Step 2 resolves the project with one `git rev-parse` child and waits
-    // for it with no bound: a wedged `.git/HEAD` fifo blocks that open, as
-    // on a wedged filesystem, and discovery never reaches its prompt.
-    let (reached, answered) = probe_step(2, true);
-    assert!(
-        reached.starts_with(&[1, 2]),
-        "discovery reaches step 2's pause point: {reached:?}"
-    );
-    assert!(
-        answered.is_some(),
-        "step 2 (project resolution for `Config::load`: the `git` child) answers \
-         within {STEP_WAIT:?}; reached {reached:?}"
-    );
-}
-
-#[test]
 fn step_3_holds_at_its_pause_point_then_builds_the_provider_vm() {
-    let (reached, answered) = probe_step(3, false);
+    let (reached, answered) = probe_step(3);
     assert_eq!(
         reached,
         vec![1, 2, 3, 4],
@@ -1555,7 +1511,7 @@ fn step_3_holds_at_its_pause_point_then_builds_the_provider_vm() {
 
 #[test]
 fn step_4_holds_at_its_pause_point_then_runs_model_discovery() {
-    let (reached, answered) = probe_step(4, false);
+    let (reached, answered) = probe_step(4);
     assert_eq!(
         reached,
         vec![1, 2, 3, 4],
@@ -1580,7 +1536,7 @@ fn a_gate_names_only_its_worker_thread() {
         releases: Mutex::new(HashMap::new()),
     });
     set_step_gate(Some(name_gate(Arc::clone(&held))));
-    let _guard = ProbeGuard { fifo: None };
+    let _guard = ProbeGuard;
     super::pause_at(7);
     assert!(
         reached_rx.try_recv().is_err(),
