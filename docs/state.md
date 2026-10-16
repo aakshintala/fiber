@@ -319,12 +319,14 @@ What is recorded:
   output; a call with no hooks, or a dispatch a shutdown suppresses,
   writes none. `tool.run` covers one entered execution on its worker, not
   the wait for its ordered completion. The scopes nest instead of adding up: a
-  requested handoff holds its note's request and model scopes, and
+  requested handoff holds its note's request and model scopes; a handoff
+  whose note a hook writes has neither, and
   `provider_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
-  no turn scope. Also installed are the five hook chains other
+  no turn scope. Also installed are the six hook chains other
   than the tool hooks: `hook.session_start`, `hook.turn_start`,
-  `hook.before_message`, `hook.before_model_call` and `hook.turn_end`, one
+  `hook.before_message`, `hook.before_model_call`, `hook.turn_end` and
+  `hook.before_handoff`, one
   scope around each entered public dispatch, however it returns, empty
   chains included. Tool hooks take no scope: `tool.hooks` covers those
   chains. Other plain agent clients stay unobserved.

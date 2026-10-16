@@ -216,7 +216,8 @@ a breaking change.
   `notice` (`docs/extensions.md`, "When a hook fails"). The automatic
   trigger does not fire again in that turn, so the turn goes on until it ends
   or the overflow rule applies.
-- `cancelled` means a person cancelled the turn while the note request ran. The
+- `cancelled` means a person cancelled the turn while the note was being
+  written, by the note request or a `before_handoff` hook. The
   turn completes `interrupted` and the context stays as it was.
 
 ### Resume
