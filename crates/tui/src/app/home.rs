@@ -10,7 +10,7 @@ use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
     Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line, delete_line,
-    from_status, line, line_with, recent_rows,
+    from_status, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -192,7 +192,6 @@ impl App {
         let mut spend = 0.0;
         let mut live_count = 0usize;
         let mut list = Vec::new();
-        let mut rows = Vec::new();
         let wall = self.rail_state().wall();
         for section in sections {
             let hidden_exited = section.hidden();
@@ -225,11 +224,6 @@ impl App {
                 }
                 let status = row.status.as_ref();
                 let stop = row.left.is_none() && row.state != State::Unreadable;
-                rows.push((
-                    row.key,
-                    line_with(row, &home.launch.project, self.motion.glyph(row)),
-                    stop,
-                ));
                 list.push(ListLine::Live {
                     key: row.key,
                     number: self.rail_state().number(row.key),
@@ -264,11 +258,6 @@ impl App {
                 });
             }
             for row in section.exited.iter().take(section.shown_exited) {
-                rows.push((
-                    row.key,
-                    line_with(row, &home.launch.project, self.motion.glyph(row)),
-                    false,
-                ));
                 list.push(ListLine::Exited {
                     key: row.key,
                     glyph: "○",
@@ -351,7 +340,6 @@ impl App {
                 ]);
                 chips
             },
-            rows,
             picker: home.picker_screen(),
             blockers: home.blockers.clone(),
             foot,

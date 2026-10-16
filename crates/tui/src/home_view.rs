@@ -461,7 +461,7 @@ fn draw_list(
             at.saturating_add(height.min(capacity))
                 .saturating_sub(capacity)
         });
-    if screen.empty && screen.rows.is_empty() {
+    if screen.empty {
         let y = placed
             .list_top
             .saturating_add(super::to_u16(capacity.saturating_sub(2) / 2));

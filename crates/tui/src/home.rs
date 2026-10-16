@@ -182,8 +182,6 @@ pub(crate) struct HomeScreen {
     pub(crate) list: Vec<ListLine>,
     /// No live, crashed or exited session exists.
     pub(crate) empty: bool,
-    /// The rows: their keys, their lines, and whether they end in a ✕.
-    pub(crate) rows: Vec<(u64, String, bool)>,
     /// The rejected `start`'s message, above the box until the next
     /// `start` goes out.
     pub(crate) blockers: Vec<String>,
