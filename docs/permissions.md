@@ -305,6 +305,49 @@ for. An agent that could rewrite the notes would widen its own approvals.
 `fiber config get reviewer.context` prints the notes as the reviewer reads
 them: each layer's text under its heading.
 
+### Setting up the notes
+
+`/reviewer-setup`, in the interactive terminal, writes the notes with the
+person. The person types it and the terminal runs it, so its save is not an
+agent's edit. It has no command-line form, and a headless run never starts it.
+The first time in a session that the reviewer blocks a call while both layers
+of the notes are empty, the terminal shows one notice naming the command.
+
+It proposes lines, one topic at a time, in the order of the bullets above.
+Each proposal comes from evidence:
+
+- the project's own files: its git remotes, its CI configuration and its
+  package registries;
+- the person's answer to one question per topic;
+- the person's Fiber sessions: calls the reviewer blocked that a person then
+  allowed, an escalation answered allow ("What happens on a block"), counted
+  per prefix. Nothing else in a session is read.
+
+The session's model turns the evidence for each topic into proposed lines, one
+fact or rule a line, in a request of its own that carries no conversation. Its
+`usage_recorded` belongs to no action. Fourteen escalations answered allow for
+`gh pr merge … --squash` on the person's repositories become "squash-merging my
+own pull requests once CI passes". The person confirms, edits or strikes each
+line. Only confirmed lines are kept, and no model writes or rewrites the notes
+themselves: a template sets each confirmed line as a bullet under its topic's
+heading.
+
+Each line shows the layer it will go to, and one key flips it. A line from the
+project's files goes to the per-project notes. An answer about accounts, hosts
+or tools goes to the global notes. A session line goes to the per-project notes
+when every escalation behind it came from this project, and to the global notes
+otherwise. Outside a project, every line goes to the global notes.
+
+Last, one screen shows each layer's notes exactly as they will be saved, as a
+diff against what is there, with the file named. Approving saves them and then
+offers a reload now or the change from the next session, because the notes are
+fixed for the session. Cancelling saves nothing.
+
+The command owns the bullets under its topic headings. Run again, it shows its
+earlier lines first, to keep or strike, and proposes only what they do not
+already cover. Text outside its headings, such as prose the person wrote, is
+kept byte for byte.
+
 ### How it runs
 
 Two stages. The first asks for one word: `check`, meaning the call goes
