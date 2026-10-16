@@ -203,6 +203,18 @@ impl Setup {
         specs: Vec<ServerSpec>,
         images: std::sync::Arc<FakeImages>,
     ) -> Started {
+        self.start_with_images_within(specs, images, WITHIN)
+    }
+
+    /// As [`start_with_images`], with a caller-given `within` for the
+    /// guard; the default stays [`WITHIN`].
+    #[track_caller]
+    pub(crate) fn start_with_images_within(
+        &self,
+        specs: Vec<ServerSpec>,
+        images: std::sync::Arc<FakeImages>,
+        within: Duration,
+    ) -> Started {
         let workspace = self.workspace();
         let artifacts = self.artifacts();
         let cache = self.cache();
@@ -237,7 +249,7 @@ impl Setup {
                 done.send(outcome).unwrap_or(());
             })
             .expect("a thread for the start");
-        match Deadline::after(WITHIN).recv(&finished) {
+        match Deadline::after(within).recv(&finished) {
             Ok(outcome) => outcome.unwrap_or_else(|payload| std::panic::resume_unwind(payload)),
             Err(_) => {
                 let waiting = outstanding
@@ -247,7 +259,7 @@ impl Setup {
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(", ");
-                panic!("waited {WITHIN:?} for the start, waiting on [{waiting}]");
+                panic!("waited {within:?} for the start, waiting on [{waiting}]");
             }
         }
     }

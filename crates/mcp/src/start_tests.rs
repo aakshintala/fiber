@@ -256,7 +256,11 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     started.servers.stop();
     // The refused server reports at once, so only the held server is
     // still outstanding when the wall guard below fires: the message
-    // names it and not the server that already reported.
+    // names it and not the server that already reported. Five seconds
+    // covers the thread spawns and guard round-trips with room to
+    // spare under a parallel suite: neither server waits on the fake
+    // clock, so no startup deadline can fire, and a mutant that changes
+    // the outcome still runs out this same bound or fails faster.
     let held = Setup::new();
     let (quiet, _quiet_release) = held_spec(&held, "quiet");
     let mut refused = held.spec("two");
@@ -268,7 +272,11 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     refused.stdio_mut().run = Some(run_program(&held, &gate));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        held.start(vec![quiet, refused])
+        held.start_with_images_within(
+            vec![quiet, refused],
+            FakeImages::ok(),
+            Duration::from_secs(5),
+        )
     }));
     let message = match outcome {
         Ok(_) => panic!("a held start ends only on its guard"),
@@ -278,7 +286,7 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
             .unwrap_or_else(|| "a non-string panic".to_owned()),
     };
     assert!(
-        message.contains("waiting on [quiet]"),
+        message.contains("waited 5s for the start, waiting on [quiet]"),
         "the guard names the outstanding server: {message}"
     );
     assert!(
