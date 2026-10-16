@@ -80,6 +80,8 @@ cargo run --release -- fixtures/session.jsonl --static --home full-empty
 cargo run --release -- fixtures/session.jsonl --static --home full-focus-exited
 cargo run --release -- fixtures/session.jsonl --static --home full-closing
 cargo run --release -- fixtures/session.jsonl --static --home full-picker
+cargo run --release -- fixtures/session.jsonl --static --home full-remote-empty
+cargo run --release -- fixtures/session.jsonl --static --home full-remote-picker
 cargo run --release -- fixtures/session.jsonl --static --home rail-focused
 ```
 
@@ -93,6 +95,10 @@ cargo run --release -- fixtures/session.jsonl --static --home rail-focused
 - `full-focus-exited`: the first exited row focused, a still frame.
 - `full-closing`: one live row `CLOSING` after `/clear`, a still frame.
 - `full-picker`: the workspace picker open over the fleet, a still frame.
+- `full-remote-empty`: remote home with no workspace chosen and an empty
+  picker, a still frame.
+- `full-remote-picker`: remote home with no workspace chosen and the hub's
+  recent workspaces in the picker, a still frame.
 - `rail-focused`: the conversation view with the rail focused on a
   NEEDS INPUT card (the lifted card, the dimmed input box, the rail foot
   hint), a still frame.

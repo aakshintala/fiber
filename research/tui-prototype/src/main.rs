@@ -8081,7 +8081,7 @@ mod tests {
         assert_eq!(
             all,
             [
-                "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, rail-focused, live",
+                "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, full-remote-empty, full-remote-picker, rail-focused, live",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, history-one, history-none, notice, notices, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty, prices, prices-empty, prices-free, prices-noprice, prices-tiered",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",

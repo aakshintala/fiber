@@ -7,5 +7,7 @@ One run per case: `--home CASE`.
 - full-focus-exited: the first exited row on the selection bar; live rows unmarked.
 - full-closing: the first live row with dim `CLOSING` where the state word sits, its other cells as a live row.
 - full-picker: the picker centred over the fleet with `Workspaces` bold accent, four recent workspaces, the first `›` on the bar, and the bold-key legend foot.
+- full-remote-empty: the dim `▣ no workspace` chip; the open `Workspaces` picker with no rows and the footer `↑↓ move · Enter open`, without `Esc closes`.
+- full-remote-picker: the dim `▣ no workspace` chip; the open `Workspaces` picker with the hub's four recents, no launch-directory row, the first focused, and the footer `↑↓ move · Enter open`, without `Esc closes`.
 - rail-focused: the rail left with the needs-input card lifted across its whole surface; the dimmed conversation behind; the input box with a dim stripe and dim text; the foot hint with bold keys.
 - live: not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.
