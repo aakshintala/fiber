@@ -167,8 +167,15 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   sample it did not force a call.
 
 Fiber sends mode `VALIDATED` only when every tool in the request fits the
-strict subset. A tool declared in every session, such as `ask_user`, is sent
-with `strict: false`, so Gemini requests use `AUTO` until #1214 settles it.
+strict subset. Measured 2026-10-16 on `gemini-3-flash-preview`, six requests
+with prompts that invited each violation and `ask_user`'s schema as
+`parametersJsonSchema`: `VALIDATED` accepted every request (6 of 6, HTTP 200),
+`maxLength` was broken (one reply set `header` to a 62-character sentence
+against `maxLength: 12`), while `minItems` and `maxItems` were not broken in
+the samples (a request for six questions returned four; a request for one
+option returned two, the second label invented; a request for seven options
+returned no call). So Gemini requests keep `AUTO`, because `ask_user` and the
+session naming tool both declare `maxLength`, and no fit check is added.
 Fiber's own argument check still validates every call (`docs/tools.md`,
 "Before a call runs").
 
