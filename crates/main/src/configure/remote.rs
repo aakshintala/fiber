@@ -1,4 +1,8 @@
 //! Wire shapes for configuration on the hub's machine.
+use std::fs::{self, File, OpenOptions};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Read;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -291,17 +295,121 @@ impl hub::Machine for Seam {
         };
         Ok(Some(result))
     }
-    fn read_config(&self, _workspace: &Path, _path: &Path) -> Result<(String, String), Failure> {
-        Err(failure(ErrorCode::IoFailed, "not built yet"))
+    fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure> {
+        self.config_path(workspace, path)?;
+        let bytes = read_bytes(path)?;
+        let version = version_of(bytes.as_deref());
+        let text =
+            String::from_utf8(bytes.unwrap_or_default()).map_err(|error| io_failed(path, error))?;
+        Ok((text, version))
     }
     fn write_config(
         &self,
-        _workspace: &Path,
-        _path: &Path,
-        _text: &str,
-        _version: &str,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
     ) -> Result<(), Failure> {
-        Err(failure(ErrorCode::IoFailed, "not built yet"))
+        self.config_path(workspace, path)?;
+        cap(text.len())?;
+        // Config and rules writes serialize the whole read-compare-write.
+        // Skill files are editor-owned: no lock file is left in a repository.
+        let _lock = if path.file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
+            None
+        } else {
+            let parent = path.parent().ok_or_else(invalid)?;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)
+                .map_err(|error| io_failed(parent, error))?;
+            let mut name = path.as_os_str().to_owned();
+            name.push(".lock");
+            let lock = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .mode(0o666)
+                .open(name)
+                .map_err(|error| io_failed(path, error))?;
+            lock.lock().map_err(|error| io_failed(path, error))?;
+            Some(lock)
+        };
+        let bytes = read_bytes(path)?;
+        if version_of(bytes.as_deref()) != version {
+            return Err(failure(
+                ErrorCode::StaleRequest,
+                format!("{} changed since it was read.", path.display()),
+            ));
+        }
+        config::write_atomic(path, text.as_bytes(), 0o666)
+            .map_err(|error| failure(error.code(), error.to_string()))
+    }
+}
+
+const TEXT_LIMIT: usize = 64 * 1024;
+
+impl Seam {
+    fn config_path(&self, workspace: &Path, path: &Path) -> Result<(), Failure> {
+        if !workspace.is_absolute() || !path.is_absolute() {
+            return Err(invalid());
+        }
+        if path.file_name() == Some(std::ffi::OsStr::new("SKILL.md")) {
+            return Ok(());
+        }
+        let (_, project) = cli::project_of(&self.home, workspace)?;
+        let project = self.home.join("projects").join(project.as_str());
+        let paths = [
+            self.home.join("config.json"),
+            project.join("config.json"),
+            workspace.join(".fiber/config.json"),
+            self.home.join("rules"),
+            project.join("rules"),
+        ];
+        if paths.iter().any(|allowed| allowed == path) {
+            Ok(())
+        } else {
+            Err(invalid())
+        }
+    }
+}
+
+fn cap(length: usize) -> Result<(), Failure> {
+    if length > TEXT_LIMIT {
+        return Err(failure(
+            ErrorCode::TooLarge,
+            "Configuration text exceeds 64 KiB.",
+        ));
+    }
+    Ok(())
+}
+
+fn io_failed(path: &Path, error: impl std::fmt::Display) -> Failure {
+    failure(ErrorCode::IoFailed, format!("{}: {error}", path.display()))
+}
+
+fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>, Failure> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_failed(path, error)),
+    };
+    let mut bytes = Vec::new();
+    file.take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| io_failed(path, error))?;
+    cap(bytes.len())?;
+    Ok(Some(bytes))
+}
+
+fn version_of(bytes: Option<&[u8]>) -> String {
+    match bytes {
+        None => "missing".to_owned(),
+        Some(bytes) => {
+            let mut hasher = DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        }
     }
 }
 

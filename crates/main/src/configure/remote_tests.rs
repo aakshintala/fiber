@@ -291,3 +291,194 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         );
     }
 }
+
+#[test]
+fn remote_config_files_allow_only_the_views_paths() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(home.clone());
+    let project = dirs.project_file(&workspace);
+    let allowed = [
+        home.join("config.json"),
+        project.clone(),
+        workspace.join(".fiber/config.json"),
+        home.join("rules"),
+        project.with_file_name("rules"),
+        workspace.join("SKILL.md"),
+    ];
+    for path in allowed {
+        write(&path, "body");
+        let (text, version) = seam.read_config(&workspace, &path).unwrap();
+        assert_eq!(text, "body");
+        assert_eq!(version.len(), 16);
+        assert!(
+            version
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        seam.write_config(&workspace, &path, "changed", &version)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "changed");
+    }
+    for path in [
+        home.join("credentials/x"),
+        workspace.join(".fiber/other.json"),
+        "config.json".into(),
+        workspace.join("SKILL.md.bak"),
+        home.join("other/../config.json"),
+    ] {
+        assert_eq!(
+            seam.read_config(&workspace, &path).unwrap_err().code,
+            ErrorCode::InvalidArguments
+        );
+        assert_eq!(
+            seam.write_config(&workspace, &path, "x", "missing")
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArguments
+        );
+    }
+    assert_eq!(
+        seam.read_config(Path::new("relative"), &home.join("config.json"))
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        seam.write_config(
+            Path::new("relative"),
+            &home.join("config.json"),
+            "x",
+            "missing"
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::InvalidArguments
+    );
+    assert!(!workspace.join("SKILL.md.lock").exists());
+}
+
+#[test]
+fn remote_config_versions_cover_missing_stale_and_byte_changes() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let path = dirs.home().join("config.json");
+    let seam = Seam::new(dirs.home());
+    assert_eq!(
+        seam.read_config(&workspace, &path).unwrap(),
+        (String::new(), "missing".into())
+    );
+    seam.write_config(&workspace, &path, "{}", "missing")
+        .unwrap();
+    assert_eq!(
+        seam.write_config(&workspace, &path, "lost", "missing")
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleRequest
+    );
+    let (_, version) = seam.read_config(&workspace, &path).unwrap();
+    // Equal-length edits still invalidate a content version.
+    fs::write(&path, "[]").unwrap();
+    let error = seam
+        .write_config(&workspace, &path, "lost", &version)
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::StaleRequest);
+    assert_eq!(
+        error.message,
+        format!("{} changed since it was read.", path.display())
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "[]");
+    let (_, version) = seam.read_config(&workspace, &path).unwrap();
+    seam.write_config(&workspace, &path, "{", &version).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{");
+    let rules = dirs.home().join("rules");
+    seam.write_config(&workspace, &rules, "this is not a rule\n", "missing")
+        .unwrap();
+    assert_eq!(fs::read_to_string(rules).unwrap(), "this is not a rule\n");
+}
+
+#[test]
+fn remote_config_caps_count_bytes_at_both_edges_and_never_cut() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let path = workspace.join("SKILL.md");
+    for length in [65_535, 65_536, 65_537] {
+        let text = "x".repeat(length);
+        write(&path, &text);
+        let read = seam.read_config(&workspace, &path);
+        if length == 65_537 {
+            assert_eq!(read.unwrap_err().code, ErrorCode::TooLarge);
+        } else {
+            let (body, _) = read.unwrap();
+            assert_eq!(body.len(), length);
+            assert!(body == text);
+        }
+        fs::remove_file(&path).unwrap();
+        let written = seam.write_config(&workspace, &path, &text, "missing");
+        if length == 65_537 {
+            assert_eq!(written.unwrap_err().code, ErrorCode::TooLarge);
+            assert!(!path.exists());
+        } else {
+            written.unwrap();
+            let body = fs::read(&path).unwrap();
+            assert_eq!(body.len(), length);
+            assert!(body == text.as_bytes());
+        }
+    }
+    let unicode = "é".repeat(32_768);
+    seam.write_config(&workspace, &path, &unicode, "missing")
+        .unwrap();
+    assert_eq!(seam.read_config(&workspace, &path).unwrap().0.len(), 65_536);
+    let (_, version) = seam.read_config(&workspace, &path).unwrap();
+    assert_eq!(
+        seam.write_config(&workspace, &path, &format!("{unicode}a"), &version)
+            .unwrap_err()
+            .code,
+        ErrorCode::TooLarge
+    );
+    fs::write(&path, [0xff]).unwrap();
+    let error = seam.read_config(&workspace, &path).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(error.message.contains(path.to_str().unwrap()));
+}
+
+#[test]
+fn remote_config_write_takes_the_lock_before_comparing_the_version() {
+    use fakes::Deadline;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let path = dirs.home().join("config.json");
+    let seam = Seam::new(dirs.home());
+    write(&path, "old");
+    let (_, version) = seam.read_config(&workspace, &path).unwrap();
+    let lock = fs::File::create(path.with_file_name("config.json.lock")).unwrap();
+    lock.lock().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (started, ready) = mpsc::channel();
+    let file = path.clone();
+    std::thread::spawn(move || {
+        started.send(()).unwrap();
+        tx.send(seam.write_config(&workspace, &file, "new", &version))
+            .unwrap_or(());
+    });
+    let deadline = Deadline::after(Duration::from_secs(10));
+    deadline.recv_or_fail(&ready, "writer started");
+    assert!(matches!(
+        Deadline::after(Duration::from_millis(300)).recv(&rx),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    fs::write(&path, "other").unwrap();
+    drop(lock);
+    assert_eq!(
+        deadline
+            .recv_or_fail(&rx, "writer finished")
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleRequest
+    );
+    assert_eq!(fs::read_to_string(path).unwrap(), "other");
+}
