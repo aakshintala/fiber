@@ -447,7 +447,23 @@ cut with "…". The cards draw:
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
 - **Quota.** "extension" dim in the title. Each limit is its name dim with
   the share left right-aligned, and a bar of ▆ under it in `accent`, or in
-  `error` with the share when little is left.
+  `error` with the share when little is left. A window shows `100 -
+  percent_used`, floored at zero, as a rounded whole percent. A credit with
+  a positive limit shows remaining divided by limit, clamped to 0–100%.
+  The figure and bar use `error` at or past `quota.notice_at` percent used
+  (default 80). A reset window says "reset" with a full `accent` bar.
+  A credit without a positive limit shows remaining to two decimals, with
+  no bar or `error` colour. The bar fills to the share left, rounded to
+  the nearest cell, with at least one cell for any positive share.
+  Each name is the provider and window name, or "credit". The credential
+  label follows the provider only when it has more than one label.
+  An unreachable label shows its last value without age, or nothing when
+  it has none. With no rows, the card draws nothing.
+  The terminal asks for cached quota on attach, on focus-in (DEC mode
+  1004), and at each attached session's busy-to-settled turn end. A
+  keypress asks only once the last answer is at least 5 minutes old
+  (`docs/tools.md`, "Fetching"). At most one query is in flight; a turn
+  end during it is not held. A rejection stops queries until reattach.
 
 With the rail hidden and sessions waiting, the Session card ends with "! N
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
@@ -460,7 +476,8 @@ never from `details`, which has no fixed shape a client may rely on
 
 ⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
-file's diff. The same views back `/model`, `/context`, `/usage` and `/tools`.
+file's diff. A Quota row opens nothing until `/quota` is specified
+([#2526](https://github.com/aakshintala/fiber/issues/2526)). The same views back `/model`, `/context`, `/usage` and `/tools`.
 
 There is no built-in task list
 ([Task list](https://github.com/aakshintala/fiber/issues/56)).
@@ -717,7 +734,7 @@ Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
-area. Clicking any other segment opens its card's view.
+area. Clicking any other segment opens its card's view; a Quota segment opens nothing until `/quota` is specified.
 
 The status line sits on the `panel` tint, one column in, with segments joined
 by a dim "  │  ". Each card's segments are short forms of its rows: the working
@@ -728,6 +745,10 @@ context breakdown; the cost and "cache" dim with its share; "tools N" dim and
 any down server in `error`; "±" dim, "N files" and the `added` and `removed`
 totals; "◆" in `secondary` before the delegates; "⚙" in `attention` before
 the jobs; and "Q" dim before the quota, with a limit nearly spent in `error`.
+The Quota segment joins each short name and figure with a dim " · ". A
+short name is the provider, with its credential label when it has more than
+one. The window name follows only when that label has more than one
+window. With no quota rows, there is no Quota segment.
 With the rail hidden and sessions waiting, the first row opens with "N
 waiting" in `attention`.
 
@@ -1703,7 +1724,9 @@ Each can be turned off: `tui.attention.notification`, `tui.attention.bell` and
 
 ## Mouse and hover
 
-Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Hover
+Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Mode
+1004, focus reporting, is also on for Quota queries ("The panel"); restore
+turns it off. Hover
 highlights the click target under the pointer. The highlight is instant, with
 no transition. A frame redraws only the rows that changed.
 
