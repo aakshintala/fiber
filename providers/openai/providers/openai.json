@@ -58,7 +58,8 @@
       ],
       "max_output_tokens": 32768,
       "name": "GPT-4.1",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -78,7 +79,8 @@
       ],
       "max_output_tokens": 32768,
       "name": "GPT-4.1 mini",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -118,7 +120,8 @@
       ],
       "max_output_tokens": 16384,
       "name": "GPT-4o",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -137,7 +140,8 @@
       ],
       "max_output_tokens": 4096,
       "name": "GPT-4o (2024-05-13)",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -157,7 +161,8 @@
       ],
       "max_output_tokens": 16384,
       "name": "GPT-4o (2024-08-06)",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -177,7 +182,8 @@
       ],
       "max_output_tokens": 16384,
       "name": "GPT-4o (2024-11-20)",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -197,7 +203,8 @@
       ],
       "max_output_tokens": 16384,
       "name": "GPT-4o mini",
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -223,7 +230,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -249,7 +257,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -275,7 +284,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -297,7 +307,8 @@
       "protocol": "openai-responses",
       "thinking_levels": [
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -323,7 +334,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -350,7 +362,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -398,7 +411,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -445,7 +459,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -507,7 +522,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -534,7 +550,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -561,7 +578,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -594,7 +612,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -630,7 +649,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -663,7 +683,8 @@
         "medium",
         "high",
         "xhigh"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -701,7 +722,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -739,7 +761,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -777,7 +800,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -814,7 +838,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -852,7 +877,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -890,7 +916,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -927,7 +954,8 @@
         "high",
         "xhigh",
         "max"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -1095,7 +1123,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -1168,7 +1197,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "web_search"
     }
   ],
   "name": "openai",

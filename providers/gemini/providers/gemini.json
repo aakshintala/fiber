@@ -372,7 +372,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -395,7 +396,8 @@
         "low",
         "medium",
         "high"
-      ]
+      ],
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -411,7 +413,8 @@
       "thinking_levels": [
         "minimal",
         "high"
-      ]
+      ],
+      "web_search": "google_search"
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -427,7 +430,8 @@
       "thinking_levels": [
         "minimal",
         "high"
-      ]
+      ],
+      "web_search": "google_search"
     }
   ],
   "name": "gemini",

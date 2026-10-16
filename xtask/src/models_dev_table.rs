@@ -173,6 +173,10 @@ const GEMINI: Package = Package {
         ("gemini-3.7-flash", GOOGLE_SEARCH),
         ("gemini-3.8-flash", GOOGLE_SEARCH),
         ("gemini-3-flash-preview", GOOGLE_SEARCH),
+        ("gemini-flash-latest", GOOGLE_SEARCH),
+        ("gemini-flash-lite-latest", GOOGLE_SEARCH),
+        ("gemma-4-26b-a4b-it", GOOGLE_SEARCH),
+        ("gemma-4-31b-it", GOOGLE_SEARCH),
     ],
     thinking: &[
         ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
@@ -202,6 +206,10 @@ const GEMINI: Package = Package {
     ],
 };
 
+/// The hosted search the probed OpenAI models accept (October 16, 2026);
+/// a refused model declares none.
+const OPENAI_SEARCH: &str = r#"{"web_search":"web_search"}"#;
+
 /// OpenAI's models, all on `openai-responses` with `store: false`.
 const OPENAI: Package = Package {
     path: "providers/openai/providers/openai.json",
@@ -215,7 +223,38 @@ const OPENAI: Package = Package {
     protocol_overrides: &[],
     every_model: r#"{"compat":{"store":false}}"#,
     by_protocol: &[],
-    by_model: &[],
+    by_model: &[
+        ("gpt-4.1", OPENAI_SEARCH),
+        ("gpt-4.1-mini", OPENAI_SEARCH),
+        ("gpt-4o", OPENAI_SEARCH),
+        ("gpt-4o-2024-05-13", OPENAI_SEARCH),
+        ("gpt-4o-2024-08-06", OPENAI_SEARCH),
+        ("gpt-4o-2024-11-20", OPENAI_SEARCH),
+        ("gpt-4o-mini", OPENAI_SEARCH),
+        ("gpt-5", OPENAI_SEARCH),
+        ("gpt-5-mini", OPENAI_SEARCH),
+        ("gpt-5-nano", OPENAI_SEARCH),
+        ("gpt-5-pro", OPENAI_SEARCH),
+        ("gpt-5.1", OPENAI_SEARCH),
+        ("gpt-5.2", OPENAI_SEARCH),
+        ("gpt-5.2-pro", OPENAI_SEARCH),
+        ("gpt-5.3-codex", OPENAI_SEARCH),
+        ("gpt-5.4", OPENAI_SEARCH),
+        ("gpt-5.4-mini", OPENAI_SEARCH),
+        ("gpt-5.4-nano", OPENAI_SEARCH),
+        ("gpt-5.4-pro", OPENAI_SEARCH),
+        ("gpt-5.5", OPENAI_SEARCH),
+        ("gpt-5.5-pro", OPENAI_SEARCH),
+        ("gpt-5.6-luna", OPENAI_SEARCH),
+        ("gpt-5.6-sol", OPENAI_SEARCH),
+        ("gpt-5.6-terra", OPENAI_SEARCH),
+        ("gpt-6-astra", OPENAI_SEARCH),
+        ("gpt-6-luna", OPENAI_SEARCH),
+        ("gpt-6-sol", OPENAI_SEARCH),
+        ("gpt-6.1-sol", OPENAI_SEARCH),
+        ("o3", OPENAI_SEARCH),
+        ("o4-mini", OPENAI_SEARCH),
+    ],
     thinking: &[
         ("gpt-5", MINIMAL_LOW_MEDIUM_HIGH, None),
         ("gpt-5-mini", MINIMAL_LOW_MEDIUM_HIGH, None),

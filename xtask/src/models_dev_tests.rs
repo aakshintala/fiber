@@ -1108,3 +1108,38 @@ fn zen_keeps_its_google_generative_ai_models() {
         assert!(generated_model(output, id).is_some(), "{id}");
     }
 }
+
+#[test]
+fn openai_search_marks_match_the_october_probe() {
+    // The October 16, 2026 hosted-search probe
+    // (research/web-tools/hosted-search.md) accepted `web_search` on
+    // `gpt-4o` and refused it on `gpt-4`, so the generated OpenAI file
+    // marks the former and leaves the latter unmarked.
+    let package = PACKAGES
+        .iter()
+        .find(|package| package.path == "providers/openai/providers/openai.json")
+        .unwrap();
+    let mut ids: Vec<&str> = package.by_model.iter().map(|(id, _)| *id).collect();
+    for (id, _, _) in package.thinking {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    for id in ["gpt-4o", "gpt-4"] {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let models: Vec<(&str, Value)> = ids.iter().map(|id| (*id, tool_model(json!({})))).collect();
+    let (output, _) = generate_one(package, &models);
+    assert_eq!(
+        generated_model(&output, "gpt-4o").unwrap()["web_search"],
+        "web_search"
+    );
+    assert!(
+        generated_model(&output, "gpt-4")
+            .unwrap()
+            .get("web_search")
+            .is_none()
+    );
+}
