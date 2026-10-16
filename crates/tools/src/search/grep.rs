@@ -14,6 +14,7 @@ use super::fallback;
 use super::find::{basename, glob_match};
 use super::grep_args::{self, Mode, Options};
 use super::notice;
+use super::matches::{MatchFile, MATCHES_ENV, LIMIT};
 use super::walk::{self, DirRoot, Root};
 use super::{Out, Outcome, flush_exit};
 
@@ -28,7 +29,11 @@ pub fn grep_main(args: Vec<OsString>) -> i32 {
     let stdout = std::io::stdout();
     let mut buffered = std::io::BufWriter::new(stdout.lock());
     let mut stderr = std::io::stderr().lock();
-    let outcome = run(&cwd, &args, &mut input, &mut buffered, &mut stderr);
+    let side = std::env::var_os(MATCHES_ENV).map(PathBuf::from);
+    let outcome = match side.as_deref() {
+        Some(path) => run_recording(&cwd, &args, &mut input, &mut buffered, &mut stderr, Some((path, LIMIT))),
+        None => run(&cwd, &args, &mut input, &mut buffered, &mut stderr),
+    };
     let flushed = buffered.flush();
     match outcome {
         Outcome::Done(code) => flush_exit("grep", code, flushed, &mut stderr),
@@ -46,6 +51,17 @@ pub(crate) fn run(
     stdin: &mut dyn Read,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+) -> Outcome {
+    run_recording(cwd, args, stdin, stdout, stderr, None)
+}
+
+pub(crate) fn run_recording(
+    cwd: &Path,
+    args: &[OsString],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    side: Option<(&Path, u64)>,
 ) -> Outcome {
     let options = match grep_args::parse(args) {
         grep_args::Parsed::Run(options) => options,
@@ -79,6 +95,12 @@ pub(crate) fn run(
     } else {
         options.paths.clone()
     };
+    let lines = !options.count && !options.files_with_matches
+        && !options.only_matching && !options.invert;
+    let files = !paths.is_empty() && !paths.iter().any(|path| path == Path::new("-"));
+    if lines && files {
+        search.matches = side.and_then(|(path, limit)| MatchFile::create(path, limit));
+    }
     // The path shows when more than one file is searched, or when `-r`
     // names a directory.
     let show = paths.len() > 1
@@ -208,6 +230,9 @@ pub(crate) fn run(
             writeln!(stderr, "{line}").unwrap_or(());
         }
     }
+    if let Some(matches) = search.matches {
+        matches.finish();
+    }
     Outcome::Done(if failed {
         2
     } else if matched {
@@ -223,6 +248,7 @@ struct Search {
     matcher: grep_regex::RegexMatcher,
     /// The line searcher: numbers, inversion, context and binary skips.
     searcher: Searcher,
+    matches: Option<MatchFile>,
 }
 
 /// Compiles the pattern: nothing when the pattern needs the system grep, as
@@ -270,6 +296,7 @@ fn compile(options: &Options) -> Result<Search, ()> {
     Ok(Search {
         matcher,
         searcher: searcher.build(),
+        matches: None,
     })
 }
 
@@ -509,6 +536,8 @@ fn search_stream(
         options,
         matcher: &search.matcher,
         label: target.label,
+        path: target.label.unwrap_or(err_label),
+        matches: search.matches.as_mut(),
         out,
         matched: false,
         count: 0,
@@ -565,6 +594,8 @@ struct Emit<'a, 'w> {
     matcher: &'a grep_regex::RegexMatcher,
     /// The label lines print under, or nothing unlabelled.
     label: Option<&'a [u8]>,
+    path: &'a [u8],
+    matches: Option<&'a mut MatchFile>,
     /// Where lines go.
     out: &'a mut Out<'w>,
     /// Whether any line matched.
@@ -624,6 +655,7 @@ impl Sink for Emit<'_, '_> {
         let text = stripped(mat.bytes());
         let no = mat.line_number().unwrap_or_default();
         self.line(no, &text, b':');
+        self.record(no, &text, false);
         Ok(!self.out.broken())
     }
 
@@ -634,6 +666,7 @@ impl Sink for Emit<'_, '_> {
         let text = stripped(context.bytes());
         let no = context.line_number().unwrap_or_default();
         self.line(no, &text, b'-');
+        self.record(no, &text, true);
         Ok(!self.out.broken())
     }
 
@@ -649,6 +682,19 @@ impl Sink for Emit<'_, '_> {
 }
 
 impl Emit<'_, '_> {
+    fn record(&mut self, no: u64, text: &[u8], context: bool) {
+        if let Some(matches) = self.matches.as_mut() {
+            let mut spans = Vec::new();
+            if !context {
+                self.matcher.find_iter_at(text, 0, |span| {
+                    spans.push((span.start(), span.end()));
+                    true
+                }).unwrap_or(());
+            }
+            matches.record(self.path, no, text, &spans, context);
+        }
+    }
+
     /// Prints one match or context line: the label, the number and the
     /// text, joined by `sep` (`:` for a match, `-` for context).
     fn line(&mut self, no: u64, text: &[u8], sep: u8) {

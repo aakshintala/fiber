@@ -10,6 +10,7 @@ mod fallback;
 mod find;
 mod grep;
 mod grep_args;
+pub(crate) mod matches;
 mod notice;
 mod walk;
 
