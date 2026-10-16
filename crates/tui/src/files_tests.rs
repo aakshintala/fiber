@@ -810,16 +810,28 @@ fn a_path_search_superseded_before_it_ran_is_skipped() {
 fn dropping_the_worker_abandons_a_path_search() {
     let home = seeded(&["proj/alpha.txt"]);
     let (out, rx) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
+    let (entered, listing) = mpsc::channel();
     let search = Search::spawn(
-        || Ok(owned(&["a.rs"])),
+        move || {
+            entered.send(()).map_err(|err| err.to_string())?;
+            gate.recv().map_err(|err| err.to_string())?;
+            Ok(owned(&["a.rs"]))
+        },
         Roots::new(
             PathBuf::from("/w"),
             Some(home.path().as_os_str().to_owned()),
         ),
         out,
     );
-    search.search(1, "~/proj/al".to_owned());
+    search.search(1, "a".to_owned());
+    // Hold an in-flight listing, rather than race drop against a queued job.
+    Deadline::after(DEADLINE).recv_or_fail(&listing, "workspace listing started");
+    search.search(2, "~/proj/al".to_owned());
     drop(search);
+    release
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
     // The worker ends without posting: the drop tags every generation
     // abandoned, so the queued path search answers nothing.
     match Deadline::after(DEADLINE).recv(&rx) {
