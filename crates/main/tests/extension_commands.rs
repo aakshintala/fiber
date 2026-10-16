@@ -518,7 +518,9 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    let (url, accepted, _release) = hold_server(setup.deadline);
+    let held = ProviderServer::start([]).unwrap();
+    held.hold();
+    let url = format!("{}/", held.url());
     setup.lua(
         "worker",
         &format!(
@@ -542,15 +544,10 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
     });
     // The close goes only once `host.http` is held, so the command is
     // parked when the session closes.
-    match setup.deadline.recv(&accepted) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("waited until the deadline for host.http to reach the held server")
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the held server ended before host.http reached it")
-        }
-    }
+    assert!(
+        held.await_requests(1, setup.deadline.left()),
+        "waited until the deadline for host.http to reach the held server"
+    );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_close(&client);
     drop(client);
