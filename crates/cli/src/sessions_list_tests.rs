@@ -413,6 +413,20 @@ fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
 }
 
 #[test]
+fn a_tab_and_an_escape_in_a_name_print_as_spaces_in_text() {
+    let name = "fix\tthe\u{1b}[31mtest";
+    let result = json!({"live": [live("s_1", idle(name))], "exited": []});
+    let rows = json_rows(result.clone());
+    assert_eq!(rows[0]["name"], json!(name));
+    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
+    ran.unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    assert!(lines[1].contains("fix the [31mtest"), "{out}");
+}
+
+#[test]
 fn no_rows_prints_the_header_in_text_and_nothing_in_json() {
     let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(empty())]);
     ran.unwrap();

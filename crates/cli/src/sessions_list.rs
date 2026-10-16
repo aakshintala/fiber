@@ -12,6 +12,7 @@ use contract::shapes::Failure;
 use contract::shapes::Usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use support::text::one_line;
 
 use crate::sessions::request;
 use crate::table::pad;
@@ -187,11 +188,6 @@ fn rows(answer: Answer) -> Vec<Row> {
         spend: spend(row.status.as_ref()),
     });
     live.chain(exited).collect()
-}
-
-/// One text cell: each embedded line break is one space.
-fn one_line(cell: &str) -> String {
-    cell.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 /// The `state` word a live session's status names.

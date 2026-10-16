@@ -8,11 +8,12 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::session_search::{Found, Hit, LIMIT, Label, Query, Scan};
+use contract::session_search::{Found, Hit, LIMIT, Query, Scan};
 use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use support::text::one_line;
 
 use crate::tool_util::{effects, failed, text_output};
 
@@ -151,17 +152,13 @@ fn printed(query: &Query, found: &Found) -> String {
 /// One hit: what and where, the line to `read` from, the artifact when the
 /// hit is in one, and the snippet.
 fn block(out: &mut String, number: usize, hit: &Hit) {
-    let label = match hit.label {
-        Label::Message => "message",
-        Label::ToolInput => "tool_input",
-        Label::ToolOutput => "tool_output",
-    };
+    let label = hit.label.as_str();
     out.push_str(&format!(
         "{number}. {label}, session {} \"{}\", seq {}, {}\n",
         hit.session_id.0,
         name(&hit.name),
         hit.seq.0,
-        utc(hit.ts / 1_000)
+        contract::clock::utc_time(hit.ts / 1_000)
     ));
     // The log's line for an event is its `seq` + 1 (`docs/tools.md`,
     // "Searching past sessions").
@@ -186,27 +183,6 @@ fn name(name: &str) -> String {
     } else {
         line
     }
-}
-
-/// `text` with every control character as a space, so a hit stays on its
-/// lines.
-fn one_line(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
-/// `seconds` since the epoch as a UTC time to the second,
-/// `2026-10-07T10:00:03Z`.
-pub(crate) fn utc(seconds: u64) -> String {
-    let (year, month, day) = contract::clock::utc_date_of_secs(seconds);
-    let second = seconds % 86_400;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        second / 3_600,
-        second % 3_600 / 60,
-        second % 60
-    )
 }
 
 #[cfg(test)]

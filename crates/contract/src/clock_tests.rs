@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use super::{utc_date, utc_date_of_secs, wall_ms};
+use super::{utc_date, utc_date_of_secs, utc_time, wall_ms};
 
 #[test]
 fn the_epoch_is_zero() {
@@ -53,4 +53,20 @@ fn utc_date_pins_epoch_leap_days_and_century_years() {
 fn utc_date_before_the_epoch_is_the_epoch_date() {
     let wall = SystemTime::UNIX_EPOCH - Duration::from_secs(86_400 * 400);
     assert_eq!(utc_date(wall), (1970, 1, 1));
+}
+
+#[test]
+fn utc_time_prints_seconds_since_the_epoch() {
+    for (seconds, printed) in [
+        (0, "1970-01-01T00:00:00Z"),
+        (86_399, "1970-01-01T23:59:59Z"),
+        (86_400, "1970-01-02T00:00:00Z"),
+        (951_868_799, "2000-02-29T23:59:59Z"),
+        (946_684_799, "1999-12-31T23:59:59Z"),
+        (946_684_800, "2000-01-01T00:00:00Z"),
+        (1_791_367_203, "2026-10-07T10:00:03Z"),
+        (4_107_542_400, "2100-03-01T00:00:00Z"),
+    ] {
+        assert_eq!(utc_time(seconds), printed, "{seconds}");
+    }
 }
