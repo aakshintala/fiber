@@ -479,6 +479,17 @@ it starts and after each turn.
 
 ### Swapped views
 
+A remote terminal's configuration views show the hub's machine: its
+settings, rules, credentials, tool switches and skill switches and text.
+`keys` and every `tui.*` key belong to the client instead, including `/keys`,
+their `/settings` rows and the theme picker.
+
+For a hub-owned file, Ctrl+G fetches its text and opens a temporary copy in
+the client's editor. On return, the hub writes it only if its version still
+matches. Otherwise the view says the file changed and nothing is written.
+The view then rereads the hub's file, showing any configuration or rules
+error just as it does after a local edit.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
