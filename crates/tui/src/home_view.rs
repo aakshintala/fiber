@@ -168,25 +168,135 @@ fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16,
     );
 }
 
-/// The rows the frame shows the delete question in: the list rows from
-/// the box edge to the foot. Drawing clamps the stored offset to the
-/// wrapped rows past these, and scrolling clamps the stored offset to
-/// the same maximum, so Down past the end holds and one Up steps back
-/// one row.
-fn question_capacity(placed: &Placed) -> usize {
-    usize::from(placed.foot.saturating_sub(placed.edge.saturating_add(1)))
+/// The delete frame's body rows in an area `height` rows high: two
+/// edges, two pad rows, the title and its gap, and the footer and its
+/// gap, leaving the rest, at least one row.
+fn question_capacity(height: u16) -> usize {
+    usize::from(height.saturating_sub(8)).max(1)
 }
 
-/// The delete question's maximum scroll offset in `area`: its wrapped
-/// rows past the rows the frame shows them in.
-pub(crate) fn max_question_scroll(app: &App, screen: &HomeScreen, area: Rect) -> usize {
+/// The delete question's footer: one session, or every session the
+/// cascade question names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeleteFooter {
+    /// `Enter delete · Esc keep`.
+    Delete,
+    /// `Enter delete all · Esc keep`.
+    DeleteAll,
+}
+
+/// The delete question's head and its footer: the head is the question
+/// without its legend and that deleting is permanent, so a session
+/// named with the footer words keeps its name whole. The legend is the
+/// question's last one; a question without one deletes one session.
+fn split_question(question: &str) -> (&str, DeleteFooter) {
+    // The question ends in its legend, so stripping the suffix keeps a
+    // name holding the legend words whole.
+    const ALL: &str = " · Enter delete all · Esc keep";
+    const ONE: &str = " · Enter delete · Esc keep";
+    const UNDO: &str = " It cannot be undone";
+    if let Some(head) = question.strip_suffix(ALL) {
+        (
+            head.strip_suffix(UNDO).unwrap_or(head),
+            DeleteFooter::DeleteAll,
+        )
+    } else if let Some(head) = question.strip_suffix(ONE) {
+        (
+            head.strip_suffix(UNDO).unwrap_or(head),
+            DeleteFooter::Delete,
+        )
+    } else {
+        (question, DeleteFooter::Delete)
+    }
+}
+
+/// The delete frame's body rows for `question` in `area`: the head
+/// wrapped at the frame's inner width, a blank row, and that deleting
+/// is permanent. Drawing and scrolling share them, so the key path
+/// clamps to what the view draws.
+fn question_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
+    // The frame wraps at its inner width first, so it shrinks to what
+    // the head needs: 67 content columns at the 71-column preference.
+    let inner = usize::from(area.width.saturating_sub(4)).clamp(1, 67);
+    let (head, _) = split_question(question);
+    let mut rows: Vec<super::overlay::Row> = wrap(head, inner)
+        .into_iter()
+        .map(|line| super::overlay::Row {
+            spans: vec![Span::styled(line, Style::default())],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(super::overlay::Row {
+            spans: Vec::new(),
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        });
+    }
+    rows.push(super::overlay::Row {
+        spans: Vec::new(),
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    });
+    rows.push(super::overlay::Row {
+        spans: vec![Span::styled(
+            "It cannot be undone.".to_owned(),
+            Style::default(),
+        )],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    });
+    rows
+}
+
+/// The delete question's maximum scroll offset in `area`: its body rows
+/// past the rows the frame shows them in.
+pub(crate) fn max_question_scroll(_app: &App, screen: &HomeScreen, area: Rect) -> usize {
     let Some(question) = screen.question.as_ref() else {
         return 0;
     };
-    let placed = layout(app, screen, area);
-    wrap(question, usize::from(placed.width))
+    question_rows(question, area)
         .len()
-        .saturating_sub(question_capacity(&placed))
+        .saturating_sub(question_capacity(area.height))
+}
+
+/// Draws the delete question over `area`: the frame centred with its
+/// title, the window of body rows at `scroll`, and its footer, so the
+/// title row and the footer stay visible while the body scrolls.
+fn draw_delete_question(
+    question: &str,
+    scroll: usize,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    let rows = question_rows(question, area);
+    let capacity = question_capacity(area.height);
+    let max = rows.len().saturating_sub(capacity);
+    let (_, footer) = split_question(question);
+    let legend = match footer {
+        DeleteFooter::Delete => super::overlay::legend(&[("Enter", "delete"), ("Esc", "keep")]),
+        DeleteFooter::DeleteAll => {
+            super::overlay::legend(&[("Enter", "delete all"), ("Esc", "keep")])
+        }
+    };
+    let framed = super::overlay::Overlay {
+        title: Some(("Delete session".to_owned(), Some(Span::raw("✕")))),
+        close: None,
+        body: rows
+            .into_iter()
+            .skip(scroll.min(max))
+            .take(capacity)
+            .collect(),
+        footer: Some(legend),
+        prefer: 71,
+    };
+    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
 }
 
 /// Draws home's `screen` into `area` of `buf`: the one-row logo, the box
@@ -355,35 +465,8 @@ pub(super) fn render(
     // row moves, so the snapshots stay byte-identical.
     let banner = usize::from(app.banner().is_some());
     let list_top = placed.edge.saturating_add(1);
-    let capacity = question_capacity(&placed);
     let mut row_y = list_top;
-    // The delete question wraps over as many rows as needed, naming
-    // the session and everything `--cascade` adds, taking priority
-    // space over the list; Up and Down scroll it past the screen.
-    let mut asked = 0;
-    if let Some(question) = &screen.question {
-        let wrapped = wrap(question, usize::from(placed.width));
-        let max = wrapped.len().saturating_sub(capacity);
-        let scroll = screen.question_scroll.min(max);
-        asked = wrapped
-            .len()
-            .saturating_sub(scroll)
-            .min(capacity.saturating_sub(banner));
-        for (at, row) in wrapped.iter().skip(scroll).take(asked).enumerate() {
-            put(
-                buf,
-                area,
-                placed.x,
-                row_y.saturating_add(super::to_u16(at)),
-                row,
-                placed.width,
-                Style::default(),
-            );
-        }
-        row_y = row_y.saturating_add(super::to_u16(asked));
-    }
     if let Some(toggle) = &screen.toggle
-        && screen.question.is_none()
         && row_y < placed.foot
     {
         put(
@@ -401,12 +484,9 @@ pub(super) fn render(
         });
         row_y = row_y.saturating_add(1);
     }
-    let rows_capacity = capacity
-        .saturating_sub(asked)
+    let rows_capacity = usize::from(placed.foot.saturating_sub(list_top))
         .saturating_sub(banner)
-        .saturating_sub(usize::from(
-            screen.toggle.is_some() && screen.question.is_none(),
-        ));
+        .saturating_sub(usize::from(screen.toggle.is_some()));
     let start = match app.focused() {
         Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => screen
             .rows
@@ -560,6 +640,9 @@ pub(super) fn render(
             )
         };
         completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
+    }
+    if let Some(question) = &screen.question {
+        draw_delete_question(question, screen.question_scroll, area, buf, &mut targets);
     }
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);
