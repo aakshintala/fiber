@@ -296,6 +296,9 @@ impl Config {
         {
             *name = full_name(name);
         }
+        if let Some(fast) = self.fast_get(&key, model) {
+            return fast;
+        }
         let from = self
             .layers
             .iter()
@@ -311,6 +314,69 @@ impl Config {
                 Some((default, Source::Default))
             }
         }
+    }
+
+    /// The value and source of `key` without merging every layer: the
+    /// highest layer holding `key` wins whole, as `merged` shows it,
+    /// when `key` merges holder-wins. `None` takes the old route through
+    /// `merged`: a union or entry-replaced row at `key`, above it or
+    /// below its fill, an object value, a key a higher layer hides, or
+    /// a layer whose per-model view is not an object.
+    fn fast_get(&self, key: &[String], model: Option<&str>) -> Option<Option<(Value, Source)>> {
+        // Only a plain replace row merges holder-wins: a union row
+        // holds every layer's names, and an entry-replaced row goes
+        // whole to one layer, neither what the highest layer holds.
+        if keys::leaf(key).is_some_and(|row| row.merge != keys::Merge::Replace) {
+            return None;
+        }
+        for len in 0..key.len() {
+            if keys::leaf(&key[..len]).is_some_and(|row| row.merge != keys::Merge::Replace) {
+                return None;
+            }
+        }
+        // Below a union row's fill the merge re-creates the object, so
+        // a proper prefix of one reads what no single layer holds.
+        if keys::union_rows().any(|row| row.len() > key.len() && row.starts_with(key)) {
+            return None;
+        }
+        // A layer whose per-model view is not an object wipes the merge
+        // in a way no holder-wins read repeats: the old route.
+        let views: Vec<Cow<'_, Value>> = self
+            .layers
+            .iter()
+            .map(|(_, layer)| view(layer, model))
+            .collect();
+        if views.iter().any(|seen| !seen.is_object()) {
+            return None;
+        }
+        // Top-down: the first layer holding the key is the highest,
+        // unless a higher layer holds a scalar over its path, hiding it
+        // as the merge does.
+        let mut hiding = false;
+        for ((source, _), seen) in self.layers.iter().zip(&views).rev() {
+            if let Some(value) = path::get(seen, key) {
+                if hiding {
+                    return Some(None);
+                }
+                if value.is_object() {
+                    // Objects merge key by key across layers.
+                    return None;
+                }
+                return Some(Some((value.clone(), source.clone())));
+            }
+            if (1..key.len()).any(|len| {
+                path::get(seen, &key[..len]).is_some_and(|at| !at.is_object())
+            }) {
+                hiding = true;
+            }
+        }
+        // No layer holds the key: the schema default, as the old route.
+        Some(match keys::leaf(key).and_then(|row| row.default) {
+            Some(text) => serde_json::from_str(text)
+                .ok()
+                .map(|default| (default, Source::Default)),
+            None => None,
+        })
     }
 
     /// The effective value of `key` as a whole number of zero or more:
