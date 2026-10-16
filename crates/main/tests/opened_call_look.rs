@@ -182,7 +182,6 @@ fn open_call(run: &mut Run, gutter: u16, kind: &str, target: &str, marker: &str)
     })
 }
 
-
 /// The first row below `after` containing `needle`.
 fn find_row_below(rows: &[String], after: u16, needle: &str) -> Option<u16> {
     rows.iter()
