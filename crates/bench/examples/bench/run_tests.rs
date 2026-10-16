@@ -163,6 +163,32 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
     watchdog.stand_down(READY);
 }
 
+/// Waits for the child's two ready lines under one shared deadline.
+#[track_caller]
+fn wait_for_both_lines(ready: &std::sync::Mutex<Option<Ready>>) {
+    let ready = ready
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(ready) = ready {
+        // One deadline for both lines: a scoped thread reads them.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let deadline = Deadline::after(READY);
+        std::thread::scope(|scope| {
+            let deadline = &deadline;
+            scope.spawn(move || {
+                ready.wait(deadline.left());
+                ready.wait(deadline.left());
+                match tx.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        });
+        // Outside the scope closure, which `#[track_caller]` does not cross.
+        assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
+    }
+}
+
 /// A clock whose first sleep, the poll for the deadline, waits for the
 /// child's two ready lines: the deadline cannot fire before the child has
 /// set up.
@@ -180,28 +206,7 @@ impl Clock for AfterReady {
     }
     #[track_caller]
     fn sleep(&self, d: Duration) {
-        let ready = self
-            .ready
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(ready) = ready {
-            // One deadline for both lines: a scoped thread reads them.
-            let (tx, rx) = std::sync::mpsc::channel();
-            let deadline = Deadline::after(READY);
-            std::thread::scope(|scope| {
-                let deadline = &deadline;
-                scope.spawn(move || {
-                    ready.wait(deadline.left());
-                    ready.wait(deadline.left());
-                    match tx.send(()) {
-                        Ok(()) | Err(_) => {}
-                    }
-                });
-            });
-            // Outside the scope closure, which `#[track_caller]` does not cross.
-            assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
-        }
+        wait_for_both_lines(&self.ready);
         self.inner.sleep(d);
     }
     fn wait_until(
@@ -298,28 +303,7 @@ impl Clock for AfterEscape {
     #[track_caller]
     fn now(&self) -> std::time::Instant {
         if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
-            let ready = self
-                .ready
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(ready) = ready {
-                // One deadline for both lines: a scoped thread reads them.
-                let (tx, rx) = std::sync::mpsc::channel();
-                let deadline = Deadline::after(READY);
-                std::thread::scope(|scope| {
-                    let deadline = &deadline;
-                    scope.spawn(move || {
-                        ready.wait(deadline.left());
-                        ready.wait(deadline.left());
-                        match tx.send(()) {
-                            Ok(()) | Err(_) => {}
-                        }
-                    });
-                });
-                // Outside the scope closure, which `#[track_caller]` does not cross.
-                assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
-            }
+            wait_for_both_lines(&self.ready);
         }
         self.inner.now()
     }
