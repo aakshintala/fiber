@@ -689,3 +689,20 @@ fn no_color_cursor_column_counts_one_side() {
     let narrow = typed(2, 12, "hi");
     assert_eq!(super::cursor_row(&narrow, 2, 11), (2, 2));
 }
+
+#[test]
+fn an_open_search_panel_reserves_no_rows() {
+    let mut open = typed(80, 12, "hi");
+    let now = fakes::clock::FakeClock::new().now();
+    open.on_key(Key::CtrlR, now);
+    assert!(open.completions().is_some());
+    let closed = typed(80, 12, "hi");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let top = draw(&open, area, &mut bottom, &mut buf, &mut Vec::new());
+    let mut plain = Buffer::empty(area);
+    let mut bottomed = area.bottom();
+    let topped = draw(&closed, area, &mut bottomed, &mut plain, &mut Vec::new());
+    assert_eq!((top, bottom), (topped, bottomed));
+}

@@ -10,6 +10,7 @@ use super::notice_row;
 use crate::app::App;
 use crate::format;
 use crate::mouse::TargetId;
+use contract::clock::Clock;
 
 /// An app with one notice under `code`.
 fn app_with_notice(code: &str, message: &str) -> App {
@@ -113,4 +114,437 @@ fn a_row_with_no_room_for_its_code_keeps_only_the_cross() {
     assert_eq!(text(1), "✕");
     assert_eq!(text(2), " ✕");
     assert_eq!(text(3), "… ✕");
+}
+
+// The notice overlay on the shared frame (`docs/tui.md`, "Overlays").
+
+/// The prototype `notice` case's whole text, for the single form.
+const SINGLE_TEXT: &str = "Two actions share the key Ctrl+F: `search` and `search_results` act in a context they share, so both entries reverted to their defaults. Rebind one of them with /keys. An entry equal to the defaults counts as unset.";
+
+/// The four prototype `notices`, oldest first, so the overlay lists
+/// them newest first.
+fn four() -> [(&'static str, &'static str); 4] {
+    [
+        ("key_clash", SINGLE_TEXT),
+        (
+            "stream_closed",
+            "this session's log can't be read past here; reopen the session to try again",
+        ),
+        (
+            "config_invalid",
+            "a configuration file is invalid: one extension key is set under both its full and short name",
+        ),
+        (
+            "extension_failed",
+            "an extension failed to start or missed its deadline, so loading skipped it",
+        ),
+    ]
+}
+
+/// An app at `width` by `height` with `notices` pushed oldest first and
+/// the overlay open: the single form, or every notice for `all`.
+fn overlay_app(width: u16, height: u16, notices: &[(&str, &str)], all: bool) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(width, height);
+    for (code, text) in notices {
+        app.push_notice(code, (*text).to_owned());
+    }
+    if all {
+        app.open_more_notices();
+    } else {
+        app.open_notice(0);
+    }
+    app
+}
+
+/// Renders `app` at `width` by `height`: the text and the buffer.
+fn overlay_screen(app: &App, width: u16, height: u16) -> (String, Buffer) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    (crate::view::text(&buf), buf)
+}
+
+/// Draws only the overlay on an empty buffer: the slab rows and targets.
+fn overlay_only(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::overlay(app, area, &mut buf, &mut targets);
+    (buf, targets)
+}
+
+/// Every row of `buf` as text, trailing spaces kept.
+fn buf_rows(buf: &Buffer, width: u16, height: u16) -> Vec<String> {
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn notice_overlay() {
+    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    insta::assert_snapshot!("notice_overlay", shown);
+}
+
+#[test]
+fn notice_overlay_list() {
+    let owned = four();
+    let app = overlay_app(100, 30, &owned, true);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    insta::assert_snapshot!("notice_overlay_list", shown);
+}
+
+#[test]
+fn the_single_overlay_titles_and_foots_itself() {
+    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    assert!(shown.contains("Notice · key_clash"), "{shown}");
+    assert!(shown.contains("Esc closes"), "{shown}");
+    // The whole text reads, wrapped whole-word.
+    for word in SINGLE_TEXT.split(' ') {
+        assert!(shown.contains(word), "missing {word}");
+    }
+}
+
+#[test]
+fn the_list_overlay_titles_itself_notices() {
+    let owned = four();
+    let app = overlay_app(100, 30, &owned, true);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    assert!(shown.contains("Notices"), "{shown}");
+    assert!(shown.contains("Esc closes"), "{shown}");
+}
+
+#[test]
+fn text_rows_keep_the_two_blank_edge_columns() {
+    let owned = four();
+    for all in [false, true] {
+        let notices: &[(&str, &str)] = if all { &owned } else { &[owned[0]] };
+        let app = overlay_app(100, 30, notices, all);
+        let (buf, _) = overlay_only(&app, 100, 30);
+        for y in 0..30 {
+            let row: String = (0..100).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+            if row.trim().is_empty() {
+                continue;
+            }
+            if row.trim().chars().all(|ch| ch == '▄' || ch == '▀') {
+                continue;
+            }
+            assert!(row.starts_with("  "), "{row:?}");
+            assert!(row.ends_with("  "), "{row:?}");
+        }
+    }
+}
+
+#[test]
+fn list_paragraphs_start_dim_and_read_plain_after() {
+    use ratatui::style::Modifier;
+    let owned = four();
+    let app = overlay_app(100, 30, &owned, true);
+    let (buf, _) = overlay_only(&app, 100, 30);
+    let rows = buf_rows(&buf, 100, 30);
+    // Newest first: each paragraph starts below the last.
+    let mut at = 0;
+    for (code, _) in owned.iter().rev() {
+        let (y, line) = rows
+            .iter()
+            .enumerate()
+            .find(|(i, row)| *i >= at && row.contains(code))
+            .unwrap_or_else(|| panic!("{code} not drawn"));
+        // ASCII throughout, so byte indices are cell columns.
+        let col = line.find(code).unwrap();
+        let row = u16::try_from(y).expect("a row");
+        for (k, ch) in code.chars().enumerate() {
+            let cell = &buf[(u16::try_from(col + k).expect("a column"), row)];
+            assert_eq!(cell.symbol(), &ch.to_string(), "{code} moved");
+            assert!(cell.modifier.contains(Modifier::DIM), "{code} not dim");
+        }
+        let after = u16::try_from(col + code.len() + " · ".chars().count()).expect("a column");
+        assert!(
+            !buf[(after, row)].modifier.contains(Modifier::DIM),
+            "{code} text dim"
+        );
+        at = y + 1;
+    }
+}
+
+#[test]
+fn list_paragraphs_keep_one_blank_row_between() {
+    let owned = four();
+    let app = overlay_app(100, 30, &owned, true);
+    let (buf, _) = overlay_only(&app, 100, 30);
+    let rows = buf_rows(&buf, 100, 30);
+    let blank = |y: usize| rows[y].trim().is_empty();
+    let mut starts = Vec::new();
+    for (code, _) in owned.iter().rev() {
+        let (y, _) = rows
+            .iter()
+            .enumerate()
+            .find(|(i, row)| !starts.contains(i) && row.contains(code))
+            .unwrap_or_else(|| panic!("{code} not drawn"));
+        starts.push(y);
+    }
+    assert_eq!(starts.len(), 4);
+    for pair in starts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        assert!(!(a + 1..b - 1).any(&blank), "gap inside a paragraph");
+        assert!(blank(b - 1), "no blank row between paragraphs");
+    }
+    // The last paragraph runs into the frame's own blank row only.
+    let last = *starts.last().unwrap();
+    let foot = (last + 1..30).find(|y| blank(*y)).expect("no foot gap");
+    assert!(
+        !(last + 1..foot).any(blank),
+        "gap inside the last paragraph"
+    );
+    assert!(
+        rows[foot + 1].contains("Esc closes"),
+        "{:?}",
+        rows[foot + 1]
+    );
+}
+
+#[test]
+fn short_texts_shrink_and_narrow_areas_keep_the_floor() {
+    // Content narrower than the floor centres a 40-column slab.
+    for width in [41u16, 40] {
+        let app = overlay_app(width, 24, &[("x", "Saved.")], false);
+        let (buf, _) = overlay_only(&app, width, 24);
+        let edge = buf_rows(&buf, width, 24)
+            .into_iter()
+            .find(|row| row.contains('▄'))
+            .expect("no top edge");
+        assert_eq!(edge.chars().filter(|ch| *ch == '▄').count(), 40);
+    }
+    // Below 40 columns the overlay is the area wide.
+    let app = overlay_app(39, 24, &[("x", "Saved.")], false);
+    let (buf, _) = overlay_only(&app, 39, 24);
+    let edge = buf_rows(&buf, 39, 24)
+        .into_iter()
+        .find(|row| row.contains('▄'))
+        .expect("no top edge");
+    assert_eq!(edge.chars().filter(|ch| *ch == '▄').count(), 39);
+}
+
+#[test]
+fn every_listed_notice_shows_past_the_row_cap() {
+    for count in [2usize, 3, 4] {
+        let owned = four();
+        let app = overlay_app(100, 30, &owned[..count], true);
+        let (shown, _) = overlay_screen(&app, 100, 30);
+        for (code, _) in &owned[..count] {
+            assert!(shown.contains(code), "{count} notices: {code} missing");
+        }
+    }
+}
+
+#[test]
+fn short_areas_keep_the_title_and_footer_until_the_chrome_gives() {
+    // The chrome takes 8 rows, so one body row shows at 9.
+    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let first = format::wrap(SINGLE_TEXT, 67).remove(0);
+    let second = format::wrap(SINGLE_TEXT, 67).remove(1);
+    let (buf, _) = overlay_only(&app, 100, 9);
+    let shown = buf_rows(&buf, 100, 9).join("\n");
+    assert!(shown.contains("Notice · key_clash"), "{shown}");
+    assert!(shown.contains("Esc closes"), "{shown}");
+    assert!(shown.contains(&first), "{shown}");
+    assert!(!shown.contains(&second), "{shown}");
+    // At 8 rows the body gives way and the title and footer stay.
+    let (buf, _) = overlay_only(&app, 100, 8);
+    let shown = buf_rows(&buf, 100, 8).join("\n");
+    assert!(shown.contains("Notice · key_clash"), "{shown}");
+    assert!(shown.contains("Esc closes"), "{shown}");
+    assert!(!shown.contains("Two actions"), "{shown}");
+    // At 7 rows the footer gives way before the title.
+    let (buf, _) = overlay_only(&app, 100, 7);
+    let shown = buf_rows(&buf, 100, 7).join("\n");
+    assert!(shown.contains("Notice · key_clash"), "{shown}");
+    assert!(!shown.contains("Esc closes"), "{shown}");
+}
+
+#[test]
+fn no_overlay_target_over_a_zero_row_area() {
+    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let (_, targets) = overlay_only(&app, 100, 0);
+    assert!(targets.is_empty(), "{targets:?}");
+}
+
+#[test]
+fn the_cross_closes_and_esc_closes() {
+    use crate::app::Effect;
+    use crate::keys::Key;
+    let mut app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the overlay draws its cross");
+    let row: String = (0..100)
+        .map(|x| buf[(x, cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.contains("Notice · key_clash"), "{row}");
+    assert_eq!(cross.rect.width, 1);
+    assert_eq!(
+        buf.cell((cross.rect.x, cross.rect.y))
+            .map(|cell| cell.symbol()),
+        Some("✕")
+    );
+    assert_eq!(app.on_click(TargetId::CloseOverlay), Effect::None);
+    assert_eq!(app.notice_overlay(), None);
+    // Esc closes it too, with the same click target drawn first.
+    let mut app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.notice_overlay(), None);
+}
+
+#[test]
+fn the_overlay_hides_the_conversation_targets() {
+    use crate::keys::Key;
+    use crate::results_support::{attached, now, reply};
+    let mut app = attached(100, 30);
+    reply(&mut app, "a_m", "needle one");
+    assert_eq!(app.on_key(Key::CtrlF, now()), crate::app::Effect::None);
+    for (n, ch) in "needle".chars().enumerate() {
+        assert!(matches!(
+            app.on_key(Key::Char(ch), now()),
+            crate::app::Effect::FindPause { generation, .. } if generation == n as u64 + 1
+        ));
+    }
+    assert!(app.find_due(6).is_empty());
+    assert_eq!(app.on_key(Key::CtrlF, now()), crate::app::Effect::None);
+    assert!(app.results_open(), "a second Ctrl+F opens the results");
+    let area = Rect::new(0, 0, 100, 30);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, TargetId::FindResult(_))),
+        "needs a FindResult target: {targets:?}"
+    );
+    app.push_notice("key_clash", SINGLE_TEXT.to_owned());
+    app.open_notice(0);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .all(|target| !matches!(target.id, TargetId::FindResult(_))),
+        "a FindResult target under the overlay: {targets:?}"
+    );
+}
+
+#[test]
+fn the_single_overlay_draws_its_thin_box_without_colour() {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    assert!(shown.contains('┌'), "{shown}");
+    assert!(shown.contains('└'), "{shown}");
+    assert!(shown.contains('│'), "{shown}");
+    assert!(shown.contains("Notice · key_clash"), "{shown}");
+}
+
+#[test]
+fn wrap_runs_breaks_at_the_edge_and_keeps_styles() {
+    use ratatui::style::{Modifier, Style};
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let plain = Style::new();
+    // "ab · cd" is 7 columns: at room 7 it stays one row ...
+    let rows = super::wrap_runs(&[("ab · ".to_owned(), dim), ("cd".to_owned(), plain)], 7);
+    assert_eq!(rows.len(), 1);
+    // ... and at room 6 the text drops to the next row.
+    let rows = super::wrap_runs(&[("ab · ".to_owned(), dim), ("cd".to_owned(), plain)], 6);
+    assert_eq!(rows.len(), 2);
+    // The dim prefix stays dim and the text stays plain across rows.
+    assert!(rows[0].iter().all(|span| span.style == dim));
+    assert_eq!(rows[1].len(), 1);
+    assert_eq!(rows[1][0].content, "cd");
+    assert_eq!(rows[1][0].style, plain);
+}
+
+#[test]
+fn wrap_runs_breaks_a_word_wider_than_the_row() {
+    use ratatui::style::Style;
+    let rows = super::wrap_runs(&[("abcdefgh".to_owned(), Style::new())], 5);
+    assert_eq!(rows.len(), 2);
+    let joined: String = rows
+        .iter()
+        .flat_map(|row| row.iter().map(|span| span.content.as_ref()))
+        .collect();
+    assert_eq!(joined, "abcdefgh");
+}
+
+#[test]
+fn wrap_runs_starts_a_row_at_a_newline() {
+    use ratatui::style::Style;
+    let rows = super::wrap_runs(&[("a\nb".to_owned(), Style::new())], 10);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][0].content, "a");
+    assert_eq!(rows[1][0].content, "b");
+}
+
+#[test]
+fn wrap_runs_joins_split_runs_with_no_space() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // A marked hit split across runs stays one word: runs join with
+    // nothing, and a space reads only where the source holds one.
+    let rows = super::wrap_runs(
+        &[
+            ("how do I ".to_owned(), plain),
+            ("back".to_owned(), plain),
+            ("fill it".to_owned(), plain),
+        ],
+        67,
+    );
+    assert_eq!(rows.len(), 1);
+    let text: String = rows[0].iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "how do I backfill it");
+}
+
+/// Each row of `rows` as its text.
+fn row_texts(rows: &[Vec<ratatui::text::Span<'static>>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.iter().map(|span| span.content.as_ref()).collect())
+        .collect()
+}
+
+#[test]
+fn wrap_runs_fills_a_row_with_a_word_exactly_as_wide() {
+    use ratatui::style::Style;
+    // After the newline "abcd" is exactly the room, so it fills its row
+    // and "ef" must wrap: a row short by one column would take "ef".
+    let rows = super::wrap_runs(&[("x\n abcd ef".to_owned(), Style::new())], 4);
+    assert_eq!(row_texts(&rows), ["x", "abcd", "ef"]);
+}
+
+#[test]
+fn wrap_runs_drops_a_paragraph_space_left_by_an_empty_run() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // The first run is one space: the paragraph has not started, so the
+    // next run's first word takes no space before it.
+    let rows = super::wrap_runs(&[(" ".to_owned(), plain), ("abc".to_owned(), plain)], 10);
+    assert_eq!(row_texts(&rows), ["abc"]);
+}
+
+#[test]
+fn wrap_runs_drops_a_space_before_a_word_after_a_newline() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // The run before ends with a space, but the newline starts a row, so
+    // the word after it takes no space.
+    let rows = super::wrap_runs(&[("x ".to_owned(), plain), ("\nabc".to_owned(), plain)], 10);
+    assert_eq!(row_texts(&rows), ["x", "abc"]);
 }

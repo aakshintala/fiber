@@ -1525,3 +1525,91 @@ fn a_turn_copy_with_nothing_missing_pins_nothing() {
     assert_eq!(app.pages().pinned(), prior);
     assert!(app.pending_turn.is_none());
 }
+
+/// An app with the search panel open on `query`, the draft kept.
+fn searching(query: &str) -> App {
+    let mut app = attached(80, 24);
+    key(&mut app, Key::Char('d'));
+    key(&mut app, Key::Char('r'));
+    key(&mut app, Key::CtrlR);
+    assert!(app.completions().is_some());
+    for ch in query.chars() {
+        key(&mut app, Key::Char(ch));
+    }
+    app
+}
+
+/// The drawn CloseOverlay target, read from the frame.
+fn cross(app: &mut App) -> Hit {
+    frame(app)
+        .into_iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the panel draws its cross")
+}
+
+#[test]
+fn the_overlay_cross_closes_the_search_panel() {
+    let mut app = searching("fi");
+    let before = app.input().expand();
+    let id = cross(&mut app).id;
+    assert_eq!(app.on_click(id), Effect::None);
+    assert!(app.completions().is_none());
+    assert_eq!(app.input().expand(), before);
+    // The next draw holds no panel.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let shown = crate::view::text({
+        crate::view::render(&app, area, &mut buf, None);
+        &buf
+    });
+    assert!(!shown.contains("Prompt history"), "{shown}");
+}
+
+#[test]
+fn the_overlay_cross_closes_the_key_map_before_the_search_panel() {
+    let mut app = searching("fi");
+    key(&mut app, Key::F1);
+    assert!(app.keymap_top().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert!(app.keymap_top().is_none());
+    assert!(app.completions().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert!(app.completions().is_none());
+}
+
+#[test]
+fn the_overlay_cross_closes_the_search_panel_before_the_notice_overlay() {
+    let mut app = searching("fi");
+    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.open_notice(0);
+    assert!(app.notice_overlay().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert!(app.completions().is_none());
+    assert!(app.notice_overlay().is_some());
+    app.on_click(TargetId::CloseOverlay);
+    assert_eq!(app.notice_overlay(), None);
+}
+
+#[test]
+fn the_overlay_cross_with_nothing_open_changes_nothing() {
+    let mut app = attached(80, 24);
+    assert_eq!(app.on_click(TargetId::CloseOverlay), Effect::None);
+    assert!(app.completions().is_none());
+    assert_eq!(app.notice_overlay(), None);
+}
+
+#[test]
+fn the_overlay_cross_closes_the_search_panel_on_home() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    key(&mut app, Key::CtrlR);
+    assert!(app.completions().is_some());
+    let id = cross(&mut app).id;
+    assert_eq!(app.on_click(id), Effect::None);
+    assert!(app.completions().is_none());
+}

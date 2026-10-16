@@ -292,11 +292,11 @@ fn body(completions: &Completions, room: usize, fit: usize) -> Vec<Row> {
     }
 }
 
-/// Draws the `/` and `@` panels over `area`, above the input box's top
-/// edge `bottom`: the entries in the shared frame, centred across the
-/// box's width, with the screen behind reading around the side margins.
-/// Nothing for the Ctrl+R kind, which the input box draws in its
-/// reserved rows. Returns the slab rect.
+/// Draws the `/`, `@` and Ctrl+R panels over `area`, above the input
+/// box's top edge `bottom`: the entries in the shared frame, centred
+/// across the box's width, with the screen behind reading around the
+/// side margins. The Ctrl+R kind draws centred over the area instead.
+/// Returns the slab rect.
 pub(super) fn draw(
     completions: &Completions,
     area: Rect,
@@ -305,7 +305,7 @@ pub(super) fn draw(
     targets: &mut Vec<Target>,
 ) -> Rect {
     if matches!(completions.rows, Rows::Search(_)) {
-        return Rect::new(area.x, area.y, 0, 0);
+        return super::history::draw(completions, area, buf, targets);
     }
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need. The

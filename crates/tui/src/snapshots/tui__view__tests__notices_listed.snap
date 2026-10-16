@@ -1,11 +1,12 @@
 ---
 source: crates/tui/src/view_tests.rs
+assertion_line: 1345
 expression: screen(&app)
 ---
-Notice 3.                                                  ✕
-Notice 2.
-Notice 1.
-Could not reach the hub: the socket refused the connection
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  Notices                                               ✕
+
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
   ⚠ connection_failed · Could not reach the hub: the sock… ✕
   ⚠ extension_failed · Notice 1.                           ✕

@@ -119,7 +119,10 @@ cargo run --release -- fixtures/session.jsonl --static --overlay keymap-narrow
 cargo run --release -- fixtures/session.jsonl --static --overlay quit
 cargo run --release -- fixtures/session.jsonl --static --overlay delete
 cargo run --release -- fixtures/session.jsonl --static --overlay history
+cargo run --release -- fixtures/session.jsonl --static --overlay history-one
+cargo run --release -- fixtures/session.jsonl --static --overlay history-none
 cargo run --release -- fixtures/session.jsonl --static --overlay notice
+cargo run --release -- fixtures/session.jsonl --static --overlay notices
 cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
 ```
 
@@ -135,7 +138,13 @@ cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
   naming what `--cascade` would add.
 - `history`: the Ctrl+R panel with the typed query `back`, every hit marked
   and the first match selected.
+- `history-one`: the same panel with one matching prompt, `1 match · newest
+  first`, that match selected.
+- `history-none`: the same panel with a typed query matching nothing, the
+  dim `no matching prompts` in place of the count row, nothing selected.
 - `notice`: the whole `key_clash` notice text, wrapped to the overlay.
+- `notices`: every notice listed in full, newest first, each a `code · text`
+  paragraph with the code dim.
 - `close-mouse`: a small keymap sample with its ✕ hovered and a dim outline
   marking the click-outside target.
 

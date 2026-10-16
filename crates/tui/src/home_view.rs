@@ -507,22 +507,6 @@ pub(super) fn render(
             }
         }
     }
-    // The completion panel above the box, in the shared frame centred
-    // across the box's width (`docs/tui.md`, "Look", "Overlays").
-    if let Some(panel) = app.completions()
-        && matches!(
-            panel.rows,
-            Rows::Slash(_) | Rows::Files(_) | Rows::Message(_)
-        )
-    {
-        let rect = Rect::new(
-            placed.x,
-            area.y,
-            placed.width,
-            placed.box_top.saturating_sub(area.y),
-        );
-        completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
-    }
     token_targets(app, area, &placed, &mut targets);
     let mut bottom = placed.foot;
     crate::view::banner::draw(app, area, buf, &mut bottom);
@@ -559,6 +543,24 @@ pub(super) fn render(
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
     super::notice_rows::draw(app, rows, buf, &mut bottom, &mut targets);
+    // The completion panels draw after the rows under them, so their
+    // cells win, and before the quit question, which takes every key.
+    // The Ctrl+R panel centres over home's whole area, as the quit
+    // question does; the `/` and `@` panels keep the box strip
+    // (`docs/tui.md`, "Look", "Overlays").
+    if let Some(panel) = app.completions() {
+        let rect = if matches!(panel.rows, Rows::Search(_)) {
+            area
+        } else {
+            Rect::new(
+                placed.x,
+                area.y,
+                placed.width,
+                placed.box_top.saturating_sub(area.y),
+            )
+        };
+        completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
+    }
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);
     }

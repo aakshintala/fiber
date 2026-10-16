@@ -3,11 +3,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 
-use super::{put, to_u16};
+use super::to_u16;
 use crate::app::App;
-use crate::completion_rows::Rows;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
@@ -18,9 +17,10 @@ use crate::surface;
 const EDITING_HINT: &str = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
 
 /// Draws the input box on the rows above `bottom`: its rows on the surface
-/// tint with edges where they fit, token targets over them, and the Ctrl+R
-/// panel above its top edge (`docs/tui.md`, "Look"). The `/` and `@`
-/// panels draw over the conversation instead, so they reserve nothing.
+/// tint with edges where they fit, token targets over them. The Ctrl+R
+/// panel draws centred over the conversation instead of in reserved rows,
+/// and the `/` and `@` panels draw over the conversation after it, so the
+/// box draws on the same rows with any panel open or closed.
 /// Moves `bottom` above it all and returns the box's top-edge row, so the
 /// `/` and `@` overlay sits above it.
 pub(super) fn draw(
@@ -98,21 +98,6 @@ pub(super) fn draw(
         buf.set_stringn(x, y, "█", 1, style(Role::Muted));
     }
     token_targets(app, area, below, (top, rows.len()), targets);
-    // Only the Ctrl+R panel draws here, in its reserved rows; the `/`
-    // and `@` panels draw over the conversation after it.
-    if let Some(completions) = app.completions()
-        && matches!(completions.rows, Rows::Search(_))
-    {
-        let lines = completions.lines();
-        for (at, line) in lines.iter().enumerate().rev() {
-            let style = if completions.selected == Some(at) {
-                Style::new().add_modifier(Modifier::REVERSED)
-            } else {
-                Style::default()
-            };
-            put(buf, area, bottom, line, style);
-        }
-    }
     box_top
 }
 

@@ -1243,20 +1243,38 @@ fn search_panel() {
     }
     app.on_key(Key::Down, now);
     insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
-    let (shown, buf) = wide(&mut app);
-    let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows[HEIGHT as usize - 6], "search prompts: fix", "{shown}");
-    let reversed = |row: u16| {
-        buf.cell((0, row))
-            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
-    };
-    assert!(!reversed(HEIGHT - 6), "{shown}");
-    assert!(!reversed(HEIGHT - 5), "{shown}");
-    assert!(reversed(HEIGHT - 4), "{shown}");
-    // Nothing matching says so.
+    // The panel draws centred on the overlay frame, in no reserved rows.
+    app.set_size(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(shown.contains("Prompt history"), "{shown}");
+    assert!(shown.contains("› fix"), "{shown}");
+    assert!(shown.contains("2 matches · newest first"), "{shown}");
+    assert!(shown.contains("Enter recalls · Esc closes"), "{shown}");
+    assert!(!shown.contains("this session"), "{shown}");
+    // The draft waits in the input box, which keeps its own rows.
+    assert!(shown.contains("draft"), "{shown}");
+    // Exactly one barred row: the second match, recall order newest first.
+    let bars: Vec<u16> = (0..24)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::markdown::Role::Accent.color()))
+        .collect();
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row: String = (0..80)
+        .map(|x| buf[(x, bars[0])].symbol().to_owned())
+        .collect();
+    assert!(row.contains("fix the build"), "{row:?}");
+    // Nothing matching says so, with nothing barred.
     app.on_key(Key::Char('z'), now);
-    let (shown, _) = wide(&mut app);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
     assert!(shown.contains("no matching prompts"), "{shown}");
+    assert!(
+        (0..24).all(|y| (0..80).all(|x| buf[(x, y)].bg != crate::markdown::Role::Accent.color())),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -2525,7 +2543,6 @@ fn the_cursor_hides_while_navigating() {
 #[test]
 fn an_open_overlay_draws_its_cross_as_a_target() {
     use crate::mouse::TargetId;
-    let cross = Rect::new(WIDTH - 1, 0, 1, 1);
     let mut app = empty();
     attach(&mut app, S_A);
     app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
@@ -2556,14 +2573,19 @@ fn an_open_overlay_draws_its_cross_as_a_target() {
     ));
     app.open_notice(0);
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
-    assert!(
-        targets
-            .iter()
-            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
-        "the notice overlay draws its cross"
-    );
+    // The notice overlay's ✕ sits on its title row's right end, closing it.
+    let notice_cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the notice overlay draws its cross");
+    let row: String = (0..WIDTH)
+        .map(|x| buf[(x, notice_cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.contains("Notice · x"), "{row}");
+    assert_eq!(notice_cross.rect.width, 1);
     assert_eq!(
-        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        buf.cell((notice_cross.rect.x, notice_cross.rect.y))
+            .map(|cell| cell.symbol()),
         Some("✕")
     );
 }

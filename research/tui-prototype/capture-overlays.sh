@@ -30,7 +30,10 @@ capture keymap-narrow 100 40
 capture quit 160 48
 capture delete 160 48
 capture history 160 48
+capture history-one 160 48
+capture history-none 160 48
 capture notice 160 48
+capture notices 160 48
 capture close-mouse 160 48
 tmux kill-session -t ov1630 2>/dev/null || true
 echo "wrote $OUT"

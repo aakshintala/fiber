@@ -787,10 +787,7 @@ impl App {
             || crate::surface::edged(self.input_height(), room),
             |panel| crate::view::request::height(&panel, self.column_width(), room),
         );
-        let under = input
-            + self.completion_rows()
-            + self.steering_below()
-            + usize::from(self.working_row_shown());
+        let under = input + self.steering_below() + usize::from(self.working_row_shown());
         // The notice rows draw above the working line, so their room is
         // what is left above it; the badge and hint draw above them.
         let notices = self.notices.drawn().min(room.saturating_sub(under));

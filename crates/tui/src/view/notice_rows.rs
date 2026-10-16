@@ -10,12 +10,15 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use super::overlay_cross;
+use super::overlay::{self, Place, Row};
 use crate::app::App;
 use crate::app::NoticeLine;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+
+/// The overlay's preferred content width (`docs/tui.md`, "Overlays").
+const PREFER: u16 = 71;
 
 /// Draws the notice rows bottom-up from `bottom`, moving it up past
 /// them: at most the rows above `area.y`, the lowest rows kept, so rows
@@ -70,10 +73,12 @@ pub(super) fn draw(
     }
 }
 
-/// Draws the notice overlay over `area`, hiding the conversation's
-/// targets as before.
+/// Draws the notice overlay over `area` in the shared frame, hiding the
+/// conversation's targets as before: one notice's whole text, or every
+/// notice as `code · text` paragraphs, newest first. An emptied list
+/// draws nothing.
 pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-    let Some(texts) = app.notice_overlay() else {
+    let Some(entries) = app.notice_overlay_entries() else {
         return;
     };
     targets.retain(|target| {
@@ -87,22 +92,178 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
                 | TargetId::Offer(_)
         )
     });
-    let rows: Vec<String> = texts
-        .iter()
-        .flat_map(|text| format::wrap(text, usize::from(area.width)))
-        .collect();
-    let mut y = area.y;
-    for row in rows {
-        if y >= area.bottom() {
+    // The text wraps at the preferred width first and the overlay
+    // shrinks to what the wrapped content needs (`docs/tui.md`,
+    // "Overlays").
+    let room = usize::from(PREFER.saturating_sub(4))
+        .min(usize::from(area.width.saturating_sub(4)))
+        .max(1);
+    let mut body = Vec::new();
+    let title = if entries.all {
+        if entries.entries.is_empty() {
             return;
         }
-        let width = usize::from(area.width);
-        let blank = " ".repeat(width);
-        buf.set_stringn(area.x, y, blank, width, super::NOTICE_TINT);
-        buf.set_stringn(area.x, y, &row, width, super::NOTICE_TINT);
-        y = y.saturating_add(1);
+        for (at, (code, text)) in entries.entries.iter().enumerate() {
+            if at > 0 {
+                body.push(blank_row());
+            }
+            body.extend(paragraph(code, text, room));
+        }
+        "Notices".to_owned()
+    } else {
+        let Some((code, text)) = entries.entries.first() else {
+            return;
+        };
+        body.extend(text_rows(text, room));
+        format!("Notice · {code}")
+    };
+    let framed = overlay::Overlay {
+        title: Some((title, Some(Span::raw("✕")))),
+        close: Some(TargetId::CloseOverlay),
+        body,
+        footer: Some(overlay::legend(&[("Esc", "closes")])),
+        prefer: PREFER,
+    };
+    overlay::draw(buf, area, &framed, Place::Centre, targets);
+}
+
+/// One blank body row.
+fn blank_row() -> Row {
+    Row {
+        spans: Vec::new(),
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
     }
-    overlay_cross(buf, area, targets);
+}
+
+/// One notice as `code · text` rows at most `room` columns wide: the
+/// code and its separator dim, the text in the normal colour, wrapped
+/// flush left.
+fn paragraph(code: &str, text: &str, room: usize) -> Vec<Row> {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    wrap_runs(
+        &[(format!("{code} · "), dim), (text.to_owned(), Style::new())],
+        room,
+    )
+    .into_iter()
+    .map(|spans| Row {
+        spans,
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    })
+    .collect()
+}
+
+/// One notice's whole text as plain rows at most `room` columns wide.
+fn text_rows(text: &str, room: usize) -> Vec<Row> {
+    wrap_runs(&[(text.to_owned(), Style::new())], room)
+        .into_iter()
+        .map(|spans| Row {
+            spans,
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        })
+        .collect()
+}
+
+/// Wraps styled `runs` at word boundaries into rows at most `room`
+/// columns wide, keeping each piece's style across its wrapped rows: a
+/// dim code stays dim, the text after it stays plain. Runs join with
+/// nothing: a space reads only where the source holds one, so a marked
+/// hit split across runs stays one word. A word wider than a row breaks
+/// where it reaches the edge; a newline starts a row, as
+/// `format::wrap` does; consecutive spaces read as one.
+pub(super) fn wrap_runs(runs: &[(String, Style)], room: usize) -> Vec<Vec<Span<'static>>> {
+    let room = room.max(1);
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut taken = 0usize;
+    // Pushes `word` (holding no space) in `style`, with a space before
+    // it when the source holds one, breaking a word wider than a row
+    // where it reaches the edge.
+    let push_word = |word: &str,
+                     style: Style,
+                     space_before: bool,
+                     rows: &mut Vec<Vec<Span<'static>>>,
+                     taken: &mut usize| {
+        if word.is_empty() {
+            return;
+        }
+        let mut rest = word;
+        let mut leading = space_before;
+        while !rest.is_empty() {
+            let wide = format::width(rest);
+            let gap = usize::from(leading);
+            if *taken + gap + wide <= room {
+                let Some(row) = rows.last_mut() else {
+                    return;
+                };
+                if leading {
+                    row.push(Span::styled(" ".to_owned(), style));
+                }
+                row.push(Span::styled(rest.to_owned(), style));
+                *taken += gap + wide;
+                return;
+            }
+            if *taken > 0 {
+                rows.push(Vec::new());
+                *taken = 0;
+            }
+            // At the row's start a word that fits takes the whole rest,
+            // and a wider one breaks at the edge.
+            let mut chunk = format::cut(rest, room);
+            if chunk.is_empty() {
+                // A single grapheme wider than the row still moves:
+                // the frame cuts the overflow.
+                let Some(first) = rest.chars().next() else {
+                    return;
+                };
+                chunk.push(first);
+            }
+            let Some(row) = rows.last_mut() else {
+                return;
+            };
+            row.push(Span::styled(chunk.clone(), style));
+            rest = &rest[chunk.len()..];
+            if rest.is_empty() {
+                *taken += format::width(&chunk);
+            } else {
+                rows.push(Vec::new());
+            }
+            leading = false;
+        }
+    };
+    // Whether the run before ended its text with a space, so a run
+    // starting without one still follows it.
+    let mut prev_ended_with_space = false;
+    // Whether any word has been pushed: the paragraph's own leading
+    // spaces drop, as a wrap does.
+    let mut started = false;
+    for (text, style) in runs {
+        for (line_no, line) in text.split('\n').enumerate() {
+            if line_no > 0 {
+                rows.push(Vec::new());
+                taken = 0;
+            }
+            for (word_no, word) in line.split(' ').enumerate() {
+                let space_before = if word_no > 0 {
+                    true
+                } else if line_no == 0 {
+                    (line.starts_with(' ') || prev_ended_with_space) && started
+                } else {
+                    false
+                };
+                if !word.is_empty() {
+                    started = true;
+                }
+                push_word(word, *style, space_before, &mut rows, &mut taken);
+            }
+        }
+        prev_ended_with_space = text.ends_with(' ');
+    }
+    rows
 }
 
 /// A notice's row `width` cells: "  ⚠ " and `code` in `attention`,

@@ -11,7 +11,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::App;
-use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -19,6 +18,7 @@ pub(crate) mod banner;
 pub(crate) mod chrome;
 mod completions;
 mod drag;
+mod history;
 #[path = "home_view.rs"]
 mod home;
 mod input_box;
@@ -54,7 +54,8 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
-/// The notice overlay's tint.
+/// The notice overlay's tint, until the overlay frame replaces it.
+#[allow(dead_code, reason = "removed in the last commit of #1792")]
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
 /// Paints `rect` as the click target under the pointer: each cell takes
@@ -271,15 +272,11 @@ pub(crate) fn render(
         }
     }
     drag::draw(app, buf, pointer);
-    // The `/` and `@` panels draw over the conversation's bottom rows,
+    // The completion panels draw over the conversation's bottom rows,
     // above the input box's top edge, after everything under them, so
-    // their cells win. The Ctrl+R panel drew in its reserved rows.
-    if let Some(completions) = app.completions()
-        && matches!(
-            completions.rows,
-            Rows::Slash(_) | Rows::Files(_) | Rows::Message(_)
-        )
-    {
+    // their cells win. The Ctrl+R panel draws centred over the
+    // conversation instead of in reserved rows.
+    if let Some(completions) = app.completions() {
         completions::draw(&completions, conversation, box_top, buf, &mut targets);
     }
     if app.quit_open() {
@@ -345,20 +342,6 @@ fn put(buf: &mut Buffer, area: Rect, bottom: &mut u16, text: &str, style: Style)
     let (end, _) = buf.set_stringn(area.x, row, text, usize::from(area.width), style);
     *bottom = row;
     Some(Rect::new(area.x, row, end.saturating_sub(area.x), 1))
-}
-
-/// The open overlay's ✕ on the conversation's top-right cell, a click
-/// target closing it; nothing when the conversation shows no rows.
-fn overlay_cross(buf: &mut Buffer, area: Rect, targets: &mut Vec<Target>) {
-    if area.is_empty() {
-        return;
-    }
-    let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
-    buf.set_string(cross.x, cross.y, "✕", Style::default());
-    targets.push(Target {
-        id: TargetId::CloseOverlay,
-        rect: cross,
-    });
 }
 
 /// Where the terminal cursor shows: at the draft's cursor while the input

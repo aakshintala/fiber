@@ -196,14 +196,6 @@ impl App {
         }
     }
 
-    /// The Ctrl+R panel's height in rows; 0 while none is open. The
-    /// `/` and `@` panels draw over the conversation, reserving nothing.
-    pub(super) fn completion_rows(&self) -> usize {
-        self.completions()
-            .filter(|completions| matches!(completions.rows, Rows::Search(_)))
-            .map_or(0, |completions| completions.lines().len())
-    }
-
     /// The completion panel above the input line, while one is open and
     /// the approval panel is closed. An empty `/` list shows "no
     /// matches", an empty `@` result "no files match"; before an `@`

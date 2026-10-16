@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::{NoticeLine, Notices};
+use super::{NoticeLine, NoticeOverlay, Notices};
 use crate::app::App;
 use crate::keys::Key;
 use crate::link::Line;
@@ -458,4 +458,66 @@ fn the_app_dismisses_and_opens_notices_and_esc_closes_the_overlay() {
     app.dismiss_notice(3);
     assert_eq!(app.notice(), Some("notice 2"));
     assert_eq!(app.notices().len(), 3);
+}
+
+#[test]
+fn overlay_entries_names_the_open_single_notice() {
+    let mut notices = stack("extension_failed", &["one", "two"]);
+    assert_eq!(notices.overlay_entries(), None);
+    notices.open(1);
+    assert_eq!(
+        notices.overlay_entries(),
+        Some(NoticeOverlay {
+            all: false,
+            entries: vec![("extension_failed".to_owned(), "two".to_owned())],
+        })
+    );
+}
+
+#[test]
+fn overlay_entries_lists_every_notice_newest_first() {
+    let mut notices = Notices::default();
+    notices.push("extension_failed", "one".to_owned());
+    notices.push("config_invalid", "two".to_owned());
+    notices.open_all();
+    assert_eq!(
+        notices.overlay_entries(),
+        Some(NoticeOverlay {
+            all: true,
+            entries: vec![
+                ("config_invalid".to_owned(), "two".to_owned()),
+                ("extension_failed".to_owned(), "one".to_owned()),
+            ],
+        })
+    );
+}
+
+#[test]
+fn overlay_entries_covers_the_cap_edges_and_the_emptied_list() {
+    for count in [2, 3, 4] {
+        let texts: Vec<String> = (0..count).map(|n| format!("notice {n}")).collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut notices = stack("extension_failed", &refs);
+        notices.open_all();
+        let entries = notices.overlay_entries().unwrap();
+        assert!(entries.all);
+        assert_eq!(entries.entries.len(), count, "{count} notices");
+    }
+    // Dismissing the open single notice closes the overlay.
+    let mut notices = stack("extension_failed", &["one", "two"]);
+    notices.open(1);
+    notices.dismiss(1);
+    assert_eq!(notices.overlay_entries(), None);
+    // Dismissing every notice while the list is open empties it, not closes.
+    let mut notices = stack("extension_failed", &["one", "two"]);
+    notices.open_all();
+    notices.dismiss(0);
+    notices.dismiss(1);
+    assert_eq!(
+        notices.overlay_entries(),
+        Some(NoticeOverlay {
+            all: true,
+            entries: vec![],
+        })
+    );
 }

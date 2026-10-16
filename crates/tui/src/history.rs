@@ -338,6 +338,12 @@ impl App {
         self.more()
     }
 
+    /// Closes the search panel, as Esc does: the draft is unchanged.
+    /// True when a search was open.
+    pub(super) fn close_search(&mut self) -> bool {
+        self.history.search.take().is_some()
+    }
+
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
@@ -351,7 +357,7 @@ impl App {
         send(line.into_iter().collect())
     }
 
-    /// The search panel, drawn as the `/` panel is: its query line, then
+    /// The search panel for the overlay frame: its query line, then
     /// the matches in a window that keeps the selection in view.
     pub(super) fn search_panel(&self) -> Option<Completions> {
         let search = self.history.search.as_ref()?;
