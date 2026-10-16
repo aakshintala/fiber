@@ -305,7 +305,7 @@ impl Tool for Shell {
             self.jobs.as_deref(),
             spill,
         ) {
-            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit),
+            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit, &parsed.command),
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
                 Some(jobs) => background::take(
                     *moved,
@@ -321,10 +321,10 @@ impl Tool for Shell {
                 ),
                 None => {
                     let finished = moved.resume(self.clock.as_ref(), cancel, emit);
-                    from_spawn(Ok(finished), limit)
+                    from_spawn(Ok(finished), limit, &parsed.command)
                 }
             },
-            Err(err) => from_spawn(Err(err), limit),
+            Err(err) => from_spawn(Err(err), limit, &parsed.command),
         }
     }
 
@@ -546,21 +546,43 @@ fn shell_program() -> &'static Path {
     }
 }
 
-fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit) -> Output {
+fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit, command: &str) -> Output {
     match result {
-        Ok(finished) => assemble(limit, finished, None),
-        Err(err) => failed(
-            ErrorCode::ToolError,
-            format!("The command could not be started: {err}."),
-        ),
+        Ok(finished) => assemble(limit, finished, None, Some(command)),
+        Err(err) => {
+            let mut output = failed(
+                ErrorCode::ToolError,
+                format!("The command could not be started: {err}."),
+            );
+            output.details = Some(details(command, None));
+            output
+        }
     }
+}
+
+fn details(command: &str, process: Option<&Process>) -> Value {
+    let mut details = json!({"command": command});
+    if let Some(process) = process {
+        if let Some(code) = process.exit_code {
+            details["exit_code"] = json!(code);
+        } else if let Some(signal) = &process.signal {
+            details["signal"] = json!(signal);
+        }
+    }
+    details
 }
 
 /// The result of a finished command: `extra`, when the job could not be
 /// opened, goes before the closing line, for a whole and a spilled output
 /// alike. A spilled output carries no text parts: the loop takes its text
 /// from the spill alone.
-pub(crate) fn assemble(limit: Limit, finished: Finished, extra: Option<&str>) -> Output {
+pub(crate) fn assemble(limit: Limit, finished: Finished, extra: Option<&str>, command: Option<&str>) -> Output {
+    let mut output = assemble_output(limit, finished, extra);
+    output.details = command.map(|command| details(command, output.process.as_ref()));
+    output
+}
+
+fn assemble_output(limit: Limit, finished: Finished, extra: Option<&str>) -> Output {
     let timed_out = finished.stop == Some(StopKind::Timeout);
     if finished.indeterminate {
         let process = process_of(&finished, timed_out);

@@ -227,13 +227,17 @@ pub(crate) fn take(
         input: moved.take_input(),
         lines: limit.monitor,
     }) {
-        Ok(opened) => hand_off(
-            moved, opened, job_cancel, clock, limit, terminal, cancel, start,
-        ),
+        Ok(opened) => {
+            let mut output = hand_off(
+                moved, opened, job_cancel, clock, limit, terminal, cancel, start,
+            );
+            output.details = Some(super::details(command, None));
+            output
+        }
         Err(error) => {
             let line = format!("It could not move to the background: {error}.");
             let finished = moved.resume(clock.as_ref(), cancel, emit);
-            assemble(limit, finished, Some(&line))
+            assemble(limit, finished, Some(&line), Some(command))
         }
     }
 }
@@ -583,7 +587,7 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
     // over every other end but the cap.
     let stopped =
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
-    let mut output = assemble(limit, finished, None);
+    let mut output = assemble(limit, finished, None, None);
     if capped {
         output.error = Some(crate::tool_util::failure(
             ErrorCode::OutputCap,

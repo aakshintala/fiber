@@ -355,14 +355,54 @@ fn result_lines_name_what_was_observed() {
 }
 
 #[test]
+fn shell_details_describe_the_command_and_reaped_status() {
+    use std::os::unix::process::ExitStatusExt;
+    use super::command::StopKind;
+    let cases = [
+        (Some(0), None, false, Some("c"), Some(json!({"command":"c", "exit_code":0}))),
+        (Some(256), None, false, Some("c"), Some(json!({"command":"c", "exit_code":1}))),
+        (Some(9), None, false, Some("c"), Some(json!({"command":"c", "signal":"SIGKILL"}))),
+        (Some(9), Some(StopKind::Timeout), false, Some("c"), Some(json!({"command":"c", "signal":"SIGKILL"}))),
+        (None, None, true, Some("c"), Some(json!({"command":"c"}))),
+        (None, None, false, Some("c"), Some(json!({"command":"c"}))),
+        (Some(0), None, false, None, None),
+    ];
+    for (raw, stop, indeterminate, command, expected) in cases {
+        let output = super::assemble(super::Limit { ms: 1, monitor: false }, Finished {
+            output: Kept::Whole(Vec::new()),
+            status: raw.map(std::process::ExitStatus::from_raw),
+            stop, indeterminate, held_open: false, sent_signal: false,
+            capped: false, flooded: false,
+        }, None, command);
+        assert_eq!(output.details, expected, "raw={raw:?}, stop={stop:?}");
+    }
+    let output = from_spawn(Err(std::io::Error::other("missing")),
+        super::Limit { ms: 1, monitor: false }, "c");
+    assert_eq!(output.details, Some(json!({"command":"c"})));
+}
+
+#[test]
+fn shell_details_keep_the_argument_not_the_search_prelude() {
+    let (send, recv) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let dir = fakes::TempDir::new("fiber-shell-command-details");
+        let fiber = fakes::script(dir.path(), "search", "exit 0");
+        let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber);
+        send.send(shell.run(&args("exit 3"), &CancelToken::new(), &Recorder::default())).unwrap();
+    });
+    let output = fakes::Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&recv, "shell details");
+    assert_eq!(output.details, Some(json!({"command":"exit 3", "exit_code":3})));
+}
+
+#[test]
 fn a_spawn_failure_is_tool_error_with_no_process() {
     let output = from_spawn(
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
         super::Limit {
             ms: 1,
             monitor: false,
-        },
-    );
+        }, "c");
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(output.process.is_none());
     assert!(text(&output).contains("could not be started"));
@@ -442,6 +482,7 @@ fn run_in_background_skips_the_bare_wait_and_returns_a_receipt() {
         [JobRecord::Started(started)] => started.clone(),
         other => panic!("expected one started job, got {other:?}"),
     };
+    let receipt_details = output.details.clone();
     assert_eq!(started.description, "sleep 30");
     assert_eq!(started.tool.as_deref(), Some("shell"));
     jobs.stop(&started.job_id);
@@ -450,6 +491,7 @@ fn run_in_background_skips_the_bare_wait_and_returns_a_receipt() {
         .expect("the stopped sleep to end");
     assert_eq!(ended.status, Outcome::Cancelled);
     assert!(ended.output_tail.is_none());
+    assert_eq!(receipt_details, Some(json!({"command": "sleep 30"})));
 }
 
 fn monitor_args(command: &str) -> Map<String, Value> {
@@ -683,8 +725,7 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
             capped: false,
             flooded: false,
         },
-        None,
-    );
+        None, None);
     assert!(output.content.is_empty());
     assert!(output.error.is_none());
     let spilled = output.spilled.expect("spilled is set");
@@ -721,8 +762,7 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
             capped: false,
             flooded: false,
         },
-        None,
-    );
+        None, None);
     assert!(output.content.is_empty());
     assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
     let process = output.process.expect("a spilled output names its process");
@@ -759,8 +799,7 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
             artifacts(&dir),
             vec![b'x'; 20_000],
         )))),
-        Some(line),
-    );
+        Some(line), None);
     let spilled = spilled.spilled.expect("spilled is set");
     let kept = spilled.file.expect("kept");
     let file = std::fs::read_to_string(&kept.path).unwrap();
@@ -770,7 +809,7 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
         "{}",
         spilled.tail
     );
-    let whole = super::assemble(limit, finished(Kept::Whole(b"hi".to_vec())), Some(line));
+    let whole = super::assemble(limit, finished(Kept::Whole(b"hi".to_vec())), Some(line), None);
     assert_eq!(
         text(&whole),
         format!("hi\n{line}\nExit code 0.\n"),
