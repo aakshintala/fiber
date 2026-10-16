@@ -1,6 +1,6 @@
 //! The model picker (#1629): a swapped view over the conversation area, like the
 //! context breakdown. Fixture data only: the stream names just the current model,
-//! so the providers, roles, thinking levels and rebuild costs below are made up.
+//! so the providers, roles, thinking levels, prices and rebuild costs below are made up.
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
@@ -46,6 +46,20 @@ pub struct Model {
     pub levels: Vec<&'static str>,
     pub level: Option<&'static str>,
     pub rebuild: &'static str,
+    /// the per-million-token input and output prices; None names no price
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    /// the tiered rates in force at or above `min` conversation tokens
+    pub tier: Option<Tier>,
+}
+
+/// A session-size price tier: at or above `min` conversation tokens the
+/// tiered rates replace the base input and output rates.
+#[derive(Clone, Copy)]
+pub struct Tier {
+    pub min: u64,
+    pub input: f64,
+    pub output: f64,
 }
 
 /// Three providers, twelve models. The current model is flat index 0.
@@ -63,6 +77,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high", "xhigh"],
                     level: Some("high"),
                     rebuild: "—",
+                    input: Some(15.00),
+                    output: Some(75.00),
+                    tier: None,
                 },
                 Model {
                     id: "claude-sonnet-5-5",
@@ -72,6 +89,13 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high"],
                     level: Some("medium"),
                     rebuild: "~84k tokens · $0.31",
+                    input: Some(3.00),
+                    output: Some(15.00),
+                    tier: Some(Tier {
+                        min: 200_000,
+                        input: 6.00,
+                        output: 30.00,
+                    }),
                 },
                 Model {
                     id: "claude-haiku-5-5",
@@ -81,6 +105,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium"],
                     level: Some("low"),
                     rebuild: "~61k tokens · $0.12",
+                    input: Some(0.80),
+                    output: Some(4.00),
+                    tier: None,
                 },
             ],
         },
@@ -96,6 +123,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high", "xhigh"],
                     level: Some("high"),
                     rebuild: "~92k tokens · $0.44",
+                    input: Some(4.00),
+                    output: Some(16.00),
+                    tier: None,
                 },
                 Model {
                     id: "gpt-6-luna",
@@ -105,6 +135,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high"],
                     level: Some("medium"),
                     rebuild: "~92k tokens · $0.28",
+                    input: Some(2.00),
+                    output: Some(8.00),
+                    tier: None,
                 },
                 Model {
                     id: "gpt-6-sol-mini",
@@ -114,6 +147,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium"],
                     level: Some("low"),
                     rebuild: "~70k tokens · $0.09",
+                    input: Some(0.30),
+                    output: Some(1.20),
+                    tier: None,
                 },
                 Model {
                     id: "gpt-6-nano",
@@ -123,6 +159,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec![],
                     level: None,
                     rebuild: "~58k tokens · $0.03",
+                    input: None,
+                    output: None,
+                    tier: None,
                 },
                 Model {
                     id: "gpt-6-sol",
@@ -132,6 +171,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high", "xhigh"],
                     level: Some("xhigh"),
                     rebuild: "~92k tokens · $0.51",
+                    input: Some(5.00),
+                    output: Some(20.00),
+                    tier: None,
                 },
             ],
         },
@@ -147,6 +189,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium", "high"],
                     level: Some("medium"),
                     rebuild: "~88k tokens · $0.22",
+                    input: Some(1.25),
+                    output: Some(10.00),
+                    tier: None,
                 },
                 Model {
                     id: "gemini-3-flash",
@@ -156,6 +201,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low", "medium"],
                     level: Some("low"),
                     rebuild: "~64k tokens · $0.06",
+                    input: Some(0.30),
+                    output: Some(2.50),
+                    tier: None,
                 },
                 Model {
                     id: "gemini-3-lite",
@@ -165,6 +213,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec![],
                     level: None,
                     rebuild: "~49k tokens · $0.01",
+                    input: Some(0.10),
+                    output: Some(0.40),
+                    tier: None,
                 },
                 Model {
                     id: "gemma-3-27b",
@@ -174,6 +225,9 @@ pub fn fixture() -> Vec<Provider> {
                     levels: vec!["low"],
                     level: Some("low"),
                     rebuild: "~77k tokens · $0.01",
+                    input: Some(0.00),
+                    output: Some(0.00),
+                    tier: None,
                 },
             ],
         },
@@ -206,6 +260,8 @@ pub struct State {
     pub tick: u64,
     /// `--static`: no animation
     pub still: bool,
+    /// the conversation tokens a switch would rebuild; None means no conversation yet
+    pub session: Option<u64>,
 }
 
 /// Every `--picker` case.
@@ -317,6 +373,46 @@ pub(crate) const CASES: &[Case<State>] = &[
             ..base()
         },
     },
+    Case {
+        name: "prices",
+        help: "rows with per-million prices and the labelled switch cost",
+        check: "every row with its input and output price per million dim after the name, the rebuild cost right-aligned labelled `switch …`, the current model keeping `—`, and the tiered row at its base rates below its tier; same panel, bar and legend.",
+        build: || State { focus: 1, ..base() },
+    },
+    Case {
+        name: "prices-empty",
+        help: "prices with no conversation, so no switch cost",
+        check: "every row with its prices but no switch cost anywhere, the tiered row at its base rates; same panel, bar and legend.",
+        build: || State {
+            session: None,
+            ..base()
+        },
+    },
+    Case {
+        name: "prices-free",
+        help: "the free model focused",
+        check: "gemma-3-27b `›` on the accent bar reading `free` for its prices, the rest priced; same panel, bar and legend.",
+        build: || State {
+            focus: 11,
+            ..base()
+        },
+    },
+    Case {
+        name: "prices-noprice",
+        help: "the unpriced model focused",
+        check: "gpt-6-nano `›` on the accent bar with no price text, only its labelled switch cost, the rest priced; same panel, bar and legend.",
+        build: || State { focus: 6, ..base() },
+    },
+    Case {
+        name: "prices-tiered",
+        help: "the tiered model above its tier",
+        check: "claude-sonnet-5-5 `›` on the accent bar at its tiered rates with the `tier 200k+` mark, the rest at their own rates; same panel, bar and legend.",
+        build: || State {
+            focus: 1,
+            session: Some(250_000),
+            ..base()
+        },
+    },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
@@ -330,6 +426,7 @@ pub(crate) const SURFACE: Surface = Surface {
 fn base() -> State {
     State {
         still: STILL.load(Relaxed),
+        session: Some(84_000),
         ..Default::default()
     }
 }
@@ -575,6 +672,33 @@ fn provider_row(p: &Provider, refreshing: bool, s: &State) -> Row {
     row(vec![sp(p.name, dim()), sp(" ", Style::new()), sp(what, st)])
 }
 
+/// The in-force input and output rates and the tier supplying them: the
+/// tiered rates at or above the tier's minimum, else the base rates. With no
+/// conversation there is no size to tier on, so the base rates win.
+fn rates(m: &Model, session: Option<u64>) -> (Option<f64>, Option<f64>, Option<Tier>) {
+    match (m.input, m.output, session, m.tier) {
+        (Some(_), Some(_), Some(n), Some(t)) if n >= t.min => {
+            (Some(t.input), Some(t.output), Some(t))
+        }
+        _ => (m.input, m.output, None),
+    }
+}
+
+/// The dim price cell after the name: the in-force input and output rates
+/// per million tokens, `free` when both are zero, nothing when unpriced.
+/// A tier in force names its threshold.
+fn price_text(m: &Model, session: Option<u64>) -> Option<String> {
+    match rates(m, session) {
+        (Some(i), Some(o), _) if i == 0.0 && o == 0.0 => Some("free".to_string()),
+        (Some(i), Some(o), Some(t)) => Some(format!(
+            "${i:.2} in · ${o:.2} out /M · tier {}k+",
+            t.min / 1000
+        )),
+        (Some(i), Some(o), None) => Some(format!("${i:.2} in · ${o:.2} out /M")),
+        _ => None,
+    }
+}
+
 /// A model row, with a mark between the gutter and the id in the checklist case.
 fn model_row(
     f: usize,
@@ -583,6 +707,7 @@ fn model_row(
     checklist: Option<bool>,
     scoped_mark: bool,
     hits: &[usize],
+    price: Option<String>,
 ) -> Row {
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
@@ -620,6 +745,9 @@ fn model_row(
     }
     if scoped_mark {
         spans.push(sp("· scoped ", dim()));
+    }
+    if let Some(p) = price {
+        spans.push(sp(format!("{p} "), dim()));
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
     // The focused model reads bold throughout, like every focused choice.
@@ -790,11 +918,12 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let focused = vis[pos] == f;
             let scoped_mark = !s.checklist && s.show_all && s.scoped.contains(&f);
             let hits = id_hits(&s.query, m.id);
+            let price = price_text(m, s.session);
             // The checklist marks instead of scoping: its rows carry a mark,
             // its thinking row stays dim with no click targets, and it never
             // takes the session-only note.
             let mark = s.checklist.then(|| s.marked.contains(&f));
-            let mk = || model_row(f, m, focused, mark, scoped_mark, &hits);
+            let mk = || model_row(f, m, focused, mark, scoped_mark, &hits, price.clone());
             if focused {
                 out.extend(panel::bar(vec![mk()]));
             } else {
@@ -1971,5 +2100,45 @@ mod tests {
         assert!(p.show_all);
         assert!(p.refreshing.is_empty());
         assert_eq!(p.marked, SCOPED.to_vec());
+    }
+
+    #[test]
+    fn the_price_cases_show_input_and_output_per_million() {
+        // With conversation the tiered row reads its base rates below the tier.
+        let t = text(&view(&for_case("prices"), 160));
+        assert!(
+            t.contains("$3.00 in · $15.00 out /M"),
+            "sonnet base rates missing"
+        );
+        assert!(
+            t.contains("$15.00 in · $75.00 out /M"),
+            "opus rates missing"
+        );
+        // With no conversation the rows still read their base rates.
+        let t = text(&view(&for_case("prices-empty"), 160));
+        assert!(t.contains("$3.00 in · $15.00 out /M"), "base rates missing");
+        // The free case reads `free` on its row while the rest stay priced.
+        let t = text(&view(&for_case("prices-free"), 160));
+        assert!(t.contains("free"), "free row missing");
+        assert!(
+            t.contains("$3.00 in · $15.00 out /M"),
+            "other rows lost rates"
+        );
+        // The unpriced case still prices every other row.
+        let t = text(&view(&for_case("prices-noprice"), 160));
+        assert!(
+            t.contains("$3.00 in · $15.00 out /M"),
+            "other rows lost rates"
+        );
+        // Above the tier the tiered row reads its tiered rates, not its base ones.
+        let t = text(&view(&for_case("prices-tiered"), 160));
+        assert!(
+            t.contains("$6.00 in · $30.00 out /M"),
+            "tiered rates missing"
+        );
+        assert!(
+            !t.contains("$3.00 in · $15.00 out /M"),
+            "base rates leak above the tier"
+        );
     }
 }
