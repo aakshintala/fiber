@@ -361,6 +361,12 @@ fn an_opened_shell_grep_shows_matches_grouped_by_path() {
     }
     let before: String = row.chars().take(at).collect();
     assert!(before.contains("2"), "{row:?} gutter");
+    // The context lines around the match carry their line numbers.
+    assert_eq!(
+        content(&grid, hit.saturating_sub(1), left, right),
+        "        1 a"
+    );
+    assert_eq!(content(&grid, hit + 1, left, right), "        3 b");
     // The context lines around the match carry no match tint.
     for y in [hit.saturating_sub(1), hit + 1] {
         for x in 0..160 {
