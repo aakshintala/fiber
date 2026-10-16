@@ -24,41 +24,20 @@ use super::{
 const DEADLINE: Duration = Duration::from_secs(10);
 const DRAIN_BOUNDARY_DEADLINE: Duration = Duration::from_secs(4);
 
-/// Runs `work` on a worker and returns its answer within `DEADLINE`: a call
-/// that blocks, such as a `Command::status` or a fifo, is a wait too.
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _sent = tx.send(work());
-    });
-    match Deadline::after(DEADLINE).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
-    }
-}
-
-/// Whether the group still holds a process: `kill -0` on a worker.
+/// Whether the group still holds a process: `kill -0` starts no process,
+/// so it runs directly.
 #[track_caller]
 fn group_lives(pgid: u32) -> bool {
-    within("kill -0 on the group", move || {
-        fakes::kill_group(pgid, "0").unwrap()
-    })
-}
-
-/// Sends SIGKILL to `pid` on a worker; an already-gone pid is fine.
-#[track_caller]
-fn kill_pid_now(pid: u32) {
-    within("kill -KILL on the pid", move || {
-        drop(fakes::kill_pid(pid, "KILL"));
-    });
+    fakes::kill_group(pgid, "0").unwrap()
 }
 
 /// A ready fifo in `dir`, made on a worker: `mkfifo` is a `Command::status`.
 #[track_caller]
 fn ready_in(dir: &std::path::Path) -> fakes::children::Ready {
     let dir = dir.to_path_buf();
-    within("the ready fifo", move || fakes::children::Ready::new(&dir))
+    fakes::within("the ready fifo", DEADLINE, move || {
+        fakes::children::Ready::new(&dir)
+    })
 }
 
 /// The extension's memory cap in these tests, unless one sets its own.
@@ -353,7 +332,7 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     assert!(!ran.timed_out);
     // The escaped grandchild still holds the pipe: clean it by pid.
     for pid in _second {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     watchdog.stand_down(DEADLINE);
 }
@@ -389,7 +368,7 @@ fn in_child(name: &str) {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
     let Ok(output) = Deadline::after(DEADLINE).recv(&rx) else {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
         panic!("waited {DEADLINE:?} for the child running {name}");
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -578,7 +557,7 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
         .expect("waited {DEADLINE:?} for the drained run")
         .expect("the drained run returns");
     for pid in escaped {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     watchdog.stand_down(DEADLINE);
 }
@@ -819,7 +798,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
         None => Deadline::after(DEADLINE).recv(&done),
     };
     if outcome.is_err() {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     let ran = outcome
         .expect("waited {DEADLINE:?} for the timed-out pid-mode run")
@@ -855,7 +834,7 @@ fn a_pid_mode_run_is_never_listed() {
     drop(cancel);
     let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     outcome
         .expect("waited {DEADLINE:?} for the cancelled pid-mode run")
@@ -980,7 +959,7 @@ fn stop_pid_signals_a_running_child() {
             watchdog.stand_down(DEADLINE);
         }
         Err(_) => {
-            kill_pid_now(pid);
+            drop(fakes::kill_pid(pid, "KILL"));
             panic!("waited {DEADLINE:?} for the signalled child to die");
         }
     }
@@ -1024,7 +1003,7 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         .ok()
         .and_then(|text| text.trim().parse().ok());
     if let Some(holder) = holder {
-        kill_pid_now(holder);
+        drop(fakes::kill_pid(holder, "KILL"));
     }
     let ran = outcome
         .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the drained pid-mode run"))
@@ -1120,7 +1099,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             .ok()
             .and_then(|text| text.trim().parse().ok());
         if let Some(holder) = holder {
-            kill_pid_now(holder);
+            drop(fakes::kill_pid(holder, "KILL"));
         }
         let ran = outcome
             .unwrap_or_else(|_| {
@@ -1179,7 +1158,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
     clock.advance(Duration::from_millis(1000));
     let outcome = Deadline::after(DEADLINE).recv(&done);
     if outcome.is_err() {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     let ran = outcome
         .expect("waited {DEADLINE:?} for the stopped pid-mode run")
@@ -1236,7 +1215,7 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
     });
     let outcome = Deadline::after(DEADLINE).recv(&done_rx);
     if outcome.is_err() {
-        kill_pid_now(pid);
+        drop(fakes::kill_pid(pid, "KILL"));
     }
     let err = outcome.expect("waited {DEADLINE:?} for the aborted pid-mode run");
     assert_eq!(err.message, "host.exec: sh: no reader thread");
@@ -1321,8 +1300,10 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     match release_tx.send(()) {
         Ok(()) | Err(_) => {}
     }
-    let error = within("the late spawn", move || late_spawn.join().unwrap())
-        .expect_err("a spawn after the kill pass");
+    let error = fakes::within("the late spawn", DEADLINE, move || {
+        late_spawn.join().unwrap()
+    })
+    .expect_err("a spawn after the kill pass");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert_eq!(
         super::groups::listed(),

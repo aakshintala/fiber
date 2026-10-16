@@ -1271,7 +1271,8 @@ fn adopt_then_stop_stops_the_adopted_server() {
     idle.servers.adopt(started.servers);
     assert_eq!(idle.servers.slots.lock().unwrap().len(), 1);
     setup.stop(idle.servers);
-    setup.await_reaped(pid);
+    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 
 #[test]
