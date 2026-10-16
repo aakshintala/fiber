@@ -430,6 +430,7 @@ fn expect_end(inbox: &mpsc::Receiver<Delivery>, deadline: Deadline, what: &str) 
         | Delivery::Resolved(..)
         | Delivery::InnerCall(_)
         | Delivery::ExtensionLog(_)
+        | Delivery::Shell(..)
         | Delivery::Cancelled) => panic!("expected a job end, got {other:?}"),
     }
 }

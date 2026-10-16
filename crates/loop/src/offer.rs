@@ -360,6 +360,7 @@ impl Loop {
                 | Delivery::InnerCall(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
                 | Delivery::Name(..)
+                | Delivery::Shell(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Interaction(_)

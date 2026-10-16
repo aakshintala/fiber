@@ -160,6 +160,10 @@ pub enum Delivery {
     /// it, and an approval wait reads the cancel signal after it wakes
     /// (`docs/architecture.md`, "Cancellation").
     Cancelled,
+    /// A driver `shell` with `send` true, run as `send` false is: the loop
+    /// writes it as `shell_command` at the drain that takes it, then
+    /// answers `Ok(None)` (`docs/invocation.md`, "Shell").
+    Shell(crate::events::ShellCommand, Ack),
 }
 
 /// News that a background job ended, sent by the session's jobs registry.

@@ -680,6 +680,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ExtensionLog(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
+            | Delivery::Shell(..)
             | Delivery::Cancelled => "other",
         })
         .collect()

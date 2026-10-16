@@ -7,7 +7,9 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{Event, ExtensionExec, ExtensionLog, QueuedMessage, SteeringQueue};
+use contract::events::{
+    Event, ExtensionExec, ExtensionLog, QueuedMessage, ShellCommand, SteeringQueue,
+};
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
@@ -482,7 +484,8 @@ impl Loop {
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
             | Delivery::InnerCall(_)
-            | Delivery::Cancelled) => {
+            | Delivery::Cancelled
+            | Delivery::Shell(..)) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
             }
@@ -549,6 +552,9 @@ impl Loop {
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
+            // A sent shell joins the next turn's input: written at this
+            // drain, held for the next `turn_started`, starting no turn.
+            Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
@@ -691,6 +697,10 @@ impl Loop {
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
+            // A sent shell joins the next turn's input, never the running
+            // turn: written at this drain and held for the next
+            // `turn_started`.
+            Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             // While a turn runs the session cannot close first: rewind
             // once it ends.
             Delivery::Rewind(_, ack) => {
@@ -730,6 +740,14 @@ impl Loop {
         accept(ack);
         self.closing = true;
         self.answerable = false;
+    }
+
+    /// Takes a sent driver shell: written as `shell_command` at this drain,
+    /// then accepted with no result, starting no turn.
+    pub(crate) fn take_shell(&mut self, line: ShellCommand, ack: Ack) -> Result<(), Error> {
+        let _ = line;
+        accept(ack);
+        Ok(())
     }
 }
 

@@ -197,7 +197,8 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
-        Delivery::Cancelled => panic!("a wake arrives as a delivery"),
+        Delivery::Cancelled
+        | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
@@ -1163,6 +1164,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let accepted_lines = until(&sender, |line| command_id(line) == Some("c_m1"));
@@ -1200,6 +1202,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_m2"));
@@ -1289,6 +1292,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
             let rejected = until(&sender, |line| command_id(line) == Some("c_cred"));
@@ -1383,6 +1387,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let accepted = until(&sender, |line| command_id(line) == Some("c_r1"));
@@ -1423,6 +1428,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_r2"));
