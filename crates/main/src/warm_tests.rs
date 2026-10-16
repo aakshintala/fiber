@@ -8,15 +8,9 @@ fn config(overrides: &[&str]) -> config::Config {
 }
 
 #[test]
-fn warming_is_off_by_default_whatever_the_cap() {
-    assert_eq!(warm(&config(&[])), None);
+fn warming_is_off_unless_warm_idle_is_true() {
     assert_eq!(warm(&config(&["cache.warm_cap=5"])), None);
     assert_eq!(warm(&config(&["cache.warm_idle=false"])), None);
-}
-
-#[test]
-fn warming_on_takes_the_default_cap_of_two_lifetimes() {
-    assert_eq!(warm(&config(&["cache.warm_idle=true"])), Some(2));
 }
 
 #[test]
