@@ -620,7 +620,7 @@ pub(crate) fn status(name: &str, workspace: &str, state: &str, parent: Option<&s
     });
     let mut payload = serde_json::json!({
         "name": name, "workspace": workspace, "project": "-w", "model": "p/m", "state": state,
-        "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
+        "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
     });
     if state == "waiting" {
         payload["waiting"] = serde_json::json!({
@@ -806,4 +806,37 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
         cv.notify_all();
     }
     hold(&mut read);
+}
+
+/// Records machine calls and answers configuration operations from a script.
+#[derive(Default)]
+pub(crate) struct FakeMachine {
+    pub(crate) calls: Mutex<Vec<Value>>,
+    pub(crate) answers: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
+}
+
+impl crate::Machine for FakeMachine {
+    fn configure(
+        &self,
+        operation: &str,
+        args: &serde_json::Map<String, Value>,
+        _clock: Arc<dyn contract::clock::Clock>,
+    ) -> Result<Option<Value>, Failure> {
+        lock(&self.calls).push(serde_json::json!({"operation":operation,"args":args}));
+        lock(&self.answers).pop_front().unwrap_or(Ok(None))
+    }
+    fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure> {
+        lock(&self.calls).push(serde_json::json!({"read":[workspace,path]}));
+        Ok(("text".to_owned(), "version".to_owned()))
+    }
+    fn write_config(
+        &self,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure> {
+        lock(&self.calls).push(serde_json::json!({"write":[workspace,path,text,version]}));
+        Ok(())
+    }
 }

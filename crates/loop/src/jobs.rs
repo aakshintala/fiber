@@ -18,7 +18,7 @@ use contract::inbox::{JobNotice, Message};
 use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{CommandId, ErrorCode, JobId, TurnId};
+use contract::{CommandId, ErrorCode, JobId, Seq, TurnId};
 
 use crate::before_message::Hooked;
 use crate::prompt::{fill, message};
@@ -234,6 +234,11 @@ impl Loop {
         pieces: Vec<Queued>,
     ) -> (Vec<InputItem>, Vec<ContextAdded>) {
         let mut input: Vec<InputItem> = Vec::new();
+        // Every held `shell_command` line joins this turn first, in `seq`
+        // order: the `turn_started` naming them releases them.
+        for seq in self.handoff.carry.pending() {
+            input.push(InputItem::ShellCommand { seq: Seq(seq) });
+        }
         let mut contexts: Vec<ContextAdded> = Vec::new();
         for piece in pieces {
             match piece {

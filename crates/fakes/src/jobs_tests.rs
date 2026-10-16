@@ -218,8 +218,7 @@ fn failing_open_is_io_and_records_nothing() {
     let Err(error) = jobs.open(opening("echo hi", Stop(Box::new(|| {})))) else {
         panic!("failing open recorded a job");
     };
-    assert!(matches!(error, OpenError::Io { .. }));
-    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert!(matches!(error, OpenError { .. }));
     let text = error.to_string();
     assert!(text.contains("could not be created"), "{text}");
     assert!(text.contains("unavailable.log"), "{text}");
@@ -235,7 +234,7 @@ fn open_into_a_missing_directory_is_io() {
     let Err(error) = jobs.open(opening("echo hi", Stop(Box::new(|| {})))) else {
         panic!("open recorded a job when the file could not be created");
     };
-    assert!(matches!(error, OpenError::Io { .. }));
+    assert!(matches!(error, OpenError { .. }));
     assert!(jobs.started().is_empty());
 }
 

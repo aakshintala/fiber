@@ -176,7 +176,7 @@ fn escape_in_the_quit_question_does_not_close_the_view() {
         None,
         json!({
             "name": "other", "workspace": "/w", "project": "-w", "state": "streaming",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
@@ -345,7 +345,7 @@ fn a_session_card_spend_click_opens_usage_and_keeps_the_draft() {
         None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
@@ -381,7 +381,7 @@ fn a_panel_click_closes_the_keymap_and_routes_the_next_key_to_usage() {
         None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
@@ -412,7 +412,7 @@ fn the_narrow_status_line_spend_segment_opens_usage() {
         None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2}, "cost": 1.25, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
@@ -522,7 +522,7 @@ fn context_status(tokens: u64, window: u64) -> Line {
         None,
         json!({
             "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
             "model": "model/m", "delegates": 0, "jobs": 0, "clients": 0,
@@ -891,10 +891,14 @@ fn the_totals_row_opens_every_changed_file_in_ranked_order() {
     assert!(shown.contains("Changed files"), "{shown}");
     let frame = app.session_view_screen(0).expect("changed-files frame");
     assert_eq!(frame.rows.len(), 7);
-    let paths: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    let paths: Vec<String> = frame
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.0.as_str()).collect())
+        .collect();
     let expected: Vec<String> = ranked(app.panel_state().changes())
         .into_iter()
-        .map(|(path, added, removed)| format!("{path}  +{added} −{removed}"))
+        .map(|(path, added, removed)| format!("{path} · +{added} −{removed}"))
         .collect();
     assert_eq!(paths, expected);
 }
@@ -1200,7 +1204,8 @@ fn down_then_enter_opens_the_second_item_and_closes_the_list() {
     open_delegates(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(selected(&app), 2);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app), 3);
     // The link is down, so opening sends nothing; the view still swaps
     // in and the list closes.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -1237,10 +1242,10 @@ fn clicking_a_row_tail_only_selects_the_row() {
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
     open_delegates(&mut app);
-    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(3))), Effect::None);
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(4))), Effect::None);
     assert!(!app.item_open());
     assert!(app.session_view_open());
-    assert_eq!(selected(&app), 3);
+    assert_eq!(selected(&app), 4);
 }
 
 #[test]

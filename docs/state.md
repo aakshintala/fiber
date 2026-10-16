@@ -284,8 +284,10 @@ What is recorded:
   whole milliseconds; a tool's timers add `tool`, the tool's name. No other
   field is recorded, and never an argument, a path or any content, as for
   every line in `logs/`. At `info` the cost is one check of the level,
-  except the one monotonic read taken before the configuration is read to
-  time `startup.config`, which is the only extra cost there. A new module
+  except the monotonic reads taken before the configuration is read, when
+  the level is not yet known: one to time `startup.config`, and two for
+  each worktree created or recreated then. Those are the only extra costs
+  there, and they write no line at `info`. A new module
   or top-level operation lands with its timer in the same pull request.
   Installed so far is `net.connect`: one scope around an actual connector
   attempt group for a native observed request, from the first socket attempt
@@ -373,7 +375,18 @@ What is recorded:
   its own thread runs, before the receipt is built. A refused call, a
   spawn or registration failure, and a call cancelled before its job
   starts write none, and the job's later life adds nothing. Its `data`
-  holds only `op` and `ms`.
+  holds only `op` and `ms`. Installed for worktrees is `worktree.create`
+  and `worktree.remove`. `worktree.create` covers the one `git worktree
+  add` a new or resumed session runs to make its worktree, stamped before
+  the configuration is read and written once the writer opens, so its `ts`
+  is the writer's open time and its `ms` the stamped duration; a creation
+  rollback stays inside that duration and writes no second line.
+  `worktree.remove` covers the one real removal after the writer opens,
+  whatever its result, excluding the exclusive take, the user scans, the
+  inspection, the lock-file unlink and every kept path; a kept or shared
+  worktree writes none. A failed creation or recreation, a recreation that
+  finds the path present, and `fiber sessions prune` write none. Their
+  `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
 

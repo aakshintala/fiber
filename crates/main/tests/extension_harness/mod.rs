@@ -8,7 +8,6 @@
 )]
 use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind};
-use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
@@ -406,50 +405,4 @@ pub(crate) fn hello() -> Response {
             "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
         }}),
     ])
-}
-
-/// [`hold_server`]'s URL, the receiver told once the request head is read,
-/// and the sender whose drop releases the held connection.
-pub(crate) type Held = (String, mpsc::Receiver<()>, mpsc::Sender<()>);
-
-/// Holds one HTTP connection open (head read, body never sent), so a
-/// `host.http` against it stays parked. Each header read takes what remains
-/// of `deadline`; the connection is held until the returned sender sends or
-/// drops. The caller receives the accepted signal with the deadline, which
-/// bounds the accept.
-#[track_caller]
-pub(crate) fn hold_server(deadline: Deadline) -> Held {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release, release_rx) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let Ok((mut sock, _)) = listener.accept() else {
-            return;
-        };
-        let mut buf = [0; 1];
-        let mut seen = Vec::new();
-        loop {
-            use std::io::Read;
-            // A zero timeout is refused, so a deadline that passes between
-            // these two reads also stops here.
-            if deadline.left().is_zero() || sock.set_read_timeout(Some(deadline.left())).is_err() {
-                return;
-            }
-            match sock.read(&mut buf) {
-                Ok(0) | Err(_) => return,
-                Ok(_) => seen.push(buf[0]),
-            }
-            if seen.ends_with(b"\r\n\r\n") {
-                break;
-            }
-        }
-        match accepted_tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        match release_rx.recv() {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    (url, accepted_rx, release)
 }

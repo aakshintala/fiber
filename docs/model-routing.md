@@ -167,8 +167,10 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   sample it did not force a call.
 
 Fiber sends mode `VALIDATED` only when every tool in the request fits the
-strict subset. A tool declared in every session, such as `ask_user`, is sent
-with `strict: false`, so Gemini requests use `AUTO` until #1214 settles it.
+strict subset. `VALIDATED` on `gemini-3-flash-preview` does not enforce
+`maxLength`, so Gemini requests keep `AUTO`, because `ask_user` and the
+session naming tool both declare it
+(`research/gemini-validated-probe/README.md`).
 Fiber's own argument check still validates every call (`docs/tools.md`,
 "Before a call runs").
 
@@ -243,7 +245,9 @@ reply. A request after the last step fails the turn. It takes the session's tool
 
 A script is a JSON file, `{"steps": [...]}`, read whole each time a model on
 it is connected: when a session starts or resumes on it, switches back to it,
-or resolves its reviewer to it. Each step is an object, a reply or an error:
+resolves its reviewer to it, or resolves a delegate to it through a configured
+`roles.*` reference (a string or an object's `model`). Each step is an object,
+a reply or an error:
 
 - A reply has `text`, a string or a list of strings streamed as fragments in
   order, or `tool_calls`, a list of `{"name": ..., "arguments": {...}}`, or
@@ -267,8 +271,8 @@ or resolves its reviewer to it. Each step is an object, a reply or an error:
 Each request takes one step, a retried request included, so a `rate_limited`
 step followed by a text step is a retry that succeeds. A request after the
 last step fails `invalid_request`, which is never retried, naming the script
-and the request. Each connection starts at step 1, and a reviewer on a script
-has its own steps. A script that cannot be read fails with `io_failed`, and a
+and the request. Each connection starts at step 1, and a reviewer or delegate
+on a script has its own steps. A script that cannot be read fails with `io_failed`, and a
 malformed one with `config_invalid` naming the file and the step: at startup
 before any line is written, on a switch as its rejection, and for a reviewer
 as a reviewer failure.
@@ -459,8 +463,9 @@ runs in the background and never holds a list back. The generator leaves out ids
 - **At start,** Fiber refreshes each provider that has a credential and whose
   cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
   one day by default. Each provider that ran is unloaded once its list is
-  written. Only the extensions the session uses stay loaded, and a provider
-  with no credential never runs.
+  written. Only the extensions the session uses stay loaded, among them each
+  provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
+  a provider with no credential never runs.
 - **When no cached copy exists,** `models()` runs when the list is first
   needed.
 - **The model picker** refreshes, in the background, any provider whose list

@@ -1,6 +1,6 @@
 //! What a person sees before approving: each item that has no approval for
 //! its content, with what an install shows and, for a changed item, the diff
-//! against the copy approved before (`docs/extensions.md`, "Code a
+//! against the newest copy approved before that is still kept, or none (`docs/extensions.md`, "Code a
 //! repository ships" and "What an install shows").
 
 use std::collections::BTreeSet;

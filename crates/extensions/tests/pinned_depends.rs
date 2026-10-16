@@ -14,17 +14,19 @@
 mod common;
 
 use std::fs;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, atomic::Ordering, mpsc};
+use std::time::Duration;
 
 use common::{
-    FIBER, Repos, Setup, StoreOperations, approve, decide_on_worker, declare, dep_dir, dep_names,
-    dep_record, dep_version, depends_home, item, manifest, named, project, store,
-    unapproved_on_worker, write,
+    FIBER, GIT_PROGRESS, Repos, STALL_SLICES, Setup, StoreOperations, approve, decide_on_worker,
+    declare, dep_dir, dep_names, dep_record, dep_version, depends_home, item, manifest, named,
+    on_worker_within, project, store, unapproved_on_worker, write,
 };
 use contract::events::OfferDecision;
 use contract::repository::{Decided, RepositoryCode};
-use extensions::{Error, Fetch, Origin, SessionOffer};
+use extensions::{Error, Fetch, Origin, SessionOffer, Store};
 use fakes::clock::FakeClock;
 use fakes::git::git;
 use serde_json::{Value, json};
@@ -370,6 +372,251 @@ fn a_replaced_manifests_obsolete_dependency_is_pruned_before_deferred_errors() {
             config::dir_name(&zz),
         ]
     );
+}
+
+/// How long a held operation may stay silent before the stall bound fails
+/// it: far below the full operation bound, so firing proves the stall
+/// bound (not a total wait) ended the test.
+const STALL: Duration = Duration::from_millis(500);
+/// How long the test waits for the stall bound to fire: far above it, far
+/// below the nextest kill, so a bound that never fires fails the test
+/// instead of hanging it.
+const OUTER: Duration = Duration::from_secs(5);
+#[test]
+fn a_stalled_approval_fails_within_the_stall_bound() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let helper = "example.com/acme/helper";
+    repos.tag(helper, "", "v1.0.0", &manifest(helper), &[]);
+    let root = "fiber.test/root";
+    declare(&setup, &named(root, &[(helper, "1.0")]));
+    // Hold the approval at its first git call: the url closure parks on a
+    // gate the test owns, so no git work starts and only the stall bound
+    // can end the wait. Later calls pass through: an approval resolves one
+    // URL per fetch. The repository path repeats `Repos::tag`: it has no
+    // accessor, and a drift fails loudly (the fetch errors instead of
+    // stalling, and the expected panic never arrives).
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(Some(gate)));
+    let root_path = setup.root();
+    let origin = Origin::new("git", move |repo: &str| {
+        if let Some(gate) = gate.lock().unwrap().take() {
+            gate.recv().unwrap();
+        }
+        format!(
+            "file://{}",
+            root_path
+                .join("repos")
+                .join(repo.replace('/', "-"))
+                .display()
+        )
+    });
+    let clock = FakeClock::new();
+    let store = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>)
+        .fetching(Fetch::new(origin, FIBER, Arc::clone(&clock) as Arc<_>));
+    let (found, digest) = item(&setup, &clock);
+    // The stall bound fires on the worker thread: run it there and receive
+    // the panic under the outer deadline.
+    let (failed, panicked) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            on_worker_within(STALL, "the approval", move || {
+                store.approve(&found, &digest)
+            })
+        }));
+        failed.send(outcome).unwrap();
+    });
+    let outcome = fakes::Deadline::after(OUTER).recv_or_fail(&panicked, "the stalled approval");
+    let message = outcome.expect_err("a stalled approval fails");
+    let text = message
+        .downcast_ref::<String>()
+        .expect("the stall panic carries its message");
+    assert!(text.contains("the approval"), "unexpected panic: {text}");
+    release.send(()).unwrap();
+}
+
+/// The stall bound of the re-arm tests. It only ever fires on a failure,
+/// so a wide one costs a passing run nothing: it tolerates a test thread,
+/// a worker or a `git clone` stalled for several seconds on a loaded host,
+/// while a genuinely stuck worker still fails within it.
+const REARM_STALL: Duration = Duration::from_secs(5);
+/// Slices each held fetch stays silent: 4 slices are 0.8 s, a sixth of the
+/// bound, so one hold plus seconds of descheduling still stays inside it.
+const HOLD_SLICES: u64 = 4;
+/// Rounds the synthetic worker parks: `PACES` holds of `HOLD_SLICES` span
+/// more slices than the bound allows silent ones, so only re-arming lets
+/// the run finish.
+const PACES: u64 = 8;
+/// How long one observation poll waits: short, so polls never near a stall.
+const POLL: Duration = Duration::from_millis(10);
+/// Observation polls before the test gives up, so a worker that never
+/// progresses fails instead of hanging: 3000 polls are at least 30 s, far
+/// beyond any slow `git clone`, far below the nextest kill.
+const POLLS: u32 = 3000;
+
+/// Holds the work for `HOLD_SLICES` whole stall-bound slices: waits, by
+/// short receives that must time out, until `on_worker_within` has passed
+/// that many slices without an answer. The test bumps nothing, so the hold
+/// is silence the bound counts.
+fn hold_slices<T>(returned: &mpsc::Receiver<T>) {
+    let start = STALL_SLICES.load(Ordering::Relaxed);
+    for _ in 0..POLLS {
+        match fakes::Deadline::after(POLL).recv(returned) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the approval failed while held")
+            }
+            Ok(_) => panic!("the held work answered before it was released"),
+        }
+        if STALL_SLICES.load(Ordering::Relaxed) >= start + HOLD_SLICES {
+            return;
+        }
+    }
+    panic!("the stall bound never passed {HOLD_SLICES} slices");
+}
+
+/// The run waited through more slices than the bound allows silent ones
+/// and still answered: progress alone kept it alive.
+fn assert_spanned_bound() {
+    let slices = u128::from(STALL_SLICES.load(Ordering::Relaxed));
+    let allowed = REARM_STALL.as_millis() / common::ROUND.as_millis();
+    assert!(
+        slices > allowed,
+        "the run spanned only {slices} slices, not past the bound's {allowed}"
+    );
+}
+
+/// Receives while proving the test's own progress: a bump before every
+/// short poll, so a worker descheduled after a release is never mistaken
+/// for a stall. Only `hold_slices` stays silent.
+fn recv_bumping<T>(rx: &mpsc::Receiver<T>, waited_for: &str) -> T {
+    for _ in 0..POLLS {
+        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+        match fakes::Deadline::after(POLL).recv(rx) {
+            Ok(value) => return value,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the sender for {waited_for} hung up")
+            }
+        }
+    }
+    panic!("never received {waited_for}");
+}
+
+#[test]
+fn git_progress_re_arms_the_stall_bound() {
+    let (release, gate) = mpsc::channel::<()>();
+    let (parked_tx, parked) = mpsc::channel::<()>();
+    let (finished, returned) = mpsc::channel();
+    std::thread::spawn(move || {
+        // Simulated slow git work: every round proves progress, then parks
+        // on a gate the test owns. No single silence reaches the stall
+        // bound, but the rounds span past it in total: without re-arming,
+        // the bound would fire.
+        let value = on_worker_within(REARM_STALL, "the approval", move || {
+            for _ in 0..PACES {
+                GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+                parked_tx.send(()).unwrap();
+                gate.recv().unwrap();
+            }
+            42
+        });
+        finished.send(value).unwrap();
+    });
+    for _ in 0..PACES {
+        recv_bumping(&parked, "the paced work to park");
+        hold_slices(&returned);
+        release.send(()).unwrap();
+    }
+    let value = recv_bumping(&returned, "the paced answer");
+    assert_eq!(value, 42);
+    assert_spanned_bound();
+}
+
+#[test]
+fn git_progress_from_a_real_approval_re_arms_the_stall_bound() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let n = |s: &str| format!("example.com/acme/{s}");
+    let (z, zz, d) = (n("z"), n("zz"), n("d"));
+    for tag in ["v1.0.0", "v2.0.0"] {
+        repos.tag(&d, "", tag, &manifest(&d), &[]);
+    }
+    // `z` 1.0 needs `d` 1.x; `z` 1.5 needs `d` 2.x.
+    repos.tag(&z, "", "v1.0.0", &named(&z, &[(&d, "1.0")]), &[]);
+    repos.tag(&z, "", "v1.5.0", &named(&z, &[(&d, "2.0")]), &[]);
+    // `zz` forces the replacement up to `z` 1.5.
+    repos.tag(
+        &zz,
+        "",
+        "v1.0.0",
+        &named(&zz, &[(&z, "1.5"), (&d, "2.0")]),
+        &[],
+    );
+    let root = "fiber.test/root";
+    declare(&setup, &named(root, &[(&z, "1.0"), (&zz, "1.0")]));
+    // Every fetch proves progress, then parks on a gate the test owns, so
+    // the approval spans past the bound with no silence ever reaching it.
+    // The repository path repeats `Repos::tag` as in the stall test above.
+    let (release, gate) = mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let (parked_tx, parked) = mpsc::channel::<()>();
+    let parked_tx = Mutex::new(parked_tx);
+    let root_path = setup.root();
+    let origin = Origin::new("git", move |repo: &str| {
+        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+        parked_tx.lock().unwrap().send(()).unwrap();
+        gate.lock().unwrap().recv().unwrap();
+        format!(
+            "file://{}",
+            root_path
+                .join("repos")
+                .join(repo.replace('/', "-"))
+                .display()
+        )
+    });
+    let clock = FakeClock::new();
+    let store = Store::new(&setup.home(), &project(), Arc::clone(&clock) as Arc<_>)
+        .fetching(Fetch::new(origin, FIBER, Arc::clone(&clock) as Arc<_>));
+    let (found, digest) = item(&setup, &clock);
+    let (finished, returned) = mpsc::channel();
+    std::thread::spawn(move || {
+        finished
+            .send(on_worker_within(REARM_STALL, "the approval", move || {
+                store.approve(&found, &digest)
+            }))
+            .unwrap();
+    });
+    // Hold every fetch for a slice, then release it, until the approval
+    // answers. An answer while a fetch is held, or a hangup, fails inside
+    // `hold_slices`.
+    let mut value = None;
+    for _ in 0..POLLS {
+        // The store's git work between fetches is live: the test proves
+        // progress on every poll, outside the holds.
+        GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+        // A hangup here means the store dropped its origin when the
+        // approval ended: no more fetches, so the answer is next.
+        if let Ok(()) = fakes::Deadline::after(POLL).recv(&parked) {
+            hold_slices(&returned);
+            release.send(()).unwrap();
+            continue;
+        }
+        match fakes::Deadline::after(POLL).recv(&returned) {
+            Ok(returned) => {
+                value = Some(returned);
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the worker for the approval hung up before sending")
+            }
+        }
+    }
+    value
+        .expect("the held approval answers")
+        .expect("the held approval succeeds");
+    assert_spanned_bound();
 }
 
 #[test]

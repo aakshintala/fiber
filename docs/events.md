@@ -406,7 +406,7 @@ Ephemeral. Written whenever the queue changes; the latest wins.
 #### `shell_command`
 
 Durable. A command the person ran with `send` true (`docs/invocation.md`,
-`shell`). It joins the next turn's input.
+`shell`), written when the command ends. It joins the next turn's input.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -448,10 +448,14 @@ sent the latest.
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
 | `model` | string | yes | the model reference in use |
+| `thinking` | string | no | the thinking level in use, as on `preamble_built`; absent when there is none |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
+| `started` | integer | yes | when the session started, as `ts` |
+| `calls` | integer | yes | tool calls the session has made so far |
+| `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
@@ -771,7 +775,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the copy approved before, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
@@ -1324,10 +1328,11 @@ Every driver command is answered with exactly one of these, echoing its id
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `tool` (string, the server's own name for the tool, when the source is `mcp`), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
 | `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
+| `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
-| `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
+| `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
 | `pair` | `device` (string), the paired device's name, and `token` (string), its device token, over the hub's port (`docs/invocation.md`, "Remote clients") |
@@ -1336,6 +1341,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `sessions` | `live`, an array with one object per running top-level session: `session_id` (string) and `status`, its latest `session_status` payload; and `exited`, an array of `recent.jsonl` rows, newest first, delegates and running sessions left out (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `prompt_history` | `prompts`, an array of prompt history lines, newest first, each a whole line as `history.jsonl` holds it (`docs/state.md`, "What each part holds"), at most 256; and `before` (integer), the byte offset where the oldest returned line starts, present only when older lines remain, sent back to read the next page, over the hub (`docs/invocation.md`, "The hub") |
 | `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
+| `configure` | the operation's result from `docs/invocation.md`, "What the hub speaks"; absent for `set_reviewer`, `switch_tool` and `switch_skill` |
+| `read_config` | `text` (string), the configuration file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
 

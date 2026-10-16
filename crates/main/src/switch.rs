@@ -7,11 +7,12 @@
 //! started on a thread of their own while the loop waits; shutdown ends
 //! that wait (`docs/configuration.md`, "Secrets").
 
+mod quota;
 mod read;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use config::{Config, ProviderData, Secret};
 use contract::clock::Clock;
@@ -49,6 +50,7 @@ struct Remembered {
 
 /// What starts a Lua provider a switch needs and the session does not hold
 /// loaded.
+#[derive(Clone)]
 pub(crate) struct Loader {
     pub(crate) extensions: Arc<SessionExtensions>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -58,6 +60,108 @@ pub(crate) struct Loader {
     /// The session's workspace, which a `scripted` model's path resolves
     /// against.
     pub(crate) workspace: PathBuf,
+}
+
+/// Serialises starts without owning a provider's lifetime.
+pub(crate) struct StartLock {
+    started: Mutex<BTreeMap<String, Weak<LuaProvider>>>,
+    #[cfg(test)]
+    pause: Mutex<Option<(String, std::sync::mpsc::Sender<Ack>)>>,
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+enum Point {
+    P,
+    Q,
+}
+
+#[cfg(test)]
+struct Ack {
+    point: Point,
+    thread: String,
+    release: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl StartLock {
+    fn seeded(loaded: &[(String, Arc<LuaProvider>)]) -> Self {
+        Self {
+            started: Mutex::new(
+                loaded
+                    .iter()
+                    .map(|(name, lua)| (name.clone(), Arc::downgrade(lua)))
+                    .collect(),
+            ),
+            #[cfg(test)]
+            pause: Mutex::default(),
+        }
+    }
+
+    fn start(
+        &self,
+        loader: &Loader,
+        config: &Config,
+        name: &str,
+        extension: &str,
+    ) -> Result<Arc<LuaProvider>, extensions::Error> {
+        #[cfg(test)]
+        self.checkpoint(name, Point::P);
+        let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = started.get(name).and_then(Weak::upgrade);
+        #[cfg(test)]
+        self.checkpoint(name, Point::Q);
+        if let Some(lua) = found {
+            return Ok(lua);
+        }
+        let lua = loader.extensions.start_provider(
+            config,
+            Arc::clone(&loader.clock),
+            Arc::clone(&loader.locks),
+            extension,
+            name,
+        )?;
+        started.insert(name.to_owned(), Arc::downgrade(&lua));
+        Ok(lua)
+    }
+
+    #[cfg(test)]
+    fn pause_at_lock(&self, name: &str, acked: std::sync::mpsc::Sender<Ack>) {
+        *self.pause.lock().unwrap() = Some((name.to_owned(), acked));
+    }
+
+    #[cfg(test)]
+    fn unpause(&self) {
+        *self.pause.lock().unwrap() = None;
+    }
+
+    #[cfg(test)]
+    fn checkpoint(&self, name: &str, point: Point) {
+        let armed = self.pause.lock().unwrap().clone();
+        if let Some((armed, acked)) = armed {
+            if armed != name {
+                return;
+            }
+            let thread = std::thread::current().name().unwrap_or("").to_owned();
+            match point {
+                Point::P => {
+                    let _sent = acked.send(Ack {
+                        point,
+                        thread,
+                        release: None,
+                    });
+                }
+                Point::Q => {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let _sent = acked.send(Ack {
+                        point,
+                        thread,
+                        release: Some(tx),
+                    });
+                    let _released = rx.recv();
+                }
+            }
+        }
+    }
 }
 
 /// What preparing a switch reads: the whole startup registry, holding no
@@ -75,6 +179,7 @@ pub(crate) struct Switching {
     remembered: Mutex<Remembered>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     loader: Loader,
+    started: Arc<StartLock>,
     reads: Arc<Reads>,
     /// The session's diagnostic writer: a switch prepares observed
     /// factories over it. `None` until the session shares its writer, and
@@ -129,6 +234,7 @@ impl Switching {
             caps: crate::settings::result_caps(&config),
             config,
             remembered: Mutex::new(remembered),
+            started: Arc::new(StartLock::seeded(&loaded)),
             loaded: Mutex::new(loaded.into_iter().collect()),
             loader,
             reads,
@@ -236,15 +342,8 @@ impl Switching {
             let lua = match (want.lua, self.loader.owners.get(&want.name)) {
                 (Some(lua), _) => Some(lua),
                 (None, Some(extension)) => Some(
-                    self.loader
-                        .extensions
-                        .start_provider(
-                            &self.config,
-                            Arc::clone(&self.loader.clock),
-                            Arc::clone(&self.loader.locks),
-                            extension,
-                            &want.name,
-                        )
+                    self.started
+                        .start(&self.loader, &self.config, &want.name, extension)
                         .map_err(|e| crate::failed(e.code(), e))?,
                 ),
                 (None, None) => None,

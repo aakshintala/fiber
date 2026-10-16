@@ -1,7 +1,8 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
 //! `sessions`, `delete`, `directories`, `read_file`, `pairing_code`, `devices`
-//! and `revoke`, and the relay to session sockets. Every connection also hears
+//! and `revoke`, the machine's `configure`, `read_config` and `write_config`,
+//! and the relay to session sockets. Every connection also hears
 //! `attention` and `device_changed` (`crate::attention`) after its hello.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
@@ -52,6 +53,7 @@ pub(crate) struct Hub {
     pub(crate) feed: Arc<Feed>,
     /// Pending pairing codes and authenticated connections.
     pub(crate) pairing: crate::pairing::Pairing,
+    pub(crate) machine: Option<Arc<dyn crate::Machine>>,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -159,6 +161,7 @@ impl Hub {
             diag,
             feed,
             pairing: crate::pairing::Pairing::new(),
+            machine: None,
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
@@ -198,6 +201,12 @@ impl Hub {
     /// shared capture, and every other caller keeps the published default.
     pub(crate) fn with_environments(mut self, environments: Arc<crate::Environments>) -> Self {
         self.environments = environments;
+        self
+    }
+
+    /// Supplies configuration on this hub's machine.
+    pub(crate) fn with_machine(mut self, machine: Arc<dyn crate::Machine>) -> Self {
+        self.machine = Some(machine);
         self
     }
 
@@ -601,6 +610,24 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
+        "configure" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_configure(hub, &line.args),
+        ),
+        "read_config" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_read_config(hub, &line.args),
+        ),
+        "write_config" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_write_config(hub, &line.args),
+        ),
         "pairing_code" => match hub.pairing.mint(hub, who, &line.args) {
             Ok(crate::pairing::Outcome::Done(result)) => {
                 accept_result(writer, hub, &line.id, result)

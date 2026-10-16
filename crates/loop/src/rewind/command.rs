@@ -223,6 +223,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Handoff(_, _, ack)
         | Delivery::Model(_, ack)
         | Delivery::Name(_, ack)
+        | Delivery::Shell(_, ack)
         | Delivery::Credential(_, ack)
         | Delivery::Reply(_, ack)
         | Delivery::Close(ack)

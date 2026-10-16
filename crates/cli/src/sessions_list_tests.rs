@@ -90,7 +90,7 @@ fn accepted(result: Value) -> Value {
 fn status(name: &str, state: Value, cost: Option<f64>, subscription: f64) -> Value {
     let mut payload = json!({
         "name": name, "workspace": "/w", "project": "-w", "model": "p/m",
-        "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
+        "started": 0, "calls": 0, "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
         "spend": {
             "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
             "cost": cost, "subscription_cost": subscription,
@@ -410,6 +410,20 @@ fn a_multiline_name_is_one_row_in_text_and_whole_in_json() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 2, "{out}");
     assert!(lines[1].contains("say hi then bye or after"), "{out}");
+}
+
+#[test]
+fn a_tab_and_an_escape_in_a_name_print_as_spaces_in_text() {
+    let name = "fix\tthe\u{1b}[31mtest";
+    let result = json!({"live": [live("s_1", idle(name))], "exited": []});
+    let rows = json_rows(result.clone());
+    assert_eq!(rows[0]["name"], json!(name));
+    let (ran, out, _) = listing(&project_at("/w", false), false, false, &[accepted(result)]);
+    ran.unwrap();
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+    assert!(lines[1].contains("fix the [31mtest"), "{out}");
 }
 
 #[test]

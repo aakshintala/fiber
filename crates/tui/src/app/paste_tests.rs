@@ -475,7 +475,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
         "name": name,
         "workspace": workspace,
         "project": project,
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

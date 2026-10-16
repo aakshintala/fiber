@@ -602,28 +602,31 @@ jobs:
           if [ "${{ needs.select.outputs.ten_turns }}" != true ]; then
             ten_turns=(--skip-ten-turns)
           fi
+          # A pull request measures the head and base binaries' timing
+          # samples in alternation inside one harness run: the base runs
+          # only the timing benchmarks the selection chooses, named by
+          # base_skip, in the same job on the same runner, so a timing
+          # comparison never crosses runners. Memory and exact rows compare
+          # against the backstop's stored results, looked up
+          # by scripts/stored-results. A base that does not build and has
+          # no stored ancestor leaves no base binary (scripts/release-size):
+          # its timings are skipped, and bench-report shows the missing
+          # base file. A base run that writes no file is reported by
+          # bench-report, not here.
+          base_flags=()
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -f "$RUNNER_TEMP/release/base/fiber" ]; then
+            base_flags=(--base-fiber "$RUNNER_TEMP/release/base/fiber" --base-out "$out/base.json" --skip-rows "$BASE_SKIP")
+            if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
+              base_flags+=(--base-paging "$RUNNER_TEMP/release/base/paging")
+            fi
+          fi
+          start=$SECONDS
           "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all \
             "${runs[@]}" \
             "${ten_turns[@]}" \
-            --paging "$RUNNER_TEMP/release/head/paging"
-          # A base that does not build and has no stored ancestor leaves no base
-          # binary (scripts/release-size): its timings are skipped, and
-          # bench-report shows the missing base file.
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -f "$RUNNER_TEMP/release/base/fiber" ]; then
-            base_paging=()
-            if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
-              base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
-            fi
-            # The base runs only the timing benchmarks the selection
-            # chooses, named by base_skip; memory and exact rows compare
-            # against the backstop's stored results, looked up
-            # by scripts/stored-results. A base run that writes no file is
-            # reported by bench-report, not here.
-            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
-              "${runs[@]}" \
-              --skip-rows "$BASE_SKIP" \
-              "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
-          fi
+            --paging "$RUNNER_TEMP/release/head/paging" \
+            "${base_flags[@]}"
+          echo "bench wall time: $((SECONDS - start)) s"
       - name: Print the attach stages
         run: |
           table=$(jq -r '

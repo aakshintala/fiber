@@ -9,6 +9,7 @@
 mod cache;
 mod credential;
 mod credential_file;
+mod editable;
 mod error;
 mod extension;
 mod extension_settings;
@@ -37,6 +38,7 @@ pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
 pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
+pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
     Binary, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,

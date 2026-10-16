@@ -20,7 +20,7 @@ use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
     Decision, DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome, Parent,
-    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    ShellCommand, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
 use contract::jobs::{Jobs, OpenError, Taken};
@@ -1388,7 +1388,7 @@ impl Listed {
 
 impl Jobs for Listed {
     fn open(&self, _: contract::jobs::Opening) -> Result<contract::jobs::Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: "unused".into(),
             source: std::io::Error::other("a listed job is not opened"),
         })
@@ -3207,4 +3207,113 @@ fn a_notice_while_idle_writes_what_its_claim_took_ahead_first() {
         .position(|line| line.kind == "job_started")
         .expect("a job_started line");
     assert_ahead_lines(&lines, DELEGATE, &action, at);
+}
+
+fn shell(command: &str, output: &str) -> Delivery {
+    Delivery::Shell(
+        ShellCommand {
+            command: command.into(),
+            output: output.into(),
+            artifact: None,
+            process: Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            },
+        },
+        ignore(),
+    )
+}
+
+#[test]
+fn two_sent_shells_come_before_the_drain_s_messages() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(shell("echo b", "b\n"));
+    world.send(shell("echo a", "a\n"));
+    world.send(prompt("Hello."));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let input = lines[0].payload["input"].as_array().unwrap();
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[0]["type"], "shell_command");
+    assert_eq!(input[1]["type"], "shell_command");
+    let first = input[0]["seq"].as_u64().unwrap();
+    let second = input[1]["seq"].as_u64().unwrap();
+    assert!(first < second, "held lines keep seq order");
+    assert_eq!(input[2]["content"][0]["text"], "Hello.");
+    let logged: Vec<u64> = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .filter(|line| line.kind == "shell_command")
+        .map(|line| line.seq.map(|seq| seq.0).unwrap())
+        .collect();
+    assert_eq!(logged, vec![first, second]);
+    let sent = users(&world.requests()[0]);
+    assert_eq!(
+        sent[sent.len() - 3..],
+        [
+            "! echo b\nb".to_owned(),
+            "! echo a\na".to_owned(),
+            "Hello.".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn a_turn_with_nothing_held_names_no_shell() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(prompt("Hello."));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let input = lines[0].payload["input"].as_array().unwrap();
+    assert_eq!(input.len(), 1);
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["content"][0]["text"], "Hello.");
+}
+
+#[test]
+fn a_shell_sent_during_a_turn_joins_the_next_turn_only() {
+    let mut world = World::new(
+        vec![
+            calls("sends"),
+            Scripted::text("Seen."),
+            Scripted::text("Again."),
+        ],
+        Vec::new(),
+        |inbox| sending(inbox, vec![shell("echo hi", "hi\n")]),
+    );
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let first = world.turn_lines();
+    assert!(
+        first
+            .iter()
+            .filter(|line| line.kind == "turn_started")
+            .flat_map(|line| line.payload["input"].as_array().unwrap().clone())
+            .all(|item| item["type"] != "shell_command"),
+        "the running turn names no shell"
+    );
+    assert!(
+        !users(&world.requests()[0]).contains(&"! echo hi\nhi".to_owned()),
+        "the running turn's next request reads no shell"
+    );
+    assert!(
+        !users(&world.requests()[1]).contains(&"! echo hi\nhi".to_owned()),
+        "the running turn's last request reads no shell"
+    );
+    assert!(
+        durable_kinds(&world).contains(&"shell_command".to_owned()),
+        "the drain still writes the line"
+    );
+    world.send(prompt("again"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let second = world.turn_lines();
+    let input = second[0].payload["input"].as_array().unwrap().clone();
+    assert_eq!(input.len(), 2);
+    assert_eq!(input[0]["type"], "shell_command");
+    assert_eq!(input[1]["content"][0]["text"], "again");
+    assert!(
+        users(&world.requests()[2]).contains(&"! echo hi\nhi".to_owned()),
+        "the next turn reads the shell"
+    );
 }

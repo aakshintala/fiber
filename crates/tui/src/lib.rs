@@ -110,6 +110,8 @@ pub use look::ThemeSetting;
 
 pub use keyset::KeysSetup;
 
+pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};
+
 pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
 pub use paging_session::paging_session;
 

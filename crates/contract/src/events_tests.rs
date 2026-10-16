@@ -329,57 +329,57 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("clients", json!({"count": 1})),
         (
             "session_status",
-            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m", "thinking": "high",
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1, "git": {"branch": "main"},
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "git": {"branch": "main"},
             "context": {"tokens": 3, "window": 4}, "spend": usage,
             "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "streaming", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "tool", "tool": "shell", "since": 1, "spend": usage,
+            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "spend": usage,
             "delegates": 1, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "retrying", "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
+            "state": "retrying", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "approval", "summary": "run npm"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "question", "summary": "which file?"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "offer", "summary": "3 items from the repository"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "context_added",
@@ -817,6 +817,30 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_accepted",
             json!({"command_id": "c", "result": {"last_seq": 41}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}, {"name": "daily", "reset": true}]}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2, "limit": 10.0}}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2}}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}], "unreachable": true}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "broken", "unreachable": true}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -872,6 +896,42 @@ fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
             payload
         };
         assert_eq!(written, expected, "{kind}");
+    }
+}
+
+#[test]
+fn a_session_status_round_trips_with_and_without_step() {
+    let (_, base) = samples()
+        .into_iter()
+        .find(|(kind, _)| *kind == "session_status")
+        .unwrap();
+    for (step, thinking) in [Some("shell ls"), None]
+        .into_iter()
+        .flat_map(|step| [Some("high"), None].map(|thinking| (step, thinking)))
+    {
+        let mut payload = base.clone();
+        payload.as_object_mut().unwrap().remove("thinking");
+        if let Some(thinking) = thinking {
+            payload["thinking"] = json!(thinking);
+        }
+        payload["started"] = json!(123);
+        payload["calls"] = json!(2);
+        if let Some(step) = step {
+            payload["step"] = json!(step);
+        }
+        let Some(Event::SessionStatus(status)) = read("session_status", payload.clone()).unwrap()
+        else {
+            panic!("not a session_status");
+        };
+        assert_eq!(status.started, 123);
+        assert_eq!(status.calls, 2);
+        assert_eq!(status.step.as_deref(), step);
+        let written = serde_json::to_value(status).unwrap();
+        assert_eq!(written.get("thinking").and_then(Value::as_str), thinking);
+        if thinking.is_none() {
+            assert!(!written.as_object().unwrap().contains_key("thinking"));
+        }
+        assert_eq!(written, payload);
     }
 }
 
@@ -1530,6 +1590,10 @@ fn an_empty_skills_result_reads_as_skills() {
 
 #[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
+        CommandResult::Quota { .. }
+    ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"tools": []}})),
         CommandResult::Tools { .. }

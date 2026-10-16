@@ -1,7 +1,7 @@
 //! One harness for the crate's tests: the fixture directory, the fake
 //! clock, and every wait with its named deadline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -203,16 +203,65 @@ impl Setup {
         specs: Vec<ServerSpec>,
         images: std::sync::Arc<FakeImages>,
     ) -> Started {
+        self.start_with_images_within(specs, images, WITHIN)
+    }
+
+    /// As [`start_with_images`], with a caller-given `within` for the
+    /// guard; the default stays [`WITHIN`].
+    #[track_caller]
+    pub(crate) fn start_with_images_within(
+        &self,
+        specs: Vec<ServerSpec>,
+        images: std::sync::Arc<FakeImages>,
+        within: Duration,
+    ) -> Started {
         let workspace = self.workspace();
         let artifacts = self.artifacts();
         let cache = self.cache();
         let clock = self.clock();
         let images: std::sync::Arc<dyn contract::images::Images> = images;
-        fakes::within("the start", WITHIN, move || {
-            crate::start::start(
-                specs, &workspace, &artifacts, images, &cache, &clock, "0.0.0",
-            )
-        })
+        // Every session server leaves `outstanding` when its start
+        // reports, so when the guard below fires the set holds exactly
+        // the servers that had not reported. `fakes::within` fixes its
+        // message upfront, so the start runs on its own thread and the
+        // expiry reads the set: a repeat names the server whose child
+        // stalled.
+        let outstanding: std::sync::Arc<std::sync::Mutex<BTreeSet<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+        let watching = std::sync::Arc::clone(&outstanding);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("mcp-start".to_owned())
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::start::start_observed_tracked(
+                        specs,
+                        &workspace,
+                        &artifacts,
+                        images,
+                        &cache,
+                        &clock,
+                        "0.0.0",
+                        None,
+                        Some(watching),
+                    )
+                }));
+                done.send(outcome).unwrap_or(());
+            })
+            .expect("a thread for the start");
+        match Deadline::after(within).recv(&finished) {
+            Ok(outcome) => outcome.unwrap_or_else(|payload| std::panic::resume_unwind(payload)),
+            Err(_) => {
+                let waiting = outstanding
+                    .lock()
+                    .expect("the outstanding set")
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                panic!("waited {within:?} for the start, waiting on [{waiting}]");
+            }
+        }
     }
 
     /// Starts the fixture directly, expecting success, with a deadline naming the wait.
@@ -355,14 +404,6 @@ impl Setup {
                 .matches(method.as_str())
                 .count()
                 >= count
-        });
-    }
-
-    /// Waits until `kill -0` fails for `pid`: the child was reaped.
-    #[track_caller]
-    pub(crate) fn await_reaped(&self, pid: u32) {
-        await_until(&format!("pid {pid} to be reaped"), move || {
-            !fakes::kill_pid(pid, "0").expect("probe")
         });
     }
 }

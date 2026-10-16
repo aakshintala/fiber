@@ -3,8 +3,12 @@
 //! hook, `approvals/<hash>` for an MCP server, and `pinned/<hash>/` for the
 //! copy. The approval file is the last thing an approval writes, so an
 //! approval never lacks its copy; a kill before it leaves an unfinished
-//! copy, which the next approval removes and builds again. A finished copy
-//! with no approval is what `fiber sessions prune` collects.
+//! copy, which the next approval removes and builds again. `fiber sessions
+//! prune` collects a finished copy only when at least one project's
+//! `approvals/<hash>` names it and no per-machine `approvals/<hash>` does;
+//! a copy with no approval record anywhere is kept.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use std::fmt;
 use std::fs::{self, File, TryLockError};
@@ -99,6 +103,33 @@ pub struct CopyHold {
     _ready: File,
 }
 
+/// What `remove_copy` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyRemoval {
+    /// The copy is gone, or would be with `dry_run`.
+    Removed,
+    /// A session holds the copy: nothing was removed.
+    Held,
+    /// No copy was there: nothing was removed.
+    Absent,
+    /// The caller's revalidation refused the removal, with why: the copy
+    /// stays.
+    Refused(String),
+}
+
+/// A copy in `pinned/` and who approved it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptCopy {
+    /// The content hash: the copy is `pinned/<hash>/`.
+    pub hash: String,
+    /// The copy's directory.
+    pub dir: PathBuf,
+    /// The project keys with `projects/<key>/approvals/<hash>`, sorted.
+    pub owners: Vec<String>,
+    /// Whether the per-machine `approvals/<hash>` names it.
+    pub machine_wide: bool,
+}
+
 impl Store {
     /// The store in `home` for `project`. The clock bounds an extension's
     /// install step when its copy is built; [`Store::fetching`] replaces
@@ -164,16 +195,167 @@ impl Store {
     /// and an earlier approval stays.
     pub fn approve(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
         check(item, hash)?;
+        // One `pinned/.lock` from the copy through the record: `global_lock`
+        // is the only place that takes it, so `approve` and `never` share
+        // its order with `ensure_copy` and `remove_copy`. A prune running
+        // under the same lock cannot miss the record being written.
+        let (_lock, pinned) = self.global_lock(item)?;
         let copy = self.copy_dir(hash);
-        self.pin(item, hash, &copy)?;
+        self.pin_locked(item, hash, &copy, &pinned)?;
+        pause_before_record(self);
         self.record(item, hash, "approve")
     }
 
     /// Records never for this content, replacing an approval. No copy is
-    /// made.
+    /// made. The lock is still held across the record, as in `approve`, so
+    /// a prune revalidation running under `pinned/.lock` sees the decision.
     pub fn never(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
         check(item, hash)?;
+        let (_lock, _pinned) = self.global_lock(item)?;
         self.record(item, hash, "never")
+    }
+
+    /// Under `pinned/.lock`: checks the copy `pinned/<hash>`, runs `check`
+    /// (never with `dry_run`), and removes the copy and its marker unless
+    /// a session holds it or `check` refused it with a reason. With
+    /// `dry_run` nothing is removed, the check never runs, and `Removed`
+    /// means the copy would be. Needs no project and no clock.
+    pub fn remove_copy(
+        home: &Path,
+        hash: &str,
+        dry_run: bool,
+        check: &mut dyn FnMut() -> Result<(), String>,
+    ) -> Result<CopyRemoval, Error> {
+        // No path is built from a name that is not a hash.
+        if !is_hash(hash) {
+            return Err(Error::Pin {
+                item: hash.to_owned(),
+                why: "that is not a content hash".to_owned(),
+            });
+        }
+        let Some((_lock, pinned)) = pinned_lock(home, hash, false)? else {
+            return Ok(CopyRemoval::Absent);
+        };
+        let copy = pinned.join(hash);
+        let Some(meta) = copy_metadata(&copy)? else {
+            return Ok(CopyRemoval::Absent);
+        };
+        let ready = pinned.join(format!("{hash}.ready"));
+        if !marker_state(hash, &ready)? {
+            // An unfinished copy has no marker, so no session holds it:
+            // only the caller's check can still refuse it.
+            if dry_run {
+                return Ok(CopyRemoval::Removed);
+            }
+            if let Err(reason) = check() {
+                return Ok(CopyRemoval::Refused(reason));
+            }
+            remove_copy_dir(&copy, &meta)?;
+            return Ok(CopyRemoval::Removed);
+        }
+        // Read-write without create: macOS refuses `O_CREAT` on a read-only
+        // open, and create would forge what ownership is being proved.
+        let marker = File::options()
+            .read(true)
+            .write(true)
+            .open(&ready)
+            .map_err(io_error(&ready))?;
+        // A session running the copy holds the marker shared, so a held
+        // copy fails here, changing nothing.
+        match marker.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(CopyRemoval::Held),
+            Err(TryLockError::Error(e)) => return Err(io_error(&ready)(e)),
+        }
+        if dry_run {
+            return Ok(CopyRemoval::Removed);
+        }
+        if let Err(reason) = check() {
+            return Ok(CopyRemoval::Refused(reason));
+        }
+        // Still under `pinned/.lock` and the marker lock: nothing renamed
+        // the copy or took a hold between the checks above and this.
+        fs::remove_file(&ready).map_err(io_error(&ready))?;
+        remove_copy_dir(&copy, &meta)?;
+        Ok(CopyRemoval::Removed)
+    }
+
+    /// Every `pinned/<hash>` that has an approval record: `owners` are the
+    /// project keys with `projects/<key>/approvals/<hash>`, sorted, and
+    /// `machine_wide` is the per-machine `approvals/<hash>`. An approval
+    /// without its copy is not listed. Takes no lock. Any listing error
+    /// other than `NotFound` is `Err` naming the path.
+    pub fn kept_copies(home: &Path) -> Result<Vec<KeptCopy>, Error> {
+        let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let projects = home.join("projects");
+        match fs::read_dir(&projects) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(io_error(&projects))?;
+                    let path = entry.path();
+                    // Only a real directory is a project: a file or a link
+                    // under `projects/` names no owner.
+                    if !fs::symlink_metadata(&path)
+                        .map_err(io_error(&path))?
+                        .file_type()
+                        .is_dir()
+                    {
+                        continue;
+                    }
+                    let key = entry.file_name().to_string_lossy().into_owned();
+                    let approvals = path.join("approvals");
+                    match fs::read_dir(&approvals) {
+                        Ok(records) => {
+                            for record in records {
+                                let record = record.map_err(io_error(&approvals))?;
+                                let name = record.file_name().to_string_lossy().into_owned();
+                                if is_hash(&name) {
+                                    owners.entry(name).or_default().push(key.clone());
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(io_error(&approvals)(e)),
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(&projects)(e)),
+        }
+        let mut machine_wide = BTreeSet::new();
+        let global = home.join("approvals");
+        match fs::read_dir(&global) {
+            Ok(records) => {
+                for record in records {
+                    let record = record.map_err(io_error(&global))?;
+                    let name = record.file_name().to_string_lossy().into_owned();
+                    if is_hash(&name) {
+                        machine_wide.insert(name);
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(&global)(e)),
+        }
+        let pinned = home.join("pinned");
+        let mut hashes: BTreeSet<String> = owners.keys().cloned().collect();
+        hashes.extend(machine_wide.iter().cloned());
+        let mut kept = Vec::new();
+        for hash in hashes {
+            let dir = pinned.join(&hash);
+            if fs::symlink_metadata(&dir).is_err() {
+                continue;
+            }
+            let mut owned = owners.remove(&hash).unwrap_or_default();
+            owned.sort();
+            kept.push(KeptCopy {
+                dir,
+                machine_wide: machine_wide.contains(&hash),
+                owners: owned,
+                hash,
+            });
+        }
+        Ok(kept)
     }
 
     /// Makes the copy again from the worktree when it is missing, and
@@ -198,40 +380,18 @@ impl Store {
         Ok(CopyHold { _ready: ready })
     }
 
-    /// Builds the copy at its final path, under the lock in
-    /// `pinned/.lock`, which serialises concurrent approvals. The path
-    /// `pinned/<hash>/` is known before the step runs, so the copy is
-    /// built in place there: a step such as creating a Python virtualenv
-    /// records its own location. The empty file `pinned/<hash>.ready` is
-    /// written last, so a copy with no `.ready` is an unfinished attempt
-    /// and is removed and built again, while a copy with one is kept. On
-    /// any error after the directory was made, the copy is removed, so a
-    /// failing step leaves no copy. A step failure is the step's own
-    /// error, unchanged.
-    fn pin(&self, item: &RepoItem, hash: &str, copy: &Path) -> Result<(), Error> {
-        let (_lock, pinned) = self.global_lock(item)?;
-        self.pin_locked(item, hash, copy, &pinned)
-    }
-
     /// `pinned/.lock`, held: what serialises concurrent approvals. The
     /// pinned root is checked before the lock file is even opened, so a
     /// link where the root goes never receives one. The lock is blocking,
     /// including for finished copies: a concurrent approval waits rather
     /// than racing a rebuild.
     fn global_lock(&self, item: &RepoItem) -> Result<(File, PathBuf), Error> {
-        let pinned = self.home.join("pinned");
-        check_dirs(&item.name, &self.home, &pinned, true)?;
-        fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
-        check_dirs(&item.name, &self.home, &pinned, false)?;
-        let lock_path = pinned.join(".lock");
-        let lock = File::options()
-            .create(true)
-            .append(true)
-            .open(&lock_path)
-            .map_err(io_error(&lock_path))?;
-        signal_lock_attempt();
-        lock.lock().map_err(io_error(&lock_path))?;
-        Ok((lock, pinned))
+        // `pinned_lock` with `create` makes the root, so `None` would mean
+        // a concurrent removal of `pinned/` itself, which no code does.
+        pinned_lock(&self.home, &item.name, true)?.ok_or(Error::Pin {
+            item: item.name.clone(),
+            why: "pinned/ is missing after it was created".to_owned(),
+        })
     }
 
     /// The copy itself, with `pinned/.lock` already held: keeping a
@@ -254,15 +414,7 @@ impl Store {
         // A link or any other non-file where the marker goes is refused
         // before it is ever opened or anything is deleted: only a regular
         // file can be locked or removed.
-        match fs::symlink_metadata(&ready) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(refused(&item.name, &ready, "is a symbolic link"));
-            }
-            Ok(meta) if !meta.file_type().is_file() => {
-                return Err(refused(&item.name, &ready, "is not a regular file"));
-            }
-            _ => {}
-        }
+        let marked = marker_state(&item.name, &ready)?;
         // The exclusive marker hold, kept until the build below is done:
         // proving ownership before deleting or replacing anything with a
         // ready file leaves a held copy alone.
@@ -276,7 +428,7 @@ impl Store {
                 // before rebuilding means a kill mid-rebuild cannot leave
                 // a partial directory beside the old marker, which the
                 // next approval would accept.
-                if ready.is_file() {
+                if marked {
                     _held = Some(claim(&ready)?);
                 }
                 if let Err(e) = fs::remove_file(&ready)
@@ -286,7 +438,7 @@ impl Store {
                 }
             }
             Ok(meta) if meta.file_type().is_dir() => {
-                if ready.is_file() {
+                if marked {
                     if self.finished(item, copy)? {
                         return Ok(());
                     }
@@ -304,7 +456,7 @@ impl Store {
                 // A stray file or link where the copy goes: claim a stale
                 // marker exactly as the legacy rebuild does, leaving a
                 // held copy alone, or the rebuild below fails on it.
-                if ready.is_file() {
+                if marked {
                     _held = Some(claim(&ready)?);
                     fs::remove_file(&ready).map_err(io_error(&ready))?;
                 }
@@ -604,6 +756,78 @@ fn check_marker(item: &str, home: &Path, path: &Path) -> Result<bool, Error> {
     }
 }
 
+/// `pinned/.lock`, held: what serialises approvals and prune's removals.
+/// With `create` the root is made first, as approvals need; without it a
+/// missing root is `None` and nothing is created, as removals need. Either
+/// way the root is checked before the lock file is even opened, so a link
+/// or file where the root goes never receives one. The lock is blocking:
+/// a concurrent approval or removal waits rather than racing a rebuild.
+fn pinned_lock(home: &Path, name: &str, create: bool) -> Result<Option<(File, PathBuf)>, Error> {
+    let pinned = home.join("pinned");
+    check_dirs(name, home, &pinned, true)?;
+    if create {
+        fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
+    } else if let Err(e) = fs::symlink_metadata(&pinned) {
+        if e.kind() == io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(io_error(&pinned)(e));
+    }
+    check_dirs(name, home, &pinned, false)?;
+    let lock_path = pinned.join(".lock");
+    let lock = File::options()
+        .create(true)
+        .append(true)
+        .open(&lock_path)
+        .map_err(io_error(&lock_path))?;
+    signal_lock_attempt();
+    lock.lock().map_err(io_error(&lock_path))?;
+    Ok(Some((lock, pinned)))
+}
+
+/// The copy's metadata, or `None` when no copy is there. Any other error
+/// fails naming the copy: `pinned/` is verified searchable under the lock
+/// just above, so only a missing copy surfaces without a concurrent
+/// permission change no test can stage.
+#[cfg_attr(false, mutants::skip)]
+fn copy_metadata(copy: &Path) -> Result<Option<fs::Metadata>, Error> {
+    match fs::symlink_metadata(copy) {
+        Ok(meta) => Ok(Some(meta)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_error(copy)(e)),
+    }
+}
+
+/// Whether the `.ready` marker is present as a regular file: a link or a
+/// non-file fails naming it before it is ever opened, while a missing
+/// marker is an unfinished copy. Any other error fails naming the marker:
+/// its parent is verified searchable under the lock, so no test can stage
+/// another error without a concurrent permission change.
+#[cfg_attr(false, mutants::skip)]
+fn marker_state(item: &str, ready: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(ready) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(refused(item, ready, "is a symbolic link"))
+        }
+        Ok(meta) if !meta.file_type().is_file() => {
+            Err(refused(item, ready, "is not a regular file"))
+        }
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io_error(ready)(e)),
+    }
+}
+
+/// Removes the copy: a directory goes through `install::remove`, while a
+/// link or file is unlinked, so a link is never followed.
+fn remove_copy_dir(copy: &Path, meta: &fs::Metadata) -> Result<(), Error> {
+    if meta.file_type().is_dir() {
+        remove(copy)
+    } else {
+        fs::remove_file(copy).map_err(io_error(copy))
+    }
+}
+
 /// Publishes an empty marker without ever following a link: a marker path
 /// that already exists in any form (an install step may have planted either
 /// marker as a link) fails the approval with nothing published, and
@@ -674,5 +898,67 @@ fn signal_lock_attempt() {
     }
 }
 
+/// A pause armed for one home: the gate is the home, and the channels
+/// carry the parked signal and the release.
+#[cfg(test)]
+type ArmedPause = (
+    PathBuf,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
+/// Approvals parked between pinning and recording, keyed by home: only the
+/// store whose test armed one pauses, so concurrent approvals in other
+/// tests never park on it.
+#[cfg(test)]
+static RECORD_PAUSES: std::sync::Mutex<Vec<ArmedPause>> = std::sync::Mutex::new(Vec::new());
+
+/// Arms the pause between pinning and recording in `approve` for `home`:
+/// while the file `home/approve-pause` exists, the approving thread signals
+/// `entered` and blocks until the test releases `release` (dropping the
+/// test's sender releases it too). Passing `None` disarms it. Only tests
+/// set it; production never pauses. The gate is a file, the same shape as
+/// the #2521 repro, because a test cannot pass it through the environment.
+#[cfg(test)]
+pub(crate) fn set_record_pause(
+    home: &Path,
+    pause: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+) {
+    let mut pauses = RECORD_PAUSES.lock().unwrap();
+    pauses.retain(|(registered, _, _)| registered != home);
+    if let Some((entered, release)) = pause {
+        pauses.push((home.to_owned(), entered, release));
+    }
+}
+
+/// The file-gated pause in `approve`, between the copy and the record. The
+/// lock in `pinned/.lock` is held across it, so a prune running under the
+/// same lock waits rather than missing the record.
+#[cfg(test)]
+fn pause_before_record(store: &Store) {
+    let taken = {
+        let mut pauses = RECORD_PAUSES.lock().unwrap();
+        pauses
+            .iter()
+            .position(|(registered, _, _)| registered == &store.home)
+            .map(|at| pauses.remove(at))
+    };
+    let Some((_, entered, release)) = taken else {
+        return;
+    };
+    if !store.home.join("approve-pause").exists() {
+        return;
+    }
+    entered.send(()).unwrap_or(());
+    release.recv().unwrap_or(());
+}
+
+#[cfg(not(test))]
+fn pause_before_record(_store: &Store) {}
+
 #[cfg(not(test))]
 fn signal_lock_attempt() {}
+
+#[cfg(test)]
+#[path = "store_remove_tests.rs"]
+mod remove_tests;

@@ -2,6 +2,7 @@
 //! flags" and "Processes"), and the one function that builds and runs
 //! every new session, `fiber ask`'s included.
 
+use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +20,35 @@ use crate::{
     Parts, ask_failed, ask_permissions, cli, crash, failed, finish, late_emit, mcp_servers,
     parts_with, run_turn, session_extensions, shutdown,
 };
+
+thread_local! {
+    // debt: the opener reaches run_new_with through a thread-local so run_new keeps its signature for rewind.rs. Upgrade trigger: when rewind.rs passes the opener explicitly, pass it as an argument and delete OPENED and OpenedHold.
+    /// The worktree's create-line opener for the `run_new` below.
+    /// `run_new_with` holds it here while `run_new` runs, so the session
+    /// directory's `events.jsonl` join stays in `fn run_new`: the context the
+    /// session-path allowance names, while `run_new` keeps the signature
+    /// `rewind.rs` calls.
+    static OPENED: RefCell<Option<doors::WorktreeOpener>> = RefCell::new(None);
+}
+
+/// Holds a worktree opener for `run_new`: set on entry, the previous
+/// value back on drop, so a panic still leaves the slot as it was.
+struct OpenedHold {
+    previous: Option<doors::WorktreeOpener>,
+}
+
+impl OpenedHold {
+    fn set(opened: Option<doors::WorktreeOpener>) -> Self {
+        let previous = OPENED.with(|cell| cell.replace(opened));
+        Self { previous }
+    }
+}
+
+impl Drop for OpenedHold {
+    fn drop(&mut self) {
+        OPENED.with(|cell| cell.replace(self.previous.take()));
+    }
+}
 
 /// The internal session command: one session process bound at
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
@@ -177,7 +207,8 @@ pub(crate) fn new_session(
         return report(signals, failure);
     }
     let worktree = isolation.worktree();
-    let result = run_new(
+    let opened = isolation.opener();
+    let result = run_new_with(
         id,
         overrides,
         prompt,
@@ -191,6 +222,7 @@ pub(crate) fn new_session(
         parent,
         None,
         reads,
+        Some(opened),
     );
     isolation.end();
     match result {
@@ -220,6 +252,10 @@ pub(crate) fn run_new(
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
 ) -> Result<i32, Failure> {
+    // Held by `run_new_with` for a fresh worktree, empty on every direct
+    // call: taking leaves the slot empty, so a panic leaves nothing
+    // behind either.
+    let opened: Option<doors::WorktreeOpener> = OPENED.with(|cell| cell.take());
     // Armed before the parts are read: from now a signal cancels the one
     // reads every startup credential command runs through.
     shutdown::arm(signals, &reads);
@@ -335,6 +371,12 @@ pub(crate) fn run_new(
     } else {
         None
     };
+    // The create line's writer opens here, before the session file
+    // attaches: its `ts` is the writer's open time, its `ms` the stamped
+    // creation. At `info` there is no timing, so nothing opens.
+    if let (Some(timing), Some(opened)) = (&timing, &opened) {
+        opened(timing);
+    }
     // The registry is built above, before any tool runs: installing the
     // session's timing times a background start as `jobs.start`.
     if let Some(timing) = &timing {
@@ -433,6 +475,7 @@ pub(crate) fn run_new(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
+    session.quota(switching.quota_reader());
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
@@ -586,6 +629,38 @@ pub(crate) fn run_new(
     Ok(code)
 }
 
+/// As [`run_new`], opening the worktree's create line once the diagnostic
+/// writer exists: `opened` is the isolation's opener, held above while
+/// `run_new` runs and called right after the session timing is built,
+/// before the writer attaches. `None` skips it, so a run without a fresh
+/// worktree writes no create line.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "session execution carries its isolation, case and startup inputs"
+)]
+pub(crate) fn run_new_with(
+    id: SessionId,
+    overrides: Vec<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    worktree: Option<Worktree>,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    fiber: Result<PathBuf, String>,
+    host: Option<Arc<extensions::HostScript>>,
+    case_run: Option<Arc<crate::case::run::CaseRun>>,
+    parent: Option<Parent>,
+    rewound: Option<r#loop::Rewound>,
+    reads: Arc<crate::switch::Reads>,
+    opened: Option<doors::WorktreeOpener>,
+) -> Result<i32, Failure> {
+    let _hold = OpenedHold::set(opened);
+    run_new(
+        id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
+        rewound, reads,
+    )
+}
+
 /// Prints a startup failure, asking about a recorded signal first: a
 /// signal that arrived before `fiber_started` exits with its code and
 /// writes nothing (`docs/invocation.md`, "Shutdown").
@@ -636,4 +711,49 @@ pub(crate) fn close(
     };
     // A row that cannot be written loses only the listing, not the log.
     hub::append(home, &row).unwrap_or(());
+}
+
+#[cfg(test)]
+mod opened_hold_tests {
+    #![allow(clippy::panic, reason = "test assertions")]
+
+    use super::*;
+
+    /// The hold hands the slot back on drop: the inner drop restores the
+    /// outer opener, and the outer drop clears the slot, so a later
+    /// `run_new_with` on the same thread sees no earlier opener.
+    #[test]
+    fn drop_restores_the_previous_opener_then_clears() {
+        let first: doors::WorktreeOpener = Arc::new(|_: &contract::diag::Timing| {});
+        let second: doors::WorktreeOpener = Arc::new(|_: &contract::diag::Timing| {});
+        // Whatever the thread ran before: start known, hand back after.
+        let stash = OPENED.with(|cell| cell.take());
+        {
+            let _outer = OpenedHold::set(Some(Arc::clone(&first)));
+            {
+                let _inner = OpenedHold::set(Some(Arc::clone(&second)));
+                assert!(
+                    OPENED.with(|cell| cell
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|held| Arc::ptr_eq(held, &second))),
+                    "the inner hold sets the slot"
+                );
+            }
+            assert!(
+                OPENED.with(|cell| cell
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|held| Arc::ptr_eq(held, &first))),
+                "the inner drop hands the slot back to the outer opener"
+            );
+        }
+        assert!(
+            OPENED.with(|cell| cell.borrow().is_none()),
+            "the outer drop clears the slot"
+        );
+        OPENED.with(|cell| {
+            cell.replace(stash);
+        });
+    }
 }

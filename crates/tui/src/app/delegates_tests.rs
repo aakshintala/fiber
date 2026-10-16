@@ -269,7 +269,7 @@ fn linked(app: &mut App) -> (String, String) {
 fn live(session: &str, state: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -294,7 +294,7 @@ fn live(session: &str, state: Value) -> Line {
 fn delegate_status(session: &str, parent: &str, state: Value) -> Line {
     let mut payload = json!({
         "name": "delegate one", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

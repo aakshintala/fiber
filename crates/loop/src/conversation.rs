@@ -9,7 +9,7 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
-    InstructionSent, Outcome, ToolCallCompleted, ToolCallRequested,
+    InstructionSent, Outcome, ShellCommand, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::shapes::ContentPart;
@@ -98,7 +98,14 @@ pub(crate) fn rebuild_and_sent(
     let mut sent = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
         if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
-            rendered.push(&event, line.action_id.as_ref(), &stamped, &completed, open);
+            rendered.push(
+                &event,
+                line.action_id.as_ref(),
+                line.seq.map(|seq| seq.0),
+                &stamped,
+                &completed,
+                open,
+            );
             if let Event::ModelChanged(changed) = &event {
                 stamped = changed.after.model.clone();
             }
@@ -154,6 +161,7 @@ impl Rendered {
         &mut self,
         event: &Event,
         action: Option<&ActionId>,
+        seq: Option<u64>,
         model: &str,
         completed: &HashSet<ActionId>,
         open: &HashSet<ActionId>,
@@ -257,7 +265,6 @@ impl Rendered {
             | Event::StepStarted(_)
             | Event::TurnCompleted(_)
             | Event::SteeringQueue(_)
-            | Event::ShellCommand(_)
             | Event::SessionNamed(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
@@ -298,6 +305,15 @@ impl Rendered {
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
+            }
+            // A sent shell waits for the next turn: held under its line's
+            // `seq`, which the `turn_started` naming it releases. It
+            // renders nothing here, so a turn never reads a shell taken
+            // while it runs.
+            Event::ShellCommand(line) => {
+                if let Some(seq) = seq {
+                    self.carry.hold(seq, line);
+                }
             }
             // A monitor's batch joins at a step boundary, as a job's end
             // does, and waits for a suspended batch's results the same way.
@@ -429,9 +445,23 @@ pub(crate) fn render(
                     InputItem::Jobs { .. } => {}
                     // The handoff's own lines render what it does.
                     InputItem::Handoff { .. } => {}
-                    // debt: a shell command starts a turn only once the
-                    // shell exists (#296); it renders then.
-                    InputItem::ShellCommand { .. } | InputItem::Unknown => {}
+                    // A sent shell the turn names renders its held line as
+                    // one user message; an item naming no held line renders
+                    // nothing.
+                    InputItem::ShellCommand { seq } => {
+                        if let Some(held) = carry.release(seq.0) {
+                            let text = shell_text(&held);
+                            conversation.push(Input::User {
+                                text: text.clone(),
+                                images: Vec::new(),
+                            });
+                            carry.input.push(Input::User {
+                                text,
+                                images: Vec::new(),
+                            });
+                        }
+                    }
+                    InputItem::Unknown => {}
                 }
             }
         }
@@ -752,6 +782,24 @@ fn dir_of(path: &str) -> String {
         .parent()
         .map(|parent| parent.display().to_string())
         .unwrap_or_default()
+}
+
+/// What the model reads for a sent shell: `! <command>`, its output,
+/// then the exit code when non-zero, or the signal. The person reads the
+/// same shape from the `shell_command` line (`crates/tui/src/shell.rs`).
+fn shell_text(line: &ShellCommand) -> String {
+    let mut text = format!("! {}", line.command);
+    let output = line.output.trim_end();
+    if !output.is_empty() {
+        text.push('\n');
+        text.push_str(output);
+    }
+    match (&line.process.signal, line.process.exit_code) {
+        (Some(signal), _) => text.push_str(&format!("\nsignal {signal}")),
+        (None, Some(code)) if code != 0 => text.push_str(&format!("\nexit {code}")),
+        (None, Some(_) | None) => {}
+    }
+    text
 }
 
 /// A message as the model reads it.

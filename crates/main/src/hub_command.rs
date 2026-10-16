@@ -106,6 +106,7 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
         }),
         clock,
         environments,
+        Arc::new(crate::configure::Seam::new(home.clone())),
     ))
 }
 

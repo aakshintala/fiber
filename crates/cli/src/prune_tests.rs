@@ -29,6 +29,10 @@ fn wall() -> std::time::SystemTime {
     fakes::clock::FakeClock::new().wall()
 }
 
+fn clock() -> std::sync::Arc<fakes::clock::FakeClock> {
+    fakes::clock::FakeClock::new()
+}
+
 fn args(older_than: Option<&str>, cascade: bool, dry_run: bool, yes: bool) -> PruneArgs {
     PruneArgs {
         older_than: older_than.map(str::to_owned),
@@ -199,7 +203,7 @@ fn run_prune(
         &setup.home(),
         &setup.workspace(),
         args,
-        wall(),
+        clock().as_ref(),
         ask,
         &mut out,
         &mut || hub.connect(),
@@ -231,7 +235,7 @@ fn run_prune_no_connect(
         &setup.home(),
         &setup.workspace(),
         args,
-        wall(),
+        clock().as_ref(),
         ask,
         &mut out,
         &mut || -> Result<doors::hub::Hub, doors::Error> {

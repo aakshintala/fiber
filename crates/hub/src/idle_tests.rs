@@ -111,6 +111,7 @@ fn serve_mode(
                     vars: Vec::new(),
                     source: contract::events::VariablesSource::Inherited,
                 }),
+                Arc::new(crate::fake::FakeMachine::default()),
             )
             .expect("the hub starts");
             done_tx.send(code).unwrap_or(());
@@ -148,6 +149,7 @@ fn serve_mode_env(
                 Arc::new(FakeStarter::hang(&home)),
                 timed,
                 environments,
+                Arc::new(crate::fake::FakeMachine::default()),
             )
             .expect("the hub starts");
             done_tx.send(code).unwrap_or(());

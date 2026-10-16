@@ -85,8 +85,12 @@ fn status(name: &str) -> Event {
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),
+        thinking: None,
         state: SessionState::Idle,
         since: 0,
+        started: 0,
+        calls: 0,
+        step: None,
         git: None,
         context: None,
         spend: usage(),
@@ -197,7 +201,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
-        Delivery::Cancelled => panic!("a wake arrives as a delivery"),
+        Delivery::Cancelled | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
@@ -1163,6 +1167,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let accepted_lines = until(&sender, |line| command_id(line) == Some("c_m1"));
@@ -1200,6 +1205,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_m2"));
@@ -1289,6 +1295,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
             let rejected = until(&sender, |line| command_id(line) == Some("c_cred"));
@@ -1383,6 +1390,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let accepted = until(&sender, |line| command_id(line) == Some("c_r1"));
@@ -1423,6 +1431,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
             let rejected_lines = until(&sender, |line| command_id(line) == Some("c_r2"));
@@ -1692,6 +1701,54 @@ struct Fixed {
     output: Output,
     bound: Bound,
     ran: Arc<AtomicBool>,
+}
+
+/// A shell tool whose output is `len` `x` bytes, read from the command's
+/// trailing number: `big 9` returns nine `x` bytes.
+struct Lengths {
+    bound: Bound,
+}
+
+impl Tool for Lengths {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let command = arguments
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let len: usize = command
+            .rsplit(' ')
+            .next()
+            .and_then(|last| last.parse().ok())
+            .unwrap_or(0);
+        Output {
+            content: vec![ContentPart::Text {
+                text: "x".repeat(len),
+            }],
+            process: Some(Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        self.bound
+    }
 }
 
 impl Tool for Fixed {
@@ -2310,34 +2367,275 @@ fn a_shell_nobody_cancelled_starts_uncancelled() {
     opened.close();
 }
 
+fn shell_send_line(id: &str, command: &str) -> String {
+    format!(r#"{{"id":"{id}","command":"shell","args":{{"command":"{command}","send":true}}}}"#)
+}
+
 #[test]
-fn shell_send_true_is_rejected_and_does_not_run() {
+fn shell_send_true_is_delivered_to_the_inbox_and_accepted_without_a_result() {
     let opened = Opened::open(vec![]);
-    let ran = Arc::new(AtomicBool::new(false));
-    opened.session.shell(fixed_ran(
-        ended(0, "hi\n"),
-        Bound::DEFAULT,
-        Arc::clone(&ran),
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_send_line("c_2", "echo hi"));
+            // The loop's side takes the delivery before the client is answered.
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the sent shell is delivered");
+            let Delivery::Shell(line, ack) = delivery else {
+                panic!("a sent shell arrives as a shell");
+            };
+            assert_eq!(line.command, "echo hi");
+            assert_eq!(line.output, "hi\n");
+            assert!(line.artifact.is_none());
+            assert_eq!(line.process.exit_code, Some(0));
+            assert_eq!(line.process.signal, None);
+            assert!(!line.process.timed_out);
+            // The ack is still held, so no answer can arrive yet: the loop
+            // answers the client only when it takes the delivery.
+            ack.0(Ok(None));
+            let accepted = response(&client, "c_2");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_2"));
+            assert!(
+                accepted["payload"].get("result").is_none(),
+                "a sent shell answers with no result: {accepted}"
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_cut_boundary_names_artifact_only_past_the_cap() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened.session.shell(Arc::new(Lengths {
+        bound: Bound { start: 4, end: 4 },
+    }));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            // The cap is 8: below it and at it the output stays whole,
+            // past it the delivery names the cut file.
+            for (id, len, cut) in [("c_7", 7, false), ("c_8", 8, false), ("c_9", 9, true)] {
+                let command = format!("big {len}");
+                send(&client, &shell_send_line(id, &command));
+                let delivery = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the sent shell is delivered");
+                let Delivery::Shell(line, ack) = delivery else {
+                    panic!("a sent shell arrives as a shell");
+                };
+                assert_eq!(line.command, command);
+                assert_eq!(line.artifact.is_some(), cut, "{id}");
+                if cut {
+                    let artifact = line.artifact.as_deref().unwrap();
+                    assert!(artifact.starts_with("artifacts/o_"), "{artifact}");
+                    assert_eq!(fs::read(dir.join(artifact)).unwrap(), vec![b'x'; len]);
+                    assert!(
+                        line.output.contains("bytes cut"),
+                        "the cut output says so: {}",
+                        line.output
+                    );
+                } else {
+                    assert_eq!(line.output, "x".repeat(len));
+                }
+                assert_eq!(line.process.exit_code, Some(0));
+                ack.0(Ok(None));
+                let accepted = response(&client, id);
+                assert_eq!(kind(&accepted), "command_accepted");
+                assert!(accepted["payload"].get("result").is_none());
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_spilled_output_delivers_the_spill_file() {
+    let opened = Opened::open(vec![]);
+    let path = opened.dir.join("artifacts/s_test.txt");
+    let saved = b"original spilled bytes, kept whole";
+    fs::write(&path, saved).unwrap();
+    let size = u64::try_from(saved.len()).unwrap();
+    opened.session.shell(fixed(
+        spilled_ok(
+            "HEAD",
+            "TAIL",
+            5,
+            path.clone(),
+            size,
+            "competing, ignored",
+            Some(0),
+        ),
+        Bound { start: 1, end: 1 },
     ));
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
-            send(
-                &client,
-                r#"{"id":"c_2","command":"shell","args":{"command":"echo hi","send":true}}"#,
+            send(&client, &shell_send_line("c_big", "cat big"));
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the sent shell is delivered");
+            let Delivery::Shell(line, ack) = delivery else {
+                panic!("a sent shell arrives as a shell");
+            };
+            let absolute = path.display().to_string();
+            let notice =
+                format!("[5 bytes cut. The full output is in {absolute}; read it with `read`.]");
+            assert_eq!(line.output, format!("HEAD\n{notice}\nTAIL"));
+            assert_eq!(line.artifact.as_deref(), Some("artifacts/s_test.txt"));
+            assert_eq!(line.process.exit_code, Some(0));
+            ack.0(Ok(None));
+            let accepted = response(&client, "c_big");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert!(accepted["payload"].get("result").is_none());
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_cancelled_tool_delivers_its_signal() {
+    let opened = Opened::open(vec![]);
+    opened.session.shell(fixed(
+        Output {
+            content: vec![ContentPart::Text {
+                text: "stopped\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: Some("SIGKILL".to_owned()),
+                timed_out: false,
+            }),
+            ..Output::default()
+        },
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_send_line("c_sig", "killed"));
+            let delivery = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the sent shell is delivered");
+            let Delivery::Shell(line, ack) = delivery else {
+                panic!("a sent shell arrives as a shell");
+            };
+            assert_eq!(line.output, "stopped\n");
+            assert!(line.artifact.is_none());
+            assert_eq!(line.process.exit_code, None);
+            assert_eq!(line.process.signal.as_deref(), Some("SIGKILL"));
+            ack.0(Ok(None));
+            let accepted = response(&client, "c_sig");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert!(accepted["payload"].get("result").is_none());
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_without_a_process_is_invalid_arguments() {
+    let opened = Opened::open(vec![]);
+    opened.session.shell(fixed(
+        Output {
+            error: Some(Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "Give one command.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..Output::default()
+        },
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_send_line("c_1", ""));
+            let line = response(&client, "c_1");
+            assert_eq!(rejection(&line), ("invalid_arguments", "Give one command."));
+            assert!(
+                inbox.try_recv().is_err(),
+                "a shell that never started reaches no inbox"
             );
-            let line = response(&client, "c_2");
-            assert_eq!(
-                rejection(&line),
-                (
-                    "invalid_arguments",
-                    "`send` is not built in this Fiber yet."
-                )
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_false_delivers_nothing_to_the_inbox() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", "echo hi"));
+            let line = response(&client, "c_1");
+            assert_eq!(line["payload"]["result"]["output"], "hi\n");
+            assert!(
+                inbox.try_recv().is_err(),
+                "an unsent shell reaches no inbox"
             );
-            assert!(!ran.load(Ordering::Relaxed));
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_once_the_inbox_is_gone_is_rejected_ended() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            drop(inbox);
+            send(&client, &shell_send_line("c_gone", "echo hi"));
+            let rejected = response(&client, "c_gone");
+            assert_eq!(rejection(&rejected), ("closing", ENDED));
             Ok(())
         })
         .unwrap();
@@ -3163,6 +3461,54 @@ fn skills_with_none_given_answers_an_empty_list() {
             assert_eq!(
                 answer["payload"]["result"],
                 serde_json::json!({"skills": []})
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn quota_answers_without_waiting_for_the_inbox() {
+    let opened = Opened::open(vec![]);
+    let rows = serde_json::json!([{"provider": "p", "credential": "work", "credit": {"remaining": 4.2, "limit": 10.0}, "unreachable": true}]);
+    let quota: Vec<contract::events::QuotaInfo> = serde_json::from_value(rows.clone()).unwrap();
+    opened
+        .session
+        .quota(Arc::new(move || (quota.clone(), 70.0)));
+    let socket = opened.socket.clone();
+    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        let client = Client::connect(&socket).unwrap();
+        send(&client, r#"{"id":"early","command":"quota"}"#);
+        assert_eq!(rejection(&response(&client, "early")), ("not_subscribed", NOT_SUBSCRIBED));
+        subscribe(&client, "sub", "full");
+        send(&client, r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#);
+        send(&client, r#"{"id":"quota","command":"quota"}"#);
+        let answer = response(&client, "quota");
+        assert_eq!(kind(&answer), "command_accepted");
+        assert_eq!(answer["payload"]["result"], serde_json::json!({"quota": rows, "notice_at": 70.0}));
+        send(&client, r#"{"id":"bad","command":"quota","args":{"future":1}}"#);
+        assert_eq!(rejection(&response(&client, "bad")), ("invalid_arguments", UNFIT));
+        Ok(())
+    }).unwrap();
+    opened.close();
+}
+
+#[test]
+fn quota_without_a_reader_answers_empty() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(&client, r#"{"id":"quota","command":"quota","args":{}}"#);
+            let answer = response(&client, "quota");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"quota": [], "notice_at": 80.0})
             );
             Ok(())
         })
@@ -4700,6 +5046,38 @@ fn reopened_log(sessions: PathBuf, id: SessionId, clock: Arc<dyn Clock>) -> Arc<
         .recv_or_fail(&rx, "the log reopened for close")
         .unwrap();
     Arc::new(log)
+}
+
+#[test]
+fn drive_quota_is_a_built_command() {
+    let opened = Opened::open(vec![]);
+    let driver = opened.session.driver();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                driver.drive(
+                    "fiber.test/a",
+                    "quota",
+                    Map::new(),
+                    Ack(Box::new(move |answer| {
+                        tx.send(answer).unwrap();
+                    })),
+                )
+            });
+            let answer = Deadline::after(DEADLINE).recv_or_fail(&rx, "the quota drive answer");
+            assert_eq!(
+                answer.unwrap(),
+                Some(contract::events::CommandResult::Quota {
+                    quota: vec![],
+                    notice_at: 80.0
+                })
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }
 
 fn drive_shell(driver: &Arc<dyn Drive>, command: &str) -> mpsc::Receiver<Answer> {

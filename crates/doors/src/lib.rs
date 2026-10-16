@@ -47,7 +47,9 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
-pub use isolation::{Isolation, RecreateError, Recreated, Shared, isolate, recreate, share};
+pub use isolation::{
+    Isolation, RecreateError, Recreated, Shared, WorktreeOpener, isolate, recreate, share,
+};
 pub use session::{Declare, Session};
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
 pub use steer::{Steered, steer};

@@ -1,11 +1,13 @@
 ---
 source: crates/tui/src/app/session_views_tests.rs
-assertion_line: 1270
 expression: shown
 ---
  Running jobs  delegates · jobs                                      Esc returns
-  task j_1
-  task j_2
+Jobs · 2 running
+◆ task j_1 · 0s · j_1
+◆ task j_2 · 0s · j_2
+
+a row opens that item's view
 
 
 
@@ -21,9 +23,6 @@ expression: shown
 
 
 
-
-
-↑↓ move · Enter open · Esc close
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -1,7 +1,8 @@
 //! `fiber sessions prune` (`docs/invocation.md`, "Deleting and pruning"):
 //! deletes old exited sessions through the hub, removes kept worktrees
-//! that hold nothing to lose, and deletes old diagnostic logs and crash
-//! files, with `--dry-run`, `--yes` and the space freed.
+//! that hold nothing to lose, removes pinned copies no worktree matches,
+//! and deletes old diagnostic logs and crash files, with `--dry-run`,
+//! `--yes` and the space freed.
 
 use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::Path;
@@ -13,6 +14,7 @@ use contract::shapes::Failure;
 
 mod diagnostics;
 mod ignored;
+mod pinned;
 mod sessions;
 mod worktrees;
 
@@ -67,7 +69,7 @@ pub fn prune(
             home,
             workspace,
             args,
-            clock.wall(),
+            clock,
             ask,
             &mut io::stdout(),
             connect,
@@ -75,18 +77,20 @@ pub fn prune(
     })
 }
 
-/// Runs prune for `home` and `workspace` at `now`: lists, asks unless
-/// `yes` or `dry_run`, deletes diagnostics, then worktrees, then sessions,
-/// and prints the space freed. `--dry-run` never connects and never asks.
+/// Runs prune for `home` and `workspace` on `clock`: lists, asks unless
+/// `yes` or `dry_run`, deletes diagnostics, then worktrees, then pinned
+/// copies, then sessions, and prints the space freed. `--dry-run` never
+/// connects and never asks.
 fn prune_run(
     home: &Path,
     workspace: &Path,
     args: &PruneArgs,
-    now: SystemTime,
+    clock: &dyn Clock,
     ask: Ask<'_>,
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
+    let now = clock.wall();
     let older_than = match &args.older_than {
         None => None,
         Some(text) => match config::parse_duration(text) {
@@ -103,24 +107,54 @@ fn prune_run(
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let selected = sessions::select(home, workspace, older_than, args.cascade, now);
     let mut planned = worktrees::select(home, workspace, args.force, args.dry_run, now);
+    let pinned_plan = pinned::select(home, workspace, clock);
     let has_sessions = !selected.deletes.is_empty();
     let has_worktrees = !planned.removals.is_empty();
+    let has_pinned = pinned_plan
+        .rows
+        .iter()
+        .any(|row| matches!(row, pinned::PinnedRow::Removable { .. }));
     let has_diagnostics = !logs.is_empty() || !crashes.is_empty();
-    if !has_sessions && !has_worktrees && !has_diagnostics {
-        print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
+    if !has_sessions && !has_worktrees && !has_pinned && !has_diagnostics {
+        print_rows(
+            out,
+            &selected.rows,
+            &planned.rows,
+            &pinned_plan.rows,
+            &logs,
+            &crashes,
+            now,
+        )?;
         write_line(out, &format!("freed {}", format_size(0)))?;
         return Ok(());
     }
     let would_free = session_listed_bytes(&selected.rows)
         + worktrees::listed_bytes(&planned)
+        + pinned::listed_bytes(&pinned_plan)
         + diag_bytes(&logs)
         + diag_bytes(&crashes);
     if args.dry_run {
-        print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
+        print_rows(
+            out,
+            &selected.rows,
+            &planned.rows,
+            &pinned_plan.rows,
+            &logs,
+            &crashes,
+            now,
+        )?;
         write_line(out, &format!("would free {}", format_size(would_free)))?;
         return Ok(());
     }
-    print_rows(out, &selected.rows, &planned.rows, &logs, &crashes, now)?;
+    print_rows(
+        out,
+        &selected.rows,
+        &planned.rows,
+        &pinned_plan.rows,
+        &logs,
+        &crashes,
+        now,
+    )?;
     if !ask.yes && !confirmed(PRUNE_PROMPT, PRUNE_NOBODY, ask.terminal, ask.input, ask.err)? {
         say(ask.err, "nothing deleted\n");
         return Ok(());
@@ -135,9 +169,12 @@ fn prune_run(
         .collect();
     let diag_total = logs.len() + crashes.len();
     let removed_worktrees = worktrees::remove_planned(home, &mut planned, args.force, &mut |_| {});
-    let freed = removed_logs.freed + removed_crashes.freed + removed_worktrees.freed;
+    let removed_pinned = pinned::remove_planned(home, &pinned_plan, clock, &mut |_| {});
+    let freed =
+        removed_logs.freed + removed_crashes.freed + removed_worktrees.freed + removed_pinned.freed;
     failures.extend(removed_worktrees.failures);
-    let worktree_total = removed_worktrees.total;
+    failures.extend(removed_pinned.failures);
+    let other_total = removed_worktrees.total + removed_pinned.total;
     drop(planned);
     if !has_sessions {
         return finish(
@@ -147,7 +184,7 @@ fn prune_run(
             freed,
             failures,
             diag_total,
-            worktree_total,
+            other_total,
         );
     }
     let stream = match connect() {
@@ -168,7 +205,7 @@ fn prune_run(
                 freed,
                 failures,
                 diag_total,
-                worktree_total,
+                other_total,
                 ask.err,
             );
         }
@@ -191,17 +228,19 @@ fn prune_run(
         freed,
         failures,
         diag_total,
-        worktree_total,
+        other_total,
         ask.err,
     )
 }
 
-/// Prints every row: sessions by id, then worktrees by name, then `logs/`
-/// then `crashes/` by file name, fields separated by two spaces.
+/// Prints every row: sessions by id, then worktrees by name, then pinned
+/// copies by hash, then `logs/` then `crashes/` by file name, fields
+/// separated by two spaces.
 fn print_rows(
     out: &mut dyn Write,
     sessions: &[sessions::SessionRow],
     worktrees: &[worktrees::WorktreeRow],
+    pinned: &[pinned::PinnedRow],
     logs: &[OldFile],
     crashes: &[OldFile],
     now: SystemTime,
@@ -211,6 +250,9 @@ fn print_rows(
     }
     for row in worktrees {
         write_line(out, &worktrees::worktree_line(row))?;
+    }
+    for row in pinned {
+        write_line(out, &pinned::pinned_line(row))?;
     }
     for file in logs {
         write_line(out, &diag_line("log", &file.path, file.bytes, now))?;
@@ -405,7 +447,7 @@ fn reconcile(
     diag_freed: u64,
     failures: Vec<(String, ErrorCode, String)>,
     diag_total: usize,
-    worktree_total: usize,
+    other_total: usize,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
     let mut freed = diag_freed;
@@ -473,7 +515,7 @@ fn reconcile(
         freed,
         failures,
         diag_total,
-        worktree_total,
+        other_total,
     )
 }
 
@@ -487,7 +529,7 @@ fn finish(
     freed: u64,
     failures: Vec<(String, ErrorCode, String)>,
     diag_total: usize,
-    worktree_total: usize,
+    other_total: usize,
 ) -> Result<(), Failure> {
     write_line(out, &format!("freed {}", format_size(freed)))?;
     if failures.is_empty() {
@@ -509,7 +551,7 @@ fn finish(
         })
         .count()
         + diag_total
-        + worktree_total;
+        + other_total;
     let (_, code, _) =
         failures
             .first()

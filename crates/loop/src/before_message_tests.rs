@@ -573,7 +573,7 @@ struct OneJob;
 
 impl Jobs for OneJob {
     fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: PathBuf::from("nowhere"),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "no jobs in this test"),
         })

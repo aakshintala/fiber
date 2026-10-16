@@ -227,6 +227,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "tools"
             | "commands"
             | "skills"
+            | "quota"
             | "history"
             | "artifact_page"
             | "model"
@@ -284,6 +285,10 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         Command::Skills => {
             let skills = conn.gate.skills();
             accept(conn, id, Some(CommandResult::Skills { skills }));
+        }
+        Command::Quota => {
+            let (quota, notice_at) = conn.gate.quota();
+            accept(conn, id, Some(CommandResult::Quota { quota, notice_at }));
         }
         Command::History(args) => {
             // The log is dropped once read, so this connection does not
@@ -420,12 +425,8 @@ fn cancel(conn: &mut Conn, id: CommandId) {
 /// before this returns. The thread gets the shell and its answer only once
 /// it has started; if it cannot start, the reader answers `io_failed`.
 fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name: &str) {
-    let running = match crate::shell::start(&conn.gate, args) {
-        Ok(running) => running,
-        Err(crate::shell::Refused::Unknown) => return unknown(conn, id, name),
-        Err(crate::shell::Refused::Rejected { code, message }) => {
-            return reject(conn, Some(id), code, &message);
-        }
+    let Some(running) = crate::shell::start(&conn.gate, args) else {
+        return unknown(conn, id, name);
     };
     let gate = Arc::clone(&conn.gate);
     let (tx, rx) = mpsc::channel::<(crate::shell::Running, Ack)>();

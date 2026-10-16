@@ -1386,7 +1386,7 @@ fn running(width: u16, height: u16) -> App {
         "session_status",
         serde_json::json!({
             "name": "work", "workspace": "/w", "project": "-w",
-            "state": "streaming", "since": 0,
+            "state": "streaming", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},

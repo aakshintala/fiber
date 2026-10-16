@@ -8,13 +8,9 @@ use std::time::Duration;
 
 use super::Watchdog;
 use crate::deadline::Deadline;
-use crate::kill_group;
+use crate::{group_alive, kill_group};
 
 const DEADLINE: Duration = Duration::from_secs(5);
-
-fn group_alive(group: u32) -> bool {
-    kill_group(group, "0").unwrap()
-}
 
 /// A process in the test's own group that a stray group signal would kill.
 fn sentinel() -> Child {

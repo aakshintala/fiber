@@ -46,6 +46,19 @@ pub fn utc_date_of_secs(secs: u64) -> (u64, u64, u64) {
     (year, month, day)
 }
 
+/// `seconds` since the epoch as a UTC time to the second,
+/// `2026-10-07T10:00:03Z`.
+pub fn utc_time(seconds: u64) -> String {
+    let (year, month, day) = utc_date_of_secs(seconds);
+    let second = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second / 3_600,
+        second % 3_600 / 60,
+        second % 60
+    )
+}
+
 #[cfg(test)]
 #[path = "clock_tests.rs"]
 mod tests;

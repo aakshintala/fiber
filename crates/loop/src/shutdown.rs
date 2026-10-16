@@ -128,6 +128,9 @@ impl Loop {
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
+            // Written and accepted at the settle, as at any drain: it
+            // starts no turn.
+            Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             Delivery::Prompt(_, ack)
             | Delivery::Steer(_, ack)
             | Delivery::Handoff(_, _, ack)

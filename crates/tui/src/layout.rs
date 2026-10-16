@@ -15,6 +15,14 @@ pub(crate) const RAIL_CEILING: u16 = 48;
 pub(crate) const PANEL_FLOOR: u16 = 30;
 /// The panel's ceiling, in columns.
 pub(crate) const PANEL_CEILING: u16 = 60;
+/// The rail's default share of the screen's width, in percent: `tui.rail.width`'s
+/// built-in default, kept here so the layout and the launch description read
+/// one source.
+pub const DEFAULT_RAIL_SHARE: f64 = 15.0;
+/// The panel's default share of the screen's width, in percent: `tui.panel.width`'s
+/// built-in default, kept here so the layout and the launch description read
+/// one source.
+pub const DEFAULT_PANEL_SHARE: f64 = 21.0;
 /// Below this many columns or rows the screen is one line saying so
 /// (`docs/tui.md`, "Shedding").
 pub(crate) const FLOOR: (u16, u16) = (40, 10);
@@ -210,6 +218,27 @@ pub(crate) fn split(width: u16, height: u16, shares: &Shares, want: &Want) -> La
         panel,
         narrow: want.panel && !panel_shown,
     }
+}
+
+/// The session screen's rail width and conversation column range at
+/// `width` by `height` with the default shares and wants: the rail 15%,
+/// the panel 21%, both wanted. The rail width is 0 while the rail is not
+/// drawn; the range is the conversation column's columns.
+pub fn session_columns(width: u16, height: u16) -> (u16, std::ops::Range<u16>) {
+    let shares = Shares {
+        rail: DEFAULT_RAIL_SHARE,
+        panel: DEFAULT_PANEL_SHARE,
+    };
+    let want = Want {
+        rail: true,
+        rail_by_count: true,
+        panel: true,
+    };
+    let layout = split(width, height, &shares, &want);
+    let rail = layout.rail.map_or(0, |rail| rail.width);
+    let start = layout.column.x;
+    let end = start.saturating_add(layout.column.width);
+    (rail, start..end)
 }
 
 #[cfg(test)]
