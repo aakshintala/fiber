@@ -89,7 +89,6 @@ fn stop_error_codes_match_the_job_stop_command() {
 
 #[test]
 fn open_error_display_writes_the_path_and_the_source() {
-    // The struct writes the same text the old Io variant wrote.
     let error = OpenError {
         path: std::path::PathBuf::from("jobs/j_abc.log"),
         source: std::io::Error::other("denied"),
