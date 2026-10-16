@@ -563,6 +563,24 @@ fn idle() -> serde_json::Value {
 }
 
 #[test]
+fn a_section_with_only_exited_rows_shows_zero_spend() {
+    let mut app = home(160, 48);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions": [recent_row("s_exited", "finished", "exited")]}),
+    ));
+
+    let frame = screen(&app, 160, 48);
+    assert!(frame.contains("w +  0 live · $0.00"), "{frame}");
+    assert!(frame.contains("exited · 1"), "{frame}");
+}
+
+#[test]
 fn home_header_and_sections_160x48() {
     let mut app = home(160, 48);
     let wall = 172_800_000;

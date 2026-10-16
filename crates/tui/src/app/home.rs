@@ -195,7 +195,10 @@ impl App {
         let wall = self.rail_state().wall();
         for section in sections {
             let hidden_exited = section.hidden();
-            let section_spend = section.live.iter().map(|row| row.spend).sum();
+            let section_spend = section
+                .live
+                .iter()
+                .fold(0.0, |spend, row| spend + row.spend);
             let waiting = section
                 .live
                 .iter()
