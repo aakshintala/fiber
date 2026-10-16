@@ -163,6 +163,32 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
     watchdog.stand_down(READY);
 }
 
+/// Waits for the child's two ready lines under one shared deadline.
+#[track_caller]
+fn wait_for_both_lines(ready: &std::sync::Mutex<Option<Ready>>) {
+    let ready = ready
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    if let Some(ready) = ready {
+        // One deadline for both lines: a scoped thread reads them.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let deadline = Deadline::after(READY);
+        std::thread::scope(|scope| {
+            let deadline = &deadline;
+            scope.spawn(move || {
+                ready.wait(deadline.left());
+                ready.wait(deadline.left());
+                match tx.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            });
+        });
+        // Outside the scope closure, which `#[track_caller]` does not cross.
+        assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
+    }
+}
+
 /// A clock whose first sleep, the poll for the deadline, waits for the
 /// child's two ready lines: the deadline cannot fire before the child has
 /// set up.
@@ -180,28 +206,7 @@ impl Clock for AfterReady {
     }
     #[track_caller]
     fn sleep(&self, d: Duration) {
-        let ready = self
-            .ready
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(ready) = ready {
-            // One deadline for both lines: a scoped thread reads them.
-            let (tx, rx) = std::sync::mpsc::channel();
-            let deadline = Deadline::after(READY);
-            std::thread::scope(|scope| {
-                let deadline = &deadline;
-                scope.spawn(move || {
-                    ready.wait(deadline.left());
-                    ready.wait(deadline.left());
-                    match tx.send(()) {
-                        Ok(()) | Err(_) => {}
-                    }
-                });
-            });
-            // Outside the scope closure, which `#[track_caller]` does not cross.
-            assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
-        }
+        wait_for_both_lines(&self.ready);
         self.inner.sleep(d);
     }
     fn wait_until(
@@ -276,33 +281,87 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     watchdog.stand_down(READY);
 }
 
+/// A clock whose second `now` read, the deadline read in `eof_once`, waits
+/// for the child's two ready lines: the deadline cannot fire before the
+/// holder has left the group.
+struct AfterEscape {
+    ready: std::sync::Mutex<Option<Ready>>,
+    reads: std::sync::atomic::AtomicUsize,
+    inner: std::sync::Arc<fakes::clock::FakeClock>,
+}
+
+impl AfterEscape {
+    fn passed(&self) -> bool {
+        self.ready
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+    }
+}
+
+impl Clock for AfterEscape {
+    #[track_caller]
+    fn now(&self) -> std::time::Instant {
+        if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+            wait_for_both_lines(&self.ready);
+        }
+        self.inner.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, wait);
+    }
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
 #[test]
 fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     let dir = TempDir::new("fiber-bench-timed-held");
     let marker = dir.path().to_string_lossy().into_owned();
     let watchdog = Watchdog::matching(&marker);
-    let escaped = dir.path().join("escaped");
-    // As above, the leader waits for the descendant's marker before
-    // exiting, so `Proc::stop` cannot catch the holder while it is still
-    // in the group. The wall-clock limit fails the test naming "timed
-    // output held open" if the call joins a reader blocked on the open
-    // pipe instead of returning at its deadline.
-    let script = format!(
-        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & while [ ! -e '{}' ]; do sleep 0.05; done",
-        dir.path().display(),
-        escaped.display(),
-        escaped.display(),
-    );
+    let ready = Ready::new(dir.path());
+    // The holder leaves the group before the deadline starts: the second
+    // clock read waits for both ready lines, so the short bound below
+    // cannot fire before the escape is proven. The wall-clock limit fails
+    // the test naming "timed output held open" if the call joins a reader
+    // blocked on the open pipe instead of returning at its deadline.
+    let script = fakes::children::escapes_group(ready.path());
+    let clock = std::sync::Arc::new(AfterEscape {
+        ready: std::sync::Mutex::new(Some(ready)),
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        inner: fakes::clock::FakeClock::new(),
+    });
+    let ran = std::sync::Arc::clone(&clock);
     let err = fakes::within("timed output held open", WALL, move || {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", &script]);
-        super::timed_to_end(&mut command, &System, Duration::from_secs(5), "the holder")
+        super::timed_to_end(
+            &mut command,
+            ran.as_ref(),
+            Duration::from_millis(50),
+            "the holder",
+        )
     })
     .unwrap_err();
     assert!(err.starts_with("timed out waiting for the holder"), "{err}");
     fakes::kill_matching(&marker).unwrap();
     assert!(fakes::matching_exits(&marker, READY));
     watchdog.stand_down(READY);
+    assert!(
+        clock.passed(),
+        "the deadline was read before the holder left the group"
+    );
 }
 
 #[test]
