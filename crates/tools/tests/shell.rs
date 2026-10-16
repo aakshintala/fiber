@@ -26,7 +26,7 @@ use fakes::Deadline;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
-use fakes::{CancelToken, Recorder, Watchdog, kill_group, kill_pid};
+use fakes::{CancelToken, Recorder, Watchdog, group_alive, kill_group, kill_pid, pid_alive};
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
@@ -84,14 +84,6 @@ fn run_on(
         DEADLINE,
         move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
     )
-}
-
-fn group_alive(group: u32) -> bool {
-    kill_group(group, "0").unwrap()
-}
-
-fn pid_alive(pid: u32) -> bool {
-    kill_pid(pid, "0").unwrap()
 }
 
 const LIFELINE: Duration = Duration::from_secs(2);

@@ -15,17 +15,9 @@ use crate::deadline::Deadline;
 use crate::temp_dir::TempDir;
 use crate::watchdog::Watchdog;
 use crate::within;
-use crate::{kill_group, kill_pid};
+use crate::{group_alive, kill_group, kill_pid, pid_alive};
 
 const DEADLINE: Duration = Duration::from_secs(5);
-
-fn group_alive(group: u32) -> bool {
-    kill_group(group, "0").unwrap()
-}
-
-fn pid_alive(pid: u32) -> bool {
-    kill_pid(pid, "0").unwrap()
-}
 
 #[track_caller]
 fn wait_child(mut child: Child) {
