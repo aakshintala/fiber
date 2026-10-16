@@ -690,6 +690,44 @@ fn remote_config_io_failures_name_the_file_and_skill_symlinks_are_allowed() {
 }
 
 #[test]
+fn remote_revoke_removes_a_project_rule_through_configure() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let text = r#"{"decision":"allow","tool":"shell","prefix":"git status"}"#;
+    let file = dirs.project_file(&workspace).with_file_name("rules");
+    write(&file, &format!("{text}\n"));
+    assert_eq!(
+        result(
+            &seam,
+            "revoke",
+            json!({"workspace":workspace,"scope":"project","line":1,"text":text})
+        ),
+        json!({"revoked":"removed"})
+    );
+    assert!(fs::read(&file).unwrap().is_empty());
+}
+
+#[test]
+fn remote_config_open_failures_other_than_missing_are_io_failures() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    // `SKILL.md` is editable at any absolute path, so a file standing
+    // where a directory must be makes `File::open` fail with
+    // `NotADirectory` (never `NotFound`). Treating every open failure as
+    // missing would return `("", "missing")` here instead of failing.
+    let blocker = workspace.join("blocker");
+    write(&blocker, "not a directory");
+    let path = blocker.join("SKILL.md");
+    assert!(std::fs::File::open(&path).unwrap_err().kind() != std::io::ErrorKind::NotFound);
+    assert_eq!(
+        seam.read_config(&workspace, &path).unwrap_err().code,
+        ErrorCode::IoFailed
+    );
+}
+
+#[test]
 fn remote_operation_documentation_lists_the_complete_wire_surface() {
     let doc = include_str!("../../../../docs/invocation.md");
     let table = doc
