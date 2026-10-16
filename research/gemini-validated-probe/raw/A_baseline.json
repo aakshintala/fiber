@@ -1,0 +1,52 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "ask_user",
+              "args": {
+                "questions": [
+                  {
+                    "header": "Database",
+                    "options": [
+                      {
+                        "label": "Postgres"
+                      },
+                      {
+                        "label": "SQLite"
+                      }
+                    ],
+                    "question": "Which database should the project use?"
+                  }
+                ]
+              },
+              "id": "call_1022856"
+            },
+            "thoughtSignature": "EpQGCpEGAWkUfRMQ/bv+IvO0CpQjvkURF4KP8jptTz08EI5rjTOFWPeX9n7sTpB1UArmfKFfbfwaGJhYgCjOGewR2p1IP2qHnS1Ak27oDSfxZM2TTwGg+1OMU8VeJrX9D3gDtoVO1NydrvP/wlPF9u9rfoNx66uB50nrUIjYs7dj1O8HT69RoZPYaZHToWKYOaZfVKQhPtd8E42flozM2pml5cOXyfjLHdP/KzjzodikufPwauXpqrRL4QhCv6QzfkDEDulxXO53CfdCSZ5Af1QPA/XivValhWyhHe96wCw6PFY2qx/w8wT0NwwZewjkqG3qxCSuBSDLJu+3lTfpTHdTGoyOPxil6L1mN48Y8xaL8QgLCBL5y4A4O0pAddlDP+qiz+YqX8ACUvXRd0uxd/URwbFr/uBgdVAE1TLdRR+TwEer+zfMUtWdq75qwV+pGAxUTJ1BiUkZoepLkHaA7qcWCYYEElcdhVL4D4mwzHbtXWxHgKgSJK4LCS0ArnoCH1H0Z7gGA3MH2deY+rAA35OVkPheLFoaYZKObzKYBxYLIlczi5kkwoH2u94SInj02z9AfreiBpFFdo9O2EyRHDmr72kn67qHCGBCs2TazitPA6w0WitK4jvnwlooLg1Ui0aQ3VHWhUSkB+qK5AksMHcM5Fi3vlL1EYAO6m0G3bn84HH8/FLnGhj3I2JQMSAdXK0hu7CXNtPgZx2iZDMmRj//ILvFJhVJ8c6sx9IgQ9x+VhCPE5FsiojO9I1Af4tw3Ynxcdd8VF0XCHuIAIf3X8sb/3cqLyJXJ8YlcVvWqx4l7BbZzww65NUGIjR0Sjl+0xBpltb+BlHCJL3vNFKaS5cHPb9geW4ZVDVW82m3cyNM3QowHfi8RQj46VccM4QDva6/7W/O5BtlstVdq7/+GwbpGFi8Zn3UTRTTh6fSz1rbzRpM5ZncaBJj+benkJ0C6rge3UEBw8vIARm0Fl4yboxJyOjoj/i4mTw5vSSaI42Ngi8LZaqUuMDIJViaFyQnJb5p95W5VHplYjQoTB3Pd63ZZKAbjPs="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 186,
+    "candidatesTokenCount": 47,
+    "totalTokenCount": 423,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 186
+      }
+    ],
+    "thoughtsTokenCount": 190,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3-flash-preview",
+  "responseId": "-dLRaoecMe-j_uMPp53zmAk"
+}
