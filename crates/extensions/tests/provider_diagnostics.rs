@@ -27,10 +27,11 @@ use contract::clock::Clock;
 use contract::clock::Wake;
 use contract::diag::{DebugLog, HookChain, Op, ProviderRequest, Timing};
 use contract::events::CallStatus;
+use contract::events::HandoffTrigger;
 use contract::hook::{
-    AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageOutcome, BeforeModelCall,
-    BeforeToolCall, CheckOutcome, ContextOutcome, Hooks, SessionStart, StartReason, TurnEnd,
-    TurnStart,
+    AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeMessage, BeforeMessageOutcome,
+    BeforeModelCall, BeforeToolCall, CheckOutcome, ContextOutcome, Hooks, SessionStart,
+    StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Tokens, Usage};
 use contract::tool::Cancel;
@@ -186,6 +187,7 @@ fn all_chains() -> String {
         hook("turn_end", "transform", "{ context = \"e\" }"),
         hook("before_message", "sanitize", "{}"),
         hook("before_model_call", "transform", "{}"),
+        hook("before_handoff", "transform", "{ note = \"h\" }"),
     ]
     .join("\n")
 }
@@ -237,6 +239,17 @@ fn dispatch_all(session: &Arc<SessionExtensions>) {
             })
         }
     });
+    within({
+        let session = Arc::clone(session);
+        move || {
+            session.before_handoff(&BeforeHandoff {
+                trigger: HandoffTrigger::Auto,
+                instructions: None,
+                conversation: &[],
+                cancel: &Never,
+            })
+        }
+    });
 }
 
 fn ops(calls: &Scopes) -> Vec<(Op, Option<String>)> {
@@ -275,6 +288,7 @@ fn each_chain_emits_one_scope_per_dispatch() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
+            (Op::Hook(HookChain::BeforeHandoff), None),
         ]
     );
     // Two successive dispatches emit twice.
@@ -290,8 +304,8 @@ fn each_chain_emits_one_scope_per_dispatch() {
             })
         }
     });
-    assert_eq!(ops(&calls).len(), 6);
-    assert_eq!(ops(&calls)[5], (Op::Hook(HookChain::SessionStart), None));
+    assert_eq!(ops(&calls).len(), 7);
+    assert_eq!(ops(&calls)[6], (Op::Hook(HookChain::SessionStart), None));
 }
 
 #[test]
@@ -311,6 +325,7 @@ fn empty_chains_emit_one_scope_each() {
             (Op::Hook(HookChain::TurnEnd), None),
             (Op::Hook(HookChain::BeforeMessage), None),
             (Op::Hook(HookChain::BeforeModelCall), None),
+            (Op::Hook(HookChain::BeforeHandoff), None),
         ]
     );
 }

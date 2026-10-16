@@ -2186,6 +2186,13 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
 
@@ -2406,6 +2413,13 @@ impl contract::hook::Hooks for StartHooks {
             outcome: contract::hook::ContextOutcome::Added(Vec::new()),
             notices: Vec::new(),
         }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}

@@ -1172,8 +1172,9 @@ fn spawn_failure_starts_no_request_or_record() {
     assert!(sink.records().is_empty());
 }
 
-/// A hook point no other test suspends on, so the admission pause below
-/// never holds another test's suspension.
+/// Registered by no other test in this file. The pause is a process-wide
+/// hook, and nextest runs each test in its own process, so tests elsewhere
+/// never meet it.
 const PAUSE_POINT: &str = "before_handoff";
 
 fn pausing_hook(url: &str) -> String {

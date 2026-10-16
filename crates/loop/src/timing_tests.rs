@@ -1623,6 +1623,13 @@ impl contract::hook::Hooks for RefusingHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
 }
 

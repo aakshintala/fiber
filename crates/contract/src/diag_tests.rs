@@ -92,6 +92,7 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::Hook(BeforeMessage), "hook.before_message"),
         (Op::Hook(BeforeModelCall), "hook.before_model_call"),
         (Op::Hook(TurnEnd), "hook.turn_end"),
+        (Op::Hook(BeforeHandoff), "hook.before_handoff"),
         (Op::McpConnect, "mcp.connect"),
         (Op::JobsStart, "jobs.start"),
         (Op::WorktreeCreate, "worktree.create"),

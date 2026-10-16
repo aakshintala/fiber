@@ -7,7 +7,8 @@
 use serde_json::{Map, Value};
 
 use crate::SessionId;
-use crate::events::{CallStatus, InputItem, Notice};
+use crate::events::{CallStatus, HandoffTrigger, InputItem, Notice};
+use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
 use crate::tool::{Cancel, SpillFile};
 
@@ -203,6 +204,60 @@ pub struct BeforeMessageAnswer {
     pub notices: Vec<Notice>,
 }
 
+/// What a `before_handoff` hook is given (`docs/extensions.md`, "The hook
+/// points"): what started the handoff, the person's instructions, and the
+/// conversation the note request would be built from, without the note
+/// request.
+#[derive(Clone, Copy)]
+pub struct BeforeHandoff<'a> {
+    /// What started the handoff.
+    pub trigger: HandoffTrigger,
+    /// The person's instructions, when there were any.
+    pub instructions: Option<&'a str>,
+    /// The conversation the note request would be built from, without
+    /// the note request.
+    pub conversation: &'a [Input],
+    /// The loop's cancel signal: set for a cancel or a shutdown.
+    pub cancel: &'a dyn Cancel,
+}
+
+impl std::fmt::Debug for BeforeHandoff<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BeforeHandoff")
+            .field("trigger", &self.trigger)
+            .field("instructions", &self.instructions)
+            .field("conversation", &self.conversation)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the chain of `before_handoff` hooks decided.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BeforeHandoffOutcome {
+    /// No hook wrote a note: Fiber makes its own note request.
+    NoNote,
+    /// The last note a hook returned, and the extension that wrote it.
+    /// The text is never empty after trimming.
+    Note {
+        /// The note's text.
+        text: String,
+        /// The extension whose note was last returned.
+        extension: String,
+    },
+    /// A `blocking` hook failed: the handoff does not complete. It
+    /// carries no note.
+    Failed(HookFailure),
+}
+
+/// The answer to a `before_handoff` call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeforeHandoffAnswer {
+    /// What the chain decided.
+    pub outcome: BeforeHandoffOutcome,
+    /// The notices the chain raised, such as a `non-blocking` hook's failure.
+    pub notices: Vec<Notice>,
+}
+
 /// The session's hooks. Calls come from the loop thread, one at a time.
 pub trait Hooks: Send + Sync {
     /// Runs every `after_tool` hook on `call`, in order, and returns what
@@ -229,6 +284,9 @@ pub trait Hooks: Send + Sync {
     /// Runs every `turn_end` hook on the model's final reply, in order, and
     /// returns the messages they continued the turn with.
     fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer;
+    /// Runs every `before_handoff` hook on the handoff, in order, and
+    /// returns the note they wrote, if any.
+    fn before_handoff(&self, handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer;
     /// Hands the session loop's inbox to the hooks, so a program an
     /// extension ran can be logged as `extension_exec`.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);

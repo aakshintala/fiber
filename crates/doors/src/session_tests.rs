@@ -1516,6 +1516,13 @@ impl contract::hook::Hooks for InboxHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
         if let Some(tx) = self.0.lock().unwrap().as_ref() {
             let _sent = tx.send(inbox);
