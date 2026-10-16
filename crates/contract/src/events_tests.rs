@@ -817,6 +817,30 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_accepted",
             json!({"command_id": "c", "result": {"last_seq": 41}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}, {"name": "daily", "reset": true}]}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2, "limit": 10.0}}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2}}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}], "unreachable": true}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "broken", "unreachable": true}], "notice_at": 80.0}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",
@@ -1566,6 +1590,10 @@ fn an_empty_skills_result_reads_as_skills() {
 
 #[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
+        CommandResult::Quota { .. }
+    ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"tools": []}})),
         CommandResult::Tools { .. }

@@ -1349,6 +1349,18 @@ Each provider credential label has one cache holding its last value, when it was
 any fetch in flight. Concurrent readers share one fetch. What the person is
 shown reads the same cache, and shows no age.
 
+The first `quota` driver command starts a loader on its own thread. It starts
+providers that have a credential label and checks whether they register
+`quota()` before reading any key. Each label's key is read once per process,
+as a model switch to that label reads it. A provider whose `quota()` is asked
+for at least one label stays loaded for the rest of the process. A provider
+without `quota()`, or whose every label's key read failed, is unloaded at once.
+A failed read reports `unreachable`, while the other labels still answer.
+Shutdown ends the reads; a read already in flight finishes and its result is
+dropped. The loader starts a quota fetch for each label whose read succeeded.
+The command answers from the caches at once, without waiting for loading,
+credential reads or fetches.
+
 A fetch runs off the request path when the cache is older than 5 minutes and
 one of these happens:
 

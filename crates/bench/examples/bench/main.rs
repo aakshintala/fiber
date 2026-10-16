@@ -4,13 +4,17 @@
 //! self-check that failed, as one result file for
 //! `cargo xtask bench-report` to judge. It measures; it judges nothing.
 //!
-//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns] [--skip-rows <names>]`
+//! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns] [--skip-rows <names>] [--base-fiber <path> --base-out <file> [--base-paging <jig>]]`
 //! (`--paging` names the `tui` crate's `paging` jig; without it that workload
 //! does not run; `--timing-runs` defaults to the `--runs` value;
 //! `--skip-rows` is a comma-joined list of timing workloads to leave out)
 //! exits 0 once the file is written (a failed workload is recorded in it),
 //! 2 on a usage error or a host other than Linux, and 1 when the file
-//! cannot be written.
+//! cannot be written. With `--base-fiber` the harness measures the head
+//! and base binaries in one process, alternating head and base samples
+//! (by sample for the repeated rows and the `paging` jig, by row block
+//! for listing, attach and wheel), and writes the base file too; a base
+//! file that cannot be written leaves the exit status alone.
 
 #![allow(
     clippy::print_stderr,
@@ -39,7 +43,7 @@ use serde_json::{Value, json};
 
 const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] \
      [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>] [--skip-ten-turns] \
-     [--skip-rows <names>]";
+     [--skip-rows <names>] [--base-fiber <path> --base-out <file> [--base-paging <jig>]]";
 
 /// The result file's format, which `cargo xtask bench-report` checks.
 const SCHEMA: u32 = 1;
@@ -51,6 +55,29 @@ enum Only {
     All,
     Timing,
     Wheel,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Base {
+    fiber: PathBuf,
+    out: PathBuf,
+    paging: Option<PathBuf>,
+}
+
+/// Which side of a paired run a timed call measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Head,
+    Base,
+}
+
+impl Side {
+    fn tag(self) -> &'static str {
+        match self {
+            Side::Head => "head",
+            Side::Base => "base",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -75,10 +102,14 @@ struct Args {
     /// skipped, so the judge reports them instead of failing the
     /// missing metrics.
     skip_rows: Vec<String>,
+    /// The base side of a paired pull-request run: its binary, its
+    /// result file, and its `paging` jig, if the base built one.
+    base: Option<Base>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let (mut fiber, mut out, mut paging) = (None, None, None);
+    let (mut base_fiber, mut base_out, mut base_paging) = (None, None, None);
     let (mut runs, mut timing_runs, mut idle_secs, mut only) = (5, None, 10, Only::All);
     let mut skip_ten_turns = false;
     let mut skip_rows = Vec::new();
@@ -101,6 +132,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--fiber" => fiber = Some(PathBuf::from(&value)),
             "--out" => out = Some(PathBuf::from(&value)),
             "--paging" => paging = Some(PathBuf::from(&value)),
+            "--base-fiber" => base_fiber = Some(PathBuf::from(&value)),
+            "--base-out" => base_out = Some(PathBuf::from(&value)),
+            "--base-paging" => base_paging = Some(PathBuf::from(&value)),
             "--runs" => {
                 runs = u32::try_from(number("--runs")?).map_err(|err| format!("--runs: {err}"))?;
             }
@@ -125,6 +159,16 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             _ => return Err(format!("unknown argument {flag:?}")),
         }
     }
+    // The base side needs its binary and its file together: a base file
+    // without a base binary, or a base binary without its file, measures
+    // nothing it can report.
+    let base = match (base_fiber, base_out, base_paging) {
+        (None, None, None) => None,
+        (None, Some(_), _) => return Err("--base-out without --base-fiber".to_owned()),
+        (None, None, Some(_)) => return Err("--base-paging without --base-fiber".to_owned()),
+        (Some(_), None, _) => return Err("--base-fiber needs --base-out <file>".to_owned()),
+        (Some(fiber), Some(out), paging) => Some(Base { fiber, out, paging }),
+    };
     Ok(Args {
         fiber: fiber.ok_or("--fiber is required")?,
         out: out.ok_or("--out is required")?,
@@ -137,6 +181,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         paging,
         skip_ten_turns,
         skip_rows,
+        base,
     })
 }
 
@@ -236,46 +281,231 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
 /// One workload's samples, by metric id.
 type Metrics = BTreeMap<&'static str, Vec<Value>>;
 
-/// Runs each selected workload with its repeats and run count, and records
-/// each finished workload's metric ids at that count. A workload that errs
-/// leaves no metrics and no counts.
+/// One side's run: the selection it walks follows its `args`, and its
+/// failures, metrics and counts land in its own result file.
+struct Pass {
+    side: Side,
+    args: Args,
+    failures: Vec<String>,
+    metrics: Metrics,
+    metric_runs: BTreeMap<&'static str, u32>,
+}
+
+impl Pass {
+    fn new(side: Side, args: Args) -> Self {
+        Self {
+            side,
+            args,
+            failures: Vec::new(),
+            metrics: BTreeMap::new(),
+            metric_runs: BTreeMap::new(),
+        }
+    }
+}
+
+/// The head's selection and, with `--base-fiber`, the base's. The base
+/// runs the timing rows the selection keeps, so `--skip-rows` filters
+/// the base list only and the head runs every row at its place in head
+/// order; a missing base list leaves the single run's selection, and its
+/// `--skip-rows` filtering, exactly as before.
+fn sides(args: &Args) -> (Args, Option<Args>) {
+    let rebuild = |fiber: &PathBuf,
+                   out: &PathBuf,
+                   only: Only,
+                   paging: &Option<PathBuf>,
+                   skip_ten_turns: bool,
+                   skip_rows: Vec<String>| {
+        Args {
+            fiber: fiber.clone(),
+            out: out.clone(),
+            runs: args.runs,
+            timing_runs: args.timing_runs,
+            idle_secs: args.idle_secs,
+            only,
+            paging: paging.clone(),
+            skip_ten_turns,
+            skip_rows,
+            base: None,
+        }
+    };
+    match &args.base {
+        None => (
+            rebuild(
+                &args.fiber,
+                &args.out,
+                args.only,
+                &args.paging,
+                args.skip_ten_turns,
+                args.skip_rows.clone(),
+            ),
+            None,
+        ),
+        Some(base) => (
+            rebuild(
+                &args.fiber,
+                &args.out,
+                args.only,
+                &args.paging,
+                args.skip_ten_turns,
+                Vec::new(),
+            ),
+            Some(rebuild(
+                &base.fiber,
+                &base.out,
+                Only::Timing,
+                &base.paging,
+                false,
+                args.skip_rows.clone(),
+            )),
+        ),
+    }
+}
+
+/// Runs each selected workload with its repeats and run count, head and
+/// base calls in alternation: head call n, then the base call n when the
+/// base runs the row, for n in 1..=`repeats`, so runner drift lands on
+/// both sides. A repeated row therefore alternates by sample, and a row
+/// that takes every sample in one call is its head block then its base
+/// block, with no other row's call between. A row runs on the base only
+/// when the base's selection holds it; any other row runs on the head
+/// alone, at its place in head order. A side whose call errs ends that
+/// side's row, its samples for the row discarded, while the other side
+/// still runs its remaining calls of the row, without the failed side.
 fn measure_all(
-    args: &Args,
-    failures: &mut Vec<String>,
-    mut measure: impl FnMut(&'static idle::Workload, u32, u32, &mut Vec<String>) -> Option<Metrics>,
-) -> (Metrics, BTreeMap<&'static str, u32>) {
-    let mut metrics: Metrics = BTreeMap::new();
-    let mut metric_runs: BTreeMap<&'static str, u32> = BTreeMap::new();
-    if args.skip_ten_turns {
+    head: &mut Pass,
+    mut base: Option<&mut Pass>,
+    mut measure: impl FnMut(
+        Side,
+        &'static idle::Workload,
+        u32,
+        u32,
+        &mut Vec<String>,
+    ) -> Result<idle::Samples, String>,
+) {
+    if head.args.skip_ten_turns {
         eprintln!(
             "bench: skipping {} (the selection did not choose it)",
             busy::TEN_TURNS_NAME
         );
     }
-    if !args.skip_rows.is_empty() {
+    if !head.args.skip_rows.is_empty() {
         eprintln!(
             "bench: skipping {} (the selection did not choose them)",
-            args.skip_rows.join(", ")
+            head.args.skip_rows.join(", ")
         );
     }
-    for (workload, repeats, runs) in selected(args) {
+    if let Some(base) = &base
+        && !base.args.skip_rows.is_empty()
+    {
         eprintln!(
-            "bench: running {} (repeats {repeats}, runs {runs})",
-            workload.name
+            "bench: skipping {} on the base (the selection did not choose them)",
+            base.args.skip_rows.join(", ")
         );
-        #[allow(
-            clippy::let_underscore_must_use,
-            reason = "a progress line must not fail the run"
-        )]
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-        if let Some(samples) = measure(workload, repeats, runs, failures) {
-            for id in samples.keys() {
-                metric_runs.insert(id, runs);
+    }
+    let rows = selected(&head.args);
+    // The rows the base runs, by name: the walk below holds the head's
+    // order, and a row the base list lacks runs on the head alone.
+    let base_rows = base.as_ref().map(|pass| {
+        selected(&pass.args)
+            .iter()
+            .map(|(workload, _, _)| workload.name)
+            .collect::<Vec<_>>()
+    });
+    for (workload, repeats, runs) in rows {
+        let paired = base_rows
+            .as_ref()
+            .is_some_and(|names| names.contains(&workload.name));
+        // Both selections share the run counts, so the head tuple's runs
+        // is each side's run count.
+        let mut head_samples: Metrics = BTreeMap::new();
+        let mut base_samples: Metrics = BTreeMap::new();
+        let mut head_alive = true;
+        let mut base_alive = paired;
+        for n in 1..=repeats {
+            // debt: the head and base side-measurement branches duplicate progress
+            // reporting, measurement, note collection, sample accumulation and failure
+            // handling; extract one per-side measurement operation called in head/base
+            // order on the next change to the side-measurement branches.
+            if head_alive {
+                eprintln!(
+                    "bench: running {} (run {n} of {repeats}, samples {runs}) [{}]",
+                    workload.name,
+                    head.side.tag()
+                );
+                #[allow(
+                    clippy::let_underscore_must_use,
+                    reason = "a progress line must not fail the run"
+                )]
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut notes = Vec::new();
+                let result = measure(head.side, workload, runs, n, &mut notes);
+                head.failures.extend(
+                    notes
+                        .into_iter()
+                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
+                );
+                match result {
+                    Ok(samples) => {
+                        for (id, sample) in samples {
+                            head_samples.entry(id).or_default().push(sample);
+                        }
+                    }
+                    Err(err) => {
+                        head.failures
+                            .push(format!("{}, run {n}: {err}", workload.name));
+                        head_alive = false;
+                        head_samples.clear();
+                    }
+                }
             }
-            metrics.extend(samples);
+            if base_alive && let Some(base) = base.as_mut() {
+                eprintln!(
+                    "bench: running {} (run {n} of {repeats}, samples {runs}) [{}]",
+                    workload.name,
+                    base.side.tag()
+                );
+                #[allow(
+                    clippy::let_underscore_must_use,
+                    reason = "a progress line must not fail the run"
+                )]
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                let mut notes = Vec::new();
+                let result = measure(base.side, workload, runs, n, &mut notes);
+                base.failures.extend(
+                    notes
+                        .into_iter()
+                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
+                );
+                match result {
+                    Ok(samples) => {
+                        for (id, sample) in samples {
+                            base_samples.entry(id).or_default().push(sample);
+                        }
+                    }
+                    Err(err) => {
+                        base.failures
+                            .push(format!("{}, run {n}: {err}", workload.name));
+                        base_alive = false;
+                        base_samples.clear();
+                    }
+                }
+            }
+        }
+        // A metric is recorded only when every call of its side's row
+        // produced it, as the single-side run did.
+        if head_alive {
+            for id in head_samples.keys() {
+                head.metric_runs.insert(id, runs);
+            }
+            head.metrics.extend(head_samples);
+        }
+        if base_alive && let Some(base) = base.as_mut() {
+            for id in base_samples.keys() {
+                base.metric_runs.insert(id, runs);
+            }
+            base.metrics.extend(base_samples);
         }
     }
-    (metrics, metric_runs)
 }
 
 /// The result file: the schema, the run counts, the runner's CPU model,
@@ -373,71 +603,154 @@ fn host_cpu() -> String {
 /// Runs each selected workload `runs` times, and each workload that runs
 /// once, once. A metric is recorded only when every run produced it; a run
 /// that errs ends its workload and is noted.
-fn bench(args: &Args, cpu: &str) -> Value {
-    let clock = run::System;
-    let mut failures = Vec::new();
-    let binary_size = match std::fs::metadata(&args.fiber) {
+///
+/// A side's binary size and home: every failure lands in that side's
+/// file, as a missing-binary run does today.
+fn setup(pass: &mut Pass) -> (Option<u64>, Option<home::Home>) {
+    let size = match std::fs::metadata(&pass.args.fiber) {
         Ok(metadata) => Some(metadata.len()),
         Err(err) => {
-            failures.push(format!("binary size of {}: {err}", args.fiber.display()));
+            pass.failures.push(format!(
+                "binary size of {}: {err}",
+                pass.args.fiber.display()
+            ));
             None
         }
     };
-    let (metrics, metric_runs) = match home::Home::new(&args.fiber) {
+    let home = match home::Home::new(&pass.args.fiber) {
+        Ok(home) => Some(home),
         Err(err) => {
-            failures.push(format!("setup: {err}"));
-            (BTreeMap::new(), BTreeMap::new())
-        }
-        Ok(home) => {
-            let measured = measure_all(args, &mut failures, |workload, repeats, runs, failures| {
-                let ctx = idle::Ctx {
-                    home: &home,
-                    clock: &clock,
-                    idle: Duration::from_secs(args.idle_secs),
-                    path: std::env::var_os("PATH"),
-                    runs,
-                    paging: args.paging.as_deref(),
-                };
-                repeat(&ctx, workload, repeats, failures)
-            });
-            if let Err(err) = home.finish() {
-                failures.push(format!("cleanup: {err}"));
-            }
-            measured
+            pass.failures.push(format!("setup: {err}"));
+            None
         }
     };
-    document(args, cpu, binary_size, metrics, metric_runs, failures)
+    (size, home)
 }
 
-fn repeat(
+/// One timed call: the workload runs once against `ctx`, its notes kept
+/// for the caller to record.
+fn run_once(
     ctx: &idle::Ctx<'_>,
-    workload: &idle::Workload,
-    runs: u32,
-    failures: &mut Vec<String>,
-) -> Option<BTreeMap<&'static str, Vec<Value>>> {
-    let mut metrics: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
-    for n in 1..=runs {
-        let mut notes = Vec::new();
-        let result = (workload.run)(ctx, &mut notes);
-        let name = workload.name;
-        failures.extend(
-            notes
-                .into_iter()
-                .map(|note| format!("{name}, run {n}: {note}")),
-        );
-        match result {
-            Ok(samples) => {
-                for (id, sample) in samples {
-                    metrics.entry(id).or_default().push(sample);
+    workload: &'static idle::Workload,
+    notes: &mut Vec<String>,
+) -> Result<idle::Samples, String> {
+    (workload.run)(ctx, notes)
+}
+
+/// Measures the head side and, with `--base-fiber`, the base side in
+/// alternation, and hands back each side's result file: `None` without a
+/// base. A side whose home failed setup runs zero timed calls while the
+/// other side runs the whole list alone.
+fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
+    let clock = run::System;
+    let (head_args, base_args) = sides(args);
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = base_args.map(|args| Pass::new(Side::Base, args));
+    let (head_size, head_home) = setup(&mut head);
+    let (base_size, base_home) = match base.as_mut() {
+        Some(pass) => setup(pass),
+        None => (None, None),
+    };
+    // The per-call closure builds its own context per call, so each side
+    // sets up and tears down its fixture exactly as the single-side run
+    // did: the calls per side per row are the same, only reordered.
+    let path = std::env::var_os("PATH");
+    match (head_home, base_home) {
+        (Some(head_home), base_home) => {
+            let head_idle = head.args.idle_secs;
+            let head_paging = head.args.paging.clone();
+            // The base side's home and context pieces, when its setup
+            // held: the walk hands the base pass over exactly then, so
+            // the closure finds them here.
+            let base_ctx = match (&base_home, &base) {
+                (Some(home), Some(pass)) => {
+                    Some((home, pass.args.idle_secs, pass.args.paging.clone()))
                 }
+                _ => None,
+            };
+            measure_all(
+                &mut head,
+                base.as_mut().filter(|_| base_ctx.is_some()),
+                |side, workload, runs, _, notes| {
+                    let (home, idle_secs, paging) = match side {
+                        Side::Head => (&head_home, head_idle, head_paging.as_deref()),
+                        Side::Base => match &base_ctx {
+                            Some((home, idle_secs, paging)) => {
+                                (*home, *idle_secs, paging.as_deref())
+                            }
+                            None => return Err("bench: the base home is missing".to_owned()),
+                        },
+                    };
+                    let ctx = idle::Ctx {
+                        home,
+                        clock: &clock,
+                        idle: Duration::from_secs(idle_secs),
+                        path: path.clone(),
+                        runs,
+                        paging,
+                    };
+                    run_once(&ctx, workload, notes)
+                },
+            );
+            if let Err(err) = head_home.finish() {
+                head.failures.push(format!("cleanup: {err}"));
             }
-            Err(err) => {
-                failures.push(format!("{name}, run {n}: {err}"));
-                return None;
+            if let Some(home) = base_home
+                && let Err(err) = home.finish()
+                && let Some(pass) = base.as_mut()
+            {
+                pass.failures.push(format!("cleanup: {err}"));
             }
         }
+        (None, Some(base_home)) => {
+            // The head's setup failed, so the base runs the whole list alone.
+            if let Some(pass) = base.as_mut() {
+                let idle_secs = pass.args.idle_secs;
+                let paging = pass.args.paging.clone();
+                measure_all(pass, None, |_, workload, runs, _, notes| {
+                    let ctx = idle::Ctx {
+                        home: &base_home,
+                        clock: &clock,
+                        idle: Duration::from_secs(idle_secs),
+                        path: path.clone(),
+                        runs,
+                        paging: paging.as_deref(),
+                    };
+                    run_once(&ctx, workload, notes)
+                });
+                if let Err(err) = base_home.finish() {
+                    pass.failures.push(format!("cleanup: {err}"));
+                }
+            }
+        }
+        (None, None) => {}
     }
-    Some(metrics)
+    let Pass {
+        args: head_args,
+        failures: head_failures,
+        metrics: head_metrics,
+        metric_runs: head_runs,
+        ..
+    } = head;
+    let head_document = document(
+        &head_args,
+        cpu,
+        head_size,
+        head_metrics,
+        head_runs,
+        head_failures,
+    );
+    let base_document = base.map(|pass| {
+        let Pass {
+            args,
+            failures,
+            metrics,
+            metric_runs,
+            ..
+        } = pass;
+        document(&args, cpu, base_size, metrics, metric_runs, failures)
+    });
+    (head_document, base_document)
 }
 
 fn main() -> ExitCode {
@@ -452,14 +765,19 @@ fn main() -> ExitCode {
         eprintln!("bench: the benchmarks measure Linux only");
         return ExitCode::from(2);
     }
-    let result = bench(&args, &host_cpu());
-    match std::fs::write(&args.out, format!("{result}\n")) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("bench: writing {}: {err}", args.out.display());
-            ExitCode::from(1)
-        }
+    let (head_result, base_result) = bench(&args, &host_cpu());
+    if let Err(err) = std::fs::write(&args.out, format!("{head_result}\n")) {
+        eprintln!("bench: writing {}: {err}", args.out.display());
+        return ExitCode::from(1);
     }
+    // A base file that cannot be written leaves the exit status alone:
+    // the missing file is reported by `bench-report`, not by this step.
+    if let (Some(base), Some(result)) = (&args.base, base_result)
+        && let Err(err) = std::fs::write(&base.out, format!("{result}\n"))
+    {
+        eprintln!("bench: writing {}: {err}", base.out.display());
+    }
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

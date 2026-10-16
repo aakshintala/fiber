@@ -111,7 +111,7 @@ pub struct RulesListing {
 
 /// The two files' paths for `project` in `home`: the global file, then
 /// the project's.
-fn files(home: &Path, project: &ProjectKey) -> (PathBuf, PathBuf) {
+pub(crate) fn files(home: &Path, project: &ProjectKey) -> (PathBuf, PathBuf) {
     (
         home.join("rules"),
         home.join("projects").join(project.as_str()).join("rules"),

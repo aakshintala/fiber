@@ -355,6 +355,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `tools` | none |
 | `commands` | none |
 | `skills` | none |
+| `quota` | none |
 | `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `artifact_page` | `path` (string, as a result's `artifact` names it), `offset` (integer, bytes, default 0) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `thinking` (string, optional) |
@@ -385,6 +386,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `artifact_page` | Answers with one page of a file under the session's `artifacts/`, starting at `offset`: at most 64 lines, the page size of history paging (`docs/tui.md`, "History and paging"), and at most 64 KiB, a longer line cut at a character boundary and continued on the next page. A client pages with `next`, so a file is never loaded whole; the terminal's call view reads a cut call's full output this way (`docs/tui.md`, "Swapped views"). The path is resolved as `read_file` resolves it ("A session's files"): outside `artifacts/` it is rejected `invalid_arguments`, and a missing file is `not_found`. An `offset` past the end of the file is rejected `invalid_arguments`. `size` is the file's size when the page is read: a file that grows is paged to that size, and one that shrinks during the read is rejected `io_failed`. `offset` and `next` count bytes; bytes that are not valid UTF-8 become `�` in `text`, and an `offset` inside a character is rejected `invalid_arguments`. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `skills` | Answers with every skill discovery found (`docs/system-prompt.md`, "Skills"), including those `skills.disabled` switches off and those another skill shadows, which `commands` leaves out: in discovery order, each skill followed by the skills it shadows. Each entry is the skill's name, its description, the path of its `SKILL.md`, its source and, for an extension's skill, the extension's name, whether its header and place let the model load it, whether `skills.disabled` switches it off, the paths of the skills it shadows, and, on a shadowed skill, the path of the skill that wins. The model can load a skill only when its header and place allow it, it is not switched off and no skill shadows it. A skill whose header is invalid is left out, as discovery leaves it out. The list is fixed when the session starts, and again when it reloads. The terminal's `/skills` view reads it (`docs/tui.md`, "Swapped views"). |
+| `quota` | Answers at once with every provider credential label's cached quota and `quota.notice_at`. The first command starts loading quota providers off the request path; later commands read the same caches (`docs/tools.md`, "Fetching"). |
 | `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), each MCP server's prompt (`docs/mcp.md`, "Prompts and resources"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint`, or an MCP prompt's arguments as `<name>` when required and `[name]` when not, and a tag: `skill`, `template`, the extension's name, or the MCP server's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
 | `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `credential_missing` for a label the provider does not have, naming its labels, and with the credential's own code when the label's source cannot be read. |
@@ -956,6 +958,9 @@ websocket for everything it does.
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
+| `configure` | `operation` (string), plus that operation's arguments below | Reads or writes configuration on the hub's machine. Sent without `session_id`. |
+| `read_config` | `workspace` (absolute string), `path` (string) | Reads a configuration view's file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
+| `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
@@ -966,6 +971,52 @@ Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
 first when it asks where to start one, and lists directories with
 `directories`.
+
+The `configure` operations below use the hub's Fiber home and the project of
+`workspace` on that machine. Every `workspace` is absolute. Arguments are
+required unless marked optional; unknown keys, wrong types and explicit
+`null` are rejected `invalid_arguments`.
+
+| Operation | Arguments besides `operation` | Result |
+|---|---|---|
+| `settings` | `workspace` (string) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted |
+| `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
+| `global_file` | none | `file` (string), the hub's global configuration file |
+| `rules` | `workspace` (string) | `global` and `project`, each with `file` and either `rows` or `error`; a row holds `line` (integer), `text` (string) and `rule` (the standing rule object from `docs/configuration.md`) |
+| `revoke` | `workspace`, `scope`, `text` (strings), `line` (integer) | `revoked`, either `removed` or `stale`; `scope` is `global` or `project` |
+| `login_targets` | none | `targets`, objects with `name` and `kind` (`key`, `browser` or `secret`) |
+| `store_key` | `name`, `key` (strings), `label` (string, optional) | `path` (string, relative to Fiber home) and `replaced` (boolean), as `fiber login` stores it; the key is never returned or logged |
+| `reviewer_models` | `name` (string) | `models` (array of strings), optional `selected` (string), and `notices` (array of strings), from the hub's installed provider |
+| `set_reviewer` | `name`, `id` (strings) | no result |
+| `tool_switches` | `workspace` (string) | `groups`, objects with `group`, `project` and `everywhere`; `group` is one of `{"mcp":"name"}` or `{"extension":"name"}`; each layer holds `disabled` (array of strings) and optional `enabled` (array of strings) |
+| `switch_tool` | `workspace`, `tool`, `scope` (strings), `group` (object as above), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skills_disabled` | `workspace` (string) | `project` and `everywhere` (arrays of strings) |
+| `switch_skill` | `workspace`, `name`, `scope` (strings), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skill_text` | `path` (string) | `text` (string), as the local skill view reads it |
+
+A setting row holds `key`, `layer` and `shown` (strings), and `file` (string)
+when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
+`value` and `redacted` carry `value` (string); `union` carries `names`
+(`[name, layer]` pairs) and `own` (`[layer, json]` pairs).
+`scope` is `any` (with `repo`, a boolean), `global_only`, `repo_only` or
+`person_files`. Values are JSON text, not decoded values.
+
+`keys` and every `tui.*` key belong to the terminal that draws, including
+`/keys`, `/settings` rows for those keys and the theme picker. They stay in
+the client's Fiber home. The hub serves neither `save_keys`, themes nor
+`LoginShow`, which draws a login URL and code on the client.
+
+`read_config` and `write_config` are the Ctrl+G commands, not arbitrary file
+access. Their `path` must lexically equal the global, project or repository
+`config.json`, the global or project `rules`, or be an absolute path named
+`SKILL.md`. Both refuse text over 64 KiB with `too_large`, without cutting
+it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit
+lowercase hexadecimal content hashes, or `missing`. For configuration and
+rules, the write holds `<path>.lock` across reading, comparing and writing;
+skill files leave no lock file. A stale write says the path changed since
+it was read. A matching write stores even invalid configuration or rules:
+the client rereads the view to show its error. `read_file` remains limited
+to session artifacts.
 
 ### Remote clients
 

@@ -113,6 +113,8 @@ pub enum Command {
     Commands,
     /// Answers with every skill discovery found, switched-off and shadowed ones included.
     Skills,
+    /// Answers with each provider credential label's cached quota.
+    Quota,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
     /// Answers with a page of an artifact's full output.

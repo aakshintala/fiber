@@ -10,7 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::install_extension;
+pub(super) use crate::test_support::install_extension;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -36,7 +36,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// `command` that appends to `bad_marker` and fails; `filed` with `m`
 /// behind the `file` source `key_file`, absent at first; `bed` with a
 /// bedrock model behind the `command` source `other` uses.
-struct Fixture {
+pub(super) struct Fixture {
     root: fakes::TempDir,
     home: PathBuf,
     workspace: PathBuf,
@@ -65,7 +65,7 @@ fn data_extension(home: &Path, name: &str, data: &serde_json::Value) {
     );
 }
 
-fn fixture(name: &str) -> Fixture {
+pub(super) fn fixture(name: &str) -> Fixture {
     let root = fakes::TempDir::new(name);
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
@@ -184,7 +184,7 @@ fn fixture(name: &str) -> Fixture {
     }
 }
 
-fn config(fixture: &Fixture, overrides: &[&str]) -> Config {
+pub(super) fn config(fixture: &Fixture, overrides: &[&str]) -> Config {
     crate::test_support::load(&fixture.home, &fixture.workspace, "test", overrides)
 }
 
@@ -206,7 +206,7 @@ fn startup(names: &[&str]) -> Credentials {
 /// The `Switching` over the fixture with `overrides` and the credential
 /// map holding `fake` and `claude` under `default`, as `parts_in` builds
 /// it.
-fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
+pub(super) fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
     assembled(
         &fixture.home,
         config(fixture, overrides),
@@ -218,7 +218,7 @@ fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
 /// `Switching` as `parts_in` builds it over `home`: the registry after
 /// `add_lua`, every Lua provider's extension, and `keep`'s Lua providers
 /// loaded, `SessionExtensions` holding none.
-fn assembled(
+pub(super) fn assembled(
     home: &Path,
     config: Config,
     credentials: Credentials,
@@ -1539,6 +1539,31 @@ fn lua_fixture(name: &str) -> (Fixture, PathBuf, PathBuf) {
 
 fn vm_runs(counter: &Path) -> usize {
     std::fs::read_to_string(counter).map_or(0, |text| text.len())
+}
+
+#[test]
+fn a_dead_start_lock_entry_restarts_the_provider() {
+    let (fixture, counter, _) = lua_fixture("fiber-switch-dead-start");
+    let switching = switching(&fixture, &[]);
+    let extension = switching.loader.owners.get("lp").unwrap();
+    let lua = switching
+        .started
+        .start(&switching.loader, &switching.config, "lp", extension)
+        .unwrap();
+    assert!(lua.registers("credential").unwrap());
+    let weak = Arc::downgrade(&lua);
+    drop(lua);
+    assert!(weak.upgrade().is_none());
+    let lua = switching
+        .started
+        .start(&switching.loader, &switching.config, "lp", extension)
+        .unwrap();
+    assert!(lua.registers("credential").unwrap());
+    assert_eq!(
+        vm_runs(&counter),
+        3,
+        "startup and two separate live providers"
+    );
 }
 
 /// A Lua-only provider the session unloaded at start is started for the
