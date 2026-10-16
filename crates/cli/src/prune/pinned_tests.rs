@@ -455,16 +455,16 @@ fn a_bare_entry_is_skipped_and_does_not_block_pruning() {
     let hash = approve(&home, &key, &wt, clock.as_ref());
     // The worktree matches: nothing is listed, and the bare entry does
     // not block the match.
-    let plan = plan(&home, &wt, clock.as_ref());
-    assert!(plan.rows.is_empty());
+    let plan1 = plan(&home, &wt, clock.as_ref());
+    assert!(plan1.rows.is_empty());
     git(
         &bare,
         &["worktree", "remove", "--force", wt.to_str().unwrap()],
     );
     // Only the bare entry is left: the copy is removable.
-    let plan = plan(&home, &bare, clock.as_ref());
-    assert_eq!(removable(&plan).len(), 1);
-    assert_eq!(removable(&plan)[0].0, hash.as_str());
+    let plan2 = plan(&home, &bare, clock.as_ref());
+    assert_eq!(removable(&plan2).len(), 1);
+    assert_eq!(removable(&plan2)[0].0, hash.as_str());
 }
 
 #[test]
