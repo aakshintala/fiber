@@ -298,15 +298,15 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     // Enter opens the focused list row through the normal open path:
     // the hub gets a new `subscribe` for the session. Home also shows the
     // name, and the notices float over it. The earlier Ctrl+C disarmed
-    // the quit hint, so home's `chips and sessions` foot tells home from
+    // the quit hint, so home's `↑ sessions · ↓ chips` foot tells home from
     // the conversation (#1903). Before Enter nothing is reopened: the
     // wait below must not be met by home, or `release_one` could run
     // before the reopened `subscribe` reaches the session.
     let reopened_shown =
-        |screen: &Grid| shows(screen, "zebraflight") && !shows(screen, "chips and sessions");
+        |screen: &Grid| shows(screen, "zebraflight") && !shows(screen, "↑ sessions · ↓ chips");
     let held = run.screen();
     assert!(
-        shows(&held, "chips and sessions") && !reopened_shown(&held),
+        shows(&held, "↑ sessions · ↓ chips") && !reopened_shown(&held),
         "home does not meet the reopen wait: {}",
         held.contents
     );

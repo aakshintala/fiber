@@ -125,7 +125,8 @@ fn is_chip_names_the_chip_row() {
     for stop in [
         Spot::Entry(0),
         Spot::Stop(0),
-        Spot::Toggle,
+        Spot::Start(0),
+        Spot::More(0),
         Spot::Pick(0),
         Spot::Quit(crate::home::QuitChoice::Stay),
     ] {
@@ -584,77 +585,15 @@ fn down_on_the_chip_row_with_no_session_does_nothing() {
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    // Every row scoped away: the toggle shows, yet ↓ does nothing.
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "away",
-        "/lens",
-        "-other",
-        serde_json::json!({"state": "idle"}),
-    ));
-    drawn(&mut app);
-    assert!(
-        app.home_screen()
-            .is_some_and(|screen| screen.toggle.is_some())
-    );
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
 #[test]
-fn down_on_a_chip_skips_the_toggle_to_the_first_row() {
-    let mut app = home_with(Some("acme/m1"));
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        serde_json::json!({"state": "idle"}),
-    ));
-    app.on_line(live(
-        "s_bbbbbbbbbbbbbbbb",
-        "away",
-        "/lens",
-        "-other",
-        serde_json::json!({"state": "idle"}),
-    ));
-    drawn(&mut app);
-    assert!(
-        app.home_screen()
-            .is_some_and(|screen| screen.toggle.is_some())
-    );
-    // ↓ skips the toggle to the first row.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    // k from the first row reaches the toggle, ↓ skips back past it,
-    // and ↑ on it returns to the chip.
-    assert_eq!(app.on_key(Key::Char('k'), now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Toggle)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    assert_eq!(app.on_key(Key::Char('k'), now()), Effect::None);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-}
-
-#[test]
-fn shift_tab_reaches_the_last_cross() {
+fn shift_tab_reaches_the_last_chip() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
     assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Stop(keys(&app)[1])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
 }
 
 #[test]

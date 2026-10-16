@@ -40,7 +40,7 @@ impl App {
             self.focus,
             Some(TargetId::Home(spot))
                 if spot.is_chip()
-                    || matches!(spot, Spot::Entry(_) | Spot::Stop(_) | Spot::Toggle)
+                    || matches!(spot, Spot::Entry(_) | Spot::Stop(_) | Spot::More(_))
         )
     }
 
@@ -103,12 +103,7 @@ impl App {
         let Some(home) = self.home.as_ref() else {
             return Vec::new();
         };
-        let scoped = home.launch.git && !home.sessions.show_all();
-        home.sessions
-            .shown(&home.launch.project, scoped)
-            .iter()
-            .map(|row| row.key)
-            .collect()
+        home.sessions.all().iter().map(|row| row.key).collect()
     }
 
     /// ↓ on the entry bar: the completion panel and a recalled prompt
@@ -240,7 +235,6 @@ impl App {
         };
         let row = match spot {
             Spot::Entry(row) | Spot::Stop(row) => Some(row),
-            Spot::Toggle => None,
             Spot::Start(_)
             | Spot::More(_)
             | Spot::Workspace

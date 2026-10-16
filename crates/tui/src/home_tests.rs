@@ -48,7 +48,7 @@ fn envelope(session: &str, state: Value) -> Envelope {
 /// The rows shown for `project`, unscoped.
 fn shown(sessions: &Sessions) -> Vec<String> {
     sessions
-        .shown(PROJECT, false)
+        .all()
         .iter()
         .map(|row| line(row, PROJECT))
         .collect()
@@ -270,7 +270,7 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
         json!({"state": "streaming"}),
     )));
     assert_eq!(shown(&sessions), ["●  fix the parser"]);
-    let key = sessions.shown(PROJECT, false)[0].key;
+    let key = sessions.all()[0].key;
     let mut renamed = payload(json!({"state": "streaming"}));
     renamed["name"] = json!("tidy docs");
     sessions.status(from_status(&Envelope {
@@ -278,7 +278,7 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
         ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}))
     }));
     assert_eq!(shown(&sessions), ["●  tidy docs"]);
-    assert_eq!(sessions.shown(PROJECT, false)[0].key, key);
+    assert_eq!(sessions.all()[0].key, key);
 }
 
 #[test]
@@ -325,11 +325,7 @@ fn a_new_status_goes_after_the_rows_already_there() {
         sessions.status(from_status(&envelope(session, json!({"state": "idle"}))));
     }
     assert_eq!(shown(&sessions), ["✓  fix the parser", "✓  fix the parser"]);
-    let ids: Vec<String> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.id.0.clone())
-        .collect();
+    let ids: Vec<String> = sessions.all().iter().map(|row| row.id.0.clone()).collect();
     assert_eq!(ids, ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
 }
 
@@ -343,14 +339,14 @@ fn a_status_for_a_recent_row_moves_it_and_keeps_its_key() {
         ])),
         true,
     );
-    let key = sessions.shown(PROJECT, false)[1].key;
+    let key = sessions.all()[1].key;
     sessions.status(from_status(&envelope(
         "s_bbbbbbbbbbbbbbbb",
         json!({"state": "streaming"}),
     )));
     // The resumed session moves into the feed rows, live again.
     assert_eq!(shown(&sessions), ["●  fix the parser", "○  first"]);
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert_eq!(rows[0].id.0, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(rows[0].key, key);
     assert_eq!(rows[0].left, None);
@@ -417,11 +413,7 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
         ])),
         true,
     );
-    let keys: Vec<u64> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.key)
-        .collect();
+    let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
     // A first page listing the same ids again keeps their keys, drops the
     // missing row, and skips the id already in the feed.
     sessions.recent(
@@ -436,11 +428,7 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
         shown(&sessions),
         ["●  fix the parser", "○  second", "✗  third"]
     );
-    assert_eq!(
-        sessions.shown(PROJECT, false)[1].key,
-        keys[2],
-        "the kept row keeps its key",
-    );
+    assert_eq!(sessions.all()[1].key, keys[2], "the kept row keeps its key",);
 }
 
 #[test]
@@ -460,7 +448,7 @@ fn an_older_page_skips_ids_already_in_the_feed() {
         false,
     );
     assert_eq!(shown(&sessions), ["●  fix the parser", "○  second"]);
-    assert_eq!(sessions.shown(PROJECT, false).len(), 2);
+    assert_eq!(sessions.all().len(), 2);
 }
 
 #[test]
@@ -488,11 +476,7 @@ fn removing_a_feed_row_keeps_the_others_in_order() {
         sessions.status(from_status(&envelope(session, json!({"state": "idle"}))));
     }
     sessions.remove(&SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
-    let ids: Vec<String> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.id.0.clone())
-        .collect();
+    let ids: Vec<String> = sessions.all().iter().map(|row| row.id.0.clone()).collect();
     assert_eq!(ids, ["s_aaaaaaaaaaaaaaaa", "s_cccccccccccccccc"]);
 }
 
@@ -524,7 +508,7 @@ fn a_recent_row_adds_cost_and_subscription_cost() {
         )])),
         true,
     );
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert!((rows[0].spend - 0.60).abs() < 1e-9);
     assert_eq!(shown(&sessions), ["○  old work  $0.60"]);
 }
@@ -595,11 +579,7 @@ fn keys_are_never_reused_after_a_row_drops() {
         ])),
         true,
     );
-    let keys: Vec<u64> = sessions
-        .shown(PROJECT, false)
-        .iter()
-        .map(|row| row.key)
-        .collect();
+    let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
     assert_eq!(keys.len(), 3);
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
     // A first page that drops a row, then a status for that id: a new key,
@@ -615,7 +595,7 @@ fn keys_are_never_reused_after_a_row_drops() {
         "s_bbbbbbbbbbbbbbbb",
         json!({"state": "idle"}),
     )));
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     let revived = rows
         .iter()
         .find(|row| row.id.0 == "s_bbbbbbbbbbbbbbbb")
@@ -913,43 +893,6 @@ fn opening_from_each_level() {
 }
 
 #[test]
-fn hidden_counts_waiting_rows_only() {
-    let mut sessions = Sessions::default();
-    let mut waiting = payload(json!({"state": "waiting", "waiting": {
-        "request_id": "r_1", "kind": "approval", "summary": "shell"}}));
-    waiting["project"] = json!(OTHER);
-    sessions.status(from_status(&Envelope {
-        payload: waiting.as_object().cloned().unwrap_or_default(),
-        ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "waiting"}))
-    }));
-    let mut idle = payload(json!({"state": "idle"}));
-    idle["project"] = json!(OTHER);
-    sessions.status(from_status(&Envelope {
-        payload: idle.as_object().cloned().unwrap_or_default(),
-        ..envelope("s_bbbbbbbbbbbbbbbb", json!({"state": "idle"}))
-    }));
-    sessions.status(from_status(&envelope(
-        "s_cccccccccccccccc",
-        json!({"state": "idle"}),
-    )));
-    assert_eq!(sessions.hidden(PROJECT), (2, 1));
-    assert_eq!(sessions.hidden(OTHER), (1, 0));
-}
-
-#[test]
-fn toggle_line_names_waiting_or_scoping_back() {
-    assert_eq!(
-        super::toggle_line(2, false),
-        "2 waiting in other projects · show all"
-    );
-    assert_eq!(
-        super::toggle_line(0, false),
-        "0 waiting in other projects · show all"
-    );
-    assert_eq!(super::toggle_line(0, true), "show this project only");
-}
-
-#[test]
 fn dependents_reads_each_backticked_id_once_in_order() {
     use contract::SessionId;
     let id = |session: &str| SessionId(session.to_owned());
@@ -1036,7 +979,7 @@ fn a_recent_row_is_in_git_when_its_last_status_is() {
         ])),
         true,
     );
-    let rows = sessions.shown(PROJECT, false);
+    let rows = sessions.all();
     assert!(rows[0].git);
     assert!(!rows[1].git);
 }

@@ -1,29 +1,28 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 1060
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    1 working · 1 ready · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
-
-
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-
-                  Quit                                       ✕
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcu  1 session working
+w +  2 live · $0▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+⌥1 ● fix the par                                                   WORKING  0s ✕
+    s_aaaaaaaaaa  Quit                                       ✕
+⌥2 ✓ tidy docs                                                       READY  0s ✕
+    s_bbbbbbbbbb  1 session working
 
                   › Enter  leave them running
-[w]  [no model]     c      close all
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    Esc    stay                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parse                                                               ✕
-✓  tidy docs      click a choice · they keep running meanwhile                 ✕
+                    c      close all
+                    Esc    stay
+
+                  click a choice · they keep running meanwhile
 
                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

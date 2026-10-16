@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Sessions, Spot, State, cascade_line, delete_line, from_status, line,
-    line_with, recent_rows, toggle_line,
+    Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line, delete_line,
+    from_status, line, line_with, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -144,9 +144,6 @@ impl App {
     /// What home draws, or `None` unless [`App::on_home`] holds.
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
-        // Scoped is inside git with the toggle off: only the launch
-        // project's rows show.
-        let scoped = home.launch.git && !home.sessions.show_all();
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker.
         let workspace = home
@@ -183,17 +180,137 @@ impl App {
         // The foot names the key map's bound key, leaving it out
         // when the action is unbound; Ctrl+C cannot be rebound, so its
         // hint stays fixed.
+        let sections = home.sessions.sections(&home.launch.project);
+        let (mut waiting_count, mut working, mut retrying, mut crashed, mut ready) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut spend = 0.0;
+        let mut live_count = 0usize;
+        let mut list = Vec::new();
+        let mut rows = Vec::new();
+        let wall = self.rail_state().wall();
+        for section in sections {
+            let hidden_exited = section.hidden();
+            let section_spend = section.live.iter().map(|row| row.spend).sum();
+            let waiting = section
+                .live
+                .iter()
+                .filter(|row| row.left.is_none() && row.state == State::Waiting)
+                .count();
+            list.push(ListLine::Head {
+                start: section.start,
+                name: section.name,
+                live: section.live.len(),
+                spend: crate::format::money(section_spend),
+                waiting,
+            });
+            for row in section.live {
+                live_count += 1;
+                spend += row.spend;
+                if row.left == Some(Left::Crashed) {
+                    crashed += 1;
+                } else {
+                    match row.state {
+                        State::Waiting => waiting_count += 1,
+                        State::Working | State::Jobs => working += 1,
+                        State::Retrying => retrying += 1,
+                        State::Idle => ready += 1,
+                        State::Unreadable => {}
+                    }
+                }
+                let status = row.status.as_ref();
+                let stop = row.left.is_none() && row.state != State::Unreadable;
+                rows.push((
+                    row.key,
+                    line_with(row, &home.launch.project, self.motion.glyph(row)),
+                    stop,
+                ));
+                list.push(ListLine::Live {
+                    key: row.key,
+                    number: self.rail_state().number(row.key),
+                    glyph: self.motion.glyph(row).to_owned(),
+                    name: crate::home::title(row),
+                    word: crate::view::rail::word(row),
+                    tone: crate::view::rail::tone(row),
+                    since: status
+                        .map(|status| crate::view::rail::elapsed(status.since, wall))
+                        .unwrap_or_default(),
+                    stop,
+                    id: row.id.0.clone(),
+                    turns: status.and_then(|status| status.turns),
+                    branch: status
+                        .and_then(|status| status.git.as_ref().and_then(|git| git.branch.clone())),
+                    spend: crate::format::money(row.spend),
+                    context: status.and_then(|status| {
+                        status.context.as_ref().map(|context| {
+                            if context.window == 0 {
+                                0
+                            } else {
+                                context.tokens.saturating_mul(100) / context.window
+                            }
+                        })
+                    }),
+                    wait: row.note.clone().or_else(|| row.waiting.clone()),
+                });
+            }
+            if !section.exited.is_empty() {
+                list.push(ListLine::ExitedHead {
+                    count: section.exited.len(),
+                });
+            }
+            for row in section.exited.iter().take(section.shown_exited) {
+                rows.push((
+                    row.key,
+                    line_with(row, &home.launch.project, self.motion.glyph(row)),
+                    false,
+                ));
+                list.push(ListLine::Exited {
+                    key: row.key,
+                    glyph: "○",
+                    name: crate::home::title(row),
+                    id: row.id.0.clone(),
+                    turns: row.status.as_ref().and_then(|status| status.turns),
+                    spend: crate::format::money(row.spend),
+                    age: row.status.as_ref().map(|status| {
+                        format!("{} ago", crate::view::rail::elapsed(status.since, wall))
+                    }),
+                });
+            }
+            if let Some(row) = section.exited.get(section.shown_exited) {
+                list.push(ListLine::More {
+                    key: row.key,
+                    count: hidden_exited,
+                });
+            }
+        }
+        let header = Header {
+            counts: [waiting_count, working, retrying, crashed, ready]
+                .into_iter()
+                .zip([
+                    (crate::theme::Role::Attention, "waiting on you"),
+                    (crate::theme::Role::Accent, "working"),
+                    (crate::theme::Role::Warning, "retrying"),
+                    (crate::theme::Role::Error, "crashed"),
+                    (crate::theme::Role::Muted, "ready"),
+                ])
+                .filter(|(count, _)| *count > 0)
+                .map(|(count, (role, label))| (role, format!("{count} {label}")))
+                .collect(),
+            spend: (live_count > 0).then(|| format!("{} live", crate::format::money(spend))),
+        };
         let foot = if self.hint() {
             self.hint_text()
         } else {
             match self.keys().first_label("key_map") {
                 Some(label) => {
-                    format!("↓ chips and sessions · {label} the key map · Ctrl+C twice to quit")
+                    format!("↑ sessions · ↓ chips · {label} the key map · Ctrl+C twice to quit")
                 }
-                None => "↓ chips and sessions · Ctrl+C twice to quit".to_owned(),
+                None => "↑ sessions · ↓ chips · Ctrl+C twice to quit".to_owned(),
             }
         };
         Some(HomeScreen {
+            header,
+            list,
+            empty: home.sessions.all().is_empty(),
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
             // always show is a later ticket's.
@@ -228,34 +345,9 @@ impl App {
                 ]);
                 chips
             },
-            rows: home
-                .sessions
-                .shown(&home.launch.project, scoped)
-                .iter()
-                .map(|row| {
-                    // Every readable row ends in a ✕: stopping a live
-                    // session, deleting an exited one. An unreadable row
-                    // has none.
-                    (
-                        row.key,
-                        line_with(row, &home.launch.project, self.motion.glyph(row)),
-                        row.state != State::Unreadable,
-                    )
-                })
-                .collect(),
+            rows,
             picker: home.picker_screen(),
             blockers: home.blockers.clone(),
-            // The toggle shows inside git whenever a row hides, or
-            // while everything shows.
-            toggle: {
-                let (hidden, waiting) = if scoped {
-                    home.sessions.hidden(&home.launch.project)
-                } else {
-                    (0, 0)
-                };
-                (home.launch.git && (hidden > 0 || home.sessions.show_all()))
-                    .then(|| toggle_line(waiting, home.sessions.show_all()))
-            },
             foot,
             question,
             question_scroll,
@@ -288,7 +380,7 @@ impl App {
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
         let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
+        let scoped = home.launch.git;
         let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
         out.extend(self.launch_lines());
@@ -505,7 +597,7 @@ impl App {
         home.focus_list = false;
         self.focus = order(targets, &self.regions, Area::Conversation)
             .into_iter()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Toggle)));
+            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_))));
         true
     }
 
@@ -594,8 +686,7 @@ impl App {
             return None;
         }
         let next = self.home.as_ref().and_then(|home| {
-            let scoped = home.launch.git && !home.sessions.show_all();
-            let shown = home.sessions.shown(&home.launch.project, scoped);
+            let shown = home.sessions.all();
             let at = shown.iter().position(|row| row.key == focused)?;
             shown.get(at + 1).map(|row| row.key)
         });
@@ -623,7 +714,6 @@ impl App {
         match spot {
             Spot::Entry(key) => self.open_row(key),
             Spot::Stop(key) => self.stop_or_ask(key),
-            Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
             Spot::Worktree => self.toggle_worktree(),
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
@@ -697,31 +787,10 @@ impl App {
             return Vec::new();
         };
         let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
+        let scoped = home.launch.git;
         let id = mint();
         home.recent_ask = Some((id.clone(), true));
         vec![recent_line(&id, None, scoped.then_some(project.as_str()))]
-    }
-
-    /// Flips the scope toggle and asks the first `recent` page again,
-    /// naming the launch project while scoped.
-    fn toggle_scope(&mut self) -> Effect {
-        let Some(home) = self.home.as_mut() else {
-            return Effect::None;
-        };
-        home.sessions.toggle();
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
-        let id = mint();
-        home.recent_ask = Some((id.clone(), true));
-        Effect::Send(vec![recent_line(
-            &id,
-            None,
-            scoped.then_some(project.as_str()),
-        )])
     }
 
     /// Asks the next `recent` page past the focused last row: `before`
@@ -731,7 +800,7 @@ impl App {
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let home = self.home.as_mut()?;
         let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
+        let scoped = home.launch.git;
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
         }
@@ -761,7 +830,6 @@ impl App {
                 Some(line(row, &home.launch.project))
             }
             Spot::Stop(_)
-            | Spot::Toggle
             | Spot::Start(_)
             | Spot::More(_)
             | Spot::Workspace

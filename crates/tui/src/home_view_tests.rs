@@ -76,6 +76,25 @@ fn home_only(app: &App, area: Rect, buf: &mut Buffer) -> Vec<crate::mouse::Targe
     super::render(app, &screen, area, buf, None)
 }
 
+/// Home with `count` live sessions in one project.
+fn home_with_live_rows(width: u16, height: u16, count: u8) -> App {
+    let mut app = home(width, height);
+    app.on_line(hello());
+    for n in 0..count {
+        app.on_line(status(&format!("s_{n:016x}"), "session", live()));
+    }
+    app
+}
+
+/// The row holding the box's full-width top edge.
+fn box_top(frame: &str, width: usize) -> usize {
+    let edge = "▄".repeat(width);
+    frame
+        .lines()
+        .position(|row| row == edge)
+        .unwrap_or_else(|| panic!("box top missing:\n{frame}"))
+}
+
 /// Chooses a model for this session only: with no model on the chip,
 /// Enter opens the picker instead of starting, so the blocker tests
 /// pick through it, keeping the `[no model]` chips their snapshots show.
@@ -122,7 +141,7 @@ fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
     // draft row. Drawn below the floor, one row taller it marks the
     // bottom row; one row shorter the row is past the area and nothing
     // draws, without panicking (`docs/tui.md`, "The input box").
-    for (height, drawn) in [(6, true), (5, false)] {
+    for (height, drawn) in [(6, true), (5, true)] {
         let mut app = home(80, height);
         type_draft(&mut app, "a\nb\nc");
         let area = Rect::new(0, 0, 80, height);
@@ -133,7 +152,7 @@ fn the_cursor_marks_the_last_fitting_row_and_sheds_below_it() {
             .filter(|(x, y)| buf[(*x, *y)].symbol() == "█")
             .collect();
         if drawn {
-            assert_eq!(at, vec![(3, 5)], "height {height}");
+            assert_eq!(at, vec![(5, 3)], "height {height}");
         } else {
             assert!(at.is_empty(), "height {height}: {at:?}");
         }
@@ -159,8 +178,7 @@ fn draft_rows_clip_at_the_areas_bottom_row() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("  f"), "{text}");
-    assert!(!text.contains("  g"), "{text}");
-    assert!(!text.contains("  h"), "{text}");
+    assert!(text.contains("  h"), "{text}");
 }
 
 #[test]
@@ -217,9 +235,9 @@ fn home_cursor_sits_at_the_draft_cursor_in_the_box() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
-    // The pad is three rows, then the four-row logo and one blank row,
-    // the ▄ edge and the draft's first row; the cursor sits after "› hi".
-    assert_eq!(cursor(&app, area), Some(Position::new(4, 9)));
+    // The bottom-aligned box puts the draft below its top edge; the
+    // cursor sits after "› hi" at the inset text column.
+    assert_eq!(cursor(&app, area), Some(Position::new(6, 19)));
 }
 
 #[test]
@@ -240,7 +258,7 @@ fn the_empty_home_prompt_is_info_and_its_text_dim() {
                 .contains("? for shortcuts")
         })
         .expect("the placeholder row");
-    for x in [0, 1] {
+    for x in [2, 3] {
         assert_eq!(
             buf[(x, row)].style().fg,
             Some(crate::theme::Role::Info.color()),
@@ -252,9 +270,9 @@ fn the_empty_home_prompt_is_info_and_its_text_dim() {
             "cell {x}"
         );
     }
-    assert_eq!(buf[(2, row)].symbol(), "█");
+    assert_eq!(buf[(4, row)].symbol(), "█");
     assert!(
-        buf[(3, row)]
+        buf[(5, row)]
             .style()
             .add_modifier
             .contains(ratatui::style::Modifier::DIM),
@@ -353,6 +371,15 @@ fn accepted(id: &str, result: serde_json::Value) -> Line {
         ]
         .into_iter()
         .collect(),
+    })
+}
+
+/// A session spend with `cost` and the common token fields.
+fn session_spend(cost: f64) -> serde_json::Value {
+    serde_json::json!({
+        "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2},
+        "cost": cost,
+        "subscription_cost": 0.0,
     })
 }
 
@@ -469,35 +496,394 @@ fn idle() -> serde_json::Value {
 }
 
 #[test]
+fn home_header_and_sections_160x48() {
+    let mut app = home(160, 48);
+    let wall = 172_800_000;
+    app.set_wall(wall);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The 160x48 Look fixture: eight live sessions across three projects,
+    // followed by four loaded exited sessions in fiber and one in lens.
+    for (id, name, project, workspace, started, since, turns, cost, state) in [
+        (
+            "s_9f31ac",
+            "fix flaky lock test",
+            "-fiber",
+            "/work/fiber",
+            1,
+            wall - 16_000,
+            4,
+            1.35,
+            serde_json::json!({"state":"streaming","git":{"branch":"main"},"context":{"tokens":120,"window":1000}}),
+        ),
+        (
+            "s_3ab702",
+            "review #688",
+            "-fiber",
+            "/work/fiber",
+            2,
+            wall - 1_320_000,
+            3,
+            1.10,
+            serde_json::json!({"state":"waiting","git":{"branch":"review-688"},"context":{"tokens":410,"window":1000},"waiting":{"request_id":"r_1","kind":"approval","summary":"shell cargo publish --dry-run"}}),
+        ),
+        (
+            "s_50c9d2",
+            "backfill embeddings",
+            "-lens",
+            "/work/lens",
+            3,
+            wall - 720_000,
+            9,
+            0.87,
+            serde_json::json!({"state":"retrying","git":{"branch":"backfill/embed"},"context":{"tokens":330,"window":1000}}),
+        ),
+        (
+            "s_5e91b4",
+            "lsp probe",
+            "-fiber",
+            "/work/fiber",
+            4,
+            wall - 10_800_000,
+            3,
+            0.05,
+            serde_json::json!({"state":"idle","git":{"branch":"spike/lsp"},"context":{"tokens":910,"window":1000}}),
+        ),
+        (
+            "s_44d2e1",
+            "docs: rail spec",
+            "-fiber",
+            "/work/fiber",
+            5,
+            wall - 540_000,
+            6,
+            0.42,
+            serde_json::json!({"state":"idle","git":{"branch":"docs/rail-692"},"context":{"tokens":270,"window":1000}}),
+        ),
+        (
+            "s_77aa01",
+            "migrate every provider adapter to the new streaming contract",
+            "-lens",
+            "/work/lens",
+            6,
+            wall - 120_000,
+            12,
+            0.64,
+            serde_json::json!({"state":"streaming","git":{"branch":"migrate/streaming"},"context":{"tokens":580,"window":1000}}),
+        ),
+        (
+            "s_08f3b9",
+            "bump ratatui",
+            "-fiber",
+            "/work/fiber",
+            7,
+            wall - 240_000,
+            1,
+            1.00,
+            serde_json::json!({"state":"waiting","git":{"branch":"deps/ratatui-0.30"},"context":{"tokens":640,"window":1000},"waiting":{"request_id":"r_2","kind":"question","summary":"2 of 3 answered"}}),
+        ),
+        (
+            "s_6d1e44",
+            "rewrite onboarding tour",
+            "-beacon",
+            "/work/beacon",
+            8,
+            wall - 3_600_000,
+            7,
+            0.35,
+            serde_json::json!({"state":"idle","git":{"branch":"tour/rewrite"},"context":{"tokens":190,"window":1000}}),
+        ),
+    ] {
+        let mut state = state;
+        state["project"] = serde_json::json!(project);
+        state["workspace"] = serde_json::json!(workspace);
+        state["started"] = serde_json::json!(started);
+        state["since"] = serde_json::json!(since);
+        state["turns"] = serde_json::json!(turns);
+        state["spend"] = session_spend(cost);
+        app.on_line(status(id, name, state));
+    }
+    app.on_line(left("s_5e91b4", "crashed"));
+    let exited = |id: &str, project: &str, workspace: &str, name: &str, since, turns, cost| {
+        let mut row = recent_row(id, name, "exited");
+        row["project"] = serde_json::json!(project);
+        row["workspace"] = serde_json::json!(workspace);
+        row["status"] = serde_json::json!({
+            "name": name,
+            "workspace": workspace,
+            "project": project,
+            "model": "test/model",
+            "state": "idle",
+            "since": since,
+            "started": 0,
+            "calls": 0,
+            "turns": turns,
+            "spend": session_spend(cost),
+            "delegates": 0,
+            "jobs": 0,
+            "clients": 0,
+        });
+        row
+    };
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions":[
+            exited("s_7f20aa", "-fiber", "/work/fiber", "cut the 0.0.1 release", wall - 10_800_000, 5, 1.10),
+            exited("s_61c9d0", "-fiber", "/work/fiber", "speed up the render loop", wall - 18_000_000, 2, 0.58),
+            exited("s_88f310", "-fiber", "/work/fiber", "port the router to hyper", wall - 86_400_000, 8, 2.02),
+            exited("s_hidden", "-fiber", "/work/fiber", "hidden exited row", 0, 1, 0.01),
+            exited("s_50c9a1", "-lens", "/work/lens", "how do I backfill embeddings for old sessions?", 0, 9, 0.87),
+        ]}),
+    ));
+    let frame = screen(&app, 160, 48);
+    for text in [
+        "2 waiting on you · 2 working · 1 retrying · 1 crashed · 2 ready · $5.78 live",
+        "fiber +  5 live · $3.92  2 waiting on you",
+        "lens +  2 live · $1.51",
+        "beacon +  1 live · $0.35",
+        "exited · 4",
+        "… 1 more",
+        "5 turns",
+        "s_50c9a1 · 9 turns · $0.87 · 2d ago",
+    ] {
+        assert!(frame.contains(text), "{text}: {frame}");
+    }
+    insta::assert_snapshot!("home_header_and_sections_160x48", frame);
+}
+
+#[test]
+fn live_row_second_line_joins_id_turns_branch_spend_context_and_the_wait() {
+    let mut app = home(160, 48);
+    app.set_wall(20_000);
+    app.on_line(hello());
+    app.on_line(status("s_9f31ac", "review", serde_json::json!({"state":"waiting","since":1000,"turns":4,"git":{"branch":"main"},"context":{"tokens":120,"window":1000},"spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.35,"subscription_cost":0.0},"waiting":{"request_id":"r_1","kind":"approval","summary":"approve publish"}})));
+    let frame = screen(&app, 160, 48);
+    assert!(
+        frame.contains("s_9f31ac · 4 turns · ⎇ main · $1.35 · 12% · approval: approve publish"),
+        "{frame}"
+    );
+}
+
+#[test]
+fn a_row_without_turns_draws_no_turns_segment() {
+    let mut app = home(160, 48);
+    app.set_wall(10_800_000);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.on_line(status(
+        "s_live",
+        "live no turns",
+        serde_json::json!({"state":"streaming","git":{"branch":"main"}}),
+    ));
+    let mut old_status = serde_json::json!({"name":"exited no turns","workspace":"/w","project":"-w","model":"test/model","state":"idle","since":0,"started":0,"calls":0,"spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":0.0,"subscription_cost":0.0},"delegates":0,"jobs":0,"clients":0});
+    old_status.as_object_mut().unwrap().remove("turns");
+    let mut old = recent_row("s_old", "exited no turns", "exited");
+    old["status"] = old_status;
+    app.on_line(accepted(&recent_id, serde_json::json!({"sessions":[old]})));
+    let frame = screen(&app, 160, 48);
+    assert!(frame.contains("s_live · ⎇"), "{frame}");
+    assert!(frame.contains("s_old · $0.00 · 3h ago"), "{frame}");
+    assert!(!frame.contains("s_live · 0 turns"), "{frame}");
+    assert!(!frame.contains("s_old · 0 turns"), "{frame}");
+}
+
+#[test]
+fn one_turn_is_singular_and_zero_draws_0_turns() {
+    let mut app = home(160, 48);
+    app.on_line(hello());
+    app.on_line(status(
+        "s_one",
+        "one",
+        serde_json::json!({"state":"idle","turns":1}),
+    ));
+    app.on_line(status(
+        "s_zero",
+        "zero",
+        serde_json::json!({"state":"idle","turns":0}),
+    ));
+    let frame = screen(&app, 160, 48);
+    assert!(frame.contains("s_one · 1 turn · $0.00"), "{frame}");
+    assert!(frame.contains("s_zero · 0 turns · $0.00"), "{frame}");
+}
+
+#[test]
+fn an_exited_row_shows_id_turns_spend_and_age() {
+    let mut app = home(160, 48);
+    app.set_wall(10_800_000);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut exited = recent_row("s_7f20aa", "release", "exited");
+    exited["status"] = serde_json::json!({"name":"release","workspace":"/w","project":"-w","model":"test/model","state":"idle","since":0,"started":0,"calls":0,"turns":5,"spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.10,"subscription_cost":0.0},"delegates":0,"jobs":0,"clients":0});
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions":[exited]}),
+    ));
+    assert!(screen(&app, 160, 48).contains("s_7f20aa · 5 turns · $1.10 · 3h ago"));
+}
+
+#[test]
+fn an_exited_row_age_comes_from_the_last_status() {
+    let mut app = home(160, 48);
+    app.set_wall(10_800_000);
+    let outgoing = app.on_line(hello());
+    let recent_id = serde_json::from_str::<serde_json::Value>(&outgoing[1]).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut exited = recent_row("s_age", "age", "exited");
+    exited["status"] = serde_json::json!({"name":"age","workspace":"/w","project":"-w","model":"test/model","state":"idle","since":10_740_000,"started":0,"calls":0,"turns":2,"spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":0.0,"subscription_cost":0.0},"delegates":0,"jobs":0,"clients":0});
+    app.on_line(accepted(
+        &recent_id,
+        serde_json::json!({"sessions":[exited]}),
+    ));
+    assert!(screen(&app, 160, 48).contains("s_age · 2 turns · $0.00 · 1m ago"));
+}
+
+#[test]
+fn a_two_row_line_cuts_the_name_first_at_60_columns() {
+    let mut app = home(60, 24);
+    app.set_wall(20_000);
+    app.on_line(hello());
+    app.on_line(status(
+        "s_narrow",
+        &"long session name ".repeat(8),
+        serde_json::json!({"state":"streaming","since":1000,"turns":3}),
+    ));
+    let frame = screen(&app, 60, 24);
+    assert!(frame.contains("WORKING"), "{frame}");
+    assert!(frame.contains("19s"), "{frame}");
+    insta::assert_snapshot!("home_narrow_rows_60x24", frame);
+}
+
+#[test]
+fn the_focused_row_is_on_the_selection_bar() {
+    let mut app = home(160, 48);
+    app.on_line(hello());
+    app.on_line(status("s_focused", "focused", live()));
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    app.drawn(&targets);
+    // Down reaches the chip row, then the first session row.
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
+    let targets = home_only(&app, area, &mut buf);
+    let row_target = targets
+        .iter()
+        .find(|t| matches!(t.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+        .unwrap();
+    for y in row_target.rect.y..row_target.rect.y.saturating_add(2) {
+        for x in area.x..area.right() {
+            assert_eq!(buf[(x, y)].bg, crate::theme::Role::Selection.color());
+        }
+    }
+    let next = row_target.rect.y.saturating_add(2);
+    if next < area.bottom() {
+        assert_ne!(
+            buf[(area.x, next)].bg,
+            crate::theme::Role::Selection.color()
+        );
+    }
+}
+
+#[test]
+fn the_box_sits_on_the_last_rows_above_the_foot() {
+    for (width, height) in [(80, 24), (160, 48)] {
+        let frame = screen(&home(width, height), width, height);
+        assert!(
+            frame
+                .lines()
+                .nth(usize::from(height - 6))
+                .unwrap()
+                .starts_with('▄')
+        );
+        assert!(
+            frame
+                .lines()
+                .nth(usize::from(height - 1))
+                .unwrap()
+                .contains("↑ sessions · ↓ chips")
+        );
+    }
+}
+
+#[test]
+fn the_box_is_the_full_width_with_the_session_box_inset() {
+    let frame = screen(&home(160, 48), 160, 48);
+    assert_eq!(frame.lines().nth(42).unwrap(), "▄".repeat(160));
+    assert!(frame.lines().nth(43).unwrap().starts_with("▌ › "));
+}
+
+#[test]
+fn home_empty_160x48() {
+    let frame = screen(&home(160, 48), 160, 48);
+    assert!(frame.lines().nth(2).unwrap().contains("no sessions yet"));
+    assert!(frame.contains("No sessions yet."));
+    assert!(frame.contains("Type below and press Enter to start one."));
+    insta::assert_snapshot!("home_empty_160x48", frame);
+}
+
+#[test]
+fn the_four_row_header_needs_twelve_rows_and_32_columns() {
+    let short = screen(&home(80, 11), 80, 11);
+    assert!(short.contains("⌇ fiber 0.0.1"));
+    assert!(!short.contains("no sessions yet"));
+    let tall = screen(&home(80, 12), 80, 12);
+    assert!(tall.lines().take(4).any(|line| line.contains('█')));
+    assert!(tall.lines().nth(2).unwrap().contains("no sessions yet"));
+    let narrow_area = Rect::new(0, 0, 31, 24);
+    let mut narrow_buf = Buffer::empty(narrow_area);
+    home_only(&home(31, 24), narrow_area, &mut narrow_buf);
+    let narrow = text(&narrow_buf);
+    assert!(narrow.contains("⌇ fiber 0.0.1"), "{narrow}");
+}
+
+#[test]
+fn at_height_twelve_the_focused_live_rows_first_line_stays_on_screen() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status(
+        "s_short",
+        "focused first line",
+        serde_json::json!({"state":"streaming"}),
+    ));
+    let initial_area = Rect::new(0, 0, 80, 24);
+    let mut initial_buf = Buffer::empty(initial_area);
+    let targets = home_only(&app, initial_area, &mut initial_buf);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
+    app.set_size(80, 12);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let frame = text(&buf);
+    assert!(
+        frame.lines().nth(5).unwrap().contains("focused first line"),
+        "{frame}"
+    );
+    assert!(!frame.lines().nth(6).unwrap().contains("s_short"));
+    assert!(
+        targets
+            .iter()
+            .any(|t| t.rect.y == 5 && matches!(t.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+    );
+}
+
+#[test]
 fn home_four_row_logo_80x24() {
     insta::assert_snapshot!("home_four_row_logo_80x24", screen(&home(80, 24), 80, 24));
-}
-
-#[test]
-fn home_one_row_logo_at_the_height_limit() {
-    insta::assert_snapshot!(
-        "home_one_row_logo_at_the_height_limit",
-        screen(&home(80, 16), 80, 16)
-    );
-}
-
-#[test]
-fn the_four_row_logo_needs_its_height_exactly() {
-    // At 80 columns the threshold is 17 rows: a pad of 2, the four-row
-    // logo, one blank row, the six-row box, three list rows, the foot.
-    let tall = screen(&home(80, 17), 80, 17);
-    // The four pixel rows sit under the pad of 2; the drawn cursor in
-    // the box below must not stand in for them.
-    assert!(
-        tall.lines().skip(2).take(4).any(|row| row.contains('█')),
-        "four pixel rows at the threshold"
-    );
-    let short = screen(&home(80, 16), 80, 16);
-    assert!(
-        short.lines().take(3).all(|row| !row.contains('█')),
-        "one row below the threshold"
-    );
-    assert!(short.contains("⌇ fiber 0.0.1"), "the one-row logo");
 }
 
 #[test]
@@ -513,17 +899,6 @@ fn a_screen_narrower_than_the_logo_gets_one_row() {
         "no pixel rows without the width"
     );
     assert!(narrow.contains("⌇ fiber 0.0.1"), "the one-row logo");
-}
-
-#[test]
-fn the_logo_glyph_setting_changes_the_one_row_logo() {
-    // The four-row logo's wave is drawn pixels, and never changes.
-    let tall = screen(&home_with_glyph(80, 24, "≈"), 80, 24);
-    assert!(tall.contains('█'), "four pixel rows");
-    assert!(!tall.contains('≈'), "no glyph in the pixel logo");
-    let short = screen(&home_with_glyph(80, 16, "≈"), 80, 16);
-    assert!(short.contains("≈ fiber 0.0.1"), "the setting's glyph");
-    assert!(!short.contains('⌇'), "no wave where the glyph goes");
 }
 
 #[test]
@@ -558,50 +933,11 @@ fn home_picker_open() {
     insta::assert_snapshot!("home_picker_open", screen(&app, 80, 24));
 }
 
-/// A waiting `session_status` for `session` in another project.
-fn away_waiting() -> Line {
-    Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
-        session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: serde_json::json!({
-            "name": "away",
-            "workspace": "/lens",
-            "project": "-other",
-            "state": "waiting",
-            "waiting": {"request_id": "r_1", "kind": "approval",
-                "summary": "shell"},
-            "started": 0, "calls": 0, "since": 0,
-            "spend": {"tokens": {"input": 1, "cache_read": 0,
-                "cache_write": {}, "output": 2},
-                "cost": 0.0, "subscription_cost": 0.0},
-            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
-        })
-        .as_object()
-        .cloned()
-        .unwrap_or_default(),
-    })
-}
-
 #[test]
-fn home_scoped_with_the_toggle() {
-    let mut app = git_home(80, 24);
-    app.on_line(hello());
-    app.on_line(status("s_aaaaaaaaaaaaaaaa", "here", idle()));
-    app.on_line(away_waiting());
-    insta::assert_snapshot!("home_scoped_with_the_toggle", screen(&app, 80, 24));
-}
-
-#[test]
-fn home_with_blocker_lines() {
+fn blocker_lines_sit_above_the_box_and_the_list_yields() {
     // A rejected `start` draws its message above the box, wrapped at its
-    // width.
-    let mut app = home(80, 24);
-    app.on_line(hello());
+    // width, and takes the same number of rows from the list.
+    let mut app = home_with_live_rows(80, 24, 7);
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
     let now = fakes::clock::FakeClock::new().now();
@@ -616,28 +952,64 @@ fn home_with_blocker_lines() {
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
-            ("command_id".to_owned(), serde_json::Value::String(id.to_owned())),
-            ("code".to_owned(), serde_json::Value::String("start_failed".to_owned())),
+            (
+                "command_id".to_owned(),
+                serde_json::Value::String(id.to_owned()),
+            ),
+            (
+                "code".to_owned(),
+                serde_json::Value::String("start_failed".to_owned()),
+            ),
             (
                 "message".to_owned(),
-                serde_json::Value::String(
-                    "No API key for test/model in this workspace. Run `fiber login` and press Enter to try again, or pick another model.\nA second line stays short."
-                        .to_owned(),
-                ),
+                serde_json::Value::String("one\ntwo".to_owned()),
             ),
         ]
         .into_iter()
         .collect(),
     }));
-    insta::assert_snapshot!("home_with_blocker_lines", screen(&app, 80, 24));
+    let frame = screen(&app, 80, 24);
+    insta::assert_snapshot!("home_with_blocker_lines", frame.clone());
+    let blocked = app.home_screen().expect("home draws");
+    let area = Rect::new(0, 0, 80, 24);
+    let placed = super::layout(&app, &blocked, area);
+    let plain = home_with_live_rows(80, 24, 7);
+    let plain_screen = plain.home_screen().expect("home draws");
+    let plain_placed = super::layout(&plain, &plain_screen, area);
+    assert_eq!(placed.box_top, plain_placed.box_top);
+    assert_eq!(
+        plain_placed.list_end.saturating_sub(placed.list_end),
+        u16::try_from(blocked.blockers.len()).unwrap_or(u16::MAX)
+    );
+    let blocker_start = placed
+        .box_top
+        .saturating_sub(u16::try_from(blocked.blockers.len()).unwrap_or(u16::MAX));
+    assert_eq!(frame.lines().nth(usize::from(blocker_start)), Some("one"));
+    assert_eq!(
+        frame
+            .lines()
+            .nth(usize::from(blocker_start.saturating_add(1))),
+        Some("two")
+    );
+    assert_eq!(usize::from(placed.box_top), box_top(&frame, 80));
+    let mut blocked_buf = Buffer::empty(area);
+    let blocked_targets = home_only(&app, area, &mut blocked_buf);
+    let mut plain_buf = Buffer::empty(area);
+    let plain_targets = home_only(&plain, area, &mut plain_buf);
+    let entry_targets = |targets: &[crate::mouse::Target]| {
+        targets
+            .iter()
+            .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+            .count()
+    };
+    assert!(entry_targets(&blocked_targets) < entry_targets(&plain_targets));
 }
 
 #[test]
 fn blockers_count_against_the_four_row_logo() {
-    // Three blocker lines at the 17-row threshold leave no room for the
-    // pixel logo: the one-row form draws, with the blockers above the
-    // box.
-    let mut app = home(80, 17);
+    // Three blocker rows need 15 rows for the four-row logo; one row less
+    // uses the one-row logo.
+    let mut app = home(80, 14);
     app.on_line(hello());
     choose_session_model(&mut app);
     type_draft(&mut app, "hi");
@@ -669,7 +1041,7 @@ fn blockers_count_against_the_four_row_logo() {
         .into_iter()
         .collect(),
     }));
-    let text = screen(&app, 80, 17);
+    let text = screen(&app, 80, 14);
     // The pad of 2 and the one logo row hold no pixel rows while the
     // blockers show.
     assert!(
@@ -677,6 +1049,8 @@ fn blockers_count_against_the_four_row_logo() {
         "one row while the blockers show"
     );
     assert!(text.contains("⌇ fiber 0.0.1"), "the one-row logo");
+    let threshold = screen(&app, 80, 15);
+    assert!(threshold.lines().take(4).any(|row| row.contains('█')));
     assert_eq!(
         app.home_screen()
             .map(|screen| screen.blockers)
@@ -686,29 +1060,30 @@ fn blockers_count_against_the_four_row_logo() {
 }
 
 #[test]
-fn the_toggle_keeps_a_row_for_the_list() {
-    // Nine rows fit under the box: with the toggle heading the list,
-    // eight session rows draw.
-    let mut app = git_home(80, 24);
-    app.on_line(hello());
-    for n in 0..10u8 {
-        let session = format!("s_{n:016x}");
-        app.on_line(status(&session, "here", idle()));
-    }
-    app.on_line(away_waiting());
+fn the_banner_yields_a_row_and_the_link_up_frame_is_unchanged() {
+    let up = home_with_live_rows(80, 24, 7);
+    let up_frame = screen(&up, 80, 24);
+    assert_eq!(box_top(&up_frame, 80), 18);
+
+    let mut down = home_with_live_rows(80, 24, 7);
+    down.connect_failed("Could not reach the hub: refused".to_owned());
+    down.next_retry();
+    let down_frame = screen(&down, 80, 24);
+    assert!(down_frame.contains("Connection lost · reconnecting"));
+    assert_eq!(box_top(&down_frame, 80) + 1, box_top(&up_frame, 80));
+
     let area = Rect::new(0, 0, 80, 24);
-    let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
-    let toggles = targets
-        .iter()
-        .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Toggle))
-        .count();
-    let entries = targets
-        .iter()
-        .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
-        .count();
-    assert_eq!(toggles, 1);
-    assert_eq!(entries, 8);
+    let mut up_buf = Buffer::empty(area);
+    let up_targets = home_only(&up, area, &mut up_buf);
+    let mut down_buf = Buffer::empty(area);
+    let down_targets = home_only(&down, area, &mut down_buf);
+    let entries = |targets: &[crate::mouse::Target]| {
+        targets
+            .iter()
+            .filter(|target| matches!(target.id, crate::mouse::TargetId::Home(Spot::Entry(_))))
+            .count()
+    };
+    assert_eq!(entries(&up_targets), entries(&down_targets) + 1);
 }
 
 #[test]
@@ -716,27 +1091,18 @@ fn home_cursor_hides_while_navigating() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
-    // Pasted text past the token line count becomes one paste token, a
-    // click target focus can move to.
-    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
-    app.on_edit(crate::keys::Edit::Paste(pasted.join("\n")));
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
-    assert!(
-        targets
-            .iter()
-            .any(|target| matches!(target.id, crate::mouse::TargetId::Token(_))),
-        "a paste token draws"
-    );
     app.drawn(&targets);
+    // Down reaches the chip row, then the session row, where the draft
+    // cursor is hidden.
     let now = fakes::clock::FakeClock::new().now();
-    // Shift+Tab focuses the last stop, past the chip row: navigating
-    // hides the cursor.
-    app.on_key(Key::BackTab, now);
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
     assert!(matches!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Stop(_)))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
     ));
     assert_eq!(cursor(&app, area), None);
 }
@@ -768,8 +1134,8 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Nine rows fit under the four-row logo's box: one chip step and
-    // ten row steps focus the tenth row below the fold.
+    // Thirteen list lines fit under the box: one chip step and ten
+    // row steps focus the tenth session below the fold.
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..11 {
         app.on_key(Key::Down, now);
@@ -799,7 +1165,7 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
             }
         })
         .collect();
-    assert_eq!(drawn.len(), 9);
+    assert_eq!(drawn.len(), 13);
     assert_eq!(drawn.last(), Some(&keys[9]));
     assert!(!drawn.contains(&keys[0]));
     // j steps onto the row's ✕, and the list still ends there.
@@ -825,6 +1191,7 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
             }
         })
         .collect();
+    assert_eq!(drawn.len(), 13);
     assert_eq!(drawn.last(), Some(&keys[9]));
 }
 
@@ -1398,9 +1765,8 @@ fn quit_prompt_over_a_session() {
 }
 
 #[test]
-fn a_wide_screen_centres_the_box() {
-    // The box is 100 columns wide on a 120-column screen: ten columns
-    // of pad on each side.
+fn a_wide_screen_keeps_the_box_full_width() {
+    // The box spans the 120-column area; its text starts two columns in.
     let app = home(120, 24);
     let area = Rect::new(0, 0, 120, 24);
     let mut buf = Buffer::empty(area);
@@ -1409,7 +1775,7 @@ fn a_wide_screen_centres_the_box() {
         .iter()
         .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Workspace))
         .unwrap_or_else(|| panic!("a workspace chip target"));
-    assert_eq!(workspace.rect.x, 10);
+    assert_eq!(workspace.rect.x, 2);
 }
 
 #[test]
@@ -1423,7 +1789,7 @@ fn the_chips_join_with_two_spaces_from_the_box_edge() {
         .iter()
         .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Workspace))
         .unwrap_or_else(|| panic!("a workspace chip target"));
-    assert_eq!(workspace.rect.x, 0);
+    assert_eq!(workspace.rect.x, 2);
     let drawn = screen(&app, 80, 24);
     assert!(
         drawn.lines().any(|row| row.contains(
@@ -1473,27 +1839,6 @@ fn a_chip_starting_on_the_box_edge_takes_no_target_at_any_width() {
             }
         }
     }
-}
-
-#[test]
-fn the_toggle_does_not_draw_on_the_foot_row() {
-    // At ten rows the list has no room past the box: the toggle shows
-    // in state, but draws nothing, and the foot hint keeps its row.
-    let mut app = git_home(80, 10);
-    app.on_line(hello());
-    app.on_line(status("s_aaaaaaaaaaaaaaaa", "here", idle()));
-    app.on_line(away_waiting());
-    assert!(app.home_screen().and_then(|screen| screen.toggle).is_some());
-    let area = Rect::new(0, 0, 80, 10);
-    let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
-    assert!(
-        targets
-            .iter()
-            .all(|target| target.id != crate::mouse::TargetId::Home(Spot::Toggle)),
-        "no toggle target on the foot row"
-    );
-    assert!(screen(&app, 80, 10).contains("↓ chips and sessions"));
 }
 
 #[test]
@@ -1594,35 +1939,6 @@ fn only_the_selected_completion_sits_on_the_bar() {
 }
 
 #[test]
-fn the_focused_row_is_reversed_and_others_are_not() {
-    use ratatui::style::Modifier;
-
-    let mut app = home(80, 24);
-    app.on_line(hello());
-    app.on_line(status("s_aaaaaaaaaaaaaaaa", "first", live()));
-    app.on_line(status("s_bbbbbbbbbbbbbbbb", "second", idle()));
-    let area = Rect::new(0, 0, 80, 24);
-    let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
-    app.drawn(&targets);
-    // ↓ focuses the chip row first, then the first row.
-    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
-    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
-    let mut buf = Buffer::empty(area);
-    render(&app, area, &mut buf, None);
-    let drawn = screen(&app, 80, 24);
-    let at = |name: &str| {
-        drawn
-            .lines()
-            .position(|row| row.contains(name))
-            .and_then(|row| u16::try_from(row).ok())
-            .unwrap_or_else(|| panic!("{name} draws"))
-    };
-    assert!(buf[(0, at("first"))].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(0, at("second"))].modifier.contains(Modifier::REVERSED));
-}
-
-#[test]
 fn the_hovered_row_is_tinted_and_others_are_not() {
     use ratatui::style::Color;
 
@@ -1653,15 +1969,14 @@ fn the_paste_token_has_an_exact_target() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
-    // "> [Pasted text #1 · 312 lines]" on the draft's first row: the pad
-    // is three rows, then the four-row logo and one blank row, the ▄
-    // edge and the draft.
+    // "> [Pasted text #1 · 312 lines]" on the draft's first row in
+    // the bottom-aligned box.
     let tokens: Vec<ratatui::layout::Rect> = targets
         .iter()
         .filter(|target| matches!(target.id, crate::mouse::TargetId::Token(_)))
         .map(|target| target.rect)
         .collect();
-    assert_eq!(tokens, vec![Rect::new(2, 9, 28, 1)]);
+    assert_eq!(tokens, vec![Rect::new(2, 19, 28, 1)]);
 }
 
 #[test]
@@ -1976,13 +2291,15 @@ fn short_home_slash_keeps_its_selection_barred() {
     let buf = buffer(&app, 80, 24);
     let shown = screen(&app, 80, 24);
     let accent = crate::theme::Role::Accent.color();
-    let bars: Vec<u16> = (0..24)
-        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == accent))
-        .collect();
-    assert_eq!(bars.len(), 1, "{shown}");
-    let row = row_text(&buf, bars[0], 80);
+    let selected = (0..24)
+        .find(|y| row_text(&buf, *y, 80).contains("scoped-models"))
+        .unwrap_or_else(|| panic!("the selected workspace draws:\n{shown}"));
+    assert!(
+        (0..80).any(|x| buf[(x, selected)].bg == accent),
+        "the selected workspace stays barred:\n{shown}"
+    );
+    let row = row_text(&buf, selected, 80);
     assert!(row.contains("scoped-models"), "{shown}");
-    assert!(shown.contains("above"), "{shown}");
     assert!(shown.contains("of 24"), "{shown}");
 }
 
@@ -2071,8 +2388,6 @@ fn home_focus_chip_typing() {
 
 #[test]
 fn home_focus_first_row() {
-    use ratatui::style::Modifier;
-
     let mut app = focus_home();
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::Down, now);
@@ -2089,8 +2404,14 @@ fn home_focus_first_row() {
             .and_then(|row| u16::try_from(row).ok())
             .unwrap_or_else(|| panic!("{name} draws"))
     };
-    assert!(buf[(0, at("first"))].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(0, at("second"))].modifier.contains(Modifier::REVERSED));
+    assert_eq!(
+        buf[(0, at("first"))].bg,
+        crate::theme::Role::Selection.color()
+    );
+    assert_ne!(
+        buf[(0, at("second"))].bg,
+        crate::theme::Role::Selection.color()
+    );
     insta::assert_snapshot!("home_focus_first_row", drawn);
 }
 
@@ -2757,7 +3078,7 @@ fn no_color_boxes_the_home_box_and_narrows_its_text() {
     }
     let draft = &shown[usize::from(top) + 1];
     assert!(draft.contains("hello"), "{draft:?}");
-    assert!(draft.starts_with("│›"), "{draft:?}");
+    assert!(draft.starts_with("│ ›"), "{draft:?}");
     let caret: String = (0..80u16).map(|x| buf[(x, top + 1)].symbol()).collect();
     assert!(caret.contains('█'), "{caret:?}");
     assert!(!caret.ends_with('█'), "the cursor never sits on a border");

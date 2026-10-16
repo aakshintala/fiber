@@ -2,27 +2,27 @@
 source: crates/tui/src/home_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    1 working · 1 ready · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+w +  2 live · $0.00
+⌥1 ● fix the parser                                                WORKING  0s ✕
+    s_aaaaaaaaaaaaaaaa · $0.00
+⌥2 ✓ tidy docs                                                       READY  0s ✕
+    s_bbbbbbbbbbbbbbbb · $0.00
 
 
 
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+
+
+
+
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› /? for shortcuts
-
-
-[w]  [no model]  [thinking: default]  Enter starts a session
+▌ › /? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parser                                                              ✕
-✓  tidy docs                                                                   ✕
-
-
-
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit
