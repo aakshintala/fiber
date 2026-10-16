@@ -201,50 +201,6 @@ impl Group {
     }
 }
 
-/// The diff of a call that changed a file, as [`opened`] draws text, each
-/// line added or removed in the added or removed colour.
-/// An opened call's output, error or diff under its row, indented eight
-/// columns: the first 20 logical lines, then "… N more lines" dim, or
-/// "no output" when empty. Diff lines keep their added and removed
-/// colours. The cap counts logical lines, not wrapped rows: a long line
-/// still wraps through `Rows::pad` (`docs/tui.md`, "Tool groups and the
-/// ledger").
-const OPENED_LINES: usize = 20;
-
-fn opened_call(text: &str, diff: bool, out: &mut Rows) {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
-        out.push((dim(format!("{INDENT}no output")), None));
-        return;
-    }
-    for line in lines.iter().take(OPENED_LINES) {
-        let mut row = dim(format!("{INDENT}{line}"));
-        if diff {
-            let role = if line.starts_with('+') {
-                Some(Role::Added)
-            } else if line.starts_with('-') {
-                Some(Role::Removed)
-            } else {
-                None
-            };
-            if let Some(role) = role {
-                row = row.patch_style(style(role));
-            }
-        }
-        out.push((row, None));
-    }
-    let more = lines.len().saturating_sub(OPENED_LINES);
-    if more > 0 {
-        let more = u64::try_from(more).unwrap_or(u64::MAX);
-        out.push((
-            dim(format!(
-                "{INDENT}… {}",
-                count(more, "more line", "more lines")
-            )),
-            None,
-        ));
-    }
-}
 impl Group {
     /// What its calls did, by kind, and how often the model thought.
     /// Read, edited and written files count distinct `path` argument
@@ -538,7 +494,7 @@ impl Group {
                 out.push((Line::from(row), Some(Target::Call(call.id))));
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
-                    opened_call(&legacy_text(call), !call.changes.is_empty(), out);
+                    super::opened::rows(call, width, out);
                 }
                 out.end_scope();
             }
@@ -616,24 +572,6 @@ const GUTTER_BLANK: &str = "      ";
 /// An opened call or thought's indent: eight columns (`docs/tui.md`,
 /// "Tool groups and the ledger").
 pub(in crate::turn) const INDENT: &str = "        ";
-
-/// What the ledger's opened rows show until the per-kind views draw
-/// them: the `diff` string when `details` holds one, else the headline
-/// when it names the failure, else the content.
-fn legacy_text(call: &Call) -> String {
-    if let Some(diff) = call
-        .details
-        .as_ref()
-        .and_then(|details| details.get("diff"))
-        .and_then(Value::as_str)
-    {
-        return diff.to_owned();
-    }
-    if !call.headline.is_empty() {
-        return call.headline.clone();
-    }
-    call.content.clone()
-}
 
 /// A dim span.
 pub(super) fn dim_span(text: String) -> Span<'static> {

@@ -1081,16 +1081,19 @@ fn an_edited_file_row_colours_its_counts() {
         .find(|span| span.content.starts_with("src/a.rs"))
         .unwrap_or_else(|| panic!("the target in {edited:?}"));
     assert_eq!(target_span.style.fg, None);
-    // Its opened diff: a removed line, then an added one.
+    // Its opened diff has no hunk, so it draws plain and uncoloured.
     app.open(target(
         &app,
         "     2 ✓ edit     src/a.rs                           +3 −1",
     ));
-    let removed = styled(&app, "         -old");
-    let added = styled(&app, "         +new");
-    assert_eq!(removed.style.fg, Some(Role::Removed.color()));
-    assert_eq!(added.style.fg, Some(Role::Added.color()));
-    assert!(dim(&removed) && dim(&added));
+    for row in ["         -old", "         +new"] {
+        let line = styled(&app, row);
+        assert!(!dim(&line), "{row}");
+        assert!(
+            line.spans.iter().all(|span| span.style.fg.is_none()),
+            "{row} uncoloured"
+        );
+    }
 }
 
 #[test]
@@ -1113,7 +1116,7 @@ fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
     ));
     for row in ["         +one", "         -two"] {
         let line = styled(&app, row);
-        assert!(dim(&line), "{row}: {:?}", texts(&app));
+        assert!(!dim(&line), "{row}: {:?}", texts(&app));
         assert_eq!(line.style.fg, None, "{row}");
     }
 }
@@ -1122,26 +1125,31 @@ fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
 fn opening_a_call_shows_its_error_reason_diff_or_output() {
     let mut app = ledger_app();
     app.open(group(&app));
-    for (row, shown) in [
+    for (row, shown, lit) in [
         (
             "     2 ✓ edit     src/a.rs                           +3 −1",
             vec!["         -old", "         +new"],
+            false,
         ),
         (
             "       ✗ shell    cargo t           nonzero_exit: exit 101",
-            vec!["         nonzero_exit: exit 101"],
+            vec!["         nonzero_exit: exit 101", "         out"],
+            true,
         ),
         (
             "       ✗ other    u                                 denied",
             vec!["         not allowed"],
+            true,
         ),
         (
             "       ⊘ other                                   cancelled",
             vec!["         x"],
+            false,
         ),
         (
             "       ✓ read     a.rs                              1 line",
             vec!["         ok"],
+            false,
         ),
     ] {
         let call = target(&app, row);
@@ -1158,10 +1166,14 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
             Some(shown.iter().map(|s| (*s).to_owned()).collect()),
             "{row}"
         );
-        assert!(dim(&styled(
-            &app,
-            shown.first().copied().unwrap_or_default()
-        )));
+        assert_eq!(
+            dim(&styled(
+                &app,
+                shown.first().copied().unwrap_or_default()
+            )),
+            lit,
+            "{row}"
+        );
         app.open(call);
     }
     // A thought opened in the ledger shows its text eight columns in.

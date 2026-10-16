@@ -1080,6 +1080,7 @@ fn open_read_call(id: usize, lines: usize) -> Call {
         name: "read".to_owned(),
         arguments: json!({"path": "notes.txt"}),
         status: Some(CallStatus::Completed),
+        details: Some(json!({"start_line": 1})),
         content,
         lines: lines as u64,
         started: true,
@@ -1110,20 +1111,20 @@ fn opened_group(call: Call) -> Group {
     }
 }
 
-/// An opened call shows its output indented eight columns: 19 lines draw
-/// whole, 20 draw with no "more" row, and 21 draw 20 rows then "… 1 more
-/// line" dim.
+/// An opened read shows its lines numbered from the first line read:
+/// 19 lines draw whole, 20 draw with no "more" row, and 21 draw 20 rows
+/// then "… 1 more line (Enter to view)" dim.
 #[test]
 fn an_opened_call_is_capped_at_twenty_lines() {
     for (lines, shown, more) in [
         (19usize, 19usize, None),
         (20, 20, None),
-        (21, 20, Some("… 1 more line")),
+        (21, 20, Some("… 1 more line (Enter to view)")),
     ] {
         let rows = opened_rows(&opened_group(open_read_call(1, lines)), 76);
         assert_eq!(rows.len(), shown + usize::from(more.is_some()), "{lines}");
-        assert_eq!(rows[0], "        L0001");
-        assert_eq!(rows[shown - 1], format!("        L{shown:04}"));
+        assert_eq!(rows[0], "         1 L0001");
+        assert_eq!(rows[shown - 1], format!("        {:>2} L{shown:04}", shown));
         match more {
             None => assert!(!rows.iter().any(|row| row.contains('…')), "{lines}"),
             Some(last) => assert_eq!(rows[shown], format!("        {last}")),
@@ -1135,24 +1136,22 @@ fn an_opened_call_is_capped_at_twenty_lines() {
     // 300 lines draw 20 rows, then "… 280 more lines".
     let rows = opened_rows(&opened_group(open_read_call(1, 300)), 76);
     assert_eq!(rows.len(), 21);
-    assert_eq!(rows[19], "        L0020");
-    assert_eq!(rows[20], "        … 280 more lines");
+    assert_eq!(rows[19], "        20 L0020");
+    assert_eq!(rows[20], "        … 280 more lines (Enter to view)");
     assert!(!rows.iter().any(|row| row.contains("L0021")));
 }
 
-/// An opened diff of 25 lines is capped with its colours kept.
+/// An opened edit draws its diff with the headers dropped: the `+`
+/// span keeps its added colour, body text is not dim, and 26 logical
+/// lines cap at 20 with "… 6 more lines (Enter to view)".
 #[test]
 fn an_opened_diff_is_capped_with_its_colours() {
-    let diff = (1..=25)
-        .map(|n| {
-            if n % 2 == 0 {
-                format!("+added {n}")
-            } else {
-                format!("-removed {n}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut diff =
+        "diff --git a/a.rs b/a.rs\nindex 123..456 100644\n--- a/a.rs\n+++ b/a.rs\n@@ -1,14 +1,13 @@\n-old\n+new\n"
+            .to_owned();
+    for n in 1..=23 {
+        diff.push_str(&format!(" context {n}\n"));
+    }
     let call = Call {
         details: Some(json!({"diff": diff})),
         changes: vec![contract::events::FileChange {
@@ -1166,17 +1165,41 @@ fn an_opened_diff_is_capped_with_its_colours() {
     let (rows, _) = summary_row(&opened_group(call), false, 76);
     let shown: Vec<_> = rows.into_iter().skip(2).collect();
     assert_eq!(shown.len(), 21);
-    assert_eq!(shown[20].0.to_string(), "        … 5 more lines");
-    let added = &shown[1].0;
     assert_eq!(
-        added.style.fg,
+        shown[20].0.to_string(),
+        "        … 6 more lines (Enter to view)"
+    );
+    // The diff's own headers never draw.
+    assert!(
+        !shown
+            .iter()
+            .any(|row| ["diff --git", "index ", "---", "+++"]
+                .iter()
+                .any(|header| row.0.to_string().contains(header))),
+        "{shown:?}"
+    );
+    let added = shown
+        .iter()
+        .find(|row| row.0.to_string().contains("+new"))
+        .expect("the added row");
+    assert_eq!(
+        added.0.spans[2].style.fg,
         Some(crate::theme::Role::Added.color()),
         "{added:?} keeps its colour"
     );
+    // Body text is not dim; the hunk row and the gutters are.
+    for row in &shown[1..20] {
+        for span in row.0.spans.iter().skip(2) {
+            assert!(
+                !span.style.add_modifier.contains(Modifier::DIM),
+                "{span:?} body not dim"
+            );
+        }
+    }
 }
 
-/// An opened failure reads "<code>: <message>", and empty output reads
-/// "no output".
+/// An opened failure shows its headline first, then its view; empty
+/// output reads "no output" dim.
 #[test]
 fn an_opened_call_shows_its_error_or_no_output() {
     let call = Call {
