@@ -1032,6 +1032,44 @@ fn replace_global_of_the_wrong_type_is_refused_and_writes_nothing() {
 }
 
 #[test]
+fn set_returns_the_file_it_wrote_for_each_layer() {
+    let setup = Setup::new();
+    for (layer, expected) in [
+        (Layer::Global, setup.global()),
+        (Layer::Project, setup.project()),
+        (Layer::Repository, setup.repository()),
+    ] {
+        let file = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "handoff.tokens",
+            json!(7),
+        )
+        .unwrap();
+        assert_eq!(file, expected);
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"tokens\": 7"), "{file:?}: {text:?}");
+    }
+}
+
+#[test]
+fn a_refused_set_returns_no_file() {
+    let setup = Setup::new();
+    let result = set(
+        &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Repository,
+        "session.idle_exit_ms",
+        json!(60000),
+    );
+    assert!(result.is_err());
+    assert!(!setup.repository().exists());
+}
+
+#[test]
 fn get_global_reads_only_fiber_homes_file() {
     let setup = Setup::new();
     assert_eq!(get_global(&setup.home(), "hub.port").unwrap(), None);

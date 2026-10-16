@@ -40,7 +40,7 @@ pub enum Layer {
 /// Sets one key in a layer's file (`fiber config set`). The value's type is
 /// checked against "Keys", and a key the
 /// layer may not hold is refused before anything is written: on any `Err`
-/// no file is created or changed.
+/// no file is created or changed. Returns the layer's file it wrote.
 pub fn set(
     home: &Path,
     workspace: &Path,
@@ -48,7 +48,7 @@ pub fn set(
     layer: Layer,
     key: &str,
     value: Value,
-) -> Result<(), ConfigError> {
+) -> Result<PathBuf, ConfigError> {
     let (file, source) = layer_file(home, workspace, project, layer)?;
     let (segments, notices) = checked(key, value.clone(), &source)?;
     if !notices.is_empty() {
@@ -66,7 +66,8 @@ pub fn set(
     }
     let resolved = resolve_spelling(&root, &segments);
     path::set(&mut root, &resolved, value);
-    write_root(&file, &root)
+    write_root(&file, &root)?;
+    Ok(file)
 }
 
 /// One change to a list of names in one layer's file (`/tools`, `/skills`).
