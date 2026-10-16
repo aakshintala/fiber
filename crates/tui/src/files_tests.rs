@@ -8,6 +8,7 @@ use fakes::Deadline;
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -595,6 +596,61 @@ fn a_directory_outside_a_repository_gives_the_error() {
     assert!(!error.contains('\n'), "{error}");
 }
 
+#[test]
+fn the_search_core_lists_once_and_only_for_workspace_queries() {
+    use super::{Listing, search};
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let mut listing = Listing::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(owned(&["alpha", "beta"]))
+    });
+    let home = seeded(&["alpha"]);
+    let roots = Roots::new(PathBuf::from("/w"), Some(home.path().into()));
+    assert_eq!(
+        search(&mut listing, &roots, "~/al", || false),
+        Some(Ok(owned(&["~/alpha"])))
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        search(&mut listing, &roots, "al", || false),
+        Some(Ok(owned(&["alpha"])))
+    );
+    assert_eq!(
+        search(&mut listing, &roots, "be", || false),
+        Some(Ok(owned(&["beta"])))
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_search_core_checks_cancellation_before_either_mode() {
+    use super::{Listing, search};
+    for query in ["", "~/al"] {
+        let mut listing = Listing::new(|| panic!("cancelled query must not list"));
+        assert_eq!(search(&mut listing, &nowhere(), query, || true), None);
+    }
+}
+
+#[test]
+fn the_search_core_keeps_at_most_fifty_in_both_modes() {
+    use super::{Listing, search};
+    for (count, kept) in [(49, 49), (50, 50), (51, 50)] {
+        let paths: Vec<String> = (0..count).map(|n| format!("f{n:03}")).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let home = seeded(&refs);
+        let roots = Roots::new(PathBuf::from("/w"), Some(home.path().into()));
+        let mut listing = Listing::new(move || Ok(paths));
+        for query in ["f", "~/f"] {
+            let rows = search(&mut listing, &roots, query, || false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(rows.len(), kept, "{count}: {query}");
+            assert!(rows.iter().all(|row| row.contains('f')));
+        }
+    }
+}
+
 /// Roots over an empty workspace and no home: for worker tests that
 /// never resolve a path.
 fn nowhere() -> Roots {
@@ -793,8 +849,10 @@ fn a_worker_that_never_started_answers_every_search_with_why() {
 fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
     let (out, rx) = mpsc::channel();
     let (release, gate) = mpsc::channel::<()>();
+    let (started, listing) = mpsc::channel();
     let search = Search::spawn(
         move || {
+            started.send(()).map_err(|err| err.to_string())?;
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
@@ -802,6 +860,8 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
         out,
     );
     search.search(1, "a".to_owned());
+    // Hold an in-flight listing, rather than race drop against a queued job.
+    Deadline::after(DEADLINE).recv_or_fail(&listing, "workspace listing started");
     drop(search);
     release
         .send(())

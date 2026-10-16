@@ -24,7 +24,7 @@ mod configure_fake;
 mod context_view;
 mod editor;
 mod event_loop;
-mod files;
+pub mod files;
 mod focus;
 mod format;
 mod highlight;

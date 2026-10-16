@@ -958,6 +958,10 @@ websocket for everything it does.
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
+| `search_files` | `workspace` (absolute string), `text` (string), `fresh` (boolean, optional) | Searches the hub's files, answering `rows` (at most 50 strings) or `error` (string), as the file panel does. |
+| `device_login` | `name` (string) | Runs the provider's device-code login on the hub, answering `url` and `code` (strings). |
+| `device_login_result` | none | Answers with `path` (string, relative to the hub's Fiber home) once that connection's login has stored its credential, or rejects with its failure. |
+| `device_login_cancel` | none | Cancels that connection's login and answers once nothing more can be stored. No result. |
 | `configure` | `operation` (string), plus that operation's arguments below | Reads or writes configuration on the hub's machine. Sent without `session_id`. |
 | `read_config` | `workspace` (absolute string), `path` (string) | Reads a configuration view's file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
@@ -971,6 +975,31 @@ Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
 first when it asks where to start one, and lists directories with
 `directories`.
+
+`search_files` runs both file-panel modes (`docs/tui.md`, "Keys") on
+the hub's machine. `~/` starts at the hub's home; `../` starts at `workspace`.
+The connection's search worker lists git's tracked files on its first
+workspace query and reuses that listing. `fresh: true` or a different
+workspace replaces it. The listing ends when the connection closes or a
+query replaces it. A client sends `fresh: true` when it opens a new panel.
+A newer query cancels the older walk and answers it `stale_request`, even
+when several queued queries were skipped. A skipped query still applies
+its `fresh` and workspace change. Other hub commands do not wait behind a
+walk. A base that cannot be read or a failed git listing answers `error`,
+not a rejection.
+
+A connection holds at most one device login. A new `device_login` cancels
+the previous one first, and disconnecting cancels it too. Each command gets
+one answer: `device_login` when the provider shows the URL and code,
+`device_login_result` when it ends, and `device_login_cancel` after cancel
+returns. An already ended login answers its result at once. A result or
+cancel with no login, or a second waiting result command, is rejected
+`stale_request`. Failure before a code is shown rejects `device_login`;
+a provider that opens a browser instead is rejected `authentication_failed`,
+saying it has no device-code form. Unknown arguments, wrong types and
+explicit `null` on these commands or `search_files` are `invalid_arguments`.
+A search worker or login thread that cannot start rejects its command
+`io_failed`; a later search can try again.
 
 The `configure` operations below use the hub's Fiber home and the project of
 `workspace` on that machine. Every `workspace` is absolute. Arguments are

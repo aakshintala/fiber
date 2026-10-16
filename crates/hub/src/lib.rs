@@ -7,7 +7,8 @@
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete`,
 //! `directories`, `read_file`, `pairing_code`, `devices`, `revoke`,
-//! `configure`, `read_config` and `write_config`, and relays
+//! `configure`, `read_config`, `write_config`, `search_files`, `device_login`,
+//! `device_login_result` and `device_login_cancel`, and relays
 //! session commands to `run/<session_id>` (`docs/invocation.md`, "What the hub speaks").
 //! It sends `attention` and `device_changed` to every connection
 //! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub
@@ -20,6 +21,7 @@ mod attention;
 mod closed;
 mod connection;
 mod delete;
+mod device_login;
 mod devices;
 mod diag;
 mod directories;
@@ -28,6 +30,7 @@ mod error;
 #[cfg(test)]
 pub(crate) mod fake;
 mod feed;
+mod file_search;
 mod first;
 mod idle;
 mod listen;
@@ -68,7 +71,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::Machine;
+pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
 pub use crate::recent::{Left, RecentRow, append};
 
 /// What the hub reads from the configuration when it starts.

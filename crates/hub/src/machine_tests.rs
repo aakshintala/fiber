@@ -178,13 +178,26 @@ fn config_file_commands_refuse_every_bad_shape_without_a_call() {
 
 #[test]
 fn a_hub_without_a_machine_keeps_unknown_command() {
+    // Deliberately leave the fake uninstalled: exchange(None) never calls with_machine.
+    let machine = FakeMachine::default();
     for answer in exchange(
         None,
-        ["configure", "read_config", "write_config"]
-            .into_iter()
-            .map(|n| command(n, json!({})))
-            .collect(),
+        [
+            "search_files",
+            "device_login",
+            "device_login_result",
+            "device_login_cancel",
+            "configure",
+            "read_config",
+            "write_config",
+        ]
+        .into_iter()
+        .map(|n| command(n, json!({})))
+        .collect(),
     ) {
+        assert_eq!(answer["kind"], "command_rejected");
+        assert_eq!(answer["payload"]["command_id"], "m");
         assert_eq!(answer["payload"]["code"], "unknown_command");
     }
+    assert!(lock(&machine.calls).is_empty());
 }

@@ -727,6 +727,307 @@ fn remote_config_open_failures_other_than_missing_are_io_failures() {
     );
 }
 
+fn remote_git(workspace: &Path, args: &[&str]) {
+    use std::os::unix::process::CommandExt;
+    let child = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(args)
+        .process_group(0)
+        .envs(fakes::check_run())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let output = fakes::finished(
+        "remote search git",
+        child,
+        &[],
+        std::time::Duration::from_secs(10),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn remote_search_uses_the_workspaces_listing_and_the_given_home() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("search");
+    let seam = Seam::new(home.clone());
+    write(&workspace.join("alpha.rs"), "tracked");
+    write(&workspace.join("untracked.rs"), "not tracked");
+    write(&home.join("from-home"), "home");
+    remote_git(&workspace, &["init", "-q"]);
+    remote_git(&workspace, &["add", "alpha.rs"]);
+    let mut search = seam.file_search(&workspace, Some(&home));
+    let result = fakes::within(
+        "hub workspace search",
+        std::time::Duration::from_secs(10),
+        move || {
+            assert_eq!(
+                search.search("alpha", &|| false),
+                Some(Ok(vec!["alpha.rs".into()]))
+            );
+            assert_eq!(search.search("untracked", &|| false), Some(Ok(vec![])));
+            assert_eq!(
+                search.search("~/from-", &|| false),
+                Some(Ok(vec!["~/from-home".into()]))
+            );
+            search
+        },
+    );
+    let mut search = result;
+    write(&workspace.parent().unwrap().join("sibling.txt"), "sibling");
+    assert_eq!(
+        search.search("../sibling", &|| false),
+        Some(Ok(vec!["../sibling.txt".into()]))
+    );
+    assert_eq!(search.search("alpha", &|| true), None);
+    assert_eq!(search.search("~/from-", &|| true), None);
+}
+
+#[test]
+fn remote_search_reports_the_first_git_error_line_and_caps_both_modes() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("not-git");
+    fs::create_dir_all(&workspace).unwrap();
+    let seam = Seam::new(home.clone());
+    let mut search = seam.file_search(&workspace, Some(&home));
+    let result = fakes::within("git error", std::time::Duration::from_secs(10), move || {
+        search.search("", &|| false)
+    });
+    let error = result.unwrap().unwrap_err();
+    assert!(error.contains("not a git repository"), "{error}");
+    assert!(!error.contains('\n'));
+    for (count, kept) in [(49, 49), (50, 50), (51, 50)] {
+        let workspace = dirs.workspace(&format!("count{count}"));
+        for n in 0..count {
+            write(&workspace.join(format!("match{n:03}")), "x");
+        }
+        remote_git(&workspace, &["init", "-q"]);
+        remote_git(&workspace, &["add", "."]);
+        let mut search = seam.file_search(&workspace, Some(&workspace));
+        fakes::within(
+            "bounded remote searches",
+            std::time::Duration::from_secs(10),
+            move || {
+                for query in ["match", "~/match"] {
+                    let rows = search.search(query, &|| false).unwrap().unwrap();
+                    assert_eq!(rows.len(), kept, "{count}: {query}");
+                    assert!(rows.iter().all(|row| row.contains("match")));
+                }
+            },
+        );
+    }
+}
+
+fn remote_install_codex(home: &Path, server: &fakes::OauthServer) {
+    crate::test_support::install_extension(
+        home,
+        "extensions/codex",
+        json!({"name":"codex","version":"v0.0.0","fiber":"0.0.0","api":1}),
+        &[(
+            "codex",
+            json!({"name":"codex","login":"browser","models":[{"id":"m","protocol":"openai-responses","base_url":"http://x/v1","context_window":1000}]}),
+        )],
+    );
+    // This provider exercises the hub adapter, not a vendor's OAuth protocol.
+    write(
+        &home.join("extensions/codex/providers/codex.lua"),
+        &format!(
+            r#"
+        fiber.provider("codex", {{ credential = {{ timeout = 60000, run = function(arg)
+            assert(arg.login == "device", "the hub must ask for the device method")
+            local email
+            local stored = host.oauth.refresh(function()
+                local reply = host.http({{ url = "{base}/device", method = "POST" }})
+                local started = json.decode(reply.body)
+                host.oauth.show("{base}/codex/device", started.user_code)
+                local token = host.oauth.poll({{ url = "{base}/token", pending = {{403}}, interval = started.interval }})
+                email = token.email
+                return {{token = token.token, refresh_token = token.refresh_token, expires_at = 4102444800}}
+            end)
+            return {{token = stored.token, expires_at = stored.expires_at, email = email}}
+        end }} }})
+    "#,
+            base = server.url()
+        ),
+    );
+}
+
+type LoginOutcome = Result<String, Failure>;
+struct RemoteLoginRun {
+    login: Arc<dyn hub::DeviceLogin>,
+    result: std::sync::mpsc::Receiver<LoginOutcome>,
+}
+impl RemoteLoginRun {
+    fn start(login: Arc<dyn hub::DeviceLogin>) -> Self {
+        let (done, result) = std::sync::mpsc::channel();
+        let running = login.clone();
+        std::thread::spawn(move || {
+            drop(done.send(running.run()));
+        });
+        Self { login, result }
+    }
+    fn finish(&self) -> LoginOutcome {
+        fakes::Deadline::after(std::time::Duration::from_secs(10))
+            .recv_or_fail(&self.result, "remote device login ended")
+    }
+}
+impl Drop for RemoteLoginRun {
+    fn drop(&mut self) {
+        self.login.cancel();
+    }
+}
+
+struct PollClock {
+    clock: Arc<fakes::clock::FakeClock>,
+    target: std::time::Instant,
+    parked: std::sync::mpsc::Sender<std::thread::ThreadId>,
+}
+impl Clock for PollClock {
+    fn now(&self) -> std::time::Instant {
+        self.clock.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.clock.wall()
+    }
+    fn sleep(&self, duration: std::time::Duration) {
+        self.clock.sleep(duration);
+    }
+    fn subscribe(&self, wake: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.clock.subscribe(wake);
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<std::time::Duration>),
+    ) {
+        self.clock.wait_until(until, &mut |bound| {
+            if until == Some(self.target) {
+                self.parked.send(std::thread::current().id()).unwrap_or(());
+            }
+            wait(bound);
+        });
+    }
+}
+
+#[test]
+fn remote_device_login_shows_the_code_and_stores_or_cancels_during_the_poll() {
+    use fakes::{Deadline, OauthReply, OauthServer};
+    use std::time::Duration;
+    for cancel in [false, true] {
+        let dirs = Dirs::new();
+        let home = dirs.home();
+        let access = "device-access-token";
+        let server = OauthServer::start(vec![
+            OauthReply::raw(
+                200,
+                &json!({"device_auth_id":"da_1","user_code":"ABCD-1234","interval":1}).to_string(),
+            ),
+            OauthReply::raw(403, "{}"),
+            OauthReply::raw(
+                200,
+                &json!({"token":access,"email":"alice@example.com","refresh_token":"rt_1"})
+                    .to_string(),
+            ),
+        ]);
+        remote_install_codex(&home, &server);
+        let clock = fakes::clock::FakeClock::new();
+        let target = clock.now() + Duration::from_secs(1);
+        let (parked, parks) = std::sync::mpsc::channel();
+        let timed: Arc<dyn Clock> = Arc::new(PollClock {
+            clock: clock.clone(),
+            target,
+            parked,
+        });
+        let (shown, codes) = std::sync::mpsc::channel();
+        let login = Seam::new(home.clone()).device_login(
+            "codex",
+            Box::new(move |url, code| {
+                shown.send((url.to_owned(), code.to_owned())).unwrap();
+            }),
+            timed,
+        );
+        let run = RemoteLoginRun::start(login);
+        let deadline = Deadline::after(Duration::from_secs(10));
+        assert_eq!(
+            deadline.recv(&codes).unwrap_or_else(|error| panic!(
+                "device code: {error}; outcome: {:?}",
+                run.result.try_recv()
+            )),
+            (format!("{}/codex/device", server.url()), "ABCD-1234".into())
+        );
+        let thread = deadline.recv_or_fail(&parks, "poll waiting past its clock check");
+        if cancel {
+            run.login.cancel();
+        } else {
+            clock.advance_when_parked(
+                Some(target),
+                Some(thread),
+                Duration::from_secs(1),
+                &deadline,
+            );
+        }
+        let outcome = run.finish();
+        if cancel {
+            assert_eq!(outcome.unwrap_err().code, ErrorCode::CredentialFailed);
+            let credentials = home.join("credentials/codex");
+            assert!(!credentials.exists() || fs::read_dir(credentials).unwrap().next().is_none());
+        } else {
+            assert_eq!(outcome.unwrap(), "credentials/codex/alice@example.com");
+            let stored: Value = serde_json::from_slice(
+                &fs::read(home.join("credentials/codex/alice@example.com")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(stored["token"], access);
+            assert_eq!(stored["refresh_token"], "rt_1");
+        }
+    }
+}
+
+#[test]
+fn remote_device_login_refuses_a_provider_that_opens_a_browser() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    install(&home);
+    let file = home.join("extensions/acme/providers/acme.json");
+    let mut data: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    data["login"] = json!("browser");
+    write(&file, &data.to_string());
+    let server = fakes::OauthServer::start(vec![]);
+    server.hold();
+    write(
+        &home.join("extensions/acme/providers/acme.lua"),
+        &format!(
+            r#"fiber.provider("acme", {{ credential = {{ timeout = 60000, run = function()
+        host.oauth.open("https://example.invalid/authorize")
+        return host.oauth.poll({{ url = "{}/token" }})
+    end }} }})"#,
+            server.url()
+        ),
+    );
+    let (shown, codes) = std::sync::mpsc::channel();
+    let login = Seam::new(home.clone()).device_login(
+        "acme",
+        Box::new(move |url, code| {
+            shown.send((url.to_owned(), code.to_owned())).unwrap();
+        }),
+        fakes::clock::FakeClock::new(),
+    );
+    let run = RemoteLoginRun::start(login);
+    let error = run.finish().unwrap_err();
+    assert_eq!(error.code, ErrorCode::AuthenticationFailed);
+    assert_eq!(error.message, "`acme` has no device-code form.");
+    assert!(codes.try_recv().is_err());
+    assert!(!home.join("credentials/acme/default").exists());
+}
+
 #[test]
 fn remote_operation_documentation_lists_the_complete_wire_surface() {
     let doc = include_str!("../../../../docs/invocation.md");
