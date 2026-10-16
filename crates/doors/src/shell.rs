@@ -23,6 +23,9 @@ use crate::mint;
 use crate::session::Gate;
 
 pub(crate) const COULD_NOT_START: &str = "The command could not start.";
+/// What a `shell` stopped before its command started says when `cancel`
+/// stopped it: the tool's own words (`tool_util.rs`, `cancelled_before`).
+pub(crate) const CANCELLED_BEFORE_START: &str = "Cancelled before it started.";
 
 /// A driver shell that passed its checks, with its cancel registered.
 pub(crate) struct Running {
@@ -150,6 +153,9 @@ fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answe
         return answered_spilled(gate, spilled, output.process, output.error);
     }
     let Some(process) = output.process else {
+        if output.error.is_none() {
+            return Err(stopped_before_start(gate));
+        }
         return Err(no_process(output.error));
     };
     let full = joined(&output.content);
@@ -164,6 +170,25 @@ fn answered(gate: &Gate, output: Output, bound: Bound) -> contract::inbox::Answe
 /// A shell that already spilled its output past 1 MiB: the spilled file is
 /// the artifact, shaped without a second write or cut. Text parts beside
 /// the spill are ignored; the command's process is kept as it ended.
+/// A shell whose tool never started a process and reports no error: the
+/// tool's `cancelled_before`, whose cancel token fired before `Tool::run`
+/// (a real failure to start carries its error). Admission closes before
+/// the shells are sealed on every `close` path, and never on `cancel`, so
+/// a closed admission is a `close` stop, answered `closing` as a running
+/// shell is, and an open one is a `cancel` stop, answered `cancelled`.
+fn stopped_before_start(gate: &Gate) -> Rejection {
+    if gate.admission.admit(|| ()).is_none() {
+        return Rejection {
+            code: ErrorCode::Closing,
+            message: crate::client::ENDED.to_owned(),
+        };
+    }
+    Rejection {
+        code: ErrorCode::Cancelled,
+        message: CANCELLED_BEFORE_START.to_owned(),
+    }
+}
+
 fn answered_spilled(
     gate: &Gate,
     spilled: contract::tool::Spilled,

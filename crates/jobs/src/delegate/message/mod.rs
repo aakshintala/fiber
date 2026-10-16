@@ -520,6 +520,7 @@ impl DelegateMessage {
             | ErrorCode::BudgetExceeded
             | ErrorCode::Busy
             | ErrorCode::CacheRebuild
+            | ErrorCode::Cancelled
             | ErrorCode::CommandConflict
             | ErrorCode::ConfigInvalid
             | ErrorCode::ConfigKeyIgnored

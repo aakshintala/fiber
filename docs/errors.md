@@ -267,6 +267,7 @@ the lines that carry it.
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `cache_rebuild` | notice | the terminal rebuilt its completion cache after a model switch (`docs/tui.md`, "Notices") |
+| `cancelled` | driver command | a `cancel` stopped a `shell` before its command started (`docs/invocation.md`, "Driver commands") |
 | `closing` | exit, tool call, extension call, driver command, notice | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set`, `state.unset` or `host.drive` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands"), or the session `fiber ask` attached to ended before its turn completed |
 | `config_invalid` | exit, extension call, notice, driver command (`rewind`) | a configuration or script file is invalid, or an MCP server declares both `command` and `url` or has a user name or password in its `url`, or `hub.default` names a missing entry or a stored hub address is invalid |
 | `connection_failed` | exit, extension call, model call, tool call, turn, notice, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host, or `fiber mcp login` could not reach the server or its authorization server, or the terminal lost its hub connection, or a client could not reach a listed hub |
@@ -374,7 +375,7 @@ Notices, for a failure outside any action:
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`, `not_found`,
-`unknown_command`, `closing`, `io_failed`, `duplicate_command`, `session_not_found`,
+`unknown_command`, `closing`, `cancelled`, `io_failed`, `duplicate_command`, `session_not_found`,
 `message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`)
 are `docs/invocation.md`, "Driver commands".
 

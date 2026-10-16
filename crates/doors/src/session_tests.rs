@@ -1536,12 +1536,16 @@ fn stopped_before_start_answer(
     let (go_tx, go_rx) = mpsc::channel();
     let (answer_tx, answer_rx) = mpsc::channel();
     thread::spawn(move || {
-        ready_tx.send(()).expect("the test waits for the pause point");
+        ready_tx
+            .send(())
+            .expect("the test waits for the pause point");
         go_rx.recv().expect("the test releases the shell");
         running.finish(
             &thread_gate,
             contract::inbox::Ack(Box::new(move |answer| {
-                answer_tx.send(answer).expect("the test waits for the answer");
+                answer_tx
+                    .send(answer)
+                    .expect("the test waits for the answer");
             })),
         );
     });
@@ -1593,7 +1597,11 @@ fn a_shell_stopped_by_close_before_it_starts_is_rejected_closing() {
         Err(rejection) => rejection,
         Ok(_) => panic!("a shell stopped before it starts is rejected"),
     };
-    assert_eq!(rejection.code, ErrorCode::Closing, "a close stop is closing");
+    assert_eq!(
+        rejection.code,
+        ErrorCode::Closing,
+        "a close stop is closing"
+    );
     assert_eq!(
         rejection.message,
         crate::client::ENDED,
