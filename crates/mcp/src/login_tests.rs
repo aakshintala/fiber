@@ -2027,10 +2027,11 @@ fn send_raw(addr: std::net::SocketAddr, head: &[u8]) -> String {
 /// wait and the scope still joins. The clock advances only after the wait
 /// parks on it below, so the advance never ends a wait that has not
 /// started. `interact` reports through its echo, asserted after the join.
-fn driven_wait(
+fn drive_wait(
     clock: &Arc<fakes::clock::FakeClock>,
     deadline: std::time::Instant,
     state: &str,
+    silent_polls: Option<u32>,
     interact: impl FnOnce(std::net::SocketAddr) -> String,
 ) -> (Result<String, LoginError>, String) {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -2041,8 +2042,17 @@ fn driven_wait(
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
         let waiter = scope.spawn(|| {
-            sent.send(wait_callback(&listener, &**clock, deadline, state))
-                .unwrap();
+            let result = match silent_polls {
+                Some(polls) => super::callback::wait_callback_within(
+                    &listener,
+                    &**clock,
+                    deadline,
+                    state,
+                    polls,
+                ),
+                None => wait_callback(&listener, &**clock, deadline, state),
+            };
+            sent.send(result).unwrap();
         });
         // The wait parks on the fake clock between accepts: only after
         // this signal does the test interact, and only after it may the
@@ -2067,6 +2077,27 @@ fn driven_wait(
         waiter.join().unwrap();
         (result, echo)
     })
+}
+
+fn driven_wait(
+    clock: &Arc<fakes::clock::FakeClock>,
+    deadline: std::time::Instant,
+    state: &str,
+    interact: impl FnOnce(std::net::SocketAddr) -> String,
+) -> (Result<String, LoginError>, String) {
+    drive_wait(clock, deadline, state, None, interact)
+}
+
+/// [`drive_wait`] with the silent-poll count as a parameter, so the idle
+/// test runs a small count while production keeps `SILENT_POLLS`.
+fn driven_wait_within(
+    clock: &Arc<fakes::clock::FakeClock>,
+    deadline: std::time::Instant,
+    state: &str,
+    silent_polls: u32,
+    interact: impl FnOnce(std::net::SocketAddr) -> String,
+) -> (Result<String, LoginError>, String) {
+    drive_wait(clock, deadline, state, Some(silent_polls), interact)
 }
 
 #[test]
@@ -2455,18 +2486,151 @@ fn a_mid_size_callback_head_reads() {
     assert_eq!(result.unwrap(), "abc");
 }
 
+/// A connection silent for the given count of reads is dropped on that
+/// poll, and a connection that pauses shorter is served: the boundary
+/// and the byte-reset through `answer_within`, paced by the reader's own
+/// tap signals, never the real clock. Exact counts hold because each test
+/// runs in its own process (docs/testing.md, "Running tests"), so no
+/// other test's connection can signal this test's taps.
+#[test]
+fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
+    // Three silent polls, then the close: the drop comes on the third.
+    {
+        let clock = fakes::clock::FakeClock::new();
+        let deadline = clock.origin() + Duration::from_secs(60);
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let silence = super::callback::tap_silence();
+        let idle = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (sent, received) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                sent.send(super::callback::answer_within(
+                    server,
+                    &*clock,
+                    deadline,
+                    "s1",
+                    3,
+                ))
+                .unwrap();
+            });
+            // One deadline for the whole wait: three silent polls, then
+            // the close. A `>` mutant of the count drops only on a
+            // fourth poll, so its fourth signal fails the drain below.
+            let wait = fakes::Deadline::after(WITHIN);
+            wait.recv_or_fail(&silence, "the first silent poll");
+            wait.recv_or_fail(&silence, "the second silent poll");
+            wait.recv_or_fail(&silence, "the third silent poll");
+            // The drop closes the connection: read to the close.
+            fakes::within("the dropped connection's close", WITHIN, || {
+                let mut idle = idle;
+                let mut byte = [0_u8; 1];
+                while idle.read(&mut byte).expect("the idle connection's close") != 0 {}
+            });
+            let served = wait.recv_or_fail(&received, "the dropped connection's answer");
+            assert!(served.is_none(), "a silent connection is dropped");
+            // No fourth poll: the drop came on the third.
+            let mut extra = 0;
+            while silence.try_recv().is_ok() {
+                extra += 1;
+            }
+            assert_eq!(extra, 0, "the drop is on the third silent poll");
+        });
+    }
+    // Sixteen silent polls with a byte in the middle are served: any
+    // byte restarts the count, so eight and eight never reach sixteen.
+    // Without the reset the count reaches sixteen and the head is
+    // refused instead.
+    {
+        let clock = fakes::clock::FakeClock::new();
+        let deadline = clock.origin() + Duration::from_secs(60);
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Both taps register before the connection: no byte flows before
+        // the test writes one, so no signal is missed between a write
+        // and a later registration.
+        let silence = super::callback::tap_silence();
+        let reads = super::callback::tap_reads();
+        let mut client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (sent, received) = mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                sent.send(super::callback::answer_within(
+                    server,
+                    &*clock,
+                    deadline,
+                    "s1",
+                    16,
+                ))
+                .unwrap();
+            });
+            let wait = fakes::Deadline::after(WITHIN);
+            // Eight silent polls, then one byte of the head.
+            for _ in 0..8 {
+                wait.recv_or_fail(&silence, "a silent poll before the byte");
+            }
+            client.write_all(b"G").unwrap();
+            // The byte's tap proves the reader consumed it; only after
+            // that signal are the earlier polls discarded, so only
+            // post-byte polls count below.
+            wait.recv_or_fail(&reads, "the callback reader's byte");
+            while silence.try_recv().is_ok() {}
+            // Eight more silent polls, then the rest of the head: the
+            // count restarted at the byte, so the head is served.
+            for _ in 0..8 {
+                wait.recv_or_fail(&silence, "a silent poll after the byte");
+            }
+            client
+                .write_all(
+                    b"ET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            // One kernel timeout for the reply: the served head answers
+            // at once, and a hung answer fails the test instead of
+            // hanging it.
+            client.set_read_timeout(Some(WITHIN)).ok();
+            let mut echo = String::new();
+            client
+                .read_to_string(&mut echo)
+                .expect("the served callback's reply");
+            assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+            let served = wait.recv_or_fail(&received, "the paused connection's answer");
+            assert!(
+                matches!(served, Some(Served::Code(code)) if code == "abc"),
+                "a pausing head is served"
+            );
+        });
+    }
+}
+
+/// How long the idle-connection read below waits for the close: one
+/// kernel socket timeout, far above the 20 ms `READ_TIMEOUT` the reader
+/// polls on, so a read that times out instead of returning 0 fails the
+/// test instead of hanging it.
+const IDLE_READ: Duration = Duration::from_millis(500);
+
 #[test]
 fn the_callback_wait_drops_an_idle_connection_and_serves_the_next() {
     let clock = fakes::clock::FakeClock::new();
     let deadline = clock.origin() + Duration::from_secs(60);
-    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+    let (result, echo) = driven_wait_within(&clock, deadline, "s1", 10, |addr| {
         // An idle connection, opened with no bytes, then the real
         // callback on a second connection.
-        let _idle = TcpStream::connect(addr).ok();
-        send_raw(
+        let mut idle = TcpStream::connect(addr).ok();
+        let echo = send_raw(
             addr,
             b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
-        )
+        );
+        // The wait has served the real callback, so the idle connection
+        // is dropped: its read returns 0 at the close.
+        if let Some(stream) = idle.as_mut() {
+            stream.set_read_timeout(Some(IDLE_READ)).ok();
+            let mut byte = [0_u8; 1];
+            while stream.read(&mut byte).expect("the idle connection's close") != 0 {}
+        }
+        echo
     });
     assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
     assert_eq!(result.unwrap(), "abc");

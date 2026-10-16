@@ -178,12 +178,26 @@ pub(crate) enum Served {
 /// Answers one callback connection. `Some` ends the wait; `None` serves
 /// the next connection. The callback tests call it directly with the
 /// injected clock, so a mutant of its answer or cap fails without waiting
-/// out a deadline.
+/// out a deadline. Test-only: production reaches [`answer_within`]
+/// through [`wait_callback_within`].
+#[cfg(test)]
 pub(crate) fn answer(
+    stream: TcpStream,
+    clock: &dyn Clock,
+    deadline: Instant,
+    state: &str,
+) -> Option<Served> {
+    answer_within(stream, clock, deadline, state, SILENT_POLLS)
+}
+
+/// [`answer`] with the silent-poll count as a parameter, so tests can run
+/// a small count while production passes [`SILENT_POLLS`].
+pub(crate) fn answer_within(
     mut stream: TcpStream,
     clock: &dyn Clock,
     deadline: Instant,
     state: &str,
+    silent_polls: u32,
 ) -> Option<Served> {
     stream.set_nonblocking(false).ok()?;
     stream.set_read_timeout(Some(READ_TIMEOUT)).ok()?;
@@ -254,7 +268,7 @@ pub(crate) fn answer(
                 silent += 1;
                 #[cfg(test)]
                 signal_silence();
-                if silent >= SILENT_POLLS {
+                if silent >= silent_polls {
                     return None;
                 }
             }
@@ -313,6 +327,18 @@ pub(crate) fn wait_callback(
     deadline: Instant,
     state: &str,
 ) -> Result<String, LoginError> {
+    wait_callback_within(listener, clock, deadline, state, SILENT_POLLS)
+}
+
+/// [`wait_callback`] with the silent-poll count as a parameter, so tests
+/// can run a small count while production passes [`SILENT_POLLS`].
+pub(crate) fn wait_callback_within(
+    listener: &TcpListener,
+    clock: &dyn Clock,
+    deadline: Instant,
+    state: &str,
+    silent_polls: u32,
+) -> Result<String, LoginError> {
     // The poll pause: one condvar wait, so the idle loop never spins
     // and the fake clock still sees every park below.
     let poll = (std::sync::Mutex::new(()), std::sync::Condvar::new());
@@ -321,7 +347,7 @@ pub(crate) fn wait_callback(
             return Err(LoginError::Timeout);
         }
         match listener.accept() {
-            Ok((stream, _)) => match answer(stream, clock, deadline, state) {
+            Ok((stream, _)) => match answer_within(stream, clock, deadline, state, silent_polls) {
                 None => {}
                 Some(Served::Code(code)) => return Ok(code),
                 Some(Served::Failed(error)) => return Err(error),
