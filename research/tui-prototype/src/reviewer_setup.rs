@@ -2,9 +2,9 @@
 //! centred panel over a dimmed conversation. Fixture data only: the
 //! prototype runs no reviewer, so the topics, evidence and every line below
 //! are made up. Each case draws one static frame and waits for a key; Esc,
-//! q or Ctrl+C quits. The notice the terminal shows when the reviewer blocks
-//! while both layers are empty reuses `--overlay notice`: it is not redrawn
-//! here.
+//! q or Ctrl+C quits. The `notice` case draws the notice the terminal shows
+//! when the reviewer blocks while both layers are empty, naming
+//! `/reviewer-setup`.
 
 use super::input::{Ev, Key};
 use super::overlays;
@@ -68,6 +68,7 @@ pub enum Kind {
     Struck,
     Flipped,
     Diff,
+    Notice,
 }
 
 #[derive(Debug)]
@@ -80,13 +81,13 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "first",
         help: "first run in a project: one topic at a time with evidence and layer",
-        check: "topic `4 of 5 · Routine actions` with the `gh pr merge … --squash` escalation count as evidence and the `[per-project]` line barred; a centred panel with ▄ ▀ edges, `Reviewer setup` bold accent with a dim ✕, and a bold-key legend foot.",
+        check: "topic `4 of 5 · Routine actions` with its question (`What routine actions …`), the `gh pr merge … --squash` escalation count as evidence and the `[per-project]` line barred; a centred panel with ▄ ▀ edges, `Reviewer setup` bold accent with a dim ✕, and a bold-key legend foot.",
         build: || State { kind: Kind::First },
     },
     Case {
         name: "outside",
         help: "first run outside a project: every line global",
-        check: "topic `2 of 5 · Internal hosts` with the person's answer as evidence and the `[global]` line barred, under a dim `Outside a project` line; the same panel and legend.",
+        check: "topic `2 of 5 · Internal hosts` with its question (`Which internal hosts …`) and the person's answer as evidence and the `[global]` line barred, under a dim `Outside a project` line; the same panel and legend.",
         build: || State {
             kind: Kind::Outside,
         },
@@ -106,7 +107,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "flipped",
         help: "a flipped layer, from per-project to global",
-        check: "the same line as `first` barred with the `[global]` tag, under a dim `was per-project` line; the same panel and legend.",
+        check: "the topic with its question and the same line as `first` barred with the `[global]` tag, under a dim `was per-project` line; the same panel and legend.",
         build: || State {
             kind: Kind::Flipped,
         },
@@ -114,8 +115,14 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "diff",
         help: "the final diff per layer with files named, approve or cancel",
-        check: "each layer's notes as a diff against the file as it is now with the file named, added lines `+` in the added colour, `(no changes)` where the layer is untouched, and a dim reload line; the same panel with an approve-or-cancel legend.",
+        check: "each layer's notes as a diff against the file as it is now with the file named, each added line as a bullet under its topic's heading with `+` in the added colour, `(no changes)` where the layer is untouched, and a dim reload line; the same panel with an approve-or-cancel legend.",
         build: || State { kind: Kind::Diff },
+    },
+    Case {
+        name: "notice",
+        help: "the notice naming /reviewer-setup when the reviewer blocks with both layers empty",
+        check: "the notice text naming `/reviewer-setup`, wrapped to the panel; the same panel with an Esc-closes legend.",
+        build: || State { kind: Kind::Notice },
     },
 ];
 
@@ -150,6 +157,7 @@ fn footer(s: &State) -> super::Row {
         Kind::Rerun => panel::footer_legend(&[("Enter", "keep"), ("x", "strike"), ("Esc", "back")]),
         Kind::Struck => panel::footer_legend(&[("Enter", "keep"), ("Esc", "back")]),
         Kind::Diff => panel::footer_legend(&[("Enter", "approve"), ("Esc", "cancel")]),
+        Kind::Notice => panel::footer_legend(&[("Esc", "closes")]),
     }
 }
 
@@ -161,6 +169,13 @@ const HOSTS_EV: &str = "answer: only corp.example hosts and registries count as 
 const OURS: &str = "github.com/acme/* are ours";
 const CI: &str = "pull requests merge only with green CI";
 const CI_EV: &str = "its CI configuration: .github/workflows/ci.yml on every pull request";
+/// The question the person answers for each topic drawn here, in the words
+/// of docs/permissions.md, "What the person tells it".
+const ROUTINE_Q: &str = "What routine actions, such as squash-merging your own pull requests once CI passes, should the reviewer allow?";
+const HOSTS_Q: &str = "Which internal hosts, registries and services count as inside?";
+/// The notice the terminal shows the first time in a session that the
+/// reviewer blocks a call while both layers of the notes are empty.
+const NOTICE_TEXT: &str = "The reviewer blocked a call while both layers of the notes are empty. Run /reviewer-setup to set them up.";
 /// Fiber home holds both layers: the global file at its top and the
 /// per-project file under `projects/<key>` (docs/configuration.md, "Layers").
 const GLOBAL_FILE: &str = "~/.fiber/config.json";
@@ -231,17 +246,24 @@ fn added(line: &str) -> super::Row {
     row(vec![sp(format!("+ {line}"), fg(GREEN))])
 }
 
+/// The notice's whole text, wrapped to the inner width.
+fn notice_body(inner: usize) -> Vec<super::Row> {
+    super::wrap_rows(vec![sp(NOTICE_TEXT, Style::new())], inner, vec![], vec![])
+}
+
 /// The panel's body rows at an inner width.
 fn body(s: &State, inner: usize) -> Vec<super::Row> {
     match s.kind {
         Kind::First => [
             vec![topic("Topic 4 of 5 · Routine actions")],
+            evidence(ROUTINE_Q, inner),
             evidence(SQUASH_EV, inner),
             proposal(Source::Session, true, true, SQUASH, inner),
         ]
         .concat(),
         Kind::Outside => [
             vec![topic("Topic 2 of 5 · Internal hosts")],
+            evidence(HOSTS_Q, inner),
             evidence(HOSTS_EV, inner),
             proposal(Source::Answer, true, false, HOSTS, inner),
             vec![row(vec![sp(
@@ -270,6 +292,7 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
         .collect(),
         Kind::Flipped => [
             vec![topic("Topic 4 of 5 · Routine actions")],
+            evidence(ROUTINE_Q, inner),
             evidence(SQUASH_EV, inner),
             // The person flipped this line off its rule-given layer.
             barred(Layer::Global, SQUASH, inner),
@@ -286,14 +309,17 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
                 dim(),
             )]),
             row(vec![sp("  reviewer.context:", dim())]),
-            added(&format!("- {SQUASH}")),
+            row(vec![sp("  Source control:", dim())]),
             added(&format!("- {OURS}")),
+            row(vec![sp("  Routine actions:", dim())]),
+            added(&format!("- {SQUASH}")),
             row(vec![]),
             row(vec![sp(
                 "Approving then offers `r` reload now or `n` from the next session.",
                 dim(),
             )]),
         ],
+        Kind::Notice => notice_body(inner),
     }
 }
 
@@ -445,7 +471,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 6);
+        assert_eq!(CASES.len(), 7);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -654,6 +680,64 @@ mod tests {
     }
 
     #[test]
+    fn proposal_cases_ask_the_topic_question() {
+        for (c, head, tail) in [
+            ("first", "What routine actions", "should the reviewer allow"),
+            ("outside", "Which internal hosts", HOSTS_Q),
+            (
+                "flipped",
+                "What routine actions",
+                "should the reviewer allow",
+            ),
+        ] {
+            let t = text(&for_case(c), 120, 40);
+            assert!(t.contains(head), "{c} is missing its topic question");
+            // The tail may wrap onto the next row; its words still read.
+            for w in tail.split(' ') {
+                assert!(t.contains(w), "{c} question lost {w:?}");
+            }
+            let lines: Vec<&str> = t.split('\n').collect();
+            let topic = lines.iter().position(|l| l.contains("of 5")).unwrap();
+            let question = lines.iter().position(|l| l.contains(head)).unwrap();
+            assert!(topic < question, "{c}: the question reads above its topic");
+        }
+    }
+
+    #[test]
+    fn diff_groups_added_lines_under_topic_headings() {
+        let t = text(&for_case("diff"), 120, 40);
+        let lines: Vec<&str> = t.split('\n').collect();
+        let source = lines
+            .iter()
+            .position(|l| l.contains("Source control:"))
+            .unwrap();
+        let ours = lines.iter().position(|l| l.contains(OURS)).unwrap();
+        let routine = lines
+            .iter()
+            .position(|l| l.contains("Routine actions:"))
+            .unwrap();
+        let squash = lines.iter().position(|l| l.contains(SQUASH)).unwrap();
+        assert!(
+            source < ours && ours < routine && routine < squash,
+            "an added line reads outside its topic's heading"
+        );
+    }
+
+    #[test]
+    fn notice_names_reviewer_setup() {
+        let t = text(&for_case("notice"), 120, 40);
+        assert!(
+            t.contains("/reviewer-setup"),
+            "the notice does not name the command"
+        );
+        assert!(
+            t.contains("both layers of the notes are empty"),
+            "the notice does not say when it shows"
+        );
+        assert!(t.contains("Esc closes"), "missing the legend");
+    }
+
+    #[test]
     fn proposal_screens_bar_exactly_one_row_and_diff_none() {
         for (c, bars) in [
             ("first", 1),
@@ -662,6 +746,7 @@ mod tests {
             ("struck", 1),
             ("flipped", 1),
             ("diff", 0),
+            ("notice", 0),
         ] {
             let rows = view(&for_case(c), 120);
             let barred = rows

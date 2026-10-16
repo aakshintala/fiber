@@ -205,8 +205,8 @@ command-line form (docs/permissions.md says so), and a headless run never
 starts it. Each case draws one static frame from the fixtures in
 `src/reviewer_setup.rs` and waits for a key; Esc, q or Ctrl+C quits.
 Combine with `--static`; the fixture still loads but the setup ignores it.
-The notice the terminal shows when the reviewer blocks while both layers
-are empty is not drawn here: it reuses `--overlay notice`.
+The `notice` case draws the notice the terminal shows when the reviewer
+blocks while both layers are empty, naming `/reviewer-setup`.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup first
@@ -215,27 +215,33 @@ cargo run --release -- fixtures/session.jsonl --static --reviewer-setup rerun
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup struck
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup flipped
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup diff
+cargo run --release -- fixtures/session.jsonl --static --reviewer-setup notice
 ```
 
 - `first`: first run in a project, topic 4 of 5 (routine actions): the
-  session evidence (14 escalations answered allow for
+  topic's question, the session evidence (14 escalations answered allow for
   `gh pr merge … --squash`) and the `[per-project]` line barred. Legend:
   `Tab flip layer · Enter confirm · e edit · x strike · Esc back`.
 - `outside`: first run outside a project, topic 2 of 5 (internal hosts):
-  the person's answer as evidence and the `[global]` line barred, with a
+  the topic's question, the person's answer as evidence and the `[global]`
+  line barred, with a
   dim note that every line goes to the global notes. Same legend.
 - `rerun`: a rerun with earlier lines: two kept `✓` lines under `Earlier
   lines`, then the new proposal barred under `New proposals`. Legend:
   `Enter keep · x strike · Esc back`.
 - `struck`: a struck line, dim with strikethrough on its bar, kept out of
   the notes. Legend: `Enter keep · Esc back`.
-- `flipped`: the first run's line flipped to `[global]`, with a dim `was
+- `flipped`: the first run's topic with its question and the line flipped to `[global]`, with a dim `was
   per-project` line. Same legend as `first`.
 - `diff`: the final diff, each layer's notes against the file as it is now
   with the file named (`~/.fiber/config.json` and
-  `~/.fiber/projects/fiber/config.json`), added lines `+` in the added
+  `~/.fiber/projects/fiber/config.json`), each added line as a bullet under
+  its topic's heading with `+` in the added
   colour, and a dim line saying approving then offers `r` reload now or
   `n` from the next session. Legend: `Enter approve · Esc cancel`.
+- `notice`: the notice naming `/reviewer-setup`, shown the first time in a
+  session the reviewer blocks a call while both layers of the notes are
+  empty. Legend: `Esc closes`.
 
 The keys match the two tools the person already uses, probed rather than
 guessed: Claude Code's binary names `h`, `c`, `o` and `q + Enter`
@@ -243,7 +249,7 @@ shortcuts, submits on Enter (`Press return to submit`) and takes
 Shift+Enter or Option+Enter for a new line (`/terminal-setup`); pi's help
 names Tab for switching scope and Ctrl+P for cycling models. Enter
 confirms, Esc backs out and Tab flips the layer, as in both tools and in
-every prototype overlay; `e`/`x` strike and edit by initial letter, and
+every prototype overlay; `e` edits and `x` strikes by initial letter, and
 `r`/`n` answer the reload offer, are the screen's own.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
