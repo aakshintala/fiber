@@ -1016,7 +1016,6 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     );
     // A test-owned subscriber on a clone of the bridged socket, carrying
     // the websocket's shutdown like the connection's own registrations.
-    // Its writer blocks on the first byte: the bridge is already full.
     let owned = Arc::new(Mutex::new(sub_sock));
     let closer = crate::feed::Closer {
         stream: closer_sock,
@@ -1030,31 +1029,87 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .attention
         .listen(Arc::clone(&owned), closer, retired)
         .unwrap();
-    // The first small line blocks the writer: the bridge is still full
-    // from the fill phase, which the held mutex proves.
+    // Force the drained order from the outside peer on every run: read
+    // until the first small line's bytes arrive, which proves the pump
+    // drained the bridge and the line went through, then stop reading.
+    // The bound wait below refills from here whatever the drain left.
     let first = waiting_with("run r0");
     drop(
         hub.feed
             .attention
             .notify("s_0000000000000000", None, &first, false),
     );
-    let blocked = Arc::clone(&owned);
-    await_true("the Unix writer to block in its write", move || {
-        blocked.try_lock().is_err()
-    });
-    // Further small lines: the bound fires once QUEUE are queued behind
-    // the blocked writer. The loop allows for the dequeued empty snapshot
-    // and stops at the report; the assert below pins that it fired.
-    let mut closers = Vec::new();
-    for n in 1..crate::feed::QUEUE + 10 {
-        if !closers.is_empty() {
+    let drained = Deadline::after(DEADLINE);
+    let needle: &[u8] = b"run r0";
+    let mut overlap = Vec::new();
+    loop {
+        if drained.left().is_zero() {
+            panic!("the TCP peer to drain the first small line");
+        }
+        let mut chunk = [0u8; 4096];
+        let n = match tcp_client.read(&mut chunk) {
+            Ok(0) => panic!("the TCP peer to drain the first small line: the stream closed"),
+            Ok(n) => n,
+            Err(error) => panic!("the TCP peer to drain the first small line: {error}"),
+        };
+        // The frame may split the needle across reads, so each search
+        // covers the new chunk plus the previous needle-length overlap.
+        overlap.extend_from_slice(&chunk[..n]);
+        if overlap.windows(needle.len()).any(|w| w == needle) {
             break;
+        }
+        let keep = overlap.len().min(needle.len() - 1);
+        overlap.drain(..overlap.len() - keep);
+    }
+    // Notify one small line per wait poll until the queue bound fires
+    // and hands back the shutdowns: the peer stops reading after the
+    // drain above, so the bridge refills and the bound fires whatever
+    // the drain left, and a bridge that never fills fails this wait by
+    // name. The cap fails by name through the assert below.
+    // The drain's first line is already out: resume numbering after it.
+    let bound_lines = Arc::new(AtomicU64::new(1));
+    let bound_hub = Arc::clone(&hub);
+    let bound_closers: Arc<Mutex<Vec<crate::feed::Closer>>> = Arc::new(Mutex::new(Vec::new()));
+    let bound_out = Arc::clone(&bound_closers);
+    await_true("the bound to fire", move || {
+        let mut out = lock(&bound_out);
+        if !out.is_empty() {
+            return true;
+        }
+        let n = bound_lines.fetch_add(1, Ordering::SeqCst);
+        if n > 20_000 {
+            return true;
         }
         let session = format!("s_{n:016x}");
         let status = waiting_with(&format!("run r{n}"));
-        closers.extend(hub.feed.attention.notify(&session, None, &status, false));
-    }
+        out.extend(
+            bound_hub
+                .feed
+                .attention
+                .notify(&session, None, &status, false),
+        );
+        !out.is_empty()
+    });
+    let closers = {
+        let mut out = lock(&bound_closers);
+        std::mem::take(&mut *out)
+    };
     assert!(!closers.is_empty(), "the bound fired");
+    // The block wait runs on a thread the test joins: joining it ends the
+    // last other clone before the count assert, so the assert reads the
+    // joined state at once. Feed's stop already joined every writer.
+    let (block_tx, block_rx) = mpsc::channel();
+    let blocked = Arc::clone(&owned);
+    let block_wait = thread::spawn(move || {
+        while blocked.try_lock().is_ok() {
+            thread::yield_now();
+        }
+        block_tx.send(()).unwrap_or(());
+    });
+    Deadline::after(crate::testkit::DEADLINE)
+        .recv(&block_rx)
+        .expect("the Unix writer to block in its write");
+    block_wait.join().expect("the block wait thread to join");
     crate::feed::close_connections(closers, UnixStream::shutdown);
     assert_eq!(
         hub.feed.attention.listeners(),
@@ -1064,12 +1119,18 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     // The pump ends, the TCP side closes, and the served read loop
     // returns: a closer that shut only the Unix halves would leave the
     // pump and the TCP stream hanging.
-    Deadline::after(SHUT)
-        .recv(&pump_rx)
-        .expect("the pump to end");
-    tcp_client.set_read_timeout(Some(SHUT)).unwrap();
+    // One deadline for the pump's end and the TCP drain together: the
+    // per-read timeout is only a poll pause, so a stalled drain fails
+    // this wait by name instead of hanging the loop.
+    let shut = Deadline::after(SHUT);
+    shut.recv(&pump_rx).expect("the pump to end");
     let mut buf = [0; 8];
     loop {
+        let left = shut.left();
+        if left.is_zero() {
+            panic!("the TCP side closes");
+        }
+        tcp_client.set_read_timeout(Some(left)).unwrap();
         match tcp_client.read(&mut buf) {
             Ok(0) => break,
             Ok(_) => {}
