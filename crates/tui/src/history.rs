@@ -152,6 +152,13 @@ impl History {
         self.browse.as_ref().is_some_and(|(_, shown)| shown == text)
     }
 
+    /// Seeds a recall match independently of the draft for operand coverage.
+    /// Normal prompt history cannot produce this empty-prompt state.
+    #[cfg(test)]
+    pub(super) fn browse_empty_for_test(&mut self) {
+        self.browse = Some((0, String::new()));
+    }
+
     /// Keeps browsing in step with the draft, as `text`: an edit ends
     /// browsing, and any text typed ends the wait for a page.
     pub(super) fn sync(&mut self, text: &str) {

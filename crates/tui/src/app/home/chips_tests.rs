@@ -597,6 +597,26 @@ fn up_keeps_the_box_browsing_a_recalled_prompt() {
 }
 
 #[test]
+fn entry_up_keeps_an_empty_box_for_completions_without_recall() {
+    let mut app = home_with(Some("acme/m1"));
+    let _effect = app.open_search();
+    assert!(app.draft.is_empty());
+    assert!(app.completions().is_some());
+    assert!(!app.recall_browsing());
+    assert_eq!(app.entry_up(), None);
+}
+
+#[test]
+fn entry_up_keeps_an_empty_box_for_recall_without_completions() {
+    let mut app = home_with(Some("acme/m1"));
+    app.history.browse_empty_for_test();
+    assert!(app.draft.is_empty());
+    assert!(app.completions().is_none());
+    assert!(app.recall_browsing());
+    assert_eq!(app.entry_up(), None);
+}
+
+#[test]
 fn down_from_the_last_row_focuses_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
