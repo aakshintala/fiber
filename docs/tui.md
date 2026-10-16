@@ -1340,6 +1340,9 @@ what it started keeps running.
   one enters it and keeps the panel open on the new base, choosing a file inserts
   its path and closes the panel, and a base that cannot be read says why.
   Each keystroke cancels the last search, in either mode.
+  A remote terminal searches the hub's machine in both modes: `~/` is the
+  hub's home and `../` starts at the workspace there. The path listing stays
+  on the hub; only the ranked rows reach the terminal.
 
 ### Moving through the conversation
 
@@ -1627,6 +1630,10 @@ the wait.
 opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers under
 "Providers", each tagged `browser` for OAuth or `key` for an API key, then
 the extension credentials under "Secrets", the first row focused.
+
+On a remote terminal, login runs on the hub and stores its credential in the
+hub's Fiber home. OAuth always uses the device-code step below; Esc cancels
+the hub's login. The reviewer step lists the hub's models.
 
 Once a provider is picked, each step replaces the whole overlay; nothing is
 added under the list. The title is the provider's name and the list is not

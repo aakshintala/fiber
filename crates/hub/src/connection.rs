@@ -1,7 +1,8 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
 //! `sessions`, `delete`, `directories`, `read_file`, `pairing_code`, `devices`
-//! and `revoke`, the machine's `configure`, `read_config` and `write_config`,
+//! and `revoke`, the machine's `configure`, `read_config`, `write_config`,
+//! `search_files`, `device_login`, `device_login_result` and `device_login_cancel`,
 //! and the relay to session sockets. Every connection also hears
 //! `attention` and `device_changed` (`crate::attention`) after its hello.
 //!

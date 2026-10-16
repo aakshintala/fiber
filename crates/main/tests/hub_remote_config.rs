@@ -195,38 +195,73 @@ fn the_hub_searches_its_own_machine_over_the_port() {
     let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = free.local_addr().unwrap().port();
     drop(free);
-    write_json(&setup.home().join("config.json"), &json!({"hub":{"port":port}}));
-    let process = HubProc::spawn_command(setup.deadline,
-        setup.fiber(&["hub", "serve", "--installed"]).env("HOME", user_home.path()));
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"hub":{"port":port}}),
+    );
+    let process = HubProc::spawn_command(
+        setup.deadline,
+        setup
+            .fiber(&["hub", "serve", "--installed"])
+            .env("HOME", user_home.path()),
+    );
     let home = setup.home();
     let (stream, hello) = bounded(setup.deadline, "search hub ready", move || {
         doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(hello.kind, "hub_hello");
     let local = Socket::from(setup.deadline, stream);
     let mut unauth = Ws::connect(&setup, port);
     assert_eq!(unauth.text(&setup)["kind"], "hub_hello");
-    unauth.send(&setup, json!({"id":"no","command":"search_files","args":{"workspace":workspace,"text":"alpha"}}));
+    unauth.send(
+        &setup,
+        json!({"id":"no","command":"search_files","args":{"workspace":workspace,"text":"alpha"}}),
+    );
     let refused = unauth.text(&setup);
     assert_eq!(refused["payload"]["code"], "unauthenticated");
     assert!(!refused.to_string().contains("hub-alpha.rs"));
     assert!(matches!(unauth.next(&setup), Frame::Close(1008)));
     assert!(matches!(unauth.next(&setup), Frame::Eof));
-    let paired = run_to_exit(setup.deadline, "pair search client", setup.fiber(&["hub", "pair", "search-client"]));
-    assert!(paired.status.success(), "{}", String::from_utf8_lossy(&paired.stderr));
+    let paired = run_to_exit(
+        setup.deadline,
+        "pair search client",
+        setup.fiber(&["hub", "pair", "search-client"]),
+    );
+    assert!(
+        paired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&paired.stderr)
+    );
     let code = String::from_utf8(paired.stdout).unwrap().trim().to_owned();
     let mut pairing = Ws::connect(&setup, port);
     assert_eq!(pairing.text(&setup)["kind"], "hub_hello");
-    pairing.send(&setup, json!({"id":"p","command":"pair","args":{"code":code}}));
-    let token = accepted(pairing.text(&setup))["token"].as_str().unwrap().to_owned();
+    pairing.send(
+        &setup,
+        json!({"id":"p","command":"pair","args":{"code":code}}),
+    );
+    let token = accepted(pairing.text(&setup))["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(pairing.text(&setup)["kind"], "device_changed");
-    assert_eq!(recv(&local, "search client paired")["kind"], "device_changed");
+    assert_eq!(
+        recv(&local, "search client paired")["kind"],
+        "device_changed"
+    );
     drop(pairing);
     let mut client = Ws::connect(&setup, port);
     assert_eq!(client.text(&setup)["kind"], "hub_hello");
-    client.send(&setup, json!({"id":"a","command":"authenticate","args":{"token":token}}));
+    client.send(
+        &setup,
+        json!({"id":"a","command":"authenticate","args":{"token":token}}),
+    );
     accepted(client.text(&setup));
-    for (text, rows) in [("alpha", json!(["src/hub-alpha.rs"])), ("untracked", json!([])), ("~/hub-home", json!(["~/hub-home-file"]))] {
+    for (text, rows) in [
+        ("alpha", json!(["src/hub-alpha.rs"])),
+        ("untracked", json!([])),
+        ("~/hub-home", json!(["~/hub-home-file"])),
+    ] {
         client.send(&setup, json!({"id":"search","command":"search_files","args":{"workspace":workspace,"text":text}}));
         let answer = client.text(&setup);
         assert_eq!(answer["payload"]["command_id"], "search");

@@ -7,7 +7,8 @@
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete`,
 //! `directories`, `read_file`, `pairing_code`, `devices`, `revoke`,
-//! `configure`, `read_config` and `write_config`, and relays
+//! `configure`, `read_config`, `write_config`, `search_files`, `device_login`,
+//! `device_login_result` and `device_login_cancel`, and relays
 //! session commands to `run/<session_id>` (`docs/invocation.md`, "What the hub speaks").
 //! It sends `attention` and `device_changed` to every connection
 //! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub
