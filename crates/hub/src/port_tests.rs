@@ -1016,7 +1016,8 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     );
     // A test-owned subscriber on a clone of the bridged socket, carrying
     // the websocket's shutdown like the connection's own registrations.
-    // Its writer blocks on the first byte: the bridge is already full.
+    // Its writer blocks once the bridge fills, which the bound wait
+    // below ensures whatever order the fill phase left.
     let owned = Arc::new(Mutex::new(sub_sock));
     let closer = crate::feed::Closer {
         stream: closer_sock,
@@ -1037,8 +1038,7 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     // name through the assert below.
     let bound_lines = Arc::new(AtomicU64::new(0));
     let bound_hub = Arc::clone(&hub);
-    let bound_closers: Arc<Mutex<Vec<crate::feed::Closer>>> =
-        Arc::new(Mutex::new(Vec::new()));
+    let bound_closers: Arc<Mutex<Vec<crate::feed::Closer>>> = Arc::new(Mutex::new(Vec::new()));
     let bound_out = Arc::clone(&bound_closers);
     await_true("the bound to fire", move || {
         let mut out = lock(&bound_out);
