@@ -493,17 +493,6 @@ fn admission_returns_before_run_starts_and_two_run_in_order() {
     );
 }
 
-#[derive(Default)]
-struct Recorder {
-    events: std::sync::Mutex<Vec<contract::events::Event>>,
-}
-
-impl contract::emit::Emit for Recorder {
-    fn emit(&self, event: &contract::events::Event) {
-        self.events.lock().unwrap().push(event.clone());
-    }
-}
-
 #[test]
 fn a_failing_run_gives_one_extension_failed_notice_naming_the_extension() {
     let home = Home::new();
@@ -512,7 +501,7 @@ fn a_failing_run_gives_one_extension_failed_notice_naming_the_extension() {
         "fiber.command(\"bad\", { timeout = 5000, run = function() error(\"boom\") end })\n",
     );
     let session = home.load(&[]);
-    let recorder = Arc::new(Recorder::default());
+    let recorder = Arc::new(fakes::EventLog::default());
     session.emit_to(recorder.clone() as Arc<dyn contract::emit::Emit>);
     let door: &dyn ExtensionDoor = &*session;
     let release = door
@@ -525,7 +514,7 @@ fn a_failing_run_gives_one_extension_failed_notice_naming_the_extension() {
         let (tx, rx) = mpsc::channel();
         let mut found = None;
         for _ in 0..(WAIT.as_millis() / 10) {
-            found = recorder.events.lock().unwrap().iter().find_map(|event| {
+            found = recorder.events().iter().find_map(|event| {
                 let contract::events::Event::Notice(notice) = event else {
                     return None;
                 };
@@ -575,7 +564,7 @@ fn run_return_values_are_ignored() {
                 vec![],
             )],
         );
-        let recorder = Arc::new(Recorder::default());
+        let recorder = Arc::new(fakes::EventLog::default());
         for src in &all {
             src.lua
                 .set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
@@ -599,7 +588,7 @@ fn run_return_values_are_ignored() {
             "a {tag} return is ignored"
         );
         assert!(
-            recorder.events.lock().unwrap().is_empty(),
+            recorder.events().is_empty(),
             "a {tag} return emits no notice"
         );
     }
