@@ -153,6 +153,7 @@ pub(crate) fn bounded<T: Send + 'static>(
 /// Sends `signal` to process group `group` through `fakes::kill_group`: a
 /// kill(2) call that starts no process, so it runs directly with no bound.
 /// It keeps its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
 pub(crate) fn kill_group(
     _deadline: Deadline,
@@ -165,6 +166,7 @@ pub(crate) fn kill_group(
 /// Sends `signal` to process `pid` through `fakes::kill_pid`: a kill(2)
 /// call that starts no process, so it runs directly with no bound. It
 /// keeps its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
 pub(crate) fn kill_pid(_deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
     fakes::kill_pid(pid, signal)
@@ -184,6 +186,7 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
 /// Whether any process remains in process group `group`, probed directly:
 /// a kill(2) call starts no process, so it runs with no bound. It keeps
 /// its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
 pub(crate) fn group_alive(_deadline: Deadline, group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()

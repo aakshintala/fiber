@@ -864,6 +864,7 @@ fn endless_pages_end_at_the_startup_deadline() {
             "endless {method} pages end at the startup deadline",
         );
         assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+        assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
     }
 }
 

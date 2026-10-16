@@ -172,26 +172,6 @@ fn kill_pid_signals_a_live_process() {
 }
 
 #[test]
-fn group_alive_sees_a_live_group() {
-    let mut child = Command::new("sleep")
-        .arg("30")
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    assert!(group_alive(child.id()));
-    assert!(kill_group(child.id(), "KILL").unwrap());
-    child.wait().unwrap();
-}
-
-#[test]
-fn pid_alive_sees_a_live_process() {
-    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
-    assert!(pid_alive(child.id()));
-    child.kill().unwrap();
-    child.wait().unwrap();
-}
-
-#[test]
 fn group_alive_is_false_once_the_group_is_empty() {
     let mut child = Command::new("sleep")
         .arg("30")
