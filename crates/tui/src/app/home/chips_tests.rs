@@ -41,9 +41,11 @@ fn home_with(model: Option<&str>) -> App {
 fn home_git(git: bool, model: Option<&str>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: model.map(str::to_owned),
@@ -301,7 +303,12 @@ fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
     // Outside git the switch hides: ↓ lands on the workspace chip.
-    app.home.as_mut().expect("home").launch.git = false;
+    let crate::LaunchLocation::Local { git, .. } =
+        &mut app.home.as_mut().expect("home").launch.location
+    else {
+        panic!("local launch")
+    };
+    *git = false;
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(app.focused(), None);

@@ -16,8 +16,9 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
         let mut app = connected();
         type_text(&mut app, "keep this draft");
         app.set_home(crate::home::Launch {
-            hub: Some("box".to_owned()),
-            workspace: PathBuf::from("/sentinel/launch-dir"),
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
             model,
             ..Default::default()
         });

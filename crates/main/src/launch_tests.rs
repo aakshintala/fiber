@@ -72,11 +72,14 @@ fn an_identity_equal_to_the_workspace_is_not_git() {
         None,
         Vec::new(),
     );
-    assert_eq!(launch.hub, None);
-    assert_eq!(launch.client_dir, workspace);
-    assert_eq!(launch.workspace, workspace);
-    assert_eq!(launch.project, log::project_key(&identity));
-    assert!(!launch.git);
+    assert_eq!(
+        launch.location,
+        tui::LaunchLocation::Local {
+            workspace,
+            project: log::project_key(&identity),
+            git: false
+        }
+    );
     assert!(launch.hover);
     assert_eq!(launch.version, env!("CARGO_PKG_VERSION"));
 }
@@ -97,11 +100,14 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
         None,
         Vec::new(),
     );
-    assert_eq!(launch.hub, None);
-    assert_eq!(launch.client_dir, workspace);
-    assert_eq!(launch.workspace, workspace);
-    assert_eq!(launch.project, log::project_key(&identity));
-    assert!(launch.git);
+    assert_eq!(
+        launch.location,
+        tui::LaunchLocation::Local {
+            workspace,
+            project: log::project_key(&identity),
+            git: true
+        }
+    );
 }
 
 #[test]

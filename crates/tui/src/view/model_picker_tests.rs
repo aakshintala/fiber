@@ -222,8 +222,11 @@ fn narrow_levels() {
 fn scoped() {
     let mut app = attached(160, 48);
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         scoped_models: vec!["acme/m1".to_owned(), "zeta/z2".to_owned()],
         ..Default::default()
     });
@@ -236,8 +239,11 @@ fn scoped() {
 fn narrow_scoped() {
     let mut app = attached(100, 40);
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         scoped_models: vec!["acme/m1".to_owned(), "zeta/z2".to_owned()],
         ..Default::default()
     });
@@ -250,8 +256,11 @@ fn narrow_scoped() {
 fn scoped_all() {
     let mut app = attached(160, 48);
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         scoped_models: vec!["acme/m1".to_owned(), "zeta/z2".to_owned()],
         ..Default::default()
     });
@@ -829,8 +838,11 @@ fn a_long_checklist_draws_no_refresh_button() {
 fn scope_filtered() {
     let mut app = attached(160, 48);
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         scoped_models: vec!["acme/m1".to_owned(), "zeta/z2".to_owned()],
         ..Default::default()
     });

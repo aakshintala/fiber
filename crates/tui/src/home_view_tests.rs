@@ -16,8 +16,9 @@ fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
     for typed in [false, true] {
         let mut app = home(80, 24);
         app.set_home(Launch {
-            hub: Some("box".to_owned()),
-            workspace: PathBuf::from("/sentinel/launch-dir"),
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
             ..Default::default()
         });
         if typed {
@@ -56,9 +57,11 @@ fn home(width: u16, height: u16) -> App {
 fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -79,9 +82,11 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
 fn git_home(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: true,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -1052,9 +1057,11 @@ fn home_chips() {
     // The workspace, the model, the thinking level, and what Enter does.
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),
@@ -1075,8 +1082,9 @@ fn home_chips() {
 fn remote_picker_frame(recents: bool) -> String {
     let mut app = home(80, 24);
     app.set_home(Launch {
-        hub: Some("box".to_owned()),
-        workspace: PathBuf::from("/sentinel/launch-dir"),
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
         version: "0.0.1".to_owned(),
         logo_glyph: "⌇".to_owned(),
         model: Some("test/model".to_owned()),
@@ -2041,9 +2049,11 @@ fn a_chip_starting_on_the_box_edge_takes_no_target_at_any_width() {
         for width in 1..=120 {
             let mut app = App::new(PathBuf::from("/w"));
             app.set_home(Launch {
-                workspace: PathBuf::from("/w"),
-                project: "-w".to_owned(),
-                git: true,
+                location: crate::LaunchLocation::Local {
+                    workspace: PathBuf::from("/w"),
+                    project: "-w".to_owned(),
+                    git: true,
+                },
                 hover: true,
                 version: "0.0.1".to_owned(),
                 model: model.map(str::to_owned),
@@ -2651,9 +2661,11 @@ fn home_focus_first_row() {
 fn focus_home_no_hover() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: true,
+        },
         hover: false,
         version: "0.0.1".to_owned(),
         model: None,
@@ -2726,9 +2738,11 @@ fn a_chip_past_the_box_has_no_target() {
     let model = "m".repeat(36);
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some(model.clone()),

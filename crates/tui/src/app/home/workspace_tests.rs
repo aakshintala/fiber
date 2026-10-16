@@ -13,9 +13,11 @@ use std::path::PathBuf;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),
@@ -252,10 +254,9 @@ fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
 fn remote() -> App {
     let mut app = home();
     app.set_home(Launch {
-        hub: Some("box".to_owned()),
-        workspace: PathBuf::from("/sentinel/launch-dir"),
-        project: "sentinel-project".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
         model: Some("test/model".to_owned()),
         ..Default::default()
     });
@@ -269,7 +270,12 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     assert!(recents(&app).is_empty());
     assert_eq!(app.home_workspace(), PathBuf::new());
     assert_eq!(chips(&app)[0], "[no workspace]");
-    assert!(app.home_screen().unwrap().no_workspace);
+    assert!(
+        app.home_screen().unwrap().chips[0]
+            .0
+            .1
+            .contains(ratatui::style::Modifier::DIM)
+    );
     assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
     assert_eq!(key(&mut app, Key::Esc), Effect::None);
     assert!(picker_open(&app));
@@ -280,7 +286,12 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     key(&mut app, Key::Enter);
     assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
     assert_eq!(chips(&app)[0], "[w]");
-    assert!(!app.home_screen().unwrap().no_workspace);
+    assert!(
+        !app.home_screen().unwrap().chips[0]
+            .0
+            .1
+            .contains(ratatui::style::Modifier::DIM)
+    );
     app.home_click(Spot::Workspace);
     assert!(app.home_screen().unwrap().picker.unwrap().escapes);
     key(&mut app, Key::Esc);
@@ -1027,4 +1038,41 @@ fn backspace_past_the_text_returns_the_selection_to_the_first_recent() {
     key(&mut app, Key::Char('x'));
     assert_eq!(key(&mut app, Key::Backspace), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
+}
+
+#[test]
+fn launch_location_exposes_only_its_own_machine() {
+    let local = crate::LaunchLocation::Local {
+        workspace: PathBuf::from("/launch"),
+        project: "project-key".to_owned(),
+        git: true,
+    };
+    assert_eq!(local.workspace(), std::path::Path::new("/launch"));
+    assert_eq!(local.project(), "project-key");
+    assert_eq!(local.hub(), None);
+    assert_eq!(
+        crate::LaunchLocation::default(),
+        crate::LaunchLocation::Local {
+            workspace: PathBuf::new(),
+            project: String::new(),
+            git: false,
+        }
+    );
+    let remote = crate::LaunchLocation::Remote {
+        hub: "box".to_owned(),
+    };
+    assert_eq!(remote.workspace(), std::path::Path::new(""));
+    assert_eq!(remote.project(), "");
+    assert_eq!(remote.hub(), Some("box"));
+}
+
+#[test]
+fn local_picker_does_not_refill_when_rows_arrive() {
+    let mut app = home();
+    open(&mut app);
+    let before = recents(&app);
+    assert_eq!(before, vec!["/w"]);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "new", "/arrived"));
+    assert_eq!(app.home.as_ref().unwrap().sessions.all().len(), 1);
+    assert_eq!(recents(&app), before);
 }

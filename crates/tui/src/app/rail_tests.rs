@@ -21,8 +21,11 @@ const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quot
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         model: Some("test/model".to_owned()),
         rail_share: 15.0,
         panel_share: 21.0,
@@ -143,8 +146,9 @@ fn with(sessions: &[&str]) -> App {
 fn remote_rail_has_no_launch_project() {
     let mut app = home();
     app.set_home(Launch {
-        hub: Some("box".to_owned()),
-        project: "sentinel-project".to_owned(),
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
         ..Default::default()
     });
     linked(&mut app);

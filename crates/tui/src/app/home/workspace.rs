@@ -30,14 +30,14 @@ pub(super) struct Chooser {
     picker: Option<Picker>,
 }
 
-/// The workspace picker: the recent workspaces fixed at open, the
+/// The workspace picker: the recent workspaces shown by the picker, the
 /// selection while the recents show alone, and the typed path once a
 /// key opens its row. The typed state stays for the opening, so a
 /// failed listing is never asked again after Backspace to the recents
 /// alone.
 #[derive(Debug)]
 pub(super) struct Picker {
-    /// The recent workspaces, fixed at open.
+    /// The recent workspaces, refreshed on a remote home while no path is typed.
     recents: Vec<String>,
     /// The selected recent while the recents show alone.
     selected: usize,
@@ -53,7 +53,7 @@ impl Picker {
         !self.typed.text().is_empty()
     }
 
-    /// The recent workspaces, fixed at open.
+    /// The recent workspaces, refreshed on a remote home while no path is typed.
     #[cfg(test)]
     pub(super) fn recents(&self) -> &[String] {
         &self.recents
@@ -86,14 +86,14 @@ impl Chooser {
 impl Home {
     /// There is no implicit launch workspace on a listed hub.
     pub(in crate::app) fn no_workspace(&self) -> bool {
-        self.launch.hub.is_some() && self.chooser.chosen.is_none()
+        matches!(self.launch.location, crate::LaunchLocation::Remote { .. })
+            && self.chooser.chosen.is_none()
     }
 
     fn picker_recents(&self) -> Vec<String> {
-        let mut list = if self.launch.hub.is_some() {
-            Vec::new()
-        } else {
-            vec![self.launch.workspace.display().to_string()]
+        let mut list = match &self.launch.location {
+            crate::LaunchLocation::Local { workspace, .. } => vec![workspace.display().to_string()],
+            crate::LaunchLocation::Remote { .. } => Vec::new(),
         };
         for row in self.sessions.all() {
             if list.len() == PICKER_CAP {
@@ -111,7 +111,7 @@ impl Home {
 
     /// A remote picker follows arriving rows until a path is typed.
     pub(super) fn refill_picker(&mut self) {
-        if self.launch.hub.is_none() {
+        if let crate::LaunchLocation::Local { .. } = self.launch.location {
             return;
         }
         let Some(picker) = self.chooser.picker.as_ref() else {
@@ -136,7 +136,10 @@ impl Home {
     /// flag read when the workspace was chosen.
     pub(super) fn in_git(&self) -> bool {
         match &self.chooser.chosen {
-            None => self.launch.hub.is_none() && self.launch.git,
+            None => matches!(
+                self.launch.location,
+                crate::LaunchLocation::Local { git: true, .. }
+            ),
             Some(_) => self.chooser.chosen_git,
         }
     }
@@ -146,12 +149,15 @@ impl Home {
     /// launch flag for the launch directory, else whether some row in
     /// that workspace is then.
     pub(in crate::app) fn choose(&mut self, workspace: String) {
-        self.chooser.chosen_git = if self.launch.hub.is_none()
-            && workspace == self.launch.workspace.display().to_string()
-        {
-            self.launch.git
-        } else {
-            self.sessions.in_git(&workspace)
+        self.chooser.chosen_git = match &self.launch.location {
+            crate::LaunchLocation::Local {
+                workspace: launch,
+                git,
+                ..
+            } if workspace == launch.display().to_string() => *git,
+            crate::LaunchLocation::Local { .. } | crate::LaunchLocation::Remote { .. } => {
+                self.sessions.in_git(&workspace)
+            }
         };
         self.chooser.chosen = Some(workspace);
         self.chooser.worktree = false;
@@ -453,7 +459,7 @@ impl App {
         }
     }
 
-    /// Clicks the picker row `at`: past the recents fixed at open it
+    /// Clicks the picker row `at`: past the current recents it
     /// does nothing. Choosing a workspace turns the new worktree switch
     /// off.
     pub(super) fn pick(&mut self, at: usize) -> Effect {
@@ -488,11 +494,7 @@ impl App {
             if let Some(chosen) = &home.chooser.chosen {
                 return PathBuf::from(chosen);
             }
-            return if home.launch.hub.is_some() {
-                PathBuf::new()
-            } else {
-                home.launch.workspace.clone()
-            };
+            return home.launch.location.workspace().to_path_buf();
         }
         self.workspace.clone()
     }

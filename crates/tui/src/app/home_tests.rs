@@ -14,9 +14,11 @@ use std::path::PathBuf;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),
@@ -66,9 +68,9 @@ fn review() -> Line {
 fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
     let mut app = home();
     app.set_home(Launch {
-        hub: Some("box".to_owned()),
-        project: "sentinel-project".to_owned(),
-        workspace: PathBuf::from("/sentinel/launch-dir"),
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
         ..Default::default()
     });
     linked(&mut app);
@@ -338,7 +340,7 @@ fn listed(app: &App) -> Vec<String> {
             home.sessions
                 .all()
                 .iter()
-                .map(|row| crate::home::line(row, &home.launch.project))
+                .map(|row| crate::home::line(row, home.launch_project()))
                 .collect()
         })
         .unwrap_or_default()
@@ -659,7 +661,7 @@ fn keys(app: &App) -> Vec<u64> {
 fn more_key(app: &App, project: &str) -> Option<u64> {
     let home = app.home.as_ref()?;
     home.sessions
-        .sections(&home.launch.project)
+        .sections(home.launch_project())
         .into_iter()
         .find(|section| section.project == project)
         .and_then(|section| section.exited.get(section.shown_exited).map(|row| row.key))
@@ -2350,9 +2352,11 @@ fn the_file_listing_follows_the_picked_workspace() {
 fn git_home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: true,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),

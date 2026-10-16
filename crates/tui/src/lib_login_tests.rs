@@ -63,8 +63,11 @@ fn loop_with(
     lp.app
         .set_configure(Some(Arc::clone(seam) as Arc<dyn Configure>));
     lp.app.set_home(crate::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     lp.app.set_size(60, 12);
@@ -315,8 +318,11 @@ fn without_a_channel_the_worker_never_starts_and_the_start_waits() {
     lp.app
         .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
     lp.app.set_home(crate::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     lp.app.set_size(60, 12);

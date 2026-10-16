@@ -691,27 +691,6 @@ pub(super) fn render(
     }
     // The chip row: the workspace, the model, the thinking level, and
     // what Enter does. The workspace chip opens the picker.
-    let texts: Vec<&str> = screen.chips.iter().map(|(_, text)| text.as_str()).collect();
-    put(
-        buf,
-        area,
-        text_x,
-        placed.chip,
-        &texts.join("  "),
-        placed.inner,
-        BOX_TINT,
-    );
-    if screen.no_workspace {
-        put(
-            buf,
-            area,
-            text_x,
-            placed.chip,
-            "[no workspace]",
-            placed.inner,
-            BOX_TINT.add_modifier(Modifier::DIM),
-        );
-    }
     let mut chip_x = text_x;
     // A chip past the box's right edge draws nothing and takes no
     // target; a chip cut part-way keeps its visible cells. Without
@@ -719,10 +698,28 @@ pub(super) fn render(
     let box_end = text_x
         .saturating_add(placed.inner)
         .min(area.x.saturating_add(area.width));
-    for (at, (spot, text)) in screen.chips.iter().enumerate() {
+    for (at, ((spot, modifier), text)) in screen.chips.iter().enumerate() {
         if at != 0 {
+            put(
+                buf,
+                area,
+                chip_x,
+                placed.chip,
+                "  ",
+                box_end.saturating_sub(chip_x),
+                BOX_TINT,
+            );
             chip_x = chip_x.saturating_add(2);
         }
+        put(
+            buf,
+            area,
+            chip_x,
+            placed.chip,
+            text,
+            box_end.saturating_sub(chip_x),
+            BOX_TINT.add_modifier(*modifier),
+        );
         let wide = super::to_u16(width(text));
         if let Some(spot) = spot {
             let end = chip_x.saturating_add(wide).min(box_end);
@@ -894,7 +891,7 @@ enum TypedRow {
     Blank,
     /// The dim "── recents ──" header.
     Header,
-    /// The recent at its index into the recents fixed at open.
+    /// The recent at its index into the current recents.
     Recent(usize),
 }
 
@@ -993,7 +990,7 @@ fn picker_footer(escapes: bool) -> super::overlay::Row {
 /// its cursor, the completions with the focused one on the bar, the
 /// blank row, the dim header and the dim recents, with a focused
 /// recent barred. Only the recent rows take clicks, by their index
-/// into the recents fixed at open.
+/// into the current recents.
 fn draw_typed_picker(
     typed: &TypedScreen,
     recents: &[String],

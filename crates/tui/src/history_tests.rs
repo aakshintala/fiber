@@ -139,9 +139,9 @@ fn with_own(app: &mut App, prompts: &[&str]) {
 fn remote_history() -> App {
     let mut app = connected();
     app.set_home(crate::home::Launch {
-        hub: Some("box".to_owned()),
-        workspace: PathBuf::from("/sentinel/launch-dir"),
-        project: "sentinel-project".to_owned(),
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
         ..Default::default()
     });
     app

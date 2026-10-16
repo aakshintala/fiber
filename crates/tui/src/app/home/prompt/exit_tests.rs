@@ -14,9 +14,11 @@ use std::path::PathBuf;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -582,7 +584,9 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
 #[test]
 fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
     let mut app = home();
-    app.home.as_mut().unwrap().launch.hub = Some("box".to_owned());
+    app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
+        hub: "box".to_owned(),
+    };
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", json!("idle"), 0, 0, 0));
     assert_eq!(

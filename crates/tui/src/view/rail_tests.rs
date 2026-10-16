@@ -49,8 +49,11 @@ fn row(key: u64, project: &str, workspace: &str, spend: f64, left: Option<Left>)
 fn app(share: f64) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/Users/you/work/fiber"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/Users/you/work/fiber"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: share,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -718,8 +721,11 @@ fn rail_scrolled() {
 fn on_home_no_rail_is_drawn() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -783,8 +789,11 @@ fn session_card_with_n_waiting() {
     // panel and the conversation's 84.
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/Users/you/work/fiber"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/Users/you/work/fiber"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 30.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),

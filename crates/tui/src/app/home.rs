@@ -79,18 +79,14 @@ pub(super) struct Home {
 impl Home {
     /// A listed hub has no client launch project.
     pub(super) fn launch_project(&self) -> &str {
-        if self.launch.hub.is_some() {
-            ""
-        } else {
-            &self.launch.project
-        }
+        self.launch.location.project()
     }
 }
 
 impl App {
     /// The listed hub this terminal belongs to, if any.
     pub(super) fn remote_hub(&self) -> Option<&str> {
-        self.home.as_ref()?.launch.hub.as_deref()
+        self.home.as_ref()?.launch.location.hub()
     }
 
     /// Stores the launch description as home, keying prompt history by its
@@ -321,24 +317,24 @@ impl App {
             }
         };
         Some(HomeScreen {
-            no_workspace: home.no_workspace(),
             header,
             list,
             empty: home.sessions.all().is_empty(),
             version: home.launch.version.clone(),
             glyph: home.launch.logo_glyph.clone(),
             chips: {
-                let workspace = if home.no_workspace() {
-                    "no workspace"
+                use ratatui::style::Modifier;
+                let (workspace, modifier) = if home.no_workspace() {
+                    ("no workspace", Modifier::DIM)
                 } else {
-                    &segment
+                    (segment.as_str(), Modifier::empty())
                 };
-                let mut chips = vec![(Some(Spot::Workspace), format!("[{workspace}]"))];
+                let mut chips = vec![((Some(Spot::Workspace), modifier), format!("[{workspace}]"))];
                 // The new worktree switch sits beside the workspace
                 // chip, shown while the workspace in use is in git.
                 if home.in_git() {
                     chips.push((
-                        Some(Spot::Worktree),
+                        (Some(Spot::Worktree), Modifier::empty()),
                         if home.chooser.worktree() {
                             "[x] new worktree".to_owned()
                         } else {
@@ -348,17 +344,20 @@ impl App {
                 }
                 chips.extend([
                     (
-                        Some(Spot::Model),
+                        (Some(Spot::Model), Modifier::empty()),
                         format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
                     (
-                        Some(Spot::Thinking),
+                        (Some(Spot::Thinking), Modifier::empty()),
                         format!(
                             "[thinking: {}]",
                             home.launch.thinking.as_deref().unwrap_or("default")
                         ),
                     ),
-                    (None, "Enter starts a session".to_owned()),
+                    (
+                        (None, Modifier::empty()),
+                        "Enter starts a session".to_owned(),
+                    ),
                 ]);
                 chips
             },
@@ -915,13 +914,11 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
-                let workspace = home.chooser.chosen().map(str::to_owned).unwrap_or_else(|| {
-                    if home.launch.hub.is_some() {
-                        String::new()
-                    } else {
-                        home.launch.workspace.display().to_string()
-                    }
-                });
+                let workspace = home
+                    .chooser
+                    .chosen()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| home.launch.location.workspace().display().to_string());
                 let mut args = json!({"workspace": workspace});
                 if let Some(object) = args.as_object_mut() {
                     if !self.launch_overrides.is_empty() {

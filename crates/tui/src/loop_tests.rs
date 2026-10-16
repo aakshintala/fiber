@@ -1240,9 +1240,11 @@ fn resume_open_replays_the_log_to_the_tail() {
     let lines = handoff_log(150, "the last reply holds quokkas");
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -1447,8 +1449,11 @@ fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
         .resize(160, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]

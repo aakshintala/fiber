@@ -102,7 +102,7 @@ pub use configure::{
     SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
-pub use home::Launch;
+pub use home::{Launch, LaunchLocation};
 
 pub use open_at::OpenAt;
 

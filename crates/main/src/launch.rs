@@ -88,11 +88,11 @@ pub(crate) fn launch(
         .filter_map(|name| name.as_str().map(str::to_owned))
         .collect();
     tui::Launch {
-        hub: None,
-        client_dir: workspace.clone(),
-        workspace,
-        project,
-        git,
+        location: tui::LaunchLocation::Local {
+            workspace,
+            project,
+            git,
+        },
         open_at: tui::OpenAt::Home,
         hover,
         reduced_motion,
