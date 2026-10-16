@@ -22,6 +22,15 @@ const READER_STOP: Duration = Duration::from_secs(2);
 /// The most [`Client::send_by`] writes under one reading of its deadline.
 const CHUNK: usize = 4096;
 
+// Test-only pause between `send_by`'s last write and its timeout reset.
+// The test sets it on the sending thread; `send_by` takes and runs it
+// once, so a peer that closes while it waits lands before the reset.
+#[cfg(test)]
+thread_local! {
+    static SEND_BY_BEFORE_RESET: std::cell::RefCell<Option<Box<dyn Fn() + Send>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// A client connected to a session socket. It sends command lines and reads
 /// the JSON lines that come back.
 pub struct Client {
@@ -81,7 +90,9 @@ impl Client {
     /// never renews the deadline. At zero it returns a `TimedOut` error
     /// without writing; a zero timeout never reaches the socket, which takes
     /// it as an error. On return the socket has no write timeout, so a later
-    /// `send` is unbounded as before.
+    /// `send` is unbounded as before. After a full write whose reset fails,
+    /// the socket keeps its last timeout instead; the peer has closed, so a
+    /// later write fails at once and the timeout never waits.
     pub fn send_by(&self, line: &str, left: &dyn Fn() -> Duration) -> std::io::Result<()> {
         let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
@@ -110,8 +121,18 @@ impl Client {
                 Err(err) => break Err(err),
             }
         };
-        let unbounded = stream.set_write_timeout(None);
-        sent.and(unbounded)
+        #[cfg(test)]
+        if let Some(pause) = SEND_BY_BEFORE_RESET.with(|cell| cell.take()) {
+            pause();
+        }
+        // A full write is already delivered when the reset below runs, so a
+        // reset that fails because the peer closed first must not fail the
+        // send. A write that fails, or a deadline that passes first, keeps
+        // its own error.
+        match stream.set_write_timeout(None) {
+            Ok(()) | Err(_) => {}
+        }
+        sent
     }
 
     /// The first line `matches` accepts, parsed as JSON, or as a string when it
@@ -256,6 +277,13 @@ fn read_lines(
             }
         }
     }
+}
+
+/// Sets the pause `send_by` runs after its write loop and before its
+/// timeout reset, on this thread. `None` clears it.
+#[cfg(test)]
+fn set_send_by_before_reset(hook: Option<Box<dyn Fn() + Send>>) {
+    SEND_BY_BEFORE_RESET.with(|cell| *cell.borrow_mut() = hook);
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
