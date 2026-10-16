@@ -101,7 +101,7 @@ fn fixture(extra: bool, all_failed: bool, overrides: &[&str]) -> Fixture {
         &home,
         &workspace,
         "test",
-        &options.iter().map(String::as_str).collect::<Vec<_>>(),
+        options.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let switching = assembled(&home, config, BTreeMap::new(), &[]);
     Fixture {
