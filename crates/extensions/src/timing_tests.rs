@@ -996,30 +996,6 @@ impl Clock for GatedClock {
     }
 }
 
-/// Releases every pause it holds when it drops, on every exit path
-/// including a panic, ignoring send errors. A wait that expires below
-/// panics while the worker and the hook threads are still parked, so
-/// without this the unwind drops the extension into threads that never
-/// wake and hangs to the harness timeout instead of reporting the wait
-/// that expired.
-struct PauseGuard {
-    releases: Vec<mpsc::Sender<()>>,
-}
-
-impl PauseGuard {
-    fn holding(releases: Vec<mpsc::Sender<()>>) -> Self {
-        Self { releases }
-    }
-}
-
-impl Drop for PauseGuard {
-    fn drop(&mut self) {
-        for release in &self.releases {
-            let _ignored = release.send(());
-        }
-    }
-}
-
 /// Waits, at most `within` of real time, until the hub lock is free.
 /// `FakeClock::wait_until` records the caller's park and wakes
 /// `await_parked` before its wait closure runs, and the caller still holds
@@ -1066,11 +1042,6 @@ fn worker_emits_only_after_the_guard_releases() {
     );
     let (arrived, release) = pause_observed_execution("rz");
     let (paused, resume) = pause_at_admission();
-    // A wait that expires below must panic with its own message: the
-    // worker and the hook threads are parked, so the guard releases both
-    // pauses on every exit path, including a panic, instead of unwinding
-    // into threads that never wake.
-    let _pauses = PauseGuard::holding(vec![release.clone(), resume.clone()]);
     let mark = fake.now();
     let provider = LuaProvider::new(Arc::clone(&ext), "rz");
     let (tx, rx) = mpsc::channel();
@@ -1115,11 +1086,19 @@ fn worker_emits_only_after_the_guard_releases() {
     // that window and prove it cannot complete until the release — a
     // blocked gate plus channels, no sleeps or reruns.
     let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
-    // The gate holds the hub guard while it blocks its caller: release it
-    // on unwind too, so a failure inside the window still ends at its own
-    // message instead of hanging the extension's drop on the guard.
-    let _gate = PauseGuard::holding(vec![gated_release.clone()]);
-    fake.advance(Duration::ZERO);
+    // The zero advance wakes the parked callers into their re-park, and
+    // the gated caller holds the hub guard while it blocks on the
+    // release. The advance's wake takes the hub lock, so it runs on its
+    // own thread: running it here would block forever with only the gate
+    // able to release it.
+    let (advanced_tx, advanced_rx) = mpsc::channel();
+    {
+        let fake = Arc::clone(&fake);
+        std::thread::spawn(move || {
+            fake.advance(Duration::ZERO);
+            let _ignored = advanced_tx.send(());
+        });
+    }
     Deadline::after(WAIT)
         .recv(&gated_arrived)
         .expect("the caller reached the gated park window");
@@ -1149,6 +1128,9 @@ fn worker_emits_only_after_the_guard_releases() {
             .recv(&done_rx)
             .expect("await_unlocked completes after the release");
     }
+    Deadline::after(WAIT)
+        .recv(&advanced_rx)
+        .expect("the zero advance returns after the release");
     assert!(
         fake.await_parked(mark + Duration::from_secs(61), WAIT),
         "the caller parked past its check"
@@ -1189,72 +1171,65 @@ fn worker_emits_only_after_the_guard_releases() {
 }
 
 #[test]
-fn an_unreached_gate_names_its_wait_and_releases_both_pauses() {
+fn gated_park_holds_the_hub_guard() {
+    let server = ProviderServer::start([Response::status(200, "{\"data\":[]}")]).unwrap();
+    server.hold_from(1, Duration::from_secs(30));
+    let dir = ext_dir(None, &[("rg", &models_lua("rg", &server.url()))]);
     let fake = FakeClock::new();
     let clock = GatedClock::new(Arc::clone(&fake));
-    let mark = fake.now();
-    // No caller ever parks at the armed target, so the gated wait below
-    // expires instead of settling.
-    let (gated_arrived, _gate_release) = clock.arm(Some(mark + Duration::from_secs(61)));
-    // Stand-ins for the parked worker and hook threads: each blocks until
-    // its pause releases, then reports. Each blocks on a channel this test
-    // owns, so neither needs a deadline of its own: the guard releases
-    // them, and the test ending drops the senders.
-    let (worker_release_tx, worker_release_rx) = mpsc::channel();
-    let (worker_done_tx, worker_done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ignored = worker_release_rx.recv();
-        let _ignored = worker_done_tx.send(());
-    });
-    let (hook_release_tx, hook_release_rx) = mpsc::channel();
-    let (hook_done_tx, hook_done_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ignored = hook_release_rx.recv();
-        let _ignored = hook_done_tx.send(());
-    });
-    let (outcome_tx, outcome_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        // Releases both pauses while the wait below unwinds, ignoring send
-        // errors: the failure reports its own message instead of hanging
-        // on a parked thread. The expiry bound stays under `WAIT`, so
-        // every `WAIT`-bounded observation below keeps its margin.
-        let _pauses = PauseGuard::holding(vec![worker_release_tx, hook_release_tx]);
-        let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Deadline::after(WAIT / 2)
-                .recv_or_fail(&gated_arrived, "the caller reached the gated park window");
-        }));
-        let message = match message {
-            Ok(()) => "the gate let its wait through".to_owned(),
-            Err(payload) => payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_owned())
-                })
-                .unwrap_or_else(|| "the gate panicked without a message".to_owned()),
-        };
-        let _ignored = outcome_tx.send(message);
-    });
-    // Both pauses released during the unwind: each waiter reports, so a
-    // missing release fails here at its deadline instead of hanging.
-    Deadline::after(WAIT)
-        .recv(&worker_done_rx)
-        .expect("the worker pause released on unwind");
-    Deadline::after(WAIT)
-        .recv(&hook_done_rx)
-        .expect("the hook pause released on unwind");
-    // The outcome arrives with the reports above, so by the time both
-    // landed this receive is immediate. The expired wait names the signal
-    // it stood for.
-    let message = Deadline::after(WAIT)
-        .recv(&outcome_rx)
-        .expect("the expired wait reported");
-    assert!(
-        message.contains("the caller reached the gated park window"),
-        "the expired wait names its signal: {message}"
+    let clock_dyn: Arc<dyn Clock> = clock.clone();
+    let (sink, _) = Watching::new();
+    let ext = Arc::new(
+        LuaExtension::new("ext", dir.path(), dir.path(), Arc::clone(&clock_dyn))
+            .with_diagnostics(sink.clone() as Arc<dyn DebugLog>),
     );
+    // No pause globals: the held HTTP reply suspends the worker, so this
+    // repro shares nothing with the tests that arm them.
+    let mark = fake.now();
+    let provider = LuaProvider::new(Arc::clone(&ext), "rg");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = tx.send(provider.list_models());
+    });
+    assert!(
+        server.await_requests(1, WAIT),
+        "the worker suspended on HTTP"
+    );
+    assert!(
+        fake.await_parked(mark + Duration::from_secs(61), WAIT),
+        "the caller parked past its check"
+    );
+    let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
+    // The hub notify runs on its own thread: the gated caller holds the
+    // hub guard while it blocks on the release, and the notify's wake
+    // takes the hub lock.
+    let (notified_tx, notified_rx) = mpsc::channel();
+    {
+        let fake = Arc::clone(&fake);
+        std::thread::spawn(move || {
+            fake.advance(Duration::ZERO);
+            let _ignored = notified_tx.send(());
+        });
+    }
+    Deadline::after(WAIT)
+        .recv(&gated_arrived)
+        .expect("the caller reached the gated park window");
+    assert!(
+        !ext.hub_unlocked(),
+        "the gated caller holds the hub lock while parked"
+    );
+    gated_release
+        .send(())
+        .expect("the gated window takes its release");
+    Deadline::after(WAIT)
+        .recv(&notified_rx)
+        .expect("the hub notify returns after the release");
+    server.release();
+    let (models, _) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for the models")
+        .expect("the models() succeeds after the release");
+    assert_eq!(models.len(), 1);
 }
 
 #[test]
