@@ -113,7 +113,9 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
 
 /// The first-party models whose provider hosts a search (`docs/tools.md`,
 /// "Hosted by the provider"): every Anthropic model, every muse model on
-/// `/v1/responses`, every Gemini model, and OpenCode's OpenAI pass-through.
+/// `/v1/responses`, the OpenAI API's models that accept the hosted search,
+/// the Gemini models marked in `xtask/src/models_dev_table.rs`, and
+/// OpenCode's OpenAI pass-through.
 #[test]
 fn first_party_hosted_searches_are_the_marked_models() {
     let mut pairs = Vec::new();
