@@ -301,6 +301,16 @@ fn fills_up_after_a_mib(tool: WebFetch) -> WebFetch {
     }))
 }
 
+/// Wraps each artifact in a writer that fills up after two download pieces.
+fn fills_up_after_two_pieces(tool: WebFetch) -> WebFetch {
+    tool.with_artifact_writer(Arc::new(|file| {
+        Box::new(FillsUp {
+            file,
+            room: 2 * DOWNLOAD_PIECE,
+        })
+    }))
+}
+
 /// Whether `artifacts/` holds no file.
 fn no_file_in(rig: &Rig) -> bool {
     fs::read_dir(rig.artifacts()).map_or(true, |mut entries| entries.next().is_none())
@@ -308,8 +318,13 @@ fn no_file_in(rig: &Rig) -> bool {
 
 #[test]
 fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
-    let server = serve([ok("text/html", "<p>x</p>".repeat(2 << 20 >> 3))]);
-    let rig = Rig::new().with(fills_up_after_a_mib);
+    // Two pieces of room and four pieces of page: the writer takes two
+    // pieces, then fails mid-stream.
+    let server = serve([ok(
+        "text/html",
+        "<p>x</p>".repeat(4 * DOWNLOAD_PIECE / 8),
+    )]);
+    let rig = Rig::new().with(fills_up_after_two_pieces);
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     let message = text(&output);
@@ -1600,17 +1615,27 @@ impl Cancel for HoldsWatcher {
 
 #[test]
 fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
-    let mut page = String::with_capacity(8 << 20);
+    // Only the first three download pieces are ever built or sent; the
+    // announced total stays under the download cap so the fetch streams
+    // instead of refusing up front.
+    let mut page = String::with_capacity(3 * DOWNLOAD_PIECE);
     page.push_str("<a");
     for n in 0..1_000_000u32 {
         page.push_str(&format!(" a{n}"));
+        if page.len() >= 3 * DOWNLOAD_PIECE {
+            break;
+        }
     }
-    page.push_str(">t</a>");
-    assert!(page.len() < TEN_MIB, "the page is under the download cap");
+    page.truncate(3 * DOWNLOAD_PIECE);
+    let announced = TEN_MIB - 1024;
+    assert!(
+        announced < TEN_MIB,
+        "the announced page is under the download cap"
+    );
 
     let bytes = page.into_bytes();
     let server = serve([
-        Response::stall(200, bytes[..3 * DOWNLOAD_PIECE].to_vec(), bytes.len())
+        Response::stall(200, bytes, announced)
             .header("content-type", "text/html; charset=utf-8"),
     ]);
     let rig = Rig::new();

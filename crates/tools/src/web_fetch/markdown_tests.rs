@@ -631,7 +631,10 @@ fn a_tag_name_is_case_insensitive() {
 
 #[test]
 fn deep_nesting_of_every_kind_is_handled_without_recursion() {
-    let depth = 100_000;
+    // 20,000 levels on the 2 MiB test-thread stack: a recursive converter
+    // needs under 105 bytes a level to survive, which no unoptimised
+    // frame does.
+    let depth = 20_000;
     for (open, close) in [
         ("<div>", "</div>"),
         ("<ul><li>", "</li></ul>"),
@@ -715,8 +718,9 @@ fn excess_list_closes_pop_the_counter_first() {
 }
 
 #[test]
-fn a_million_nested_lists_keep_the_stack_at_its_cap() {
-    let depth = 1_000_000;
+fn a_hundred_thousand_nested_lists_keep_the_stack_at_its_cap() {
+    // 100,000 is past a 16-bit counter.
+    let depth = 100_000;
     let mut stream = super::Stream::default();
     stream.push(&"<ul>".repeat(depth));
     {

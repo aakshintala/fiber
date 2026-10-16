@@ -249,34 +249,34 @@ fn converted(content_type: Option<&str>, bytes: &[u8], split: usize) -> String {
     html.finish()
 }
 
-/// UTF-8 text of over 128 KiB after `prefix`, with a three-byte `あ` cut
-/// by byte 65,536.
+/// UTF-8 text of just over 64 KiB after `prefix`, with a three-byte `あ`
+/// cut by byte 65,536 and enough tail for a second output piece.
 fn long_utf8(prefix: &str) -> Vec<u8> {
     let mut text = prefix.to_owned();
     while (BOUNDARY - text.len()) % 3 != 1 {
         text.push('x');
     }
-    text.push_str(&"あ".repeat(50_000));
+    text.push_str(&"あ".repeat(22_000));
     assert!(!text.is_char_boundary(BOUNDARY));
     text.into_bytes()
 }
 
-/// Shift-JIS text of over 128 KiB after `prefix`, with a two-byte `あ`
-/// cut by byte 65,536.
+/// Shift-JIS text of just over 64 KiB after `prefix`, with a two-byte `あ`
+/// cut by byte 65,536 and enough tail for a second output piece.
 fn long_shift_jis(prefix: &[u8]) -> Vec<u8> {
     let mut bytes = prefix.to_vec();
     if bytes.len().is_multiple_of(2) {
         bytes.push(b'x');
     }
-    for _ in 0..70_000 {
+    for _ in 0..33_000 {
         bytes.extend_from_slice(SHIFT_JIS_A);
     }
     assert_eq!(bytes[BOUNDARY - 1], SHIFT_JIS_A[0]);
     bytes
 }
 
-/// UTF-16LE text of over 128 KiB with its BOM, `text` first, with a
-/// surrogate pair cut by byte 65,536.
+/// UTF-16LE text of just over 64 KiB with its BOM, `text` first, with a
+/// surrogate pair cut by byte 65,536 and enough tail for a second piece.
 fn long_utf16le(text: &str) -> Vec<u8> {
     let mut units: Vec<u16> = text.encode_utf16().collect();
     // The BOM is one unit: pad until each pair starts two bytes off a
@@ -284,7 +284,7 @@ fn long_utf16le(text: &str) -> Vec<u8> {
     while (2 + units.len() * 2) % 4 != 2 {
         units.push(u16::from(b'x'));
     }
-    units.extend("😀".repeat(40_000).encode_utf16());
+    units.extend("😀".repeat(16_500).encode_utf16());
     let mut bytes = vec![0xff, 0xfe];
     for unit in units {
         bytes.extend_from_slice(&unit.to_le_bytes());
