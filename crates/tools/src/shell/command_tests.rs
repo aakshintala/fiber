@@ -262,6 +262,65 @@ fn a_wake_inside_wait_until_is_not_lost() {
     );
 }
 
+/// Truth table for `park`'s `guard.seq != seen || (wake_on_cancel &&
+/// cancel.is_cancelled())`: each row flips one operand, so flipping either
+/// operator changes a row. The moved-sequence row kills the `||`-to-`&&`
+/// mutant; the two mixed cancel rows kill the `&&`-to-`||` mutant.
+#[test]
+fn park_wakes_on_sequence_or_on_cancel_while_running() {
+    const RETURN: Duration = Duration::from_secs(5);
+    const STILL_PARKED: Duration = Duration::from_millis(200);
+    // (sequence moved, wake_on_cancel, cancelled, park returns).
+    for (moved, wake_on_cancel, cancelled, returns) in [
+        (true, false, false, true),
+        (false, false, false, false),
+        (false, true, true, true),
+        (false, true, false, false),
+        (false, false, true, false),
+    ] {
+        let shared = Arc::new(Shared::default());
+        if moved {
+            shared.wake();
+        }
+        let cancel = CancelToken::new();
+        if cancelled {
+            cancel.cancel();
+        }
+        let origin = FakeClock::new().origin();
+        let until = origin.checked_add(Duration::from_secs(2));
+        let (done, parked) = mpsc::channel();
+        let thread_shared = Arc::clone(&shared);
+        thread::spawn(move || {
+            park(
+                &BoundlessClock { origin, wake: None },
+                &thread_shared,
+                &cancel,
+                until,
+                false,
+                wake_on_cancel,
+                0,
+            );
+            done.send(()).unwrap();
+        });
+        if returns {
+            assert!(
+                Deadline::after(RETURN).recv(&parked).is_ok(),
+                "park returned (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+        } else {
+            assert!(
+                Deadline::after(STILL_PARKED).recv(&parked).is_err(),
+                "park stayed (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+            shared.wake();
+            assert!(
+                Deadline::after(RETURN).recv(&parked).is_ok(),
+                "the stayed park was released (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+        }
+    }
+}
+
 /// How long a listing test waits on a command before it fails.
 const LIST_DEADLINE: Duration = Duration::from_secs(10);
 
