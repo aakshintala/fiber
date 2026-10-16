@@ -23,6 +23,11 @@ mod secret;
 mod settings;
 mod write;
 
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
+
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -616,15 +621,19 @@ fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
     }
 }
 
-/// A layer with its `models."<model>"` laid over its top level.
-fn view(layer: &Value, model: Option<&str>) -> Value {
-    let mut view = layer.clone();
-    if let Some(model) = model
-        && let Some(own) = layer.get("models").and_then(|m| m.get(model))
-    {
-        path::merge(&mut view, own);
+/// A layer with its `models."<model>"` laid over its top level. Borrows
+/// the layer when there is nothing to lay over it: no model, or no entry
+/// for the model. Any entry at `models.<model>`, an object or not, is
+/// merged over a clone, as before.
+fn view<'a>(layer: &'a Value, model: Option<&str>) -> Cow<'a, Value> {
+    match model.and_then(|model| layer.get("models").and_then(|models| models.get(model))) {
+        None => Cow::Borrowed(layer),
+        Some(own) => {
+            let mut view = layer.clone();
+            path::merge(&mut view, own);
+            Cow::Owned(view)
+        }
     }
-    view
 }
 
 pub(crate) fn top_level(source_name: &str) -> ConfigError {
