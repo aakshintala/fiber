@@ -392,6 +392,7 @@ fn resolved(event: Option<crate::keys::Event>) -> Resolved {
         Some(crate::keys::Event::Stroke(_))
         | Some(crate::keys::Event::Mouse(_))
         | Some(crate::keys::Event::Reply(_))
+        | Some(crate::keys::Event::Focus(_))
         | None => Resolved::Nothing,
     }
 }

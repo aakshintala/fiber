@@ -147,6 +147,11 @@ fn row_one(app: &App, width: usize) -> Option<StatusRow> {
                     push_segment(&mut joined, segment);
                 }
             }
+            Card::Quota => {
+                if let Some(spans) = super::panel::quota::segment_spans(app) {
+                    push_segment(&mut joined, Segment::plain(spans));
+                }
+            }
             Card::Jobs | Card::Delegates => {}
             Card::Widget(at) => {
                 if let Some(segment) = widget_segment(app, at) {
@@ -416,7 +421,7 @@ pub(crate) fn widget(app: &App, width: u16) -> Vec<Line<'static>> {
         .into_iter()
         .find_map(|card| match card {
             Card::Widget(at) => Some(at),
-            Card::Session | Card::ChangedFiles | Card::Jobs | Card::Delegates => None,
+            Card::Session | Card::ChangedFiles | Card::Jobs | Card::Delegates | Card::Quota => None,
         });
     let Some(lines) = at
         .and_then(|at| widgets.get(at))

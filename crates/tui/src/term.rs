@@ -21,6 +21,8 @@ const BRACKETED_PASTE: &[u8] = b"\x1b[?2004h";
 /// Mouse reporting: presses and releases (1000), drags (1002), in SGR form
 /// (1006).
 const MOUSE: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+/// Focus reporting (1004), for the Quota card.
+const FOCUS: &[u8] = b"\x1b[?1004h";
 /// Mouse reporting of every motion (1003), for hover.
 const MOTION: &[u8] = b"\x1b[?1003h";
 /// Kitty's keyboard flags query, then the primary device attributes query.
@@ -35,7 +37,7 @@ pub(crate) const KITTY_PUSH: &[u8] = b"\x1b[>1u";
 /// resets the pointer shape to the default, pops the window title, then
 /// leaves the alternate screen and shows the cursor.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// The tty `setup` changed and its modes from before. One terminal per
 /// process: the first `setup` records it.
@@ -61,6 +63,7 @@ pub(crate) fn setup(mut tty: &File, hover: bool) -> io::Result<(u16, u16)> {
     tty.write_all(PUSH_TITLE)?;
     tty.write_all(BRACKETED_PASTE)?;
     tty.write_all(MOUSE)?;
+    tty.write_all(FOCUS)?;
     if hover {
         tty.write_all(MOTION)?;
     }
@@ -130,6 +133,7 @@ pub(crate) fn resume(kitty: bool, hover: bool) -> io::Result<()> {
     out.write_all(PUSH_TITLE)?;
     out.write_all(BRACKETED_PASTE)?;
     out.write_all(MOUSE)?;
+    out.write_all(FOCUS)?;
     if hover {
         out.write_all(MOTION)?;
     }

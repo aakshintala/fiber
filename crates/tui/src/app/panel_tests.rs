@@ -823,8 +823,13 @@ fn ack(app: &mut App, out: &[Value]) -> Vec<String> {
 
 /// Asserts `lines` hold one branch query, returning its id.
 fn branch_query(lines: &[String]) -> String {
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    let branches: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap_or_else(|err| panic!("{err}")))
+        .filter(|line| line["command"] == "shell")
+        .collect();
+    assert_eq!(branches.len(), 1, "{lines:?}");
+    let line = &branches[0];
     assert_eq!(line["command"], "shell");
     assert_eq!(line["session_id"], SESSION);
     assert_eq!(line["args"]["command"], "git rev-parse --abbrev-ref HEAD");

@@ -11,6 +11,66 @@ use std::path::PathBuf;
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 
+#[test]
+fn focus_and_stale_keypress_send_quota_through_the_loop() {
+    use crate::app::items::testkit::{commands, hello, session_line};
+    use serde_json::json;
+    use std::io::Read;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    for (bytes, age, sends) in [
+        (b"\x1b[I".as_slice(), 0, true),
+        (b"x".as_slice(), 300, true),
+        (b"x".as_slice(), 0, false),
+        (b"\x1b[O".as_slice(), 300, false),
+    ] {
+        let (mut lp, _) = new_loop(TestBackend::new(80, 24), None);
+        lp.app = crate::app::items::testkit::home();
+        lp.app.on_line(hello());
+        lp.app.attach(contract::SessionId(SESSION.to_owned()));
+        lp.app.set_now(
+            lp.clock
+                .now()
+                .checked_sub(Duration::from_secs(age))
+                .unwrap(),
+            0,
+        );
+        let out = commands(
+            lp.app
+                .on_line(session_line("clients", json!({"clients": []}))),
+        );
+        let id = out.iter().find(|v| v["command"] == "quota").unwrap()["id"]
+            .as_str()
+            .unwrap();
+        lp.app.on_line(session_line(
+            "command_accepted",
+            json!({"command_id": id,
+            "result": {"quota": [], "notice_at": 80.0}}),
+        ));
+        let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            theirs.read_to_string(&mut text).unwrap();
+            tx.send(text).unwrap();
+        });
+        lp.hub.store(ours);
+        let events = lp.parser.feed(bytes);
+        assert_eq!(lp.handle_events(events), None);
+        lp.hub.hang_up();
+        let text = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&rx, "the loop's quota command");
+        reader.join().unwrap();
+        let out = commands(text.lines().map(str::to_owned).collect());
+        assert_eq!(out.len(), usize::from(sends), "{bytes:?}, age {age}");
+        if sends {
+            assert_eq!(out[0]["command"], "quota");
+            assert_eq!(out[0]["session_id"], SESSION);
+        }
+    }
+}
+
 /// The screen's text.
 fn shown(lp: &super::Loop<TestBackend>) -> String {
     crate::view::text(lp.screen.backend().buffer())
