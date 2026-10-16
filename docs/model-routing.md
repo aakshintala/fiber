@@ -243,7 +243,9 @@ reply. A request after the last step fails the turn. It takes the session's tool
 
 A script is a JSON file, `{"steps": [...]}`, read whole each time a model on
 it is connected: when a session starts or resumes on it, switches back to it,
-or resolves its reviewer to it. Each step is an object, a reply or an error:
+resolves its reviewer to it, or resolves a delegate to it through a configured
+`roles.*` reference (a string or an object's `model`). Each step is an object,
+a reply or an error:
 
 - A reply has `text`, a string or a list of strings streamed as fragments in
   order, or `tool_calls`, a list of `{"name": ..., "arguments": {...}}`, or
@@ -267,8 +269,8 @@ or resolves its reviewer to it. Each step is an object, a reply or an error:
 Each request takes one step, a retried request included, so a `rate_limited`
 step followed by a text step is a retry that succeeds. A request after the
 last step fails `invalid_request`, which is never retried, naming the script
-and the request. Each connection starts at step 1, and a reviewer on a script
-has its own steps. A script that cannot be read fails with `io_failed`, and a
+and the request. Each connection starts at step 1, and a reviewer or delegate
+on a script has its own steps. A script that cannot be read fails with `io_failed`, and a
 malformed one with `config_invalid` naming the file and the step: at startup
 before any line is written, on a switch as its rejection, and for a reviewer
 as a reviewer failure.

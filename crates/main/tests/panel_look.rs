@@ -220,6 +220,136 @@ fn slab_edge_row(grid: &Grid, y: u16) -> Option<(u16, u16)> {
         .map(|at| (at as u16, at as u16 + 33))
 }
 
+/// Duration text is normalised rather than compared to the wall clock.
+fn delegate_duration(text: &str) -> bool {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    match text.split(' ').collect::<Vec<_>>().as_slice() {
+        [seconds] => seconds.strip_suffix('s').is_some_and(digits),
+        [minutes, seconds] => {
+            minutes.strip_suffix('m').is_some_and(digits)
+                && seconds
+                    .strip_suffix('s')
+                    .is_some_and(|s| s.len() == 2 && digits(s))
+        }
+        _ => false,
+    }
+}
+
+/// A whole dim progress row below the delegate's description, in the panel.
+fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
+    grid.rows.iter().enumerate().any(|(y, row)| {
+        let Some(at) = row.find("review the diff") else {
+            return false;
+        };
+        if at < 100 || (finished && !row.contains("✓ review the diff")) {
+            return false;
+        }
+        let Some(next) = grid.rows.get(y + 1) else {
+            return false;
+        };
+        let Some(start) = next.find("2 calls · ") else {
+            return false;
+        };
+        let text = next[start..].trim_end();
+        let parts: Vec<_> = text.split(" · ").collect();
+        if parts.len() != 3
+            || parts[0] != "2 calls"
+            || !delegate_duration(parts[1])
+            || parts[2] != tail
+        {
+            return false;
+        }
+        let x = u16::try_from(next[..start].chars().count()).unwrap();
+        let y = u16::try_from(y + 1).unwrap();
+        (0..u16::try_from(text.chars().count()).unwrap()).all(|offset| {
+            let cell = grid.cell(x + offset, y);
+            cell.dim && cell.fg == Colour::Default
+        })
+    })
+}
+
+#[test]
+fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
+    for (text, expected) in [
+        ("0s", true),
+        ("9s", true),
+        ("12s", true),
+        ("2m 10s", true),
+        ("", false),
+        ("s", false),
+        ("-1s", false),
+        ("1ms", false),
+        ("2m 1s", false),
+        ("2m 100s", false),
+        ("m 10s", false),
+        ("2m 1xs", false),
+        ("2m 10s extra", false),
+    ] {
+        assert_eq!(delegate_duration(text), expected, "{text:?}");
+    }
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    fs::write(workspace.join("a.txt"), "hello\n").unwrap();
+    let hold = workspace.join("hold");
+    mkfifo(&setup, &hold);
+    let mut release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "delegate_spawn", "arguments": {
+                "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}]},
+            {"text": ["Waiting."]}, {"text": ["Done."]}
+        ]}),
+    );
+    write_json(
+        &workspace.join("d.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "head -n 1 hold"}}]},
+            {"text": ["Reviewed."]}
+        ]}),
+    );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
+            "roles": {"delegate": "fiber:scripted/d.json"},
+            "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 1000}
+        }),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+            json!({"decision": "allow", "tool": "shell", "prefix": "head -n 1 hold"})
+        ),
+    )
+    .unwrap();
+    let guard = Watchdog::matching("head -n 1 hold");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the delegate's two calls and shell subject, dim", |grid| {
+        delegate_progress(grid, "shell head -n 1 hold", false)
+    });
+    std::io::Write::write_all(&mut release, b"done\n").unwrap();
+    run.wait_screen(
+        "the finished delegate's calls, elapsed and done, dim",
+        |grid| delegate_progress(grid, "done", true),
+    );
+    guard.stand_down(setup.deadline.cleanup());
+    quit(run);
+}
+
 #[test]
 fn panel_cards_match_the_doc() {
     let (setup, _server, release) = panel_setup();
