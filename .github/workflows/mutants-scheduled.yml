@@ -48,7 +48,7 @@ jobs:
         run: scripts/install-shells
       - name: Run the workspace baseline
         timeout-minutes: 300
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --workspace --no-fail-fast --profile ci
 
   list:
     name: List workspace mutants

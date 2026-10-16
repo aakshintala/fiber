@@ -222,8 +222,10 @@ On Linux x86_64 alone:
 
   A separate workflow runs daily at 04:00 UTC against the scheduled commit,
   generating mutants across every workspace package. It runs one full-workspace
-  nextest baseline, then a list job counts the workspace mutants and picks one
-  rotation day's 16 shards, and the shards run once the baseline passes; at most
+  nextest baseline under the `ci` profile, with the same retry as the test job
+  (a failed binary-level test retries once), then a list job counts the workspace
+  mutants and picks one rotation day's 16 shards, and the shards run once the
+  baseline passes; at most
   16 shards run at once, and a concurrency group prevents scheduled runs from
   overlapping. The rotation covers the whole list over `days = max(1,
   ceil(count / 12800))` days, so each day runs 16 shards of about 800 mutants:
