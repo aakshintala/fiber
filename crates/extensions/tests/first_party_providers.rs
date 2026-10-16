@@ -113,7 +113,9 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
 
 /// The first-party models whose provider hosts a search (`docs/tools.md`,
 /// "Hosted by the provider"): every Anthropic model, every muse model on
-/// `/v1/responses`, every Gemini model, and OpenCode's OpenAI pass-through.
+/// `/v1/responses`, the OpenAI API's models that accept the hosted search,
+/// the Gemini models marked in `xtask/src/models_dev_table.rs`, and
+/// OpenCode's OpenAI pass-through.
 #[test]
 fn first_party_hosted_searches_are_the_marked_models() {
     let mut pairs = Vec::new();
@@ -176,6 +178,40 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("gemini/gemini-3.7-flash", "google_search"),
         ("gemini/gemini-3.8-flash", "google_search"),
         ("gemini/gemini-3-flash-preview", "google_search"),
+        ("gemini/gemini-flash-latest", "google_search"),
+        ("gemini/gemini-flash-lite-latest", "google_search"),
+        ("gemini/gemma-4-26b-a4b-it", "google_search"),
+        ("gemini/gemma-4-31b-it", "google_search"),
+        ("openai/gpt-4.1", "web_search"),
+        ("openai/gpt-4.1-mini", "web_search"),
+        ("openai/gpt-4o", "web_search"),
+        ("openai/gpt-4o-2024-05-13", "web_search"),
+        ("openai/gpt-4o-2024-08-06", "web_search"),
+        ("openai/gpt-4o-2024-11-20", "web_search"),
+        ("openai/gpt-4o-mini", "web_search"),
+        ("openai/gpt-5", "web_search"),
+        ("openai/gpt-5-mini", "web_search"),
+        ("openai/gpt-5-nano", "web_search"),
+        ("openai/gpt-5-pro", "web_search"),
+        ("openai/gpt-5.1", "web_search"),
+        ("openai/gpt-5.2", "web_search"),
+        ("openai/gpt-5.2-pro", "web_search"),
+        ("openai/gpt-5.3-codex", "web_search"),
+        ("openai/gpt-5.4", "web_search"),
+        ("openai/gpt-5.4-mini", "web_search"),
+        ("openai/gpt-5.4-nano", "web_search"),
+        ("openai/gpt-5.4-pro", "web_search"),
+        ("openai/gpt-5.5", "web_search"),
+        ("openai/gpt-5.5-pro", "web_search"),
+        ("openai/gpt-5.6-luna", "web_search"),
+        ("openai/gpt-5.6-sol", "web_search"),
+        ("openai/gpt-5.6-terra", "web_search"),
+        ("openai/gpt-6-astra", "web_search"),
+        ("openai/gpt-6-luna", "web_search"),
+        ("openai/gpt-6-sol", "web_search"),
+        ("openai/gpt-6.1-sol", "web_search"),
+        ("openai/o3", "web_search"),
+        ("openai/o4-mini", "web_search"),
         ("opencode-zen/gpt-6.1-sol", "web_search"),
     ]
     .into_iter()

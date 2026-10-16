@@ -481,6 +481,19 @@ it starts and after each turn.
 
 ### Swapped views
 
+A remote terminal's configuration views show the hub's machine: its
+settings, rules, credentials, tool switches and skill switches and text.
+`keys` and every `tui.*` key belong to the client instead, including `/keys`,
+their `/settings` rows and the theme picker.
+
+For a hub-owned file, Ctrl+G fetches its text and opens a temporary copy in
+the client's editor. On return, the hub writes it only if its version still
+matches. Otherwise the view says the file changed and nothing is written.
+The view then rereads the hub's file, showing any configuration or rules
+error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
+`/settings` and `/skills` in the list below describe the local editor; this
+paragraph replaces them on a remote terminal.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
@@ -629,13 +642,15 @@ a click on it returns too. The views are:
   Each shows the prefix it allows, when and from which session it was added,
   and a ✕ that revokes it. Revoking deletes the line and applies to the next
   call judged. Ctrl+G opens the rules file (`docs/permissions.md`,
-  "Remembering a decision"). "Global" and "This project" are bold headings;
+  "Remembering a decision"); on a remote terminal it opens the hub's file
+  instead ("Swapped views"). "Global" and "This project" are bold headings;
   a rule's row is "allow shell:git status · added 2d ago in review #688 · "
   and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
 - **`/settings`:** the configuration keys, their effective values and the
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
-  costs. Ctrl+G opens the file. The keys are a table of aligned columns:
+  costs. Ctrl+G opens the file; on a remote terminal it opens the hub's file
+  instead ("Swapped views"). The keys are a table of aligned columns:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
@@ -656,7 +671,8 @@ a click on it returns too. The views are:
   switched off. A switch turns a skill off or on for this project or
   everywhere, writing `skills.disabled` in that layer; the change reaches the
   model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills"). A row is "review · checks a diff
+  file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
+  hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
   its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
   last row is "Enter shows the text · Ctrl+G opens its file", dim.

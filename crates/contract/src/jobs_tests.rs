@@ -5,7 +5,7 @@ struct StubJobs;
 
 impl Jobs for StubJobs {
     fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: std::path::PathBuf::from("/none"),
             source: std::io::Error::other("refused"),
         })
@@ -85,4 +85,16 @@ fn stop_error_codes_match_the_job_stop_command() {
     for (error, code) in &cases {
         assert_eq!(error.code(), *code);
     }
+}
+
+#[test]
+fn open_error_display_writes_the_path_and_the_source() {
+    let error = OpenError {
+        path: std::path::PathBuf::from("jobs/j_abc.log"),
+        source: std::io::Error::other("denied"),
+    };
+    assert_eq!(
+        error.to_string(),
+        "the job's output file jobs/j_abc.log could not be created: denied"
+    );
 }

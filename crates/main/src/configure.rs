@@ -6,6 +6,7 @@
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
+mod remote;
 mod skills;
 mod tools;
 

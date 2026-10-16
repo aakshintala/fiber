@@ -368,6 +368,20 @@ impl LuaProvider {
         });
     }
 
+    /// Reads the cache at once, starting a fetch when due. The caller must
+    /// already know this provider registers `quota()`. Never parks or calls
+    /// Lua on the caller's thread; a first fetch reads unreachable until it
+    /// supplies a value.
+    pub fn quota_now(self: &Arc<Self>, pair: &CredentialPair, key: Option<&Secret>) -> QuotaEntry {
+        self.refresh_quota(pair, key);
+        let mut states = lock(&self.quotas.state);
+        let clock = self.extension.clock();
+        let now = clock.now();
+        let cache = states.entry(pair.clone()).or_default();
+        expire_overdue(cache, now, &self.quotas.parker);
+        entry(cache, now, clock.wall())
+    }
+
     /// What the model sees for `pair`: no quota when the package registers
     /// none, else the cache, fetching with `key` when due and waiting for
     /// the flight in

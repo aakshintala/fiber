@@ -6,7 +6,8 @@
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete`,
-//! `directories`, `read_file`, `pairing_code`, `devices` and `revoke`, and relays
+//! `directories`, `read_file`, `pairing_code`, `devices`, `revoke`,
+//! `configure`, `read_config` and `write_config`, and relays
 //! session commands to `run/<session_id>` (`docs/invocation.md`, "What the hub speaks").
 //! It sends `attention` and `device_changed` to every connection
 //! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub
@@ -30,6 +31,7 @@ mod feed;
 mod first;
 mod idle;
 mod listen;
+mod machine;
 mod pairing;
 mod port;
 mod prompt_history;
@@ -66,6 +68,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
+pub use crate::machine::Machine;
 pub use crate::recent::{Left, RecentRow, append};
 
 /// What the hub reads from the configuration when it starts.
@@ -168,6 +171,10 @@ pub trait Started: Send {
 /// returned unlogged, since only the lock's holder writes `hub.log`. Every
 /// later failure is written to `hub.log` once, as an `error` line with its
 /// code, while the lock is still held, and returned for the caller to print.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the composition root supplies each independent hub seam"
+)]
 pub fn serve(
     home: &Path,
     mode: Mode,
@@ -176,6 +183,7 @@ pub fn serve(
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
     environments: Arc<Environments>,
+    machine: Arc<dyn Machine>,
 ) -> Result<i32, StartError> {
     let lock = match mode {
         Mode::OnDemand => match listen::lock(home)? {
@@ -248,7 +256,8 @@ pub fn serve(
     let diag = diag.with_level(settings.level);
     let hub = Arc::new(
         Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
-            .with_environments(Arc::clone(&environments)),
+            .with_environments(Arc::clone(&environments))
+            .with_machine(machine),
     );
     // The feed starts a rewound session even when no client relayed the
     // rewind: the callback holds the hub weakly, so nothing runs after
