@@ -34,7 +34,7 @@ pub use host::{
     DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage, ExtensionStateSet,
     ExtensionStateUnset, ExtensionUi, ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta,
     JobLine, JobStarted, JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady,
-    OnFork, PendingReason, ReloadFailure, Reloaded, ReloadedServers, ServerFailure, SkillInfo,
+    OnFork, PendingReason, QuotaCredit, QuotaInfo, QuotaWindow, ReloadFailure, Reloaded, ReloadedServers, ServerFailure, SkillInfo,
     ToolInfo, ToolSource, ToolState, Ui,
 };
 pub use offer::{
