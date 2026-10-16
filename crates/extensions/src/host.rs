@@ -121,9 +121,10 @@ function host.exec(program, args, opts)
 end
 "#;
 
-/// How deep a Lua table may nest to become JSON. Deeper, such as a table
-/// that holds itself, is an error rather than a stack overflow.
-const MAX_DEPTH: usize = 128;
+/// JSON's reader accepts 127 nested containers. The deepest envelope path
+/// adds two (envelope and payload), leaving 125 for a converted Lua value.
+/// Deeper tables, including cycles, fail rather than overflowing the stack.
+const MAX_DEPTH: usize = 127 - 2;
 
 /// Sets the `host` and `json` globals. The returned tag is what the host
 /// calls yield, so the scheduler can tell that yield from any other; the

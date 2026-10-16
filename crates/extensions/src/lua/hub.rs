@@ -273,6 +273,7 @@ impl Hub {
 
 #[derive(Default)]
 pub(crate) struct Shared {
+    pub(super) state: Arc<crate::host::state::ExtensionState>,
     pub(super) phase: Phase,
     pub(super) loads: HashMap<String, ProviderLoad>,
     pub(super) pending_loads: VecDeque<String>,

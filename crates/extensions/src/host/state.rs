@@ -1,5 +1,12 @@
 //! A session's extension-state view and the lines awaiting its log writer.
 
+use std::rc::Rc;
+
+use contract::ErrorCode;
+use mlua::{Lua, LuaSerdeExt, MultiValue, Value as LuaValue};
+
+use super::failure::{self, Raise};
+
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -9,6 +16,120 @@ use contract::hook::{StateLine, StateSeed};
 use serde_json::Value;
 
 pub(crate) const MAX_BYTES: usize = 65_536;
+
+fn invalid(message: impl ToString) -> Raise {
+    Raise::Failed(ErrorCode::InvalidArguments, message.to_string())
+}
+
+fn key(value: &LuaValue) -> Result<String, Raise> {
+    match value {
+        LuaValue::String(key) => key.to_str().map(|key| key.to_owned()).map_err(invalid),
+        _ => Err(invalid("state: key must be a string")),
+    }
+}
+
+fn failed(error: StateError) -> Raise {
+    match error {
+        StateError::TooLarge { bytes } => Raise::Failed(
+            ErrorCode::StateTooLarge,
+            format!("state.set: value is {bytes} JSON bytes; at most {MAX_BYTES} are allowed"),
+        ),
+        StateError::Closing => {
+            Raise::Failed(ErrorCode::Closing, "extension state is closed".into())
+        }
+    }
+}
+
+pub(crate) fn install(lua: &Lua, state: Rc<VmState>, failure: &mlua::Function) -> mlua::Result<()> {
+    let table = lua.create_table()?;
+    let get = state.clone();
+    failure::register(
+        lua,
+        &table,
+        "get",
+        failure,
+        None,
+        move |lua, args: MultiValue| {
+            let key = key(args.front().unwrap_or(&LuaValue::Nil))?;
+            let value = match get.get(&key) {
+                Some(value) => lua.to_value(&value).map_err(invalid)?,
+                None => LuaValue::Nil,
+            };
+            Ok(MultiValue::from_vec(vec![value]))
+        },
+    )?;
+    let set = state.clone();
+    failure::register(
+        lua,
+        &table,
+        "set",
+        failure,
+        None,
+        move |_, args: MultiValue| {
+            let mut args = args.into_iter();
+            let key = key(&args.next().unwrap_or(LuaValue::Nil))?;
+            let value = args.next().unwrap_or(LuaValue::Nil);
+            if value.is_nil() {
+                return Err(invalid(
+                    "state.set: value is nil; use state.unset to remove the key",
+                ));
+            }
+            let value = super::to_json(&value).map_err(invalid)?;
+            let rule = match args.next().unwrap_or(LuaValue::Nil) {
+                LuaValue::Nil => OnFork::AtPoint,
+                LuaValue::Table(options) => {
+                    match options.get::<LuaValue>("on_fork").map_err(invalid)? {
+                        LuaValue::Nil => OnFork::AtPoint,
+                        LuaValue::String(rule) => match rule.to_str().map_err(invalid)?.as_ref() {
+                            "at_point" => OnFork::AtPoint,
+                            "latest" => OnFork::Latest,
+                            "fresh" => OnFork::Fresh,
+                            _ => {
+                                return Err(invalid(
+                                    "state.set: on_fork must be at_point, latest or fresh",
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(invalid(
+                                "state.set: on_fork must be at_point, latest or fresh",
+                            ));
+                        }
+                    }
+                }
+                _ => return Err(invalid("state.set: options must be a table")),
+            };
+            set.set(&key, value, rule).map_err(failed)?;
+            Ok(MultiValue::new())
+        },
+    )?;
+    let unset = state.clone();
+    failure::register(
+        lua,
+        &table,
+        "unset",
+        failure,
+        None,
+        move |_, args: MultiValue| {
+            let key = key(args.front().unwrap_or(&LuaValue::Nil))?;
+            unset.unset(&key).map_err(failed)?;
+            Ok(MultiValue::new())
+        },
+    )?;
+    failure::register(
+        lua,
+        &table,
+        "keys",
+        failure,
+        None,
+        move |lua, _: MultiValue| {
+            Ok(MultiValue::from_vec(vec![
+                lua.to_value(&state.keys()).map_err(invalid)?,
+            ]))
+        },
+    )?;
+    lua.globals().set("state", table)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Scope {

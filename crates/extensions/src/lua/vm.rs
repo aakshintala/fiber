@@ -21,6 +21,7 @@ use super::{hub, schedule, setup};
 use crate::lua::{Deadline, DeclaredHooks, Hub};
 
 pub(super) struct Vm {
+    pub(super) state: Rc<host::state::VmState>,
     pub(super) lua: Lua,
     name: String,
     pub(super) deadline: Deadline,
@@ -152,6 +153,11 @@ impl Vm {
         let search =
             super::search::install(&lua, problems.clone(), Rc::clone(&init), note_violation)
                 .map_err(lua_error)?;
+        let state = Rc::new(host::state::VmState {
+            store: hub.lock().state.clone(),
+            scope: Cell::new(host::state::Scope::Other),
+        });
+        host::state::install(&lua, state.clone(), &failures.failure).map_err(lua_error)?;
         let (http_tag, timer_funcs) = host::install(
             &lua,
             host::HostContext {
@@ -170,6 +176,7 @@ impl Vm {
         )
         .map_err(lua_error)?;
         let vm = Self {
+            state,
             lua,
             name: name.to_owned(),
             deadline,

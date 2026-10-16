@@ -290,6 +290,11 @@ impl LuaExtension {
         self
     }
 
+    pub(crate) fn with_state(self, state: Arc<host::state::StateRegistry>) -> Self {
+        self.hub.lock().state = state.store(&self.name);
+        self
+    }
+
     /// Sets this extension's memory cap in bytes.
     pub fn with_memory_cap(mut self, bytes: NonZeroUsize) -> Self {
         self.memory_cap = bytes.get();

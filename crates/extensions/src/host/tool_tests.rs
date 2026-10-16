@@ -412,16 +412,19 @@ fn args_nested_past_the_cap_raise_and_reach_no_runner() {
     let (_dir, ext) = extension(
         &tool(
             "deep",
-            "function(args) local t = {} local top = t\n\
-             for _ = 2, args.n do local n = {} t[1] = n t = n end\n\
-             local ok, err = pcall(host.tool, \"read\", top)\n\
-             if ok then return \"reached\" end\n\
-             return tostring(err:find(\"host.tool\") ~= nil) .. \"/\" .. tostring(err:find(\"127\") ~= nil) end",
+            &format!(
+                "function(args) local t = {{}} local top = t\n\
+                 for _ = 2, args.n do local n = {{}} t[1] = n t = n end\n\
+                 local ok, err = pcall(host.tool, \"read\", top)\n\
+                 if ok then return \"reached\" end\n\
+                 return tostring(err:find(\"host.tool\") ~= nil) .. \"/\" .. tostring(err:find(\"{}\") ~= nil) end",
+                crate::host::MAX_DEPTH
+            ),
         ),
         &clock,
     );
-    // 126 and 127 nested tables reach the runner; 128 raises naming
-    // `host.tool` and the depth, and reaches nothing.
+    // Values up to the JSON conversion limit reach the runner; one more
+    // table raises naming `host.tool` and the depth, and reaches nothing.
     let (runner, _entered) = FakeRunner::scripted(vec![Ok(completed("")), Ok(completed(""))]);
     let runner_calls = runner.clone();
     let held = Arc::clone(&ext);
@@ -438,10 +441,16 @@ fn args_nested_past_the_cap_raise_and_reach_no_runner() {
             )
         })
     };
-    assert_eq!(run(126).unwrap(), Some(Value::String("reached".to_owned())));
-    assert_eq!(run(127).unwrap(), Some(Value::String("reached".to_owned())));
     assert_eq!(
-        run(128).unwrap(),
+        run((crate::host::MAX_DEPTH - 1) as i64).unwrap(),
+        Some(Value::String("reached".to_owned()))
+    );
+    assert_eq!(
+        run(crate::host::MAX_DEPTH as i64).unwrap(),
+        Some(Value::String("reached".to_owned()))
+    );
+    assert_eq!(
+        run((crate::host::MAX_DEPTH + 1) as i64).unwrap(),
         Some(Value::String("true/true".to_owned()))
     );
     assert_eq!(runner_calls.calls().len(), 2);
@@ -472,15 +481,18 @@ fn a_non_json_value_in_args_raises_the_generic_message() {
 #[test]
 fn args_nested_past_the_to_json_cap_raise_the_depth_message() {
     let clock = FakeClock::new();
-    // 129 nested tables: the innermost, at depth 128, fails inside
-    // `to_json` itself, not at the parse back that 128 tables reach.
+    // One table beyond the shared limit fails during `to_json`, before
+    // arguments are serialized or handed to a runner.
     let (_dir, ext) = extension(
         &tool(
             "deep",
-            "function() local top = {} local t = top\n\
-             for _ = 2, 129 do local n = {} t[1] = n t = n end\n\
-             local _, err = pcall(host.tool, \"read\", top)\n\
-             return tostring(err) end",
+            &format!(
+                "function() local top = {{}} local t = top\n\
+                 for _ = 2, {} do local n = {{}} t[1] = n t = n end\n\
+                 local _, err = pcall(host.tool, \"read\", top)\n\
+                 return tostring(err) end",
+                crate::host::MAX_DEPTH + 1
+            ),
         ),
         &clock,
     );
@@ -488,9 +500,10 @@ fn args_nested_past_the_to_json_cap_raise_the_depth_message() {
     let runner_calls = runner.clone();
     assert_eq!(
         tool_call(&ext, "deep", runner).unwrap(),
-        Some(Value::String(
-            "host.tool: `args` nests deeper than 127".to_owned()
-        ))
+        Some(Value::String(format!(
+            "host.tool: `args` nests deeper than {}",
+            crate::host::MAX_DEPTH
+        )))
     );
     assert!(runner_calls.calls().is_empty());
 }

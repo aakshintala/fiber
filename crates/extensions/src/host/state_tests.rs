@@ -292,6 +292,243 @@ fn store_exhaustive_trial_admission_matches_surviving_writes() {
     }
 }
 
+fn lua_api(script: &str, seed: StateSeed) -> (Value, Vec<Event>) {
+    let dir = fakes::TempDir::new("fiber-state-api");
+    std::fs::write(
+        dir.path().join("init.lua"),
+        format!("fiber.command('test', {{timeout=5000, run=function() {script} end}})"),
+    )
+    .unwrap();
+    let registry = StateRegistry::new(seed);
+    let state = registry.clone();
+    let value = crate::test_support::bounded(move || {
+        let ext = crate::LuaExtension::new(
+            "goal",
+            dir.path(),
+            dir.path(),
+            fakes::clock::FakeClock::new(),
+        )
+        .with_state(state);
+        let result = ext.command("test", "").unwrap();
+        serde_json::from_str(&result).unwrap()
+    });
+    (value, registry.take_outbox())
+}
+
+#[test]
+fn lua_state_errors_are_coded_tables_with_messages() {
+    for call in [
+        "state.set('k', nil)",
+        "state.set(1, 'v')",
+        "state.set('k', function() end)",
+        "state.set('k', 0/0)",
+        "state.set('k', math.huge)",
+        "state.set('k', {[true]=1})",
+        "state.set('k', coroutine.create(function() end))",
+        "state.set('k', 'v', {on_fork='unknown'})",
+        "state.set('k', 'v', false)",
+        "state.get(1)",
+        "state.unset(1)",
+    ] {
+        let (value, events) = lua_api(
+            &format!(
+                "local ok, err = pcall(function() {call} end); return json.encode({{ok=ok, code=err.code, message=err.message}})"
+            ),
+            StateSeed::new(),
+        );
+        assert_eq!(value["ok"], false, "{call}");
+        assert_eq!(value["code"], "invalid_arguments", "{call}");
+        assert!(!value["message"].as_str().unwrap().is_empty(), "{call}");
+        if call == "state.set('k', nil)" {
+            assert!(value["message"].as_str().unwrap().contains("state.unset"));
+        }
+        assert!(events.is_empty(), "{call}");
+    }
+}
+
+#[test]
+fn lua_state_size_edges_and_default_rule() {
+    for (bytes, code) in [
+        (MAX_BYTES - 1, "ok"),
+        (MAX_BYTES, "ok"),
+        (MAX_BYTES + 1, "state_too_large"),
+    ] {
+        let (value, events) = lua_api(
+            &format!(
+                "local ok, err = pcall(state.set, 'k', string.rep('x', {})); return json.encode({{code=ok and 'ok' or err.code, message=ok and '' or err.message}})",
+                bytes - 2
+            ),
+            StateSeed::new(),
+        );
+        assert_eq!(value["code"], code);
+        match events.as_slice() {
+            [Event::ExtensionStateSet(set)] => {
+                assert_eq!(code, "ok");
+                assert_eq!(set.on_fork, OnFork::AtPoint);
+                assert_eq!(serde_json::to_vec(&set.value).unwrap().len(), bytes);
+            }
+            [] => {
+                assert_eq!(code, "state_too_large");
+                assert!(!value["message"].as_str().unwrap().is_empty());
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn lua_state_uses_host_json_conversion_and_reads_sorted_keys() {
+    let (value, events) = lua_api(
+        r#"
+        local inputs = { {'a','b'}, {a=1}, {}, {a=1,[1]=2}, {[1]='a',[3]='c'} }
+        for i, t in ipairs(inputs) do state.set(tostring(i), t, {on_fork='latest'}) end
+        state.set('z', 1); state.unset('z'); state.unset('absent')
+        return json.encode({values={state.get('1'),state.get('2'),state.get('3'),state.get('4'),state.get('5')}, keys=state.keys(), absent=state.get('absent') == nil})
+    "#,
+        StateSeed::new(),
+    );
+    assert_eq!(
+        value,
+        json!({"values":[["a","b"],{"a":1},[],{"a":1,"1":2},{"1":"a","3":"c"}],"keys":["1","2","3","4","5"],"absent":true})
+    );
+    assert_eq!(events.len(), 7);
+    for event in events.iter().take(5) {
+        let Event::ExtensionStateSet(set) = event else {
+            panic!("expected set")
+        };
+        assert_eq!(set.on_fork, OnFork::Latest);
+    }
+}
+
+#[test]
+fn lua_state_is_seeded_before_init_shared_by_vms_and_closes() {
+    let dir = fakes::TempDir::new("fiber-state-seed");
+    std::fs::write(dir.path().join("init.lua"), "local initial = state.get('k'); fiber.command('read', {timeout=5000,run=function() return json.encode({initial=initial, current=state.get('k')}) end}); fiber.command('write', {timeout=5000,run=function() local ok,e=pcall(state.set,'k',3); return ok and 'ok' or e.code end})").unwrap();
+    let registry = StateRegistry::new(StateSeed::from([(
+        "goal".into(),
+        [("k".into(), (json!(1), OnFork::AtPoint))].into(),
+    )]));
+    crate::test_support::bounded(move || {
+        let make = || {
+            crate::LuaExtension::new(
+                "goal",
+                dir.path(),
+                dir.path(),
+                fakes::clock::FakeClock::new(),
+            )
+            .with_state(registry.clone())
+        };
+        let a = make();
+        let b = make();
+        assert_eq!(
+            a.command("read", "").unwrap(),
+            "{\"current\":1,\"initial\":1}"
+        );
+        assert!(registry.take_outbox().is_empty());
+        assert_eq!(b.command("write", "").unwrap(), "ok");
+        assert_eq!(
+            a.command("read", "").unwrap(),
+            "{\"current\":3,\"initial\":1}"
+        );
+        registry.close();
+        assert_eq!(a.command("write", "").unwrap(), "closing");
+        assert_eq!(
+            a.command("read", "").unwrap(),
+            "{\"current\":3,\"initial\":1}"
+        );
+        assert_eq!(registry.take_outbox().len(), 1);
+    });
+}
+
+#[test]
+fn lua_state_depth_limit_round_trips_inside_the_log_envelope() {
+    for depth in [super::MAX_DEPTH - 1, super::MAX_DEPTH, super::MAX_DEPTH + 1] {
+        let (value, events) = lua_api(
+            &format!(
+                "local t={{}}; for _=2,{depth} do t={{t}} end; local ok,e=pcall(state.set,'deep',t); return json.encode({{ok=ok, code=ok and 'ok' or e.code}})"
+            ),
+            StateSeed::new(),
+        );
+        if depth <= super::MAX_DEPTH {
+            assert_eq!(value["ok"], true);
+            let [event] = events.as_slice() else {
+                panic!("one accepted write")
+            };
+            let envelope = contract::Envelope {
+                kind: "extension_state_set".into(),
+                session_id: contract::SessionId("state".into()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: Some(contract::Seq(1)),
+                payload: event.payload().unwrap(),
+            };
+            let bytes = serde_json::to_vec(&envelope).unwrap();
+            let read: contract::Envelope = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                contract::events::Event::from_envelope(&read)
+                    .unwrap()
+                    .as_ref(),
+                Some(event)
+            );
+        } else {
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["code"], "invalid_arguments");
+            assert!(events.is_empty());
+        }
+    }
+}
+
+#[test]
+fn lua_state_and_emit_share_conversion_and_timer_writes_are_unscoped() {
+    struct Messages(std::sync::mpsc::Sender<Value>);
+    impl contract::emit::Emit for Messages {
+        fn emit(&self, event: &Event) {
+            if let Event::ExtensionMessage(message) = event {
+                let _sent = self.0.send(message.data.clone());
+            }
+        }
+    }
+    let dir = fakes::TempDir::new("fiber-state-timer");
+    std::fs::write(dir.path().join("init.lua"), "fiber.command('test', {timeout=5000,run=function() local t={a=1,[1]=2}; state.set('mixed',t); host.emit(t); host.after(0,function() state.set('timer',true); host.emit({timer=true}) end,{timeout=5000}); return 'armed' end})").unwrap();
+    let registry = registry();
+    let held = registry.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    crate::test_support::bounded(move || {
+        let ext = crate::LuaExtension::new(
+            "goal",
+            dir.path(),
+            dir.path(),
+            fakes::clock::FakeClock::new(),
+        )
+        .with_state(held);
+        ext.set_emit(std::sync::Arc::new(Messages(tx)));
+        assert_eq!(ext.command("test", "").unwrap(), "armed");
+        let deadline = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+        assert_eq!(
+            deadline.recv_or_fail(&rx, "mixed value emitted"),
+            json!({"a":1,"1":2})
+        );
+        assert_eq!(
+            deadline.recv_or_fail(&rx, "timer state write completed"),
+            json!({"timer":true})
+        );
+    });
+    let events = registry.take_outbox();
+    let [
+        Event::ExtensionStateSet(mixed),
+        Event::ExtensionStateSet(timer),
+    ] = events.as_slice()
+    else {
+        panic!("one command and one timer write: {events:?}")
+    };
+    assert_eq!(mixed.value, json!({"a":1,"1":2}));
+    assert_eq!(timer.key, "timer");
+    assert_eq!(timer.value, true);
+    assert!(registry.take_outbox().is_empty());
+}
+
 fn registry() -> std::sync::Arc<StateRegistry> {
     StateRegistry::new(StateSeed::new())
 }

@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 /// `request` parses the same text after the yield and serde_json's parser
 /// refuses a 128th nested container. Checking with the parser itself makes
 /// the cap and the later parse agree by construction.
-const TOOL_DEPTH: usize = 127;
+const TOOL_DEPTH: usize = super::MAX_DEPTH;
 
 /// `host.tool` yields this tag, `"tool"` and the call's spec. The
 /// extension's thread runs the tool through its runner and resumes the
