@@ -5,7 +5,7 @@ struct StubJobs;
 
 impl Jobs for StubJobs {
     fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: std::path::PathBuf::from("/none"),
             source: std::io::Error::other("refused"),
         })

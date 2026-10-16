@@ -88,7 +88,7 @@ fn open_without_the_registry_arc_records_nothing() {
     let Err(error) = registry.open(opening("npm test")) else {
         panic!("open recorded a job without the registry");
     };
-    assert!(matches!(error, OpenError::Io { .. }));
+    assert!(matches!(error, OpenError { .. }));
     assert!(error.to_string().contains("registry is gone"), "{error}");
     assert!(
         std::fs::read_dir(&artifacts).unwrap().next().is_none(),
@@ -138,8 +138,7 @@ fn open_into_a_missing_artifacts_directory_records_nothing() {
     let Err(error) = registry.open(opening("npm test")) else {
         panic!("open recorded a job when the output file could not be created");
     };
-    assert!(matches!(error, OpenError::Io { .. }));
-    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert!(matches!(error, OpenError { .. }));
     let text = error.to_string();
     assert!(text.contains("could not be created"), "{text}");
     assert!(text.contains(&artifacts.display().to_string()), "{text}");

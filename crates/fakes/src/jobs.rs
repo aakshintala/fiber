@@ -160,7 +160,7 @@ impl FakeJobs {
         Self::build(dir.to_path_buf(), false)
     }
 
-    /// Every [`Jobs::open`] fails with [`OpenError::Io`]. Nothing is recorded.
+    /// Every [`Jobs::open`] fails with [`OpenError`]. Nothing is recorded.
     pub fn failing() -> Arc<Self> {
         Self::build(PathBuf::from("jobs"), true)
     }
@@ -236,7 +236,7 @@ impl FakeJobs {
 impl Jobs for FakeJobs {
     fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
         if self.fail {
-            return Err(OpenError::Io {
+            return Err(OpenError {
                 path: self.dir.join("unavailable.log"),
                 source: std::io::Error::other("background jobs are unavailable"),
             });
@@ -247,7 +247,7 @@ impl Jobs for FakeJobs {
         let path = self.dir.join(format!("{id}.log"));
         let file = match File::create(&path) {
             Ok(file) => file,
-            Err(source) => return Err(OpenError::Io { path, source }),
+            Err(source) => return Err(OpenError { path, source }),
         };
         let job_id = JobId(id.clone());
         let started = JobStarted {
