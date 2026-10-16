@@ -328,7 +328,7 @@ if [ "$(uname -s)" = Darwin ]; then
   # LEAK_SCAN_ROOT points the rule at a temp dir instead of the worktree.
   # The shell polls the stop file like the other fixtures (or exits after
   # 120 s on its own).
-  ( STOP="$stop" bash -c 'trap "" TERM; exec -a "$1/target/x" bash -c '\''trap "" TERM; while [ ! -e "$STOP" ] && [ "$SECONDS" -lt 120 ]; do sleep 0.05; done'\''' _ "$tmp" & )
+  ( STOP="$stop" bash -c 'trap "" TERM; exec -a "$1/target/x" bash -c '\''while [ ! -e "$STOP" ] && [ "$SECONDS" -lt 120 ]; do sleep 0.05; done'\''' _ "$tmp" & )
   leaker4=$(await_orphan "$tmp/target/x")
   if [ -z "$leaker4" ]; then
     echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
