@@ -7,7 +7,7 @@
 //! host call, not to any stream, through the answer sink on its driven
 //! connection (`client.rs`).
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use contract::commands::{Command, CommandLine, ReplyAnswer};
 use contract::inbox::{Ack, Rejection};
@@ -196,28 +196,24 @@ impl client::Conn {
         Self {
             id: 0,
             gate,
-            direct: None,
-            writer: None,
-            subscribed: true,
-            full: true,
-            outbox: None,
-            switches: None,
-            gone: false,
-            drive: Some((
-                answer,
-                Origin::Extension {
+            sink: client::Sink::Driven {
+                answer: Arc::new(Mutex::new(Some(answer))),
+                origin: Origin::Extension {
                     extension: extension.to_owned(),
                 },
-            )),
+            },
+            subscribed: true,
+            full: true,
+            gone: false,
         }
     }
 
     /// The sender a driven `prompt` or `steer` carries; a socket's is `Driver`.
     pub(crate) fn origin(&self) -> Origin {
-        self.drive
-            .as_ref()
-            .map(|(_, origin)| origin.clone())
-            .unwrap_or(Origin::Driver)
+        match &self.sink {
+            client::Sink::Driven { origin, .. } => origin.clone(),
+            client::Sink::Socket { .. } => Origin::Driver,
+        }
     }
 }
 

@@ -60,17 +60,44 @@ pub(crate) fn not_built(command: &str) -> String {
 pub(crate) struct Conn {
     pub(crate) id: u64,
     pub(crate) gate: Arc<Gate>,
-    pub(crate) direct: Option<UnixStream>,
-    pub(crate) writer: Option<Box<dyn Write + Send>>,
+    pub(crate) sink: Sink,
     pub(crate) subscribed: bool,
     pub(crate) full: bool,
-    pub(crate) outbox: Option<level::Outbox>,
-    pub(crate) switches: Option<mpsc::Sender<level::Switch>>,
     pub(crate) gone: bool,
-    /// The in-process driver's answer and extension: `send` and `inbox_ack`
-    /// answer it, not a stream, and a driven `prompt` or `steer` carries it.
-    /// One takes it: each command answers at once or through the inbox.
-    pub(crate) drive: Option<(Ack, Origin)>,
+}
+
+/// Where a connection's answers go: a socket writes its lines, and the
+/// in-process driver answers its host call. The two never mix, so a
+/// second send on a driven connection finds the taken answer instead of
+/// another stream.
+pub(crate) enum Sink {
+    Socket {
+        direct: Option<UnixStream>,
+        writer: Option<Box<dyn Write + Send>>,
+        subscription: Option<(level::Outbox, mpsc::Sender<level::Switch>)>,
+    },
+    Driven {
+        /// The host call's answer, taken by the first send: shared so an
+        /// acknowledgement held for the loop still finds it when a send
+        /// took it first, and taking it twice is a visible miss, never a
+        /// panic. The id stays reserved, so a retry is a duplicate.
+        answer: Arc<Mutex<Option<Ack>>>,
+        /// What a driven `prompt` or `steer` carries; a socket's is `Driver`.
+        origin: Origin,
+    },
+}
+
+impl Conn {
+    /// The subscribed connection's route to its writer, if it has one.
+    pub(crate) fn outbox(&self) -> Option<level::Outbox> {
+        match &self.sink {
+            Sink::Socket {
+                subscription: Some((outbox, _)),
+                ..
+            } => Some(outbox.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// Reads `stream` until the client hangs up or its ender stops it. `id` is
@@ -103,14 +130,14 @@ pub(crate) fn serve_connection(
     let mut conn = Conn {
         id,
         gate,
-        direct: Some(direct),
-        writer: Some(writer),
+        sink: Sink::Socket {
+            direct: Some(direct),
+            writer: Some(writer),
+            subscription: None,
+        },
         subscribed: false,
         full: false,
-        outbox: None,
-        switches: None,
         gone: false,
-        drive: None,
     };
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
@@ -132,7 +159,7 @@ pub(crate) fn serve_connection(
     if conn.full {
         conn.gate.detach();
     }
-    if let Some(outbox) = conn.outbox.take() {
+    if let Some(outbox) = conn.outbox() {
         outbox.cancel_settles();
         outbox.stop(&conn.gate.session_id);
     }
@@ -506,7 +533,15 @@ fn subscribe(
     // answer, which the writer emits before folded history. A refused
     // switch keeps this successful subscription.
     if let Some(label) = credential {
-        let Some(stream) = conn.writer.take() else {
+        let Sink::Socket {
+            direct,
+            writer,
+            subscription,
+        } = &mut conn.sink
+        else {
+            return;
+        };
+        let Some(stream) = writer.take() else {
             return;
         };
         let (ack, response, cancel) = settle_response(&conn.gate, id, last_seq);
@@ -521,20 +556,22 @@ fn subscribe(
             ack,
         ));
         conn.subscribed = true;
-        conn.outbox = Some(outbox);
-        conn.switches = Some(spawn_writer(
-            Arc::clone(&conn.gate),
-            conn.id,
-            watcher,
-            stream,
-            summary,
-            Some(Prelude {
-                response,
-                after: snapshots,
-            }),
+        *subscription = Some((
+            outbox,
+            spawn_writer(
+                Arc::clone(&conn.gate),
+                conn.id,
+                watcher,
+                stream,
+                summary,
+                Some(Prelude {
+                    response,
+                    after: snapshots,
+                }),
+            ),
         ));
         // The writer is the only writer from here.
-        drop(conn.direct.take());
+        drop(direct.take());
         return;
     }
     // The acknowledgement is written here, before the writer starts, so it
@@ -554,7 +591,10 @@ fn subscribe(
     }
     if summary {
         for line in [status, extensions].into_iter().flatten() {
-            if let Some(direct) = conn.direct.as_mut()
+            if let Sink::Socket {
+                direct: Some(direct),
+                ..
+            } = &mut conn.sink
                 && write_line(direct, &line).is_err()
             {
                 conn.gone = true;
@@ -563,20 +603,30 @@ fn subscribe(
         }
     }
     conn.subscribed = true;
-    conn.outbox = Some(outbox);
-    let Some(stream) = conn.writer.take() else {
+    let Sink::Socket {
+        direct,
+        writer,
+        subscription,
+    } = &mut conn.sink
+    else {
         return;
     };
-    conn.switches = Some(spawn_writer(
-        Arc::clone(&conn.gate),
-        conn.id,
-        watcher,
-        stream,
-        summary,
-        None,
+    let Some(stream) = writer.take() else {
+        return;
+    };
+    *subscription = Some((
+        outbox,
+        spawn_writer(
+            Arc::clone(&conn.gate),
+            conn.id,
+            watcher,
+            stream,
+            summary,
+            None,
+        ),
     ));
     // The writer is the only writer from here.
-    drop(conn.direct.take());
+    drop(direct.take());
 }
 
 fn deliver_message(
@@ -666,8 +716,14 @@ pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, me
 }
 
 fn send(conn: &mut Conn, event: Event) {
-    // The driver's acknowledgement goes to the host call, not to any stream.
-    if let Some((answer, _)) = conn.drive.take() {
+    // The driver's acknowledgement goes to the host call, not to any
+    // stream: the first send takes it, and a send past it finds the
+    // answer taken instead of another answer.
+    if let Sink::Driven { answer, .. } = &conn.sink {
+        let taken = lock(answer).take();
+        let Some(answer) = taken else {
+            return;
+        };
         if let Event::CommandAccepted(accepted) = event {
             answer.0(Ok(accepted.result));
         } else if let Event::CommandRejected(rejected) = event {
@@ -685,11 +741,15 @@ fn send(conn: &mut Conn, event: Event) {
         return;
     }
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
-    if let Some(outbox) = &conn.outbox {
+    if let Some(outbox) = conn.outbox() {
         outbox.push_kept(line);
         return;
     }
-    let Some(direct) = conn.direct.as_mut() else {
+    let Sink::Socket {
+        direct: Some(direct),
+        ..
+    } = &mut conn.sink
+    else {
         return;
     };
     if write_line(direct, &line).is_err() {
@@ -778,18 +838,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
-    // The driver's acknowledgement goes to the host call: a rejection frees
-    // the id as the socket path does.
-    if let Some((answer, _)) = conn.drive.take() {
+    // The driver's acknowledgement goes to the host call, as the socket
+    // path's does to its outbox: the guard shares the answer, so a send
+    // that took it first leaves the guard nothing to answer, and the id
+    // stays reserved, so a retry is a duplicate.
+    if let Sink::Driven { answer, .. } = &conn.sink {
+        let shared = Arc::clone(answer);
         let gate = Arc::clone(&conn.gate);
         return guard(move |result| {
+            let taken = lock(&shared).take();
+            let Some(answer) = taken else {
+                return;
+            };
             if result.is_err() {
                 gate.accepted.release(&id);
             }
             answer.0(result);
         });
     }
-    let Some(outbox) = conn.outbox.clone() else {
+    let Some(outbox) = conn.outbox() else {
         return guard(|_| {});
     };
     let gate = Arc::clone(&conn.gate);
