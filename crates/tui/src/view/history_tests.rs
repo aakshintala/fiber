@@ -368,6 +368,71 @@ fn wrapped_matches_before_a_late_selection_keep_the_selection() {
 }
 
 #[test]
+fn a_tall_selected_entry_keeps_a_narrow_slab() {
+    // Eleven rows leave one entry row. The selected entry wraps to two
+    // rows, and the frame measures every body row before it clips, so
+    // the hidden second row must not widen the slab: the window keeps
+    // only the first row (see #1792).
+    let tall = format!("fix {}", "x".repeat(65));
+    let app = searching(80, 11, &[&tall], "fix");
+    let completions = panel(&app);
+    let (buf, _, slab) = drawn(&completions, 80, 11);
+    assert_eq!(slab.width, 40, "{}", crate::view::text(&buf));
+    // The hidden second row's run of x's is not among the panel's rows.
+    assert!(
+        !crate::view::text(&buf).contains("xx"),
+        "{}",
+        crate::view::text(&buf)
+    );
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{}", crate::view::text(&buf));
+    assert!(
+        row_text(&buf, 80, bars[0]).contains("fix"),
+        "{}",
+        crate::view::text(&buf)
+    );
+    // The whole screen agrees: a 40-column slab. (The conversation
+    // behind the panel still shows the prompt's own x's.)
+    let shown = screen(&app, 80, 11);
+    let edge = shown
+        .lines()
+        .find(|line| line.contains('▄'))
+        .expect("no top edge");
+    assert_eq!(edge.chars().filter(|ch| *ch == '▄').count(), 40, "{shown}");
+}
+
+#[test]
+fn an_entry_exactly_filling_the_room_shows_alone() {
+    // Eleven rows leave one entry row and the selected entry takes
+    // exactly it, so no truncation drops a row and no neighbour fits.
+    let app = searching(80, 11, &["fix one", "fix two"], "fix");
+    let completions = panel(&app);
+    let (buf, _, slab) = drawn(&completions, 80, 11);
+    assert_eq!(slab.width, 40, "{}", crate::view::text(&buf));
+    let shown = crate::view::text(&buf);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    assert!(row_text(&buf, 80, bars[0]).contains("fix two"), "{shown}");
+    assert!(!shown.contains("fix one"), "{shown}");
+}
+
+#[test]
+fn an_entry_one_row_short_of_the_room_keeps_its_neighbour() {
+    // Thirteen rows leave three entry rows. The selected tall entry
+    // takes two, one short of the room, so the next match fills the
+    // last row exactly.
+    let tall = format!("fix {}", "x".repeat(65));
+    let app = searching(80, 13, &["fix small", &tall], "fix");
+    let completions = panel(&app);
+    let (buf, _, _) = drawn(&completions, 80, 13);
+    let shown = crate::view::text(&buf);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 2, "{shown}");
+    assert!(row_text(&buf, 80, bars[0]).contains("fix"), "{shown}");
+    assert!(shown.contains("fix small"), "{shown}");
+}
+
+#[test]
 fn down_past_the_end_holds_the_selection() {
     let mut app = searching(80, 24, &["fix one", "fix two"], "fix");
     for _ in 0..5 {

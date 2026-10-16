@@ -127,9 +127,10 @@ fn body(completions: &Completions, wrap: usize, fit: usize) -> Vec<Row> {
     if fit == 0 {
         return body;
     }
-    // A selected entry taller than the room takes the window alone: the
-    // frame clips its rows from the bottom, so its first rows show and
-    // the others drop out.
+    // The overlay measures every body row before it clips, so a row
+    // the frame would hide still widens the slab: the window keeps
+    // only the rows that fit, and a selected entry taller than the room
+    // keeps its first rows while the other entries drop out.
     let mut at = sel;
     let mut take = 1usize;
     let mut used = sel_height;
@@ -151,14 +152,17 @@ fn body(completions: &Completions, wrap: usize, fit: usize) -> Vec<Row> {
         used = used.saturating_add(next);
         take = take.saturating_add(1);
     }
+    let mut shown = Vec::new();
     for (n, entry) in entries.iter().skip(at).take(take).enumerate() {
-        body.extend(entry_rows(
+        shown.extend(entry_rows(
             entry,
             &completions.query,
             Some(at + n) == focused,
             wrap,
         ));
     }
+    shown.truncate(fit);
+    body.extend(shown);
     body
 }
 
