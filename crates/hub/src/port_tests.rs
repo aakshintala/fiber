@@ -1016,8 +1016,6 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     );
     // A test-owned subscriber on a clone of the bridged socket, carrying
     // the websocket's shutdown like the connection's own registrations.
-    // Its writer blocks once the bridge fills, which the bound wait
-    // below ensures whatever order the fill phase left.
     let owned = Arc::new(Mutex::new(sub_sock));
     let closer = crate::feed::Closer {
         stream: closer_sock,
@@ -1031,12 +1029,45 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .attention
         .listen(Arc::clone(&owned), closer, retired)
         .unwrap();
+    // Force the drained order from the outside peer on every run: read
+    // until the first small line's bytes arrive, which proves the pump
+    // drained the bridge and the line went through, then stop reading.
+    // The bound wait below refills from here whatever the drain left.
+    let first = waiting_with("run r0");
+    drop(
+        hub.feed
+            .attention
+            .notify("s_0000000000000000", None, &first, false),
+    );
+    let drained = Deadline::after(DEADLINE);
+    let needle: &[u8] = b"run r0";
+    let mut overlap = Vec::new();
+    loop {
+        if drained.left().is_zero() {
+            panic!("the TCP peer to drain the first small line");
+        }
+        let mut chunk = [0u8; 4096];
+        let n = match tcp_client.read(&mut chunk) {
+            Ok(0) => panic!("the TCP peer to drain the first small line: the stream closed"),
+            Ok(n) => n,
+            Err(error) => panic!("the TCP peer to drain the first small line: {error}"),
+        };
+        // The frame may split the needle across reads, so each search
+        // covers the new chunk plus the previous needle-length overlap.
+        overlap.extend_from_slice(&chunk[..n]);
+        if overlap.windows(needle.len()).any(|w| w == needle) {
+            break;
+        }
+        let keep = overlap.len().min(needle.len() - 1);
+        overlap.drain(..overlap.len() - keep);
+    }
     // Notify one small line per wait poll until the queue bound fires
-    // and hands back the shutdowns: with the peer not reading, the bridge
-    // fills and the bound fires whatever order the fill phase left, and
-    // a bridge that never fills fails this wait by name. The cap fails by
-    // name through the assert below.
-    let bound_lines = Arc::new(AtomicU64::new(0));
+    // and hands back the shutdowns: the peer stops reading after the
+    // drain above, so the bridge refills and the bound fires whatever
+    // the drain left, and a bridge that never fills fails this wait by
+    // name. The cap fails by name through the assert below.
+    // The drain's first line is already out: resume numbering after it.
+    let bound_lines = Arc::new(AtomicU64::new(1));
     let bound_hub = Arc::clone(&hub);
     let bound_closers: Arc<Mutex<Vec<crate::feed::Closer>>> = Arc::new(Mutex::new(Vec::new()));
     let bound_out = Arc::clone(&bound_closers);
@@ -1064,10 +1095,21 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         std::mem::take(&mut *out)
     };
     assert!(!closers.is_empty(), "the bound fired");
+    // The block wait runs on a thread the test joins: joining it ends the
+    // last other clone before the count assert, so the assert reads the
+    // joined state at once. Feed's stop already joined every writer.
+    let (block_tx, block_rx) = mpsc::channel();
     let blocked = Arc::clone(&owned);
-    await_true("the Unix writer to block in its write", move || {
-        blocked.try_lock().is_err()
+    let block_wait = thread::spawn(move || {
+        while blocked.try_lock().is_ok() {
+            thread::yield_now();
+        }
+        block_tx.send(()).unwrap_or(());
     });
+    Deadline::after(crate::testkit::DEADLINE)
+        .recv(&block_rx)
+        .expect("the Unix writer to block in its write");
+    block_wait.join().expect("the block wait thread to join");
     crate::feed::close_connections(closers, UnixStream::shutdown);
     assert_eq!(
         hub.feed.attention.listeners(),
@@ -1100,18 +1142,5 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .expect("the read loop to return");
     assert_eq!(hub.clients(), 0, "the count released");
     crate::testkit::stop_within(&hub.feed);
-    // The block wait's helper thread holds the last other clone until it
-    // exits, and the retired writer holds its own until it ends: the
-    // count reads 1 only after both end, so wait for it under a deadline
-    // instead of asserting a count another thread still owns.
-    let joined = Deadline::after(DEADLINE);
-    loop {
-        if Arc::strong_count(&owned) == 1 {
-            break;
-        }
-        if joined.left().is_zero() {
-            panic!("the writer ended and joined");
-        }
-        thread::yield_now();
-    }
+    assert_eq!(Arc::strong_count(&owned), 1, "the writer ended and joined");
 }
