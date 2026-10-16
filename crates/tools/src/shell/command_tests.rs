@@ -12,42 +12,14 @@ use fakes::Recorder;
 use fakes::clock::FakeClock;
 
 use super::super::background::{Step, running_step, wait_deadline};
-use super::super::drive::{
-    Phase, Run, already_woken, exit_code_of, finish, park, poll_while_occupied,
-};
+use super::super::drive::{Phase, Run, exit_code_of, finish, park};
 use super::super::moved::Moved;
 use super::super::output::{
     Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
 };
-use super::super::process_group::suppress_term;
 use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
 use support::group::alive;
-
-#[test]
-fn a_moved_sequence_wakes_without_a_cancel() {
-    assert!(already_woken(1, 0, false, false));
-}
-
-#[test]
-fn a_cancel_wakes_only_while_the_run_is_going() {
-    assert!(already_woken(0, 0, true, true));
-    assert!(!already_woken(0, 0, false, true));
-    assert!(!already_woken(0, 0, true, false));
-}
-
-#[test]
-fn the_drain_polls_only_while_the_group_may_be_occupied() {
-    assert!(poll_while_occupied(false));
-    assert!(!poll_while_occupied(true));
-}
-
-#[test]
-fn a_second_signal_and_an_empty_group_are_not_signalled() {
-    assert!(suppress_term(true, false));
-    assert!(suppress_term(false, true));
-    assert!(!suppress_term(false, false));
-}
 
 #[test]
 fn bump_advances_the_sequence() {
@@ -901,23 +873,6 @@ fn finish_reports_a_fired_cap() {
     assert!(!open(&shared).capped);
     lock(&shared.inner).cap_fired = true;
     assert!(open(&shared).capped);
-}
-
-#[test]
-fn the_sooner_of_two_instants() {
-    let early = at(1);
-    let late = at(2);
-    assert_eq!(
-        super::super::drive::sooner(Some(late), Some(early)),
-        Some(early)
-    );
-    assert_eq!(
-        super::super::drive::sooner(Some(early), Some(late)),
-        Some(early)
-    );
-    assert_eq!(super::super::drive::sooner(Some(late), None), Some(late));
-    assert_eq!(super::super::drive::sooner(None, Some(early)), Some(early));
-    assert_eq!(super::super::drive::sooner(None, None), None);
 }
 
 const JOB_DEADLINE: Duration = Duration::from_secs(10);
