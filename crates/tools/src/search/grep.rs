@@ -13,8 +13,8 @@ use super::bre;
 use super::fallback;
 use super::find::{basename, glob_match};
 use super::grep_args::{self, Mode, Options};
+use super::matches::{LIMIT, MATCHES_ENV, MatchFile};
 use super::notice;
-use super::matches::{MatchFile, MATCHES_ENV, LIMIT};
 use super::walk::{self, DirRoot, Root};
 use super::{Out, Outcome, flush_exit};
 
@@ -31,7 +31,14 @@ pub fn grep_main(args: Vec<OsString>) -> i32 {
     let mut stderr = std::io::stderr().lock();
     let side = std::env::var_os(MATCHES_ENV).map(PathBuf::from);
     let outcome = match side.as_deref() {
-        Some(path) => run_recording(&cwd, &args, &mut input, &mut buffered, &mut stderr, Some((path, LIMIT))),
+        Some(path) => run_recording(
+            &cwd,
+            &args,
+            &mut input,
+            &mut buffered,
+            &mut stderr,
+            Some((path, LIMIT)),
+        ),
         None => run(&cwd, &args, &mut input, &mut buffered, &mut stderr),
     };
     let flushed = buffered.flush();
@@ -95,8 +102,8 @@ pub(crate) fn run_recording(
     } else {
         options.paths.clone()
     };
-    let lines = !options.count && !options.files_with_matches
-        && !options.only_matching && !options.invert;
+    let lines =
+        !options.count && !options.files_with_matches && !options.only_matching && !options.invert;
     let files = !paths.is_empty() && !paths.iter().any(|path| path == Path::new("-"));
     if lines && files {
         search.matches = side.and_then(|(path, limit)| MatchFile::create(path, limit));
@@ -686,10 +693,12 @@ impl Emit<'_, '_> {
         if let Some(matches) = self.matches.as_mut() {
             let mut spans = Vec::new();
             if !context {
-                self.matcher.find_iter_at(text, 0, |span| {
-                    spans.push((span.start(), span.end()));
-                    true
-                }).unwrap_or(());
+                self.matcher
+                    .find_iter_at(text, 0, |span| {
+                        spans.push((span.start(), span.end()));
+                        true
+                    })
+                    .unwrap_or(());
             }
             matches.record(self.path, no, text, &spans, context);
         }

@@ -64,7 +64,10 @@ fn text_details_name_the_first_returned_line() {
     fs::write(dir.path().join("ten.txt"), "line\n".repeat(10)).unwrap();
     fs::write(dir.path().join("empty.txt"), "").unwrap();
     for (arguments, expected) in [
-        (json!({"path": "ten.txt", "offset": 5}), json!({"start_line": 5})),
+        (
+            json!({"path": "ten.txt", "offset": 5}),
+            json!({"start_line": 5}),
+        ),
         (json!({"path": "ten.txt"}), json!({"start_line": 1})),
         (json!({"path": "empty.txt"}), json!({"start_line": 1})),
     ] {
@@ -81,20 +84,30 @@ fn text_details_name_the_first_returned_line() {
 fn image_details_do_not_number_lines() {
     let dir = TempDir::new("fiber-read-image-details");
     fs::write(dir.path().join("a.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
-    let fiber = fakes::script(dir.path(), "image-details", r#"cat >/dev/null
-printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#);
+    let fiber = fakes::script(
+        dir.path(),
+        "image-details",
+        r#"cat >/dev/null
+printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
+    );
     let (send, recv) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let files = Files::new(dir.path().to_path_buf())
-            .with_images(fiber, dir.path().join("artifacts"));
-        let output = files.read().run(&args(json!({"path": "a.png"})),
-            &CancelToken::new(), &Recorder::default());
+        let files =
+            Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
+        let output = files.read().run(
+            &args(json!({"path": "a.png"})),
+            &CancelToken::new(),
+            &Recorder::default(),
+        );
         send.send(output).unwrap();
     });
     let output = fakes::Deadline::after(std::time::Duration::from_secs(10))
         .recv_or_fail(&recv, "image result");
     assert!(output.error.is_none());
-    assert!(matches!(output.content.get(1), Some(ContentPart::Image { .. })));
+    assert!(matches!(
+        output.content.get(1),
+        Some(ContentPart::Image { .. })
+    ));
     assert_eq!(output.details, None);
 }
 

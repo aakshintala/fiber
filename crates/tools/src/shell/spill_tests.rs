@@ -85,9 +85,15 @@ fn spilled_raw_counts_do_not_count_lossy_replacement_bytes() {
     let file = std::fs::read(dir.path().join("s_test.txt")).unwrap();
     assert_eq!(spilled.head_bytes, 6);
     assert_eq!(spilled.tail_bytes, 22);
-    assert_eq!(spilled.head_bytes + spilled.removed + spilled.tail_bytes, file.len() as u64);
+    assert_eq!(
+        spilled.head_bytes + spilled.removed + spilled.tail_bytes,
+        file.len() as u64
+    );
     assert_eq!(String::from_utf8_lossy(&file[..6]), spilled.head);
-    assert_eq!(String::from_utf8_lossy(&file[file.len()-22..]), spilled.tail);
+    assert_eq!(
+        String::from_utf8_lossy(&file[file.len() - 22..]),
+        spilled.tail
+    );
 }
 
 #[test]

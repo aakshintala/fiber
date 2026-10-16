@@ -117,13 +117,19 @@ fn a_pdf_is_unsupported_and_names_text_only() {
 fn edit_details_hold_only_the_exact_unified_diff() {
     let dir = TempDir::new("fiber-edit-details");
     fs::write(dir.path().join("a.txt"), "before\n").unwrap();
-    let output = edit_of(dir.path(), json!({"path": "a.txt", "edits": [
-        {"old_text": "before", "new_text": "after"}
-    ]}));
+    let output = edit_of(
+        dir.path(),
+        json!({"path": "a.txt", "edits": [
+            {"old_text": "before", "new_text": "after"}
+        ]}),
+    );
     let shown = path_text(&resolved(dir.path(), "a.txt"));
-    assert_eq!(output.details, Some(json!({"diff": format!(
-        "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
-    )})));
+    assert_eq!(
+        output.details,
+        Some(json!({"diff": format!(
+            "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
+        )}))
+    );
 }
 
 #[test]

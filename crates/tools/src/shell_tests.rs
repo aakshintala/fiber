@@ -47,25 +47,38 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 fn shell_attaches_only_strict_foreground_grep_match_records_and_cleans_up() {
     let dir = fakes::TempDir::new("fiber-shell-match-details");
     std::fs::write(dir.path().join("a.txt"), "needle\n").unwrap();
-    let fiber = fakes::script(dir.path(), "search-matches", r#"
+    let fiber = fakes::script(
+        dir.path(),
+        "search-matches",
+        r#"
 printf '%s' "$FIBER_GREP_MATCHES" > called
 printf '%s\n' '{"path":"a.txt","line":1,"text":"needle","spans":[[0,6]],"context":false}' '{"path":"a.txt","line":2,"text":"context","spans":[],"context":true}' > "$FIBER_GREP_MATCHES"
 printf 'needle\n'
-"#);
-    for (command, attaches) in [("grep needle a.txt",true), ("'grep' needle a.txt",true),
-        ("grep needle a.txt 2>/dev/null",true), ("grep needle a.txt 2>&1",true),
-        ("cat a.txt | grep needle",false), ("grep needle a.txt; true",false),
-        ("grep needle a.txt > out",false), ("command grep needle a.txt",false)] {
-        let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber.clone());
+"#,
+    );
+    for (command, attaches) in [
+        ("grep needle a.txt", true),
+        ("'grep' needle a.txt", true),
+        ("grep needle a.txt 2>/dev/null", true),
+        ("grep needle a.txt 2>&1", true),
+        ("cat a.txt | grep needle", false),
+        ("grep needle a.txt; true", false),
+        ("grep needle a.txt > out", false),
+        ("command grep needle a.txt", false),
+    ] {
+        let shell =
+            Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber.clone());
         let output = run_details_call(shell, args(command));
         assert!(output.error.is_none(), "{command}: {:?}", output.error);
         let details = output.details.unwrap();
         assert_eq!(details["command"], command);
         assert_eq!(details["exit_code"], 0);
-        let expected = attaches.then(|| json!([{"path":"a.txt", "lines":[
-            {"line":1,"text":"needle","spans":[[0,6]]},
-            {"line":2,"text":"context","spans":[]}
-        ]}]));
+        let expected = attaches.then(|| {
+            json!([{"path":"a.txt", "lines":[
+                {"line":1,"text":"needle","spans":[[0,6]]},
+                {"line":2,"text":"context","spans":[]}
+            ]}])
+        });
         assert_eq!(details.get("matches"), expected.as_ref(), "{command}");
         if let Ok(called) = std::fs::read_to_string(dir.path().join("called")) {
             let path = Path::new(&called).parent().unwrap();
@@ -79,32 +92,88 @@ printf 'needle\n'
 #[test]
 fn shell_ignores_missing_or_malformed_side_files_and_search_off_carries_no_variable() {
     let dir = fakes::TempDir::new("fiber-shell-match-missing");
-    for (name, body) in [("missing", "printf needle"),
-        ("malformed", "printf 'not json\\n' > \"$FIBER_GREP_MATCHES\"; printf needle")] {
+    for (name, body) in [
+        ("missing", "printf needle"),
+        (
+            "malformed",
+            "printf 'not json\\n' > \"$FIBER_GREP_MATCHES\"; printf needle",
+        ),
+    ] {
         let fiber = fakes::script(dir.path(), name, body);
         let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber);
         let output = run_details_call(shell, args("grep needle a.txt"));
-        assert_eq!(output.details, Some(json!({"command":"grep needle a.txt", "exit_code":0})));
+        assert_eq!(
+            output.details,
+            Some(json!({"command":"grep needle a.txt", "exit_code":0}))
+        );
         assert!(text(&output).contains("needle"));
     }
-    let output = run_details_call(Shell::new(dir.path().to_path_buf(), FakeClock::new()),
-        args("printf '%s' \"${FIBER_GREP_MATCHES-unset}\""));
+    let output = run_details_call(
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()),
+        args("printf '%s' \"${FIBER_GREP_MATCHES-unset}\""),
+    );
     assert_eq!(text(&output), "unset\nExit code 0.\n");
+}
+
+#[test]
+fn a_foreground_grep_moved_after_writing_matches_keeps_only_receipt_details() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-matches");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let fiber = fakes::script(
+        dir.path(),
+        "moved-search",
+        r#"
+printf '%s' "$FIBER_GREP_MATCHES" > called
+printf '%s\n' '{"path":"a","line":1,"text":"x","spans":[[0,1]],"context":false}' > "$FIBER_GREP_MATCHES"
+mkfifo block
+exec 3<>block
+/bin/bash -c 'read -r -t 120 line <&3' &
+"#,
+    );
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_search(fiber)
+        .with_jobs(jobs.clone());
+    let output = run_details_call(shell, args("grep x a"));
+    // The receipt proves the group moved; release the descendant before assertions.
+    let mut release = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.path().join("block"))
+        .unwrap();
+    std::io::Write::write_all(&mut release, b"done\n").unwrap();
+    let ended = jobs
+        .ended(Duration::from_secs(10))
+        .expect("moved grep descendant ended");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(output.details, Some(json!({"command":"grep x a"})));
+    assert!(output.process.is_none());
+    let called = std::fs::read_to_string(dir.path().join("called")).unwrap();
+    assert!(!Path::new(&called).parent().unwrap().exists());
 }
 
 #[test]
 fn background_search_has_no_match_side_channel() {
     let dir = fakes::TempDir::new("fiber-shell-background-matches");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
-    let fiber = fakes::script(dir.path(), "background-search", "printf '%s' \"${FIBER_GREP_MATCHES-unset}\"");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber).with_jobs(jobs.clone());
+    let fiber = fakes::script(
+        dir.path(),
+        "background-search",
+        "printf '%s' \"${FIBER_GREP_MATCHES-unset}\"",
+    );
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_search(fiber)
+        .with_jobs(jobs.clone());
     let mut arguments = args("grep needle a.txt");
     arguments.insert("run_in_background".into(), json!(true));
     let output = run_details_call(shell, arguments);
-    let ended = jobs.ended(Duration::from_secs(10)).expect("background grep ended");
+    let ended = jobs
+        .ended(Duration::from_secs(10))
+        .expect("background grep ended");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(output.details, Some(json!({"command":"grep needle a.txt"})));
-    let [JobRecord::Started(started)] = output.jobs.as_slice() else { panic!("one job"); };
+    let [JobRecord::Started(started)] = output.jobs.as_slice() else {
+        panic!("one job");
+    };
     assert!(text(&output).contains("Started in the background."));
     let file = dir.path().join(&started.output_path);
     assert_eq!(std::fs::read_to_string(file).unwrap(), "unset");
@@ -431,28 +500,70 @@ fn result_lines_name_what_was_observed() {
 
 #[test]
 fn shell_details_describe_the_command_and_reaped_status() {
-    use std::os::unix::process::ExitStatusExt;
     use super::command::StopKind;
+    use std::os::unix::process::ExitStatusExt;
     let cases = [
-        (Some(0), None, false, Some("c"), Some(json!({"command":"c", "exit_code":0}))),
-        (Some(256), None, false, Some("c"), Some(json!({"command":"c", "exit_code":1}))),
-        (Some(9), None, false, Some("c"), Some(json!({"command":"c", "signal":"SIGKILL"}))),
-        (Some(9), Some(StopKind::Timeout), false, Some("c"), Some(json!({"command":"c", "signal":"SIGKILL"}))),
+        (
+            Some(0),
+            None,
+            false,
+            Some("c"),
+            Some(json!({"command":"c", "exit_code":0})),
+        ),
+        (
+            Some(256),
+            None,
+            false,
+            Some("c"),
+            Some(json!({"command":"c", "exit_code":1})),
+        ),
+        (
+            Some(9),
+            None,
+            false,
+            Some("c"),
+            Some(json!({"command":"c", "signal":"SIGKILL"})),
+        ),
+        (
+            Some(9),
+            Some(StopKind::Timeout),
+            false,
+            Some("c"),
+            Some(json!({"command":"c", "signal":"SIGKILL"})),
+        ),
         (None, None, true, Some("c"), Some(json!({"command":"c"}))),
         (None, None, false, Some("c"), Some(json!({"command":"c"}))),
         (Some(0), None, false, None, None),
     ];
     for (raw, stop, indeterminate, command, expected) in cases {
-        let output = super::assemble(super::Limit { ms: 1, monitor: false }, Finished {
-            output: Kept::Whole(Vec::new()),
-            status: raw.map(std::process::ExitStatus::from_raw),
-            stop, indeterminate, held_open: false, sent_signal: false,
-            capped: false, flooded: false,
-        }, None, command);
+        let output = super::assemble(
+            super::Limit {
+                ms: 1,
+                monitor: false,
+            },
+            Finished {
+                output: Kept::Whole(Vec::new()),
+                status: raw.map(std::process::ExitStatus::from_raw),
+                stop,
+                indeterminate,
+                held_open: false,
+                sent_signal: false,
+                capped: false,
+                flooded: false,
+            },
+            None,
+            command,
+        );
         assert_eq!(output.details, expected, "raw={raw:?}, stop={stop:?}");
     }
-    let output = from_spawn(Err(std::io::Error::other("missing")),
-        super::Limit { ms: 1, monitor: false }, "c");
+    let output = from_spawn(
+        Err(std::io::Error::other("missing")),
+        super::Limit {
+            ms: 1,
+            monitor: false,
+        },
+        "c",
+    );
     assert_eq!(output.details, Some(json!({"command":"c"})));
 }
 
@@ -463,11 +574,15 @@ fn shell_details_keep_the_argument_not_the_search_prelude() {
         let dir = fakes::TempDir::new("fiber-shell-command-details");
         let fiber = fakes::script(dir.path(), "search", "exit 0");
         let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber);
-        send.send(shell.run(&args("exit 3"), &CancelToken::new(), &Recorder::default())).unwrap();
+        send.send(shell.run(&args("exit 3"), &CancelToken::new(), &Recorder::default()))
+            .unwrap();
     });
-    let output = fakes::Deadline::after(Duration::from_secs(10))
-        .recv_or_fail(&recv, "shell details");
-    assert_eq!(output.details, Some(json!({"command":"exit 3", "exit_code":3})));
+    let output =
+        fakes::Deadline::after(Duration::from_secs(10)).recv_or_fail(&recv, "shell details");
+    assert_eq!(
+        output.details,
+        Some(json!({"command":"exit 3", "exit_code":3}))
+    );
 }
 
 #[test]
@@ -477,7 +592,9 @@ fn a_spawn_failure_is_tool_error_with_no_process() {
         super::Limit {
             ms: 1,
             monitor: false,
-        }, "c");
+        },
+        "c",
+    );
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(output.process.is_none());
     assert!(text(&output).contains("could not be started"));
@@ -496,7 +613,9 @@ fn execute_fails_when_the_program_does_not_exist() {
         &Recorder::default(),
         super::command::MovePolicy::Stay,
         None,
-        None, None);
+        None,
+        None,
+    );
     assert!(err.is_err());
 }
 
@@ -799,7 +918,9 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
             capped: false,
             flooded: false,
         },
-        None, None);
+        None,
+        None,
+    );
     assert!(output.content.is_empty());
     assert!(output.error.is_none());
     let spilled = output.spilled.expect("spilled is set");
@@ -836,7 +957,9 @@ fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
             capped: false,
             flooded: false,
         },
-        None, None);
+        None,
+        None,
+    );
     assert!(output.content.is_empty());
     assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
     let process = output.process.expect("a spilled output names its process");
@@ -873,7 +996,9 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
             artifacts(&dir),
             vec![b'x'; 20_000],
         )))),
-        Some(line), None);
+        Some(line),
+        None,
+    );
     let spilled = spilled.spilled.expect("spilled is set");
     let kept = spilled.file.expect("kept");
     let file = std::fs::read_to_string(&kept.path).unwrap();
@@ -883,7 +1008,12 @@ fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
         "{}",
         spilled.tail
     );
-    let whole = super::assemble(limit, finished(Kept::Whole(b"hi".to_vec())), Some(line), None);
+    let whole = super::assemble(
+        limit,
+        finished(Kept::Whole(b"hi".to_vec())),
+        Some(line),
+        None,
+    );
     assert_eq!(
         text(&whole),
         format!("hi\n{line}\nExit code 0.\n"),

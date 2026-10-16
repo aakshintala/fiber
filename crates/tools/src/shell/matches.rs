@@ -15,7 +15,10 @@ pub(super) struct MatchDir {
 
 impl MatchDir {
     pub(super) fn create() -> Option<Self> {
-        let path = std::env::temp_dir().join(format!("fiber-grep-{:016x}", RandomState::new().hash_one(())));
+        let path = std::env::temp_dir().join(format!(
+            "fiber-grep-{:016x}",
+            RandomState::new().hash_one(())
+        ));
         std::fs::DirBuilder::new().mode(0o700).create(&path).ok()?;
         Some(Self { path })
     }
@@ -79,16 +82,25 @@ pub(super) fn read(path: &Path, limit: u64) -> Option<Value> {
     for raw in text.strip_suffix('\n')?.split('\n') {
         let record: Record = serde_json::from_str(raw).ok()?;
         for [start, end] in &record.spans {
-            if start > end || *end > record.text.len()
-                || !record.text.is_char_boundary(*start) || !record.text.is_char_boundary(*end)
+            if start > end
+                || *end > record.text.len()
+                || !record.text.is_char_boundary(*start)
+                || !record.text.is_char_boundary(*end)
             {
                 return None;
             }
         }
-        let line = Line { line: record.line, text: record.text, spans: record.spans };
+        let line = Line {
+            line: record.line,
+            text: record.text,
+            spans: record.spans,
+        };
         match groups.last_mut().filter(|group| group.path == record.path) {
             Some(group) => group.lines.push(line),
-            None => groups.push(Group { path: record.path, lines: vec![line] }),
+            None => groups.push(Group {
+                path: record.path,
+                lines: vec![line],
+            }),
         }
     }
     serde_json::to_value(groups).ok()

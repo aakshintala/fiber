@@ -28,20 +28,50 @@ struct Record<'a> {
 
 impl MatchFile {
     pub(crate) fn create(path: &Path, limit: u64) -> Option<Self> {
-        let file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).ok()?;
-        Some(Self { file: Some(file), path: path.to_owned(), remaining: limit })
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .ok()?;
+        Some(Self {
+            file: Some(file),
+            path: path.to_owned(),
+            remaining: limit,
+        })
     }
 
-    pub(crate) fn record(&mut self, path: &[u8], line: u64, raw: &[u8], spans: &[(usize, usize)], context: bool) {
-        let Some(file) = self.file.as_mut() else { return; };
+    pub(crate) fn record(
+        &mut self,
+        path: &[u8],
+        line: u64,
+        raw: &[u8],
+        spans: &[(usize, usize)],
+        context: bool,
+    ) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
         let spans = match std::str::from_utf8(raw) {
-            Ok(text) => spans.iter().filter(|(start, end)| start < end)
-                .map(|(start, end)| [text.floor_char_boundary(*start), text.ceil_char_boundary(*end)])
+            Ok(text) => spans
+                .iter()
+                .filter(|(start, end)| start < end)
+                .map(|(start, end)| {
+                    [
+                        text.floor_char_boundary(*start),
+                        text.ceil_char_boundary(*end),
+                    ]
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
-        let record = Record { path: String::from_utf8_lossy(path), line,
-            text: String::from_utf8_lossy(raw), spans, context };
+        let record = Record {
+            path: String::from_utf8_lossy(path),
+            line,
+            text: String::from_utf8_lossy(raw),
+            spans,
+            context,
+        };
         // These strings and integers have no fallible JSON representation.
         let mut bytes = serde_json::to_vec(&record).unwrap_or_default();
         bytes.push(b'\n');

@@ -1,7 +1,7 @@
 //! Preparing a child command's environment.
 
-use std::process::Command;
 use std::ffi::OsStr;
+use std::process::Command;
 
 pub(super) fn carried(key: &OsStr) -> bool {
     key != "BASH_ENV"

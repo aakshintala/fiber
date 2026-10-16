@@ -313,7 +313,9 @@ impl Tool for Shell {
             spill,
             side.as_deref(),
         ) {
-            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit, &parsed.command),
+            Ok(command::Ran::Finished(finished)) => {
+                from_spawn(Ok(finished), limit, &parsed.command)
+            }
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
                 Some(jobs) => background::take(
                     *moved,
@@ -334,7 +336,8 @@ impl Tool for Shell {
             },
             Err(err) => from_spawn(Err(err), limit, &parsed.command),
         };
-        if output.process.is_some() && classify::one_grep(&parsed.command)
+        if output.process.is_some()
+            && classify::one_grep(&parsed.command)
             && let Some(side) = side
             && let Some(matches) = matches::read(&side, crate::search::matches::LIMIT)
             && let Some(Value::Object(details)) = output.details.as_mut()
@@ -592,7 +595,12 @@ fn details(command: &str, process: Option<&Process>) -> Value {
 /// opened, goes before the closing line, for a whole and a spilled output
 /// alike. A spilled output carries no text parts: the loop takes its text
 /// from the spill alone.
-pub(crate) fn assemble(limit: Limit, finished: Finished, extra: Option<&str>, command: Option<&str>) -> Output {
+pub(crate) fn assemble(
+    limit: Limit,
+    finished: Finished,
+    extra: Option<&str>,
+    command: Option<&str>,
+) -> Output {
     let mut output = assemble_output(limit, finished, extra);
     output.details = command.map(|command| details(command, output.process.as_ref()));
     output

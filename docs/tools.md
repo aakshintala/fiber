@@ -129,7 +129,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   the processed file (`docs/model-routing.md`, "Image limits") and referenced
   by path, never inlined as base64 in the log.
 - The loop reads `status`, `error.code`, `control` and the declared effects,
-  never `content` or `details`. A tool's prose cannot steer control flow.
+  never `content` or `details`, except that it drops `details.matches` when a
+  hook rewrote the output (Shell, "Result and output"). A tool's prose cannot steer control flow.
 - A `failed` status is sent to the provider as that protocol's error flag on
   the tool result.
 
@@ -556,11 +557,20 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
   command and how it ended. When the command is a single built-in `grep`
-  over files ("Search"), `details` also holds `"matches"`: one
+  over files that prints lines ("Search"), `details` also holds `"matches"`: one
   `{ "path", "lines" }` per file in the order printed, each line a
   `{ "line", "text", "spans" }`: its line number, its text, and the
-  `[start, end]` byte ranges of the matches in it, empty on a context line,
-  so a client draws matches by file with the matched text picked out. A `grep` reading its standard input, or in a pipeline, adds none.
+  `[start, end]` byte ranges of the matches in it, each widened to whole
+  characters, and empty on a line that is not UTF-8 text, whose `text` holds
+  U+FFFD for bytes that are not, and empty on a context line,
+  so a client draws matches by file with the matched text picked out. A `grep`
+  reading its standard input, or in a pipeline, adds none, as do `-c`, `-l`,
+  `-o`, `-v` and a call the system `grep` runs. The built-in `grep` writes the
+  matches to a temporary file per foreground call, named in `FIBER_GREP_MATCHES`,
+  at most 1 MiB; the shell tool attaches them only when its parse finds one
+  built-in `grep` over files and never runs the search again. When an
+  `after_tool` hook rewrites the output and returns no `details`, the loop
+  drops `matches`.
 - Output follows "Bounded results": the default 16 KiB cap applies, and the
   shell keeps the first 8 KiB and the last 8 KiB. The start is where a
   command reports its setup, its first error or its first matches; the end is

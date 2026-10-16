@@ -151,7 +151,13 @@ impl Loop {
                 details,
                 artifact,
             } => {
-                let details = details.or_else(|| if content.is_some() { without_matches(ran.details) } else { ran.details });
+                let details = details.or_else(|| {
+                    if content.is_some() {
+                        without_matches(ran.details)
+                    } else {
+                        ran.details
+                    }
+                });
                 let (parts, full) = match content {
                     Some(text) if text.is_empty() => (Some(Vec::new()), text),
                     Some(text) => (None, text),
@@ -344,7 +350,13 @@ impl Loop {
                 details: hook_details,
                 artifact: hook_artifact,
             } => {
-                let details = hook_details.or_else(|| if content.is_some() { without_matches(details) } else { details });
+                let details = hook_details.or_else(|| {
+                    if content.is_some() {
+                        without_matches(details)
+                    } else {
+                        details
+                    }
+                });
                 let replaces = content.is_some();
                 let full = match content {
                     Some(text) => lined(&text),
@@ -474,7 +486,13 @@ impl Loop {
                 details: hook_details,
                 artifact,
             } => {
-                let details = hook_details.or_else(|| if content.is_some() { without_matches(details) } else { details });
+                let details = hook_details.or_else(|| {
+                    if content.is_some() {
+                        without_matches(details)
+                    } else {
+                        details
+                    }
+                });
                 match content {
                     // Replacement `content` is capped as without a spill:
                     // the hook's artifact text goes to `<action_id>.txt`.
@@ -557,7 +575,11 @@ fn replace_spilled(log: &Log, path: &std::path::Path, bytes: &[u8]) -> Result<()
 /// `content` a hook returned over the cap, cut with a notice naming the
 /// spilled file at `path`. Nothing is written for it: the file stays the
 /// artifact.
-fn cut_hook_content(content: &str, bound: Bound, path: &std::path::Path) -> (String, Vec<[u64; 2]>) {
+fn cut_hook_content(
+    content: &str,
+    bound: Bound,
+    path: &std::path::Path,
+) -> (String, Vec<[u64; 2]>) {
     let (head, tail) = Log::cut_points(content, bound);
     let removed = u64::try_from(tail.saturating_sub(head)).unwrap_or(u64::MAX);
     let text = cut_joined(
@@ -565,7 +587,10 @@ fn cut_hook_content(content: &str, bound: Bound, path: &std::path::Path) -> (Str
         &cut_notice(removed, Ok(path)),
         content.get(tail..).unwrap_or_default(),
     );
-    (text, kept_ranges(head as u64, tail as u64, content.len() as u64))
+    (
+        text,
+        kept_ranges(head as u64, tail as u64, content.len() as u64),
+    )
 }
 
 fn without_matches(mut details: Option<Value>) -> Option<Value> {
