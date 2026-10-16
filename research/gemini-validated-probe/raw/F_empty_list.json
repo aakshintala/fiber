@@ -1,0 +1,44 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "ask_user",
+              "args": {
+                "questions": [
+                  {
+                    "question": "The tool requires at least one question. Would you like to provide one or cancel?",
+                    "header": "Error"
+                  }
+                ]
+              },
+              "id": "call_1058014"
+            },
+            "thoughtSignature": "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"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 172,
+    "candidatesTokenCount": 42,
+    "totalTokenCount": 821,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 172
+      }
+    ],
+    "thoughtsTokenCount": 607,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3-flash-preview",
+  "responseId": "IdPRauzoLuKW_uMP6sTA4A0"
+}

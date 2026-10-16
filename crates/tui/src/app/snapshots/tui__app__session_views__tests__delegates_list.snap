@@ -1,13 +1,15 @@
 ---
 source: crates/tui/src/app/session_views_tests.rs
-assertion_line: 1182
 expression: shown
 ---
  Running delegates  delegates · jobs                                 Esc returns
-● fiber  test/model
-  task j_1
-● fiber  test/model
-  task j_2
+Delegates · 2 running
+◆ task j_1 · 0s
+  test/model · s_dddddddddddddddd
+◆ task j_2 · 0s
+  test/model · s_eeeeeeeeeeeeeeee
+
+a row opens that item's view
 
 
 
@@ -21,9 +23,6 @@ expression: shown
 
 
 
-
-
-↑↓ move · Enter open · Esc close
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -11,10 +11,11 @@ use std::sync::{Arc, Weak};
 
 use contract::ErrorCode;
 use contract::clock::Wake;
-use contract::session_search::{Found, Hit, LIMIT, Label, Query, Scan};
+use contract::session_search::{Found, Hit, LIMIT, Query, Scan};
 use contract::shapes::Failure;
 use contract::tool::Cancel;
 use serde::Serialize;
+use support::text::one_line;
 
 use crate::{failed, with_dirs, write_line};
 
@@ -151,11 +152,7 @@ fn text_hits(
 /// snippet. Every interpolated string is one line, so a hit stays on its
 /// lines and no escape sequence reaches the terminal.
 fn block(out: &mut dyn Write, number: usize, hit: &Hit) -> Result<(), Failure> {
-    let label = match hit.label {
-        Label::Message => "message",
-        Label::ToolInput => "tool_input",
-        Label::ToolOutput => "tool_output",
-    };
+    let label = hit.label.as_str();
     write_line(
         out,
         &format!(
@@ -184,11 +181,7 @@ fn row(hit: &Hit) -> Row {
         name: hit.name.clone(),
         seq: hit.seq.0,
         ts: hit.ts,
-        label: match hit.label {
-            Label::Message => "message",
-            Label::ToolInput => "tool_input",
-            Label::ToolOutput => "tool_output",
-        },
+        label: hit.label.as_str(),
         snippet: hit.snippet.clone(),
         log: hit.log.display().to_string(),
         artifact: hit.artifact.as_ref().map(|path| path.display().to_string()),
@@ -207,26 +200,7 @@ fn problems(found: &Found, err: &mut dyn Write) {
     }
 }
 
-/// `text` with every control character as a space, so a hit stays on its
-/// lines and no escape sequence reaches the terminal.
-fn one_line(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
-/// `seconds` since the epoch as a UTC time to the second,
-/// `2026-10-07T10:00:03Z`.
-pub(crate) fn utc(seconds: u64) -> String {
-    let (year, month, day) = contract::clock::utc_date_of_secs(seconds);
-    let second = seconds % 86_400;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        second / 3_600,
-        second % 3_600 / 60,
-        second % 60
-    )
-}
+pub(crate) use contract::clock::utc_time as utc;
 
 #[cfg(test)]
 #[path = "sessions_search_tests.rs"]

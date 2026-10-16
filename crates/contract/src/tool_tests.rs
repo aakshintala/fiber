@@ -1,27 +1,14 @@
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 
 use serde_json::{Map, Value};
 
-use super::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Settle, Tool};
+use super::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use crate::ActionId;
 use crate::clock::Wake;
 use crate::emit::Emit;
 use crate::events::Event;
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects};
-
-/// `Settle` prints opaque and compares by identity, so the loop's logs
-/// never carry a queue's contents and two calls' settles never compare
-/// equal.
-#[test]
-fn settle_debug_and_equality_are_by_identity() {
-    let first = Settle(Arc::new(Vec::<crate::jobs::Taken>::new));
-    let same = first.clone();
-    assert_eq!(format!("{:?}", first), "Settle(..)");
-    assert_eq!(first, same);
-    let other = Settle(Arc::new(Vec::<crate::jobs::Taken>::new));
-    assert_ne!(first, other);
-}
 
 struct NeverCancelled;
 

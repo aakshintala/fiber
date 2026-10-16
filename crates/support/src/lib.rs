@@ -19,6 +19,9 @@ pub mod group;
 /// The stoppable read: a socket reader that a `Stop` ends on demand.
 pub mod stoppable;
 
+/// Text on one line: control characters as spaces.
+pub mod text;
+
 /// Locks `mutex`, returning the guard even when another thread panicked
 /// while holding it: a poisoned lock still guards live state.
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

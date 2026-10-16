@@ -10,8 +10,12 @@ use crate::keys::Key;
 /// page order, then render order, and the selected entry with its top
 /// row.
 pub(crate) struct ResultsView {
-    /// The header: `41 matches for “foo”` (`docs/tui.md`, "Search").
+    /// The bar's count and query (`docs/tui.md`, "Search").
     pub(crate) header: String,
+    /// The query in the top row's command.
+    pub(crate) query: String,
+    /// The current match, independently of the list's selection.
+    pub(crate) current: Option<usize>,
     /// One entry per kept match: its display lines, cloned from the
     /// kept match so the view needs no page (`docs/tui.md`, "Search").
     pub(crate) entries: Vec<Snippet>,
@@ -69,10 +73,9 @@ impl App {
         self.find.has_results()
     }
 
-    /// The results view's entry rows: the conversation's rows less the
-    /// header's first row.
+    /// Entries that fit after the top row, count, blank and hint.
     pub(super) fn results_height(&self) -> usize {
-        self.conversation_height().saturating_sub(1)
+        self.conversation_height().saturating_sub(4) / 3
     }
 
     /// The results view as drawn, while it is open: every kept match in
@@ -87,7 +90,9 @@ impl App {
             .map(|kept| kept.snippet.clone())
             .collect();
         Some(ResultsView {
-            header: format!("{} matches for “{query}”", entries.len()),
+            header: format!("{} · ⌕ {query}", self.find_bar()?.count),
+            query: query.to_owned(),
+            current: self.find.current_index(),
             entries,
             selected,
             top,

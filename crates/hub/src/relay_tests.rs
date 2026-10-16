@@ -1790,13 +1790,14 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
 
-    /// Receives with the deadline, failing at the caller's line.
+    /// Runs one pass-on case: the positive case receives the pop, the
+    /// negative case proves the check ran through a probe forward.
     #[track_caller]
     fn run_case(entry_session: &str, entry_epoch: u64, expect_pop: bool) {
         let held = fakes::TempDir::new("ri");
         let hub = Arc::new(hub(&held));
         let relays = Arc::new(Mutex::new(Relays::default()));
-        let kept: Kept = Arc::new(Mutex::new(vec![
+        let mut entries = vec![
             (
                 "c_ack".to_owned(),
                 json!({"id": "c_ack", "command": "reply", "args": {}})
@@ -1813,7 +1814,24 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
                     .clone(),
                 false,
             ),
-        ]));
+        ];
+        if !expect_pop {
+            // A sent probe ahead of the unsent queue, so the queue never
+            // holds the probe behind it: its forward proves the relay
+            // ran the pass-on check after the earlier forward.
+            entries.insert(
+                1,
+                (
+                    "c_probe".to_owned(),
+                    json!({"id": "c_probe", "command": "reply", "args": {}})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                    true,
+                ),
+            );
+        }
+        let kept: Kept = Arc::new(Mutex::new(entries));
         let (entry_writer, _entry_peer) = UnixStream::pair().unwrap();
         crate::connection::lock(&relays).entries.push(Relay {
             session: entry_session.to_owned(),
@@ -1826,6 +1844,9 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
         });
         let order = crate::connection::lock(&relays).order.clone();
         order.enqueue(SID, "c_ack");
+        if !expect_pop {
+            order.enqueue(SID, "c_probe");
+        }
         order.enqueue(SID, "c_queued");
         let (passed_tx, passed_rx) = mpsc::channel();
         *crate::connection::lock(&hub.on_pass_on) = Some(Box::new(move |passed| {
@@ -1848,23 +1869,43 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_ack\"}}\n")
             .unwrap();
         session_peer.flush().unwrap();
-        let passed = Deadline::after(DEADLINE).recv(&passed_rx);
         let mut client_peer = client_peer;
-        let mut text = String::new();
-        std::io::BufReader::new(&mut client_peer)
-            .read_line(&mut text)
-            .unwrap();
-        // Close, never shut down: on macOS a shutdown can leave the blocked read
-        // waiting (#1877).
-        drop(session_peer);
-        join_within_deadline(thread);
+        let mut read = std::io::BufReader::new(&mut client_peer);
         if expect_pop {
+            let passed = Deadline::after(DEADLINE).recv(&passed_rx);
+            let mut text = String::new();
+            read.read_line(&mut text).unwrap();
+            // Close, never shut down: on macOS a shutdown can leave the blocked read
+            // waiting (#1877).
+            drop(session_peer);
+            join_within_deadline(thread);
             assert!(matches!(passed, Ok(crate::retire::PassOn::Popped(id)) if id == "c_queued"));
         } else {
+            let mut first = String::new();
+            read.read_line(&mut first).unwrap();
+            let first: Value = serde_json::from_str(first.trim_end()).unwrap();
+            assert_eq!(first["payload"]["command_id"], "c_ack");
+            session_peer
+                .write_all(
+                    b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_probe\"}}\n",
+                )
+                .unwrap();
+            session_peer.flush().unwrap();
+            let mut second = String::new();
+            read.read_line(&mut second).unwrap();
+            let second: Value = serde_json::from_str(second.trim_end()).unwrap();
+            assert_eq!(second["payload"]["command_id"], "c_probe");
+            // The probe's forward proves the relay ran its pass-on
+            // check after the earlier forward and passed nothing on.
+            // Check before closing: the end (drain) calls the same hook.
             assert!(
-                passed.is_err(),
+                passed_rx.try_recv().is_err(),
                 "an unrelated retiring relay does not pass the queue"
             );
+            // Close, never shut down: on macOS a shutdown can leave the blocked read
+            // waiting (#1877).
+            drop(session_peer);
+            join_within_deadline(thread);
         }
     }
 
@@ -2037,21 +2078,15 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     session_peer
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_unknown\"}}\n")
         .unwrap();
-    session_peer.flush().unwrap();
-    let mut unknown = String::new();
-    let suppressed = match read.read_line(&mut unknown) {
-        Err(error) => matches!(
-            error.kind(),
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-        ),
-        Ok(_) => false,
-    };
     session_peer
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_known\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    let mut known = String::new();
-    read.read_line(&mut known).unwrap();
+    // The relay forwards in stream order, so a forwarded unknown
+    // acknowledgement would be the first line: the first line is the
+    // known one. The read keeps the 4 s socket deadline.
+    let mut first = String::new();
+    read.read_line(&mut first).unwrap();
     // Closing the session's end ends the relay's read, as a session's
     // exit does: a shutdown on macOS can leave the blocked read waiting.
     drop(session_peer);
@@ -2063,9 +2098,11 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         "the relay thread ends once the session closes"
     );
 
-    let known: Value = serde_json::from_str(known.trim_end()).unwrap();
-    assert!(suppressed, "an unknown acknowledgement is not forwarded");
-    assert_eq!(known["payload"]["command_id"], "c_known");
+    let first: Value = serde_json::from_str(first.trim_end()).unwrap();
+    assert_eq!(
+        first["payload"]["command_id"], "c_known",
+        "an unknown acknowledgement is not forwarded"
+    );
 }
 
 #[test]
