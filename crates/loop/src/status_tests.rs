@@ -453,6 +453,41 @@ fn the_model_and_window_follow_the_preamble_and_a_switch() {
 }
 
 #[test]
+fn the_thinking_level_follows_the_preamble_and_a_switch() {
+    let mut w = world();
+    assert_eq!(w.status().thinking, None);
+    let mut preamble = json!({
+        "reason": "start", "model": "fake/m", "thinking": "high", "context_window": 1000,
+        "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+    });
+    w.feed("preamble_built", None, &preamble);
+    assert_eq!(w.status().thinking.as_deref(), Some("high"));
+    let before = json!({"model": "fake/m", "thinking": "high", "cache_lifetime": "5m"});
+    let after = json!({"model": "fake/n", "thinking": "low", "cache_lifetime": "5m"});
+    w.feed(
+        "model_changed",
+        None,
+        &json!({"before": before, "after": after, "source": "driver"}),
+    );
+    assert_eq!(w.status().thinking.as_deref(), Some("low"));
+    preamble.as_object_mut().unwrap().remove("thinking");
+    w.feed("preamble_built", None, &preamble);
+    assert_eq!(w.status().thinking, None);
+    w.feed(
+        "preamble_built",
+        None,
+        &json!({
+            "reason": "start", "model": "fake/m", "thinking": "high", "context_window": 1000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+        }),
+    );
+    w.feed("model_changed", None, &json!({
+        "before": before, "after": {"model": "fake/n", "cache_lifetime": "5m"}, "source": "driver"
+    }));
+    assert_eq!(w.status().thinking, None);
+}
+
+#[test]
 fn context_needs_a_window_and_a_window_of_zero_is_none() {
     let mut w = world();
     w.start();
