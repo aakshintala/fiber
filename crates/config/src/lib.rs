@@ -312,15 +312,13 @@ impl Config {
     /// `None` for a missing key without a default, or a value of another
     /// JSON type (a negative or fractional number is `None`).
     pub fn count(&self, key: &str, model: Option<&str>) -> Option<u64> {
-        self.get(key, model)
-            .and_then(|(value, _)| value.as_u64())
+        self.get(key, model).and_then(|(value, _)| value.as_u64())
     }
 
     /// The effective value of `key` as a flag: `None` for a missing key
     /// without a default, or a value of another JSON type.
     pub fn flag(&self, key: &str, model: Option<&str>) -> Option<bool> {
-        self.get(key, model)
-            .and_then(|(value, _)| value.as_bool())
+        self.get(key, model).and_then(|(value, _)| value.as_bool())
     }
 
     /// The effective value of `key` as text: `None` for a missing key

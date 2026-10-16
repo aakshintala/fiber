@@ -15,7 +15,9 @@ use serde_json::Value;
 /// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
 /// empty wait.
 pub(crate) fn idle_exit(config: &Config) -> Duration {
-    let ms = config.count("session.idle_exit_ms", None).unwrap_or_default();
+    let ms = config
+        .count("session.idle_exit_ms", None)
+        .unwrap_or_default();
     Duration::from_millis(ms)
 }
 
@@ -43,7 +45,9 @@ pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
 /// the top level. `"5m"` is five minutes; anything else is one hour (the
 /// config crate's `OneOf` refuses other values).
 pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
-    if config.text("cache.lifetime", Some(model)).is_some_and(|value| value == "5m")
+    if config
+        .text("cache.lifetime", Some(model))
+        .is_some_and(|value| value == "5m")
     {
         CacheLifetime::FiveMinutes
     } else {

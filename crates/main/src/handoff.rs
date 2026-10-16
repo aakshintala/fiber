@@ -18,7 +18,9 @@ pub(crate) fn handoff_settings(config: &Config, model: &str) -> HandoffSettings 
             .get("handoff.window_fraction", Some(model))
             .and_then(|(value, _)| value.as_f64())
             .unwrap_or_default(),
-        nudge: config.flag("handoff.nudge", Some(model)).unwrap_or_default(),
+        nudge: config
+            .flag("handoff.nudge", Some(model))
+            .unwrap_or_default(),
     }
 }
 

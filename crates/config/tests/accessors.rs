@@ -50,9 +50,7 @@ fn list_reads_strings_and_is_empty_when_absent() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
     assert!(config.list("hub.allowed_origins", None).is_empty());
-    let set = setup
-        .load(&["mcp.servers.gh.args=[\"a\",\"b\"]"])
-        .unwrap();
+    let set = setup.load(&["mcp.servers.gh.args=[\"a\",\"b\"]"]).unwrap();
     assert_eq!(set.list("mcp.servers.gh.args", None), ["a", "b"]);
     // A string is not an array.
     let model = setup.load(&["model=a/b"]).unwrap();
