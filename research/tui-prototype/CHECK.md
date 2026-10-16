@@ -78,6 +78,7 @@ Each surface's cases are in `check/`, one file per surface, built from the cases
 - [check/theme.md](check/theme.md)
 - [check/failures.md](check/failures.md)
 - [check/reviewer-setup.md](check/reviewer-setup.md)
+- [check/login.md](check/login.md)
 
 Themes (#1634), one run per case at 160 by 48:
 
