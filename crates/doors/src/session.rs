@@ -55,6 +55,8 @@ pub struct Session {
     accept: Mutex<Option<JoinHandle<()>>>,
 }
 
+type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+
 /// What every connection thread shares. The session holds it strongly; the
 /// log is weak, so [`Session::close`] is what releases the lock.
 pub(crate) struct Gate {
@@ -70,7 +72,7 @@ pub(crate) struct Gate {
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
     skills: OnceLock<Vec<SkillInfo>>,
-    quota: OnceLock<Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>>,
+    quota: OnceLock<QuotaRead>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
