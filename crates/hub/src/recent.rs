@@ -162,6 +162,15 @@ pub(crate) fn page(
         .collect())
 }
 
+/// How many exited sessions a query matches: the same rows `page`
+/// pages through, with no page limit.
+pub(crate) fn count(home: &Path, project: Option<&str>, running: &BTreeSet<String>) -> usize {
+    listed(home, project)
+        .into_iter()
+        .filter(|row| !running.contains(&row.session_id.0))
+        .count()
+}
+
 /// The rows the hub seeds its feed from at start: of the newest
 /// [`RECENT_KEEP`] rows, each session's newest, when it is crashed or
 /// exited waiting, not a delegate, and its directory is still there.

@@ -233,6 +233,51 @@ fn a_delegate_row_is_skipped_and_pages_stay_full() {
 }
 
 #[test]
+fn count_covers_every_row_past_the_page() {
+    let temp = Temp::new();
+    for n in 0..53 {
+        temp.append(&temp.row(n, "p", Left::Exited, None));
+    }
+    for n in 100..102 {
+        temp.append(&temp.row(n, "q", Left::Exited, None));
+    }
+    assert_eq!(count(&temp.dir, Some("p"), &BTreeSet::new()), 53);
+    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), 55);
+}
+
+#[test]
+fn count_skips_running_delegate_and_missing_directory_rows() {
+    let temp = Temp::new();
+    temp.append(&temp.row(1, "p", Left::Exited, None));
+    temp.append(&temp.row(2, "p", Left::Exited, None));
+    temp.append(&temp.row(3, "p", Left::Exited, None));
+    let mut delegate = temp.row(4, "p", Left::Exited, None);
+    delegate.status =
+        Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
+    temp.append(&delegate);
+    temp.append(&row(5, "p", Left::Exited, None));
+    let all = count(&temp.dir, None, &BTreeSet::new());
+    assert_eq!(all, 3);
+    let running = BTreeSet::from([id(3)]);
+    assert_eq!(count(&temp.dir, None, &running), 2);
+    assert_eq!(count(&temp.dir, Some("p"), &running), 2);
+}
+
+#[test]
+fn count_at_the_page_boundary_returns_its_own_value() {
+    let temp = Temp::new();
+    for n in 0..RECENT_PAGE as u64 {
+        temp.append(&temp.row(n, "p", Left::Exited, None));
+    }
+    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE);
+    temp.append(&temp.row(RECENT_PAGE as u64, "p", Left::Exited, None));
+    assert_eq!(
+        count(&temp.dir, None, &BTreeSet::new()),
+        RECENT_PAGE + 1
+    );
+}
+
+#[test]
 fn an_unknown_before_is_an_error() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
