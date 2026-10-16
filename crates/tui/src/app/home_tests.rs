@@ -219,7 +219,12 @@ fn commands(lines: Vec<String>) -> Vec<serde_json::Value> {
 /// The rows home draws, as lines.
 fn rows(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(_, line, _)| line).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -493,7 +498,7 @@ fn answers_and_a_left_fill_and_mark_the_list() {
             "how": "crashed",
         }]}),
     ));
-    assert_eq!(rows(&app), ["○  fix the parser", "✗  old work"]);
+    assert_eq!(rows(&app), ["○  fix the parser", "○  old work"]);
 }
 
 #[test]
@@ -539,7 +544,12 @@ fn start_names_the_launch_workspace() {
 /// The keys of the rows home draws, in order.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -2777,7 +2787,7 @@ fn clicking_the_drawn_cross_keeps_the_session() {
     assert!(question(&app).is_empty(), "the question closes");
     assert_eq!(
         app.home_screen()
-            .map(|screen| screen.rows.len())
+            .map(|screen| crate::home::home_test_rows(&screen).len())
             .unwrap_or_default(),
         1,
         "the session row remains"
@@ -2822,7 +2832,7 @@ fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
     assert!(question(&app).is_empty(), "the question closes");
     assert_eq!(
         app.home_screen()
-            .map(|screen| screen.rows.len())
+            .map(|screen| crate::home::home_test_rows(&screen).len())
             .unwrap_or_default(),
         1,
         "the session row remains"
@@ -3269,20 +3279,23 @@ fn unreadable_rows_have_no_x() {
     ));
     // A readable live row ends in a ✕; exited and unreadable rows have
     // none.
-    let rows: Vec<(String, bool)> = app
-        .home_screen()
-        .map(|screen| {
-            screen
-                .rows
-                .into_iter()
-                .map(|(_, line, has_x)| (line, has_x))
-                .collect()
+    let screen = app.home_screen().unwrap_or_else(|| panic!("home screen"));
+    let rows = crate::home::home_test_rows(&screen);
+    let has_x: Vec<bool> = screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            crate::home::ListLine::Live { stop, .. } => Some(*stop),
+            crate::home::ListLine::Exited { .. } => Some(false),
+            crate::home::ListLine::Head { .. }
+            | crate::home::ListLine::ExitedHead { .. }
+            | crate::home::ListLine::More { .. } => None,
         })
-        .unwrap_or_default();
+        .collect();
     assert_eq!(rows.len(), 3);
-    assert!(rows[0].1);
-    assert!(!rows[1].1);
-    assert!(!rows[2].1);
+    assert!(has_x[0]);
+    assert!(!has_x[1]);
+    assert!(!has_x[2]);
 }
 
 #[test]
@@ -3583,9 +3596,11 @@ fn home_rows_include_an_unscoped_project_below_the_fold() {
     let screen = app
         .home_screen()
         .unwrap_or_else(|| panic!("the home screen"));
-    assert_eq!(screen.rows.len(), 15);
+    assert_eq!(crate::home::home_test_rows(&screen).len(), 15);
     assert!(
-        screen.rows.iter().any(|(_, row, _)| row.contains("away")),
+        crate::home::home_test_rows(&screen)
+            .iter()
+            .any(|(_, row)| row.contains("away")),
         "the other project's session remains visible"
     );
 }

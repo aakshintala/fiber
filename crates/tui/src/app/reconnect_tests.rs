@@ -399,14 +399,23 @@ fn started(app: &mut App, session: &str) -> Vec<Value> {
 /// The rows home draws.
 fn rows(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(_, line, _)| line).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// The key of the row home draws first.
 fn first_key(app: &App) -> u64 {
     app.home_screen()
-        .and_then(|screen| screen.rows.first().map(|(key, _, _)| *key))
+        .and_then(|screen| {
+            crate::home::home_test_rows(&screen)
+                .first()
+                .map(|(key, _)| *key)
+        })
         .unwrap_or_else(|| panic!("a row"))
 }
 
@@ -784,7 +793,14 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     assert_eq!(names(&delete), ["delete"]);
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
-    assert_eq!(rows(&app), [format!("○  old work  {UNANSWERED}")]);
+    assert_eq!(rows(&app), ["○  old work"]);
+    assert_eq!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(S_B.to_owned())))
+            .and_then(|row| row.note.as_deref()),
+        Some(UNANSWERED)
+    );
     assert_eq!(app.notice(), Some(UNANSWERED));
 }
 

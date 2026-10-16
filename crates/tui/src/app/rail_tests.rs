@@ -230,7 +230,7 @@ fn a_recent_row_gets_no_number() {
     }));
     assert!(
         app.home_screen()
-            .is_some_and(|screen| screen.rows.len() == 1)
+            .is_some_and(|screen| crate::home::home_test_rows(&screen).len() == 1)
     );
     assert_eq!(app.rail_cards().map(|(cards, _)| cards.len()), Some(0));
     app.on_line(live(B, json!({})));

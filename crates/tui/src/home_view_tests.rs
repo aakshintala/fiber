@@ -369,7 +369,11 @@ fn home_with_more_rows_than_fit() {
         let session = format!("s_{n:016x}");
         app.on_line(status(&session, "fix the parser", idle()));
     }
-    assert_eq!(app.home_screen().map(|screen| screen.rows.len()), Some(15));
+    assert_eq!(
+        app.home_screen()
+            .map(|screen| crate::home::home_test_rows(&screen).len()),
+        Some(15)
+    );
     insta::assert_snapshot!("home_with_more_rows_than_fit", screen(&app, 80, 24));
 }
 
@@ -1180,7 +1184,12 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     app.drawn(&targets);
     let keys: Vec<u64> = app
         .home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default();
     assert_eq!(keys.len(), 15);
     let now = fakes::clock::FakeClock::new().now();
@@ -1289,7 +1298,12 @@ fn left(session: &str, how: &str) -> Line {
 /// The first row's key.
 fn first_key(app: &App) -> u64 {
     app.home_screen()
-        .and_then(|screen| screen.rows.into_iter().next().map(|(key, _, _)| key))
+        .and_then(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .next()
+                .map(|(key, _)| key)
+        })
         .unwrap_or_else(|| panic!("a row"))
 }
 
