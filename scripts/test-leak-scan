@@ -4,12 +4,10 @@
 # sibling run's processes, refuses an empty nonce, and stays silent once the
 # leakers have stopped.
 #
-# This self-test sends no signal to any process. Every fixture that can
-# poll does: it watches a stop file in this run's temp dir, exits when the
-# file exists, and exits on its own after 120 s at the latest, so a run
-# that dies without reaching the EXIT trap still leaves nothing behind.
-# The one fixture that cannot poll (sleep re-executed under a target/
-# argv0) runs `sleep 20`, and the test lets it expire. Cleanup touches the
+# This self-test sends no signal to any process. Every fixture polls a
+# stop file in this run's temp dir, exits when the file exists, and exits
+# on its own after 120 s at the latest, so a run that dies without
+# reaching the EXIT trap still leaves nothing behind. Cleanup touches the
 # stop file in the EXIT trap and waits for the fixtures to leave the
 # process table; a fixture still listed after the bound is reported with
 # its PID and command, and the test fails. The table is only read
@@ -116,8 +114,7 @@ cleanup() {
   local stray=
   for pid in "$leaker1" "$leaker2" "$leaker3" "$leaker4" "$leaker5" "$leaker6" "$leaker7"; do
     if [ -n "$pid" ] && pid_alive "$pid"; then
-      # 25 s covers the sleep 20 fixture when the test died before its
-      # own wait for that fixture expired.
+      # 25 s leaves room for a slow poll loop to notice the stop file.
       if require_gone "$pid" 25; then
         :
       else
@@ -325,12 +322,13 @@ if [ "$(uname -s)" = Darwin ]; then
   leaker3=
   rm -f "$stop"
   # A binary under target/ is this run's leak: exit 1 naming the PID. The
-  # orphan is sleep re-executed with argv0 set to the target/ path (bash
-  # exec -a, with SIGTERM ignored across the exec like the fixtures); ps
-  # shows the target/ path as the executable. LEAK_SCAN_ROOT points the
-  # rule at a temp dir instead of the worktree. sleep cannot poll a stop
-  # file, so it runs `sleep 20` and the test lets it expire below.
-  ( bash -c 'trap "" TERM; exec -a "$1/target/x" sleep 20' _ "$tmp" & )
+  # orphan is a shell re-executed with argv0 set to the target/ path
+  # (bash exec -a, with SIGTERM ignored across the exec like the
+  # fixtures); ps shows the target/ path as the executable.
+  # LEAK_SCAN_ROOT points the rule at a temp dir instead of the worktree.
+  # The shell polls the stop file like the other fixtures (or exits after
+  # 120 s on its own).
+  ( STOP="$stop" bash -c 'trap "" TERM; exec -a "$1/target/x" bash -c '\''trap "" TERM; while [ ! -e "$STOP" ] && [ "$SECONDS" -lt 120 ]; do sleep 0.05; done'\''' _ "$tmp" & )
   leaker4=$(await_orphan "$tmp/target/x")
   if [ -z "$leaker4" ]; then
     echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
@@ -350,18 +348,11 @@ if [ "$(uname -s)" = Darwin ]; then
     cat "$err" >&2
     exit 1
   fi
-  # Let the sleep expire: a bounded read-only wait for it to leave the
-  # table, 25 s for a 20 s sleep.
-  if require_gone "$leaker4" 25; then
-    :
-  else
-    echo "scripts/test-leak-scan: target orphan $leaker4 still alive after 25 s, leaving it alone: $(pid_command "$leaker4")" >&2
-    exit 1
-  fi
+  stop_and_require_gone "$leaker4"
   leaker4=
+  rm -f "$stop"
   # A shell orphan carrying a target/ path in its arguments is not this
   # run's leak: only argv0 names it, so this warns like sh, not fails.
-  rm -f "$stop"
   printf "#!/bin/sh\ntrap '' TERM\nwhile [ ! -e '%s' ] && [ \"\$SECONDS\" -lt 120 ]; do sleep 0.05; done\n" "$stop" >"$tmp/target/argscript"
   chmod +x "$tmp/target/argscript"
   ( bash "$tmp/target/argscript" & )
