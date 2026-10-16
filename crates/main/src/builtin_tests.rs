@@ -258,6 +258,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         names,
         [
             "ask_user",
+            "delegate_message",
             "delegate_models",
             "delegate_spawn",
             "edit",
@@ -277,6 +278,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         listed,
         [
             "ask_user",
+            "delegate_message",
             "delegate_models",
             "delegate_spawn",
             "edit",

@@ -3118,6 +3118,7 @@ fn two_runs_send_byte_identical_preambles() {
         names,
         [
             "ask_user",
+            "delegate_message",
             "delegate_models",
             "delegate_spawn",
             "edit",

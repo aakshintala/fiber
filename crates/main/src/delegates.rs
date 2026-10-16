@@ -1,9 +1,10 @@
 //! Wiring a Fiber delegate into a session (`docs/delegates.md`, "Choosing a
-//! model" and "Lifetime"): resolving its `fiber:` reference through the
-//! installed providers, building the child session's command, and watching
-//! the child's socket as an ordinary client. `main` builds one [`Delegates`]
+//! model", "Lifetime" and "Talking to a delegate"): resolving its `fiber:`
+//! reference through the installed providers, building the child session's
+//! command, watching the child's socket as an ordinary client, and steering
+//! or resuming it through `delegate_message`. `main` builds one [`Delegates`]
 //! per session and hands it to the tool seam, which registers
-//! `delegate_spawn` from it.
+//! `delegate_spawn` and `delegate_message` from it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,10 +29,10 @@ pub(crate) fn depth() -> u32 {
 /// (`docs/tools.md`, "Background jobs").
 pub(crate) const OUTPUT_CAP: u64 = 5_000_000_000;
 
-/// Everything one session needs to offer `delegate_spawn`: who the child
-/// belongs to and where it logs, and the three closures the runner drives.
-/// Built per session, because the parent session id differs for a new and
-/// a resumed session.
+/// Everything one session needs to offer `delegate_spawn` and
+/// `delegate_message`: who the child belongs to and where it logs, and the
+/// closures the runner drives. Built per session, because the parent
+/// session id differs for a new and a resumed session.
 pub(crate) struct Delegates {
     depth: u32,
     /// The parent session: the child's `--parent`.
@@ -52,6 +53,10 @@ pub(crate) struct Delegates {
     launch: jobs::Launch,
     /// Watches the child's socket.
     watch: jobs::Watch,
+    /// Steers the child's session over its socket.
+    steer: jobs::Steer,
+    /// Reads the child's log boundary for a resume.
+    last_seq: jobs::LastSeq,
 }
 
 impl Delegates {
@@ -74,6 +79,8 @@ impl Delegates {
     ) -> Self {
         let launch = launcher(&fiber);
         let watch = watcher(&home);
+        let steer = steerer(&home);
+        let last_seq = last_seq_reader(&sessions);
         Self {
             depth: depth(),
             parent,
@@ -84,6 +91,8 @@ impl Delegates {
             resolve,
             launch,
             watch,
+            steer,
+            last_seq,
         }
     }
 
@@ -104,6 +113,28 @@ impl Delegates {
             resolve: self.resolve.clone(),
             launch: Arc::clone(&self.launch),
             watch: Arc::clone(&self.watch),
+        }
+    }
+
+    /// The `delegate_message` tool this session declares: steers a running
+    /// delegate at its next step boundary, or resumes a finished one. It
+    /// shares the registry, launch, watch and depth `tool()` hands
+    /// `delegate_spawn`, so a message finds this session's own delegates
+    /// and no other session's.
+    pub(crate) fn message(&self) -> jobs::DelegateMessage {
+        jobs::DelegateMessage {
+            depth: self.depth,
+            registry: Arc::clone(&self.jobs),
+            parent: self.parent.clone(),
+            clock: Arc::clone(&self.clock),
+            // The same shutdown bound and output cap as `tool()`: one
+            // stop and one closing wait for both tools.
+            bound: doors::SHUTDOWN_BOUND,
+            cap: OUTPUT_CAP,
+            launch: Arc::clone(&self.launch),
+            watch: Arc::clone(&self.watch),
+            steer: Arc::clone(&self.steer),
+            last_seq: Arc::clone(&self.last_seq),
         }
     }
 
@@ -331,6 +362,35 @@ pub(crate) fn watcher(home: &Path) -> jobs::Watch {
             doors::Watched::Exited => jobs::Watched::Exited,
             doors::Watched::Closed { .. } => jobs::Watched::Closed,
         })
+    })
+}
+
+/// Steers the child's session over its socket as an ordinary client:
+/// one connection carrying the subscribe, the steer and the probe, with
+/// the outcome mapped back variant by variant.
+fn steerer(home: &Path) -> jobs::Steer {
+    let home = home.to_path_buf();
+    Arc::new(
+        move |id, command, text, commit: &mut dyn FnMut() -> bool, on_queued: &mut dyn FnMut()| {
+            match doors::steer(&home, id, command, text, commit, on_queued) {
+                doors::Steered::Accepted => jobs::Steered::Accepted,
+                doors::Steered::Rejected(failure) => jobs::Steered::Rejected(failure),
+                doors::Steered::Gone => jobs::Steered::Gone,
+                doors::Steered::Withheld => jobs::Steered::Withheld,
+            }
+        },
+    )
+}
+
+/// Reads the child's log boundary for a resume: the `seq` of the last
+/// complete line of `<sessions>/<delegate session id>/events.jsonl`,
+/// or the reason it could not be read, which names the log's path.
+fn last_seq_reader(sessions: &Path) -> jobs::LastSeq {
+    let sessions = sessions.to_path_buf();
+    Arc::new(move |id| {
+        log::last_seq(&sessions.join(&id.0))
+            .map(|seq| seq.map(|seq| seq.0))
+            .map_err(|error| error.to_string())
     })
 }
 
