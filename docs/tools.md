@@ -1009,10 +1009,13 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   hosted search's blocks is protocol code in `anthropic-messages`,
   `openai-responses` and `google-generative-ai`.
 - Measured September 27, 2026: ChatGPT/codex, muse (only on its
-  `/v1/responses` endpoint), OpenRouter (its `openrouter:web_search` server tool, on `openai-completions`, unprobed) and OpenCode (by
-  passing Anthropic's and OpenAI's hosted tools through) host a search.
-  Databricks does not: "Code interpreter and web search tools are not
-  supported by Databricks."
+  `/v1/responses` endpoint) and OpenCode (by passing Anthropic's and
+  OpenAI's hosted tools through) host a search, and the OpenAI API
+  (October 16, 2026, `openai-responses`: 30 of 43 model ids accepted
+  `web_search`). OpenRouter documents an `openrouter:web_search` server
+  tool (on `openai-completions`) but it is unmeasured. Databricks does
+  not: "Code interpreter and web search tools are not supported by
+  Databricks."
 - The provider runs the search before Fiber sees it, so a hosted search is
   never reviewed and cannot be refused. It writes `tool_call_started` and
   `tool_call_completed` like any call, with the query and the result URLs.
