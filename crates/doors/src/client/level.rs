@@ -227,7 +227,10 @@ pub(super) fn change(
             subscription: Some((_, switches)),
             ..
         } => switches.send(switch).is_err(),
-        _ => true,
+        super::Sink::Socket {
+            subscription: None, ..
+        }
+        | super::Sink::Driven { .. } => true,
     };
     if dead {
         // The writer is dead: a dead writer does not always mean the

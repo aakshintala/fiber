@@ -90,7 +90,10 @@ impl Conn {
                 subscription: Some((outbox, _)),
                 ..
             } => Some(outbox.clone()),
-            _ => None,
+            Sink::Socket {
+                subscription: None, ..
+            }
+            | Sink::Driven { .. } => None,
         }
     }
 }
