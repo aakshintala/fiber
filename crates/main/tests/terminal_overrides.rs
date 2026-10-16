@@ -20,7 +20,7 @@ use support::write_json;
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, with no model configured and no retry in the file: the
 /// run's `--model` is the session's only model, and its `-c` is the only
-/// retry layer. The hub idles out a second after its last client leaves,
+/// retry layer. The hub idles out 200 ms after its last client leaves,
 /// so no hub lingers.
 fn provider_without_model(setup: &support::Setup, server: &ProviderServer) {
     let source = setup.root.path().join("src");
@@ -48,7 +48,7 @@ fn provider_without_model(setup: &support::Setup, server: &ProviderServer) {
     .unwrap();
     write_json(
         &setup.home().join("config.json"),
-        &json!({"hub": {"idle_exit_ms": 1000}, "retry": {
+        &json!({"hub": {"idle_exit_ms": 200}, "retry": {
             "attempts": 0, "initial_delay_ms": 0, "max_delay_ms": 0,
         }}),
     );

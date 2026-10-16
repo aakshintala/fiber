@@ -117,7 +117,7 @@ fn links_and_the_image_line_take_the_link_look() {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();

@@ -86,7 +86,7 @@ fn markdown_reply_uses_the_markdown_look() {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
             "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);

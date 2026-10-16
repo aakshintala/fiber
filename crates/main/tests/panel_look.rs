@@ -168,7 +168,7 @@ fn panel_setup() -> (Setup, ProviderServer, Release) {
             "reviewer": {"model": "scripted/r.json"},
             "handoff": {"tokens": 400000},
             "tui": {"panel": {"width": PANEL_SHARE}},
-            "hub": {"idle_exit_ms": 1000},
+            "hub": {"idle_exit_ms": 200},
         }),
     );
     let rules = [
@@ -322,7 +322,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         &json!({
             "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
             "roles": {"delegate": "fiber:scripted/d.json"},
-            "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 1000}
+            "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 200}
         }),
     );
     fs::write(
