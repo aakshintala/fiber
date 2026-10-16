@@ -34,7 +34,9 @@ pub enum StartError {
         /// Why the bind failed.
         source: io::Error,
     },
-    /// Reading the configuration failed: the failure as the caller built it.
+    /// Reading the configuration failed. The failure is the caller's:
+    /// `main` built it, and the hub forwards its code and message as
+    /// data, unchanged.
     #[error("{}", .0.message)]
     Configure(Failure),
 }
@@ -50,3 +52,21 @@ impl StartError {
         }
     }
 }
+
+impl From<&StartError> for Failure {
+    /// The contract record of a failure: its code and its sentence, with
+    /// no retry and no provider. A forwarded `Configure` keeps the
+    /// caller's code and message.
+    fn from(error: &StartError) -> Failure {
+        Failure {
+            code: error.code(),
+            message: error.to_string(),
+            retry_after_ms: None,
+            provider: None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;
