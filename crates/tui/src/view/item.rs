@@ -16,9 +16,8 @@ use crate::mouse::{Target, TargetId};
 /// The header's rows: the breadcrumb and the status row.
 pub(crate) const ITEM_HEADER_ROWS: usize = 2;
 
-/// Draws the item view's header into `area`'s top rows: the breadcrumb
-/// with its ✕, then the status row with the stop target while the item
-/// runs.
+/// Draws the item view's header: the whole breadcrumb row returns,
+/// then the status row has the stop target while the item runs.
 pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let Some(view) = app.item_view() else {
         return;
@@ -26,11 +25,8 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
     if area.height == 0 || area.width == 0 {
         return;
     }
-    // The breadcrumb: "<parent> › ◆ <description>", with a ✕ at the right
-    // edge closing the view.
     let crumb = format!("{} › {} {}", view.parent, view.kind_glyph, view.description);
-    let cross_x = area.right().saturating_sub(1);
-    let crumb_width = usize::from(area.width).saturating_sub(1);
+    let crumb_width = usize::from(area.width);
     buf.set_stringn(
         area.x,
         area.y,
@@ -38,10 +34,9 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
         crumb_width,
         Style::default(),
     );
-    buf.set_string(cross_x, area.y, "✕", Style::default());
     targets.push(Target {
         id: TargetId::Item(Spot::Close),
-        rect: Rect::new(cross_x, area.y, 1, 1),
+        rect: Rect::new(area.x, area.y, area.width, 1),
     });
     if area.height < 2 {
         return;

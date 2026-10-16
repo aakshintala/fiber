@@ -956,6 +956,9 @@ websocket for everything it does.
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
+| `configure` | `operation` (string), plus that operation's arguments below | Reads or writes configuration on the hub's machine. Sent without `session_id`. |
+| `read_config` | `workspace` (absolute string), `path` (string) | Reads a configuration view's file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
+| `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
@@ -966,6 +969,52 @@ Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
 first when it asks where to start one, and lists directories with
 `directories`.
+
+The `configure` operations below use the hub's Fiber home and the project of
+`workspace` on that machine. Every `workspace` is absolute. Arguments are
+required unless marked optional; unknown keys, wrong types and explicit
+`null` are rejected `invalid_arguments`.
+
+| Operation | Arguments besides `operation` | Result |
+|---|---|---|
+| `settings` | `workspace` (string) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted |
+| `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
+| `global_file` | none | `file` (string), the hub's global configuration file |
+| `rules` | `workspace` (string) | `global` and `project`, each with `file` and either `rows` or `error`; a row holds `line` (integer), `text` (string) and `rule` (the standing rule object from `docs/configuration.md`) |
+| `revoke` | `workspace`, `scope`, `text` (strings), `line` (integer) | `revoked`, either `removed` or `stale`; `scope` is `global` or `project` |
+| `login_targets` | none | `targets`, objects with `name` and `kind` (`key`, `browser` or `secret`) |
+| `store_key` | `name`, `key` (strings), `label` (string, optional) | `path` (string, relative to Fiber home) and `replaced` (boolean), as `fiber login` stores it; the key is never returned or logged |
+| `reviewer_models` | `name` (string) | `models` (array of strings), optional `selected` (string), and `notices` (array of strings), from the hub's installed provider |
+| `set_reviewer` | `name`, `id` (strings) | no result |
+| `tool_switches` | `workspace` (string) | `groups`, objects with `group`, `project` and `everywhere`; `group` is one of `{"mcp":"name"}` or `{"extension":"name"}`; each layer holds `disabled` (array of strings) and optional `enabled` (array of strings) |
+| `switch_tool` | `workspace`, `tool`, `scope` (strings), `group` (object as above), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skills_disabled` | `workspace` (string) | `project` and `everywhere` (arrays of strings) |
+| `switch_skill` | `workspace`, `name`, `scope` (strings), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skill_text` | `path` (string) | `text` (string), as the local skill view reads it |
+
+A setting row holds `key`, `layer` and `shown` (strings), and `file` (string)
+when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
+`value` and `redacted` carry `value` (string); `union` carries `names`
+(`[name, layer]` pairs) and `own` (`[layer, json]` pairs).
+`scope` is `any` (with `repo`, a boolean), `global_only`, `repo_only` or
+`person_files`. Values are JSON text, not decoded values.
+
+`keys` and every `tui.*` key belong to the terminal that draws, including
+`/keys`, `/settings` rows for those keys and the theme picker. They stay in
+the client's Fiber home. The hub serves neither `save_keys`, themes nor
+`LoginShow`, which draws a login URL and code on the client.
+
+`read_config` and `write_config` are the Ctrl+G commands, not arbitrary file
+access. Their `path` must lexically equal the global, project or repository
+`config.json`, the global or project `rules`, or be an absolute path named
+`SKILL.md`. Both refuse text over 64 KiB with `too_large`, without cutting
+it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit
+lowercase hexadecimal content hashes, or `missing`. For configuration and
+rules, the write holds `<path>.lock` across reading, comparing and writing;
+skill files leave no lock file. A stale write says the path changed since
+it was read. A matching write stores even invalid configuration or rules:
+the client rereads the view to show its error. `read_file` remains limited
+to session artifacts.
 
 ### Remote clients
 

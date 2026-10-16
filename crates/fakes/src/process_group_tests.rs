@@ -15,9 +15,9 @@ use rustix::process::{Pid, Signal};
 
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
-    bounded, group_empties, group_lives, kill_group, kill_matching, kill_pid, listed_exit,
-    matching, matching_exits, pattern, pids_exit, read_lookup, signal_group, signal_named,
-    signal_pid, spawn_lookup, try_matching_exits, wait_exits,
+    bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
+    listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
+    signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
 
@@ -169,6 +169,51 @@ fn kill_pid_signals_a_live_process() {
     assert!(kill_pid(child.id(), "0").unwrap());
     assert!(kill_pid(child.id(), "KILL").unwrap());
     child.wait().unwrap();
+}
+
+#[test]
+fn group_alive_is_false_once_the_group_is_empty() {
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    assert!(group_alive(group));
+    assert!(kill_group(group, "KILL").unwrap());
+    child.wait().unwrap();
+    assert!(!group_alive(group));
+}
+
+#[test]
+fn pid_alive_is_false_once_the_process_is_reaped() {
+    let mut child = Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    assert!(pid_alive(pid));
+    child.wait().unwrap();
+    assert!(!pid_alive(pid));
+}
+
+// Like the refusal tests above: the probe is the signal `0`, which
+// signals nothing, so an id of 1 or less must panic rather than probe.
+#[test]
+fn group_alive_refuses_group_zero_and_one() {
+    for group in [0, 1] {
+        let sentinel = sentinel();
+        let refused = panic::catch_unwind(AssertUnwindSafe(|| group_alive(group)));
+        assert!(refused.is_err(), "group {group} was not refused");
+        assert!(survived(sentinel), "group {group} signalled the sentinel");
+    }
+}
+
+#[test]
+fn pid_alive_refuses_pid_zero_and_one() {
+    for pid in [0, 1] {
+        let sentinel = sentinel();
+        let refused = panic::catch_unwind(AssertUnwindSafe(|| pid_alive(pid)));
+        assert!(refused.is_err(), "pid {pid} was not refused");
+        assert!(survived(sentinel), "pid {pid} signalled the sentinel");
+    }
 }
 
 /// One refused id through `signal_group` or `signal_pid`, with a `deliver`

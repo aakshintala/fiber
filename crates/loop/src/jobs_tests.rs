@@ -1388,7 +1388,7 @@ impl Listed {
 
 impl Jobs for Listed {
     fn open(&self, _: contract::jobs::Opening) -> Result<contract::jobs::Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: "unused".into(),
             source: std::io::Error::other("a listed job is not opened"),
         })

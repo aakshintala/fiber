@@ -4,6 +4,176 @@
 use super::super::tests::{attached, count, search_all, text_turn};
 
 #[test]
+fn file_calls_name_their_paths_but_replies_and_other_calls_do_not() {
+    let mut app = attached(80, 24);
+    let mut log = Vec::new();
+    let mut seq = 0;
+    let mut feed = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        seq += 1;
+        let line = contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: contract::SessionId(super::super::tests::SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: Some(contract::TurnId("t_files".to_owned())),
+            action_id: action.map(|id| contract::ActionId(id.to_owned())),
+            seq: Some(contract::Seq(seq)),
+            payload: payload.as_object().unwrap().clone(),
+        };
+        log.push(line.clone());
+        app.on_line(crate::link::Line::Session(line));
+    };
+    feed(
+        "turn_started",
+        None,
+        serde_json::json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": "needle prompt"}]}]}),
+    );
+    for (action, tool, args) in [
+        ("a_read", "read", serde_json::json!({"path": "src/read.rs"})),
+        ("a_edit", "edit", serde_json::json!({"path": "src/edit.rs"})),
+        (
+            "a_write",
+            "write",
+            serde_json::json!({"path": "src/write.rs"}),
+        ),
+        (
+            "a_shell",
+            "shell",
+            serde_json::json!({"command": "cat src/shell.rs", "path": "not-a-file-call"}),
+        ),
+        (
+            "a_other",
+            "other",
+            serde_json::json!({"path": "not-a-file-call"}),
+        ),
+        ("a_missing", "read", serde_json::json!({})),
+        ("a_bad", "read", serde_json::json!({"path": 42})),
+    ] {
+        feed(
+            "tool_call_requested",
+            Some(action),
+            serde_json::json!({"name": tool, "arguments": args}),
+        );
+        feed(
+            "tool_call_completed",
+            Some(action),
+            serde_json::json!({"status": "completed", "content": [{"type": "text", "text": format!("needle {action}")}]}),
+        );
+    }
+    feed(
+        "text_completed",
+        Some("a_reply"),
+        serde_json::json!({"text": "needle reply"}),
+    );
+    feed(
+        "turn_completed",
+        None,
+        serde_json::json!({"outcome": "completed"}),
+    );
+    let check = |found: Vec<(super::Anchor, usize, bool, super::Snippet)>| {
+        for (text, path) in [
+            ("needle prompt", ""),
+            ("needle a_read", "src/read.rs"),
+            ("needle a_edit", "src/edit.rs"),
+            ("needle a_write", "src/write.rs"),
+            ("needle a_shell", ""),
+            ("needle a_other", ""),
+            ("needle a_missing", ""),
+            ("needle a_bad", ""),
+            ("needle reply", ""),
+        ] {
+            let hits: Vec<_> = found
+                .iter()
+                .filter(|hit| hit.3.line.contains(text))
+                .collect();
+            assert!(!hits.is_empty(), "a match for {text}");
+            for hit in hits {
+                assert_eq!(hit.3.path, path, "{text}");
+            }
+        }
+    };
+    check(super::resident(app.pages(), 0, "needle").unwrap());
+    for _ in 0..16 {
+        text_turn(
+            &mut log,
+            &mut seq,
+            &mut app,
+            &["filler one", "filler two", "filler three", "filler four"],
+        );
+    }
+    assert!(app.pages().part(0).is_none());
+    let (rows, texts, turns, paths) = app.pages().fold_text_turns(0, &log).unwrap();
+    let found = super::scratch(app.pages(), 0, &rows, &texts, &turns, &paths, "needle");
+    check(found);
+}
+
+#[test]
+fn a_match_names_the_turn_its_line_sits_in() {
+    let mut app = attached(40, 10);
+    let mut log = Vec::new();
+    let mut seq = 0;
+    text_turn(&mut log, &mut seq, &mut app, &["needle one"]);
+    text_turn(&mut log, &mut seq, &mut app, &["needle two"]);
+    let found = super::resident(app.pages(), 0, "needle").unwrap();
+    assert_eq!(
+        found.iter().map(|hit| hit.3.turn).collect::<Vec<_>>(),
+        [Some(0), Some(1)]
+    );
+    for turn in 0..16 {
+        let filler: Vec<String> = (0..4).map(|line| format!("filler {turn} {line}")).collect();
+        let refs: Vec<&str> = filler.iter().map(String::as_str).collect();
+        text_turn(&mut log, &mut seq, &mut app, &refs);
+    }
+    assert!(app.pages().part(0).is_none());
+    let (rows, texts, turns, paths) = app.pages().fold_text_turns(0, &log).unwrap();
+    let found = super::scratch(app.pages(), 0, &rows, &texts, &turns, &paths, "needle");
+    assert_eq!(
+        found.iter().map(|hit| hit.3.turn).collect::<Vec<_>>(),
+        [Some(0), Some(1)]
+    );
+}
+
+#[test]
+fn a_match_on_a_turns_first_and_last_row_is_in_it() {
+    let turns = [(3, 2..5)];
+    for (row, turn) in [
+        (1, None),
+        (2, Some(3)),
+        (3, Some(3)),
+        (4, Some(3)),
+        (5, None),
+        (6, None),
+    ] {
+        let line = crate::logical::Logical {
+            text: "needle".to_owned(),
+            from: Vec::new(),
+            row,
+            scopes: Vec::new(),
+        };
+        assert_eq!(
+            super::snippet_for(&line, &(0..6), None, None, &turns, &Vec::new()).turn,
+            turn,
+            "row {row}"
+        );
+    }
+}
+
+#[test]
+fn a_match_outside_any_turn_has_no_turn() {
+    let mut app = attached(40, 10);
+    let line = contract::Envelope {
+        kind: "shell_command".to_owned(), session_id: contract::SessionId(super::super::tests::SESSION.to_owned()),
+        ts: 0, schema_version: contract::SCHEMA_VERSION, turn_id: None, action_id: None,
+        seq: Some(contract::Seq(1)), payload: serde_json::json!({"command": "needle", "process": {"exit_code": 0, "timed_out": false}, "output": "needle"}).as_object().unwrap().clone(),
+    };
+    app.on_line(crate::link::Line::Session(line));
+    let found = super::resident(app.pages(), 0, "needle").unwrap();
+    assert!(!found.is_empty());
+    assert!(found.iter().all(|hit| hit.3.turn.is_none()));
+    assert!(found.iter().all(|hit| hit.3.path.is_empty()));
+}
+
+#[test]
 fn a_snippet_is_its_line_and_one_line_either_side_cut_to_400() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();

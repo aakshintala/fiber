@@ -167,8 +167,10 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   sample it did not force a call.
 
 Fiber sends mode `VALIDATED` only when every tool in the request fits the
-strict subset. A tool declared in every session, such as `ask_user`, is sent
-with `strict: false`, so Gemini requests use `AUTO` until #1214 settles it.
+strict subset. `VALIDATED` on `gemini-3-flash-preview` does not enforce
+`maxLength`, so Gemini requests keep `AUTO`, because `ask_user` and the
+session naming tool both declare it
+(`research/gemini-validated-probe/README.md`).
 Fiber's own argument check still validates every call (`docs/tools.md`,
 "Before a call runs").
 

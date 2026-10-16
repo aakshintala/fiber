@@ -1115,7 +1115,7 @@ impl contract::jobs::Jobs for StillRunning {
         &self,
         _: contract::jobs::Opening,
     ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
-        Err(contract::jobs::OpenError::Io {
+        Err(contract::jobs::OpenError {
             path: "unused".into(),
             source: std::io::Error::other("a listed job is not opened"),
         })

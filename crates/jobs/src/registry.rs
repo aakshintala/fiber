@@ -210,10 +210,10 @@ impl Registry {
 
     /// Mints the id, creates the empty output file, and records the job
     /// running. Does not create `artifacts`: when the file cannot be
-    /// created, returns [`OpenError::Io`] and records nothing.
+    /// created, returns [`OpenError`] and records nothing.
     pub fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
         let Some(registry) = self.me.upgrade() else {
-            return Err(OpenError::Io {
+            return Err(OpenError {
                 path: self.artifacts.clone(),
                 source: std::io::Error::other("the registry is gone"),
             });
@@ -223,7 +223,7 @@ impl Registry {
         let path = self.artifacts.join(format!("{id}.log"));
         let file = match File::create(&path) {
             Ok(file) => file,
-            Err(source) => return Err(OpenError::Io { path, source }),
+            Err(source) => return Err(OpenError { path, source }),
         };
         let job_id = JobId(id.clone());
         let started = JobStarted {

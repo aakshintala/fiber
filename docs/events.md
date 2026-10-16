@@ -448,6 +448,7 @@ sent the latest.
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
 | `model` | string | yes | the model reference in use |
+| `thinking` | string | no | the thinking level in use, as on `preamble_built`; absent when there is none |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
@@ -774,7 +775,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the copy approved before, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
@@ -1339,6 +1340,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `sessions` | `live`, an array with one object per running top-level session: `session_id` (string) and `status`, its latest `session_status` payload; and `exited`, an array of `recent.jsonl` rows, newest first, delegates and running sessions left out (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `prompt_history` | `prompts`, an array of prompt history lines, newest first, each a whole line as `history.jsonl` holds it (`docs/state.md`, "What each part holds"), at most 256; and `before` (integer), the byte offset where the oldest returned line starts, present only when older lines remain, sent back to read the next page, over the hub (`docs/invocation.md`, "The hub") |
 | `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
+| `configure` | the operation's result from `docs/invocation.md`, "What the hub speaks"; absent for `set_reviewer`, `switch_tool` and `switch_skill` |
+| `read_config` | `text` (string), the configuration file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
 | `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
 

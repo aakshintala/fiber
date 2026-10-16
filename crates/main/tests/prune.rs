@@ -568,3 +568,242 @@ fn a_running_session_keeps_its_worktree_under_force() {
     );
     drop(held);
 }
+
+/// Hook `fmt` running `script` in `dir`.
+#[track_caller]
+fn declare_hook(dir: &Path, script: &str) {
+    fs::create_dir_all(dir.join("scripts")).unwrap();
+    fs::write(dir.join("scripts/fmt.sh"), script).unwrap();
+    fs::set_permissions(
+        dir.join("scripts/fmt.sh"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join(".fiber/config")).unwrap();
+    fs::write(
+        dir.join(".fiber/config/hooks.json"),
+        r#"{"hooks":{"fmt":{"point":"after_tool","command":"scripts/fmt.sh"}}}"#,
+    )
+    .unwrap();
+}
+
+/// A linked worktree of the workspace on `branch` at `name` beside it,
+/// with its own hook script committed. Returned canonicalized.
+#[track_caller]
+fn linked(setup: &Setup, branch: &str, name: &str, script: &str) -> PathBuf {
+    let path = setup.root.path().join(name);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["worktree", "add", "-b", branch, path.to_str().unwrap()],
+    );
+    declare_hook(&path, script);
+    git(setup.deadline, &path, &["add", "."]);
+    git(setup.deadline, &path, &["commit", "--quiet", "-m", branch]);
+    fs::canonicalize(&path).unwrap()
+}
+
+/// Runs `fiber approve --yes` in `dir`, under the test's [`Deadline`].
+#[track_caller]
+fn approve_in(setup: &Setup, dir: &Path) -> std::process::Output {
+    let mut command = setup.fiber(&["approve", "--yes"]);
+    command.current_dir(dir);
+    run_to_exit(setup.deadline, "fiber approve", command)
+}
+
+/// The hash prefix the approval run approved for hook `fmt`.
+#[track_caller]
+fn approved_prefix(output: &std::process::Output) -> String {
+    let stderr = text(&output.stderr);
+    assert!(output.status.success(), "fiber approve: {stderr}");
+    stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("approved hook fmt "))
+        .expect("one hook approval")
+        .to_owned()
+}
+
+/// The names under `dir`, sorted; none when it is absent.
+fn names(dir: &Path) -> Vec<String> {
+    let mut found: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// The approval file matching `prefix`.
+#[track_caller]
+fn approval(setup: &Setup, prefix: &str) -> String {
+    let hits: Vec<String> = names(&project(setup).join("approvals"))
+        .into_iter()
+        .filter(|name| name.starts_with(prefix))
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "{prefix} in {:?}",
+        names(&project(setup).join("approvals"))
+    );
+    hits.into_iter().next().unwrap()
+}
+
+/// The copy directories under `pinned/`, sorted.
+fn copies(setup: &Setup) -> Vec<String> {
+    names(&setup.home().join("pinned"))
+        .into_iter()
+        .filter(|name| setup.home().join("pinned").join(name).is_dir())
+        .collect()
+}
+
+/// The workspace with hook `fmt` on `main` and linked worktrees `wa` on
+/// `a` and `wb` on `b` beside it, each with its own hook script, all
+/// three approved. Returns each run's hash prefix.
+#[track_caller]
+fn approved_repo(setup: &Setup) -> (String, String, String) {
+    repo(setup);
+    declare_hook(&setup.workspace(), "main\n");
+    git(setup.deadline, &setup.workspace(), &["add", "."]);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["commit", "--quiet", "-m", "hook"],
+    );
+    linked(setup, "a", "wa", "a\n");
+    linked(setup, "b", "wb", "b\n");
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let main = approved_prefix(&approve_in(setup, &workspace));
+    let a = approved_prefix(&approve_in(setup, &setup.root.path().join("wa")));
+    let b = approved_prefix(&approve_in(setup, &setup.root.path().join("wb")));
+    (main, a, b)
+}
+
+/// The `pinned  ` lines of prune's stdout.
+fn pinned_lines(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter(|line| line.starts_with("pinned  "))
+        .collect()
+}
+
+#[test]
+fn prune_removes_pinned_copies_no_worktree_matches() {
+    let setup = setup();
+    let (main, _, b) = approved_repo(&setup);
+    let hash_b = approval(&setup, &b);
+    let hash_main = approval(&setup, &main);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &[
+            "worktree",
+            "remove",
+            setup.root.path().join("wb").to_str().unwrap(),
+        ],
+    );
+    let dry = prune(&setup, &["--dry-run"]);
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr));
+    let out = text(&dry.stdout);
+    assert_eq!(pinned_lines(&out).len(), 1, "{out}");
+    let fields: Vec<_> = pinned_lines(&out)[0].split("  ").collect();
+    assert_eq!(fields.len(), 3, "{out}");
+    let (hash, size) = (fields[1], fields[2]);
+    assert_eq!(hash, hash_b);
+    assert!(out.contains(&format!("would free {size}")), "{out}");
+    assert!(
+        setup.home().join("pinned").join(&hash_b).is_dir(),
+        "dry-run deletes nothing"
+    );
+    let yes = prune(&setup, &["--yes"]);
+    assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr));
+    let out = text(&yes.stdout);
+    assert_eq!(pinned_lines(&out).len(), 1, "{out}");
+    assert!(out.contains(&format!("pinned  {hash_b}  {size}")), "{out}");
+    assert!(out.contains(&format!("freed {size}")), "{out}");
+    assert!(
+        !setup.home().join("pinned").join(&hash_b).exists(),
+        "the copy is gone"
+    );
+    assert!(
+        !setup
+            .home()
+            .join("pinned")
+            .join(format!("{hash_b}.ready"))
+            .exists()
+    );
+    // The other copies stay with their bytes, and every approval stays.
+    let hash_a = copies(&setup)
+        .into_iter()
+        .find(|name| {
+            fs::read_to_string(
+                setup
+                    .home()
+                    .join("pinned")
+                    .join(name)
+                    .join("scripts/fmt.sh"),
+            )
+            .unwrap()
+                == "a\n"
+        })
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(
+            setup
+                .home()
+                .join("pinned")
+                .join(&hash_a)
+                .join("scripts/fmt.sh")
+        )
+        .unwrap(),
+        "a\n"
+    );
+    assert!(setup.home().join("pinned").join(&hash_main).is_dir());
+    assert_eq!(names(&project(&setup).join("approvals")).len(), 3);
+}
+
+#[test]
+fn prune_keeps_a_held_pinned_copy() {
+    let setup = setup();
+    let (main, a, _) = approved_repo(&setup);
+    let hash_a = approval(&setup, &a);
+    let hash_main = approval(&setup, &main);
+    assert_ne!(hash_a, hash_main);
+    // A shared hold on the marker, as a running session keeps.
+    let ready = setup.home().join("pinned").join(format!("{hash_a}.ready"));
+    let hold = File::options().read(true).write(true).open(&ready).unwrap();
+    hold.lock_shared().unwrap();
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &[
+            "worktree",
+            "remove",
+            setup.root.path().join("wa").to_str().unwrap(),
+        ],
+    );
+    let held = prune(&setup, &["--yes"]);
+    assert_eq!(held.status.code(), Some(0), "{}", text(&held.stderr));
+    let out = text(&held.stdout);
+    assert_eq!(
+        pinned_lines(&out),
+        vec![format!("pinned  {hash_a}  skipped: a session holds it")],
+        "{out}"
+    );
+    assert!(out.contains("freed 0 B"), "{out}");
+    assert!(
+        setup.home().join("pinned").join(&hash_a).is_dir(),
+        "the copy stays"
+    );
+    drop(hold);
+    let yes = prune(&setup, &["--yes"]);
+    assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr));
+    let out = text(&yes.stdout);
+    assert_eq!(pinned_lines(&out).len(), 1, "{out}");
+    assert!(
+        !setup.home().join("pinned").join(&hash_a).exists(),
+        "removed"
+    );
+}

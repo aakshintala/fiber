@@ -124,6 +124,10 @@ fn wall() -> std::time::SystemTime {
     fakes::clock::FakeClock::new().wall()
 }
 
+fn clock() -> std::sync::Arc<fakes::clock::FakeClock> {
+    fakes::clock::FakeClock::new()
+}
+
 fn select(setup: &Setup, force: bool) -> Planned {
     super::select(&setup.home(), &setup.workspace(), force, false, wall())
 }
@@ -667,7 +671,7 @@ fn force_through_prune_run_prints_forced_removes_and_frees() {
         &setup.home(),
         &setup.workspace(),
         &args,
-        wall(),
+        clock().as_ref(),
         ask,
         &mut out,
         &mut || -> Result<doors::hub::Hub, doors::Error> { panic!("nothing connects") },
@@ -789,7 +793,7 @@ fn the_confirmation_names_ignored_files_and_removes_nothing_on_no() {
         &setup.home(),
         &setup.workspace(),
         &args,
-        wall(),
+        clock().as_ref(),
         ask,
         &mut out,
         &mut || -> Result<doors::hub::Hub, doors::Error> { panic!("nothing connects") },

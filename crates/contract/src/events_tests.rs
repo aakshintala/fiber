@@ -329,7 +329,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("clients", json!({"count": 1})),
         (
             "session_status",
-            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m",
+            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m", "thinking": "high",
             "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -881,8 +881,15 @@ fn a_session_status_round_trips_with_and_without_step() {
         .into_iter()
         .find(|(kind, _)| *kind == "session_status")
         .unwrap();
-    for step in [Some("shell ls"), None] {
+    for (step, thinking) in [Some("shell ls"), None]
+        .into_iter()
+        .flat_map(|step| [Some("high"), None].map(|thinking| (step, thinking)))
+    {
         let mut payload = base.clone();
+        payload.as_object_mut().unwrap().remove("thinking");
+        if let Some(thinking) = thinking {
+            payload["thinking"] = json!(thinking);
+        }
         payload["started"] = json!(123);
         payload["calls"] = json!(2);
         if let Some(step) = step {
@@ -895,7 +902,12 @@ fn a_session_status_round_trips_with_and_without_step() {
         assert_eq!(status.started, 123);
         assert_eq!(status.calls, 2);
         assert_eq!(status.step.as_deref(), step);
-        assert_eq!(serde_json::to_value(status).unwrap(), payload);
+        let written = serde_json::to_value(status).unwrap();
+        assert_eq!(written.get("thinking").and_then(Value::as_str), thinking);
+        if thinking.is_none() {
+            assert!(!written.as_object().unwrap().contains_key("thinking"));
+        }
+        assert_eq!(written, payload);
     }
 }
 

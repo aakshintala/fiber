@@ -85,11 +85,21 @@ pub(crate) fn frame(
     let rows = paths
         .iter()
         .map(|(path, added, removed)| {
-            vec![(
-                format!("{}  +{added} −{removed}", safe_line(path)),
-                None,
-                Ink::Plain,
-            )]
+            vec![
+                (safe_line(path), None, Ink::Heading),
+                (" · ".to_owned(), None, Ink::Muted),
+                (
+                    format!("+{added}"),
+                    None,
+                    Ink::Role(crate::theme::Role::Added),
+                ),
+                (" ".to_owned(), None, Ink::Plain),
+                (
+                    format!("−{removed}"),
+                    None,
+                    Ink::Role(crate::theme::Role::Removed),
+                ),
+            ]
         })
         .collect();
     let (files, added, removed) = totals(changes);

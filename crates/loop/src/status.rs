@@ -19,6 +19,7 @@ use contract::events::{
 use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log, Watcher};
+use support::text::one_line;
 
 use crate::Loop;
 
@@ -59,6 +60,7 @@ pub(crate) struct Fold {
     project: String,
     parent: Option<SessionId>,
     model: String,
+    thinking: Option<String>,
     window: Option<u64>,
     /// Each requested call's tool name, by action.
     tools: BTreeMap<ActionId, String>,
@@ -114,6 +116,7 @@ impl Fold {
             workspace,
             parent: None,
             model,
+            thinking: None,
             window,
             tools: BTreeMap::new(),
             running_calls: Vec::new(),
@@ -133,6 +136,7 @@ impl Fold {
                 project: String::new(),
                 parent: None,
                 model: String::new(),
+                thinking: None,
                 state: SessionState::Idle,
                 since: 0,
                 started: 0,
@@ -237,11 +241,15 @@ impl Fold {
             Event::SessionNamed(named) => self.name.clone_from(&named.name),
             Event::PreambleBuilt(built) => {
                 self.model.clone_from(&built.model);
+                self.thinking.clone_from(&built.thinking);
                 self.window = Some(built.context_window);
                 // A process that built its preamble no longer waits on an offer.
                 self.pending.retain(|p| p.kind != WaitingKind::Offer);
             }
-            Event::ModelChanged(changed) => self.model.clone_from(&changed.after.model),
+            Event::ModelChanged(changed) => {
+                self.model.clone_from(&changed.after.model);
+                self.thinking.clone_from(&changed.after.thinking);
+            }
             Event::TurnStarted(started) => {
                 if self.first_prompt.is_none() {
                     if let Some(prompt) = prompt_of(&started.input) {
@@ -511,6 +519,7 @@ impl Fold {
             project: self.project.clone(),
             parent: self.parent.clone(),
             model: self.model.clone(),
+            thinking: self.thinking.clone(),
             state: self.state(),
             since: self.since.unwrap_or_default(),
             started: self.started,
@@ -560,11 +569,6 @@ fn call_step(name: &str, subject: Option<&str>) -> String {
         Some(subject) => one_line(&format!("{name} {subject}")),
         None => one_line(name),
     }
-}
-
-/// `text` on one line.
-fn one_line(text: &str) -> String {
-    text.replace(['\n', '\r'], " ")
 }
 
 /// Classification's private path to the status watcher; never logged.

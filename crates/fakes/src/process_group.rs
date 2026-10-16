@@ -47,6 +47,21 @@ pub fn kill_group(group: u32, signal: &str) -> io::Result<bool> {
     })
 }
 
+/// Whether process group `group` still holds a process: the probe `0`
+/// through [`kill_group`], starting no process.
+///
+/// # Panics
+///
+/// When `group` is 1 or less (see [`kill_group`]).
+#[allow(
+    clippy::expect_used,
+    reason = "a probe of an id past the pid range panics, like a refused id"
+)]
+#[must_use]
+pub fn group_alive(group: u32) -> bool {
+    kill_group(group, "0").expect("a group past the pid range is never alive")
+}
+
 /// [`kill_group`] with the kernel call injected: the refusal of a group of 1
 /// or less comes before the name is read or `deliver` runs.
 fn signal_group(
@@ -158,6 +173,21 @@ pub fn kill_pid(pid: u32, signal: &str) -> io::Result<bool> {
         Some(sig) => rustix::process::kill_process(id, sig),
         None => rustix::process::test_kill_process(id),
     })
+}
+
+/// Whether `pid` still runs: the probe `0` through [`kill_pid`], starting
+/// no process. An exited child reads live until it is reaped.
+///
+/// # Panics
+///
+/// When `pid` is 1 or less (see [`kill_pid`]).
+#[allow(
+    clippy::expect_used,
+    reason = "a probe of an id past the pid range panics, like a refused id"
+)]
+#[must_use]
+pub fn pid_alive(pid: u32) -> bool {
+    kill_pid(pid, "0").expect("a pid past the pid range is never alive")
 }
 
 /// The variable naming a matching watchdog's pattern: the environment, not

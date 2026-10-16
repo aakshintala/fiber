@@ -240,20 +240,16 @@ impl App {
     /// serial; a job fills one.
     fn session_view_list_serials(&self) -> Vec<Option<u64>> {
         match self.session_views.open.as_ref() {
-            Some(Open::Delegates(_)) => self
-                .panel_state
-                .running_delegates()
+            Some(Open::Delegates(_) | Open::Jobs(_)) => self
+                .session_view_screen(0)
                 .into_iter()
-                .flat_map(|(started, _)| {
-                    let serial = self.serial_of_job(&started.job_id);
-                    [serial, serial]
+                .flat_map(|frame| frame.rows)
+                .map(|cells| {
+                    cells.into_iter().find_map(|(_, spot, _)| match spot {
+                        Some(Spot::Item(serial)) => Some(serial),
+                        _ => None,
+                    })
                 })
-                .collect(),
-            Some(Open::Jobs(_)) => self
-                .panel_state
-                .running_jobs()
-                .into_iter()
-                .map(|(id, _)| self.serial_of_job(id))
                 .collect(),
             Some(Open::Usage(_)) | Some(Open::Context(_)) | Some(Open::Files(_)) | None => {
                 Vec::new()

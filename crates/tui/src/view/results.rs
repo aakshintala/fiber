@@ -13,32 +13,35 @@ use super::to_u16;
 use crate::app::Snippet;
 use crate::app::results::ResultsView;
 use crate::mouse::{Target, TargetId};
-use crate::theme::Role;
 
 /// The selected entry's style.
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
-/// A match's highlight: underlined, so it shows with no colour.
-const HIT: Style = Style::new()
-    .bg(Role::Match.color())
-    .add_modifier(Modifier::UNDERLINED);
-
-/// Draws `view` into `area`: the header on its first row, then one row
-/// per entry from its top, the selected entry reversed and every match
-/// marked. Pushes one jump target per drawn entry. Past the bottom, or on
-/// an empty area, draws what fits.
+/// Draws the top row, count, three rows per entry and the bottom hint.
 pub(super) fn render(view: &ResultsView, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     if area.is_empty() {
         return;
     }
-    buf.set_stringn(
-        area.x,
-        area.y,
-        &view.header,
-        usize::from(area.width),
-        Style::default(),
+    crate::swapped::draw_top_row(
+        buf,
+        area,
+        "Search",
+        &format!("⌕ {}", view.query),
+        TargetId::CloseOverlay,
+        targets,
     );
-    let height = usize::from(area.height).saturating_sub(1);
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    if area.height > 1 {
+        buf.set_stringn(
+            area.x,
+            area.y + 1,
+            &view.header,
+            usize::from(area.width),
+            dim,
+        );
+    }
+    let height = usize::from(area.height).saturating_sub(4) / 3;
+    let (matched, current) = super::marks::hit_styles();
     for (row, (at, entry)) in view
         .entries
         .iter()
@@ -47,26 +50,86 @@ pub(super) fn render(view: &ResultsView, area: Rect, buf: &mut Buffer, targets: 
         .take(height)
         .enumerate()
     {
-        let y = area.y.saturating_add(1).saturating_add(to_u16(row));
+        let y = area
+            .y
+            .saturating_add(3)
+            .saturating_add(to_u16(row.saturating_mul(3)));
+        path_row(entry, Rect::new(area.x, y, area.width, 1), buf);
         let (text, hit) = entry_row(entry, area.width);
-        buf.set_stringn(area.x, y, &text, usize::from(area.width), Style::default());
+        buf.set_stringn(
+            area.x,
+            y + 1,
+            &text,
+            usize::from(area.width),
+            Style::default(),
+        );
         let rect = Rect::new(
             area.x.saturating_add(hit.start),
-            y,
+            y + 1,
             hit.end.saturating_sub(hit.start),
             1,
         );
-        // An empty range styles nothing: a match clipped past the edge
-        // keeps no highlight.
-        buf.set_style(rect.intersection(area), HIT);
-        let rect = Rect::new(area.x, y, area.width, 1);
-        if at == view.selected {
-            buf.set_style(rect, SELECTED);
+        buf.set_style(
+            rect.intersection(area),
+            if Some(at) == view.current {
+                current
+            } else {
+                matched
+            },
+        );
+        for y in [y, y + 1] {
+            let rect = Rect::new(area.x, y, area.width, 1);
+            if at == view.selected {
+                buf.set_style(rect, SELECTED);
+            }
+            targets.push(Target {
+                id: TargetId::FindResult(at),
+                rect,
+            });
         }
-        targets.push(Target {
-            id: TargetId::FindResult(at),
-            rect,
-        });
+    }
+    // At one row the return target takes precedence over the hint.
+    if area.height > 1 {
+        buf.set_stringn(
+            area.x,
+            area.bottom() - 1,
+            "Enter jumps to the match",
+            usize::from(area.width),
+            dim,
+        );
+    }
+}
+
+fn path_row(entry: &Snippet, area: Rect, buf: &mut Buffer) {
+    buf.set_stringn(
+        area.x,
+        area.y,
+        &entry.path,
+        usize::from(area.width),
+        Style::new().add_modifier(Modifier::BOLD),
+    );
+    let Some(turn) = entry.turn else {
+        return;
+    };
+    let label = format!("turn {}", turn.saturating_add(1));
+    let width = |text: &str| {
+        drawn(text)
+            .last()
+            .map_or(0, |cell| cell.col.saturating_add(cell.width))
+    };
+    let label_width = width(&label);
+    if width(&entry.path)
+        .saturating_add(1)
+        .saturating_add(label_width)
+        <= usize::from(area.width)
+    {
+        buf.set_stringn(
+            area.right().saturating_sub(to_u16(label_width)),
+            area.y,
+            label,
+            label_width,
+            Style::new().add_modifier(Modifier::DIM),
+        );
     }
 }
 
@@ -81,6 +144,7 @@ fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
         line,
         at,
         after,
+        ..
     } = entry;
     let mut text = String::new();
     if !before.is_empty() {

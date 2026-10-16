@@ -85,6 +85,7 @@ fn status(name: &str) -> Event {
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),
+        thinking: None,
         state: SessionState::Idle,
         since: 0,
         started: 0,

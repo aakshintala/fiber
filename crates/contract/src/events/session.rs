@@ -361,6 +361,9 @@ pub struct SessionStatus {
     pub parent: Option<SessionId>,
     /// The model reference in use.
     pub model: String,
+    /// The thinking level in use, as on `preamble_built`; absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     /// What the session is doing, with the keys that state carries.
     #[serde(flatten)]
     pub state: SessionState,

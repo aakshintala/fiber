@@ -23,7 +23,7 @@ use contract::{Envelope, ErrorCode, SessionId};
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{run, utc};
+use super::run;
 
 /// One named deadline per wait on a child.
 const CHILD_DEADLINE: Duration = Duration::from_secs(10);
@@ -691,17 +691,41 @@ fn a_failed_stdout_write_is_io_failed() {
 }
 
 #[test]
-fn utc_prints_seconds_since_the_epoch_as_a_utc_time() {
-    for (seconds, printed) in [
-        (0, "1970-01-01T00:00:00Z"),
-        (951_868_799, "2000-02-29T23:59:59Z"),
-        (946_684_799, "1999-12-31T23:59:59Z"),
-        (946_684_800, "2000-01-01T00:00:00Z"),
-        (1_791_367_203, "2026-10-07T10:00:03Z"),
-        (4_107_542_400, "2100-03-01T00:00:00Z"),
-    ] {
-        assert_eq!(utc(seconds), printed, "{seconds}");
-    }
+fn a_crlf_pair_in_a_snippet_prints_as_one_space() {
+    let root = fakes::TempDir::new("cli-sessions-search-crlf");
+    let home = root.path().join("h");
+    let workspace = root.path().join("r");
+    let common = root.path().join("r.git");
+    let identity = identity(&workspace, &root.path().join("rw"), &common);
+    let sessions = log::sessions_dir(&home, &common);
+    session(
+        &sessions,
+        "s_crlf",
+        &workspace,
+        &[
+            event(
+                "session_named",
+                json!({"name": "crlf work", "by": "person"}),
+            ),
+            message("say hi\r\nthen retry budget"),
+        ],
+    );
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    run(
+        &home,
+        &workspace,
+        Arc::clone(&identity),
+        true,
+        QUERY,
+        false,
+        false,
+        &mut out,
+        &mut err,
+    )
+    .unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.ends_with("   say hi then retry budget\n"), "{out}");
 }
 
 /// The child runs `search` and exits with its code, so the parent can read

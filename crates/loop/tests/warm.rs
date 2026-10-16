@@ -504,7 +504,7 @@ impl Toggle {
 
 impl Jobs for Toggle {
     fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: PathBuf::from("jobs"),
             source: std::io::Error::other("no jobs here"),
         })

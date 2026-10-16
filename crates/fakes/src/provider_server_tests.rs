@@ -73,7 +73,9 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
         "the request is recorded while the response is held"
     );
     assert!(
-        Deadline::after(Duration::from_secs(2)).recv(&rx).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the client has no body while the response is held"
     );
 
