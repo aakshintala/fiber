@@ -20,6 +20,7 @@ mod attention;
 mod closed;
 mod connection;
 mod delete;
+mod device_login;
 mod devices;
 mod diag;
 mod directories;
@@ -69,7 +70,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::{FileSearch, Machine};
+pub use crate::machine::{DeviceLogin, FileSearch, Machine};
 pub use crate::recent::{Left, RecentRow, append};
 
 /// What the hub reads from the configuration when it starts.

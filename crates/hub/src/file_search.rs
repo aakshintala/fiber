@@ -153,4 +153,4 @@ fn work(
 
 #[cfg(test)]
 #[path = "file_search_tests.rs"]
-mod tests;
+pub(crate) mod tests;

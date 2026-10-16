@@ -814,6 +814,7 @@ pub(crate) struct FakeMachine {
     pub(crate) calls: Mutex<Vec<Value>>,
     pub(crate) answers: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
     pub(crate) search_gate: Mutex<Option<Arc<SearchGate>>>,
+    pub(crate) logins: Mutex<std::collections::VecDeque<Arc<FakeLogin>>>,
 }
 
 pub(crate) struct SearchGate {
@@ -845,7 +846,73 @@ impl crate::FileSearch for FakeSearch {
         }
     }
 }
+pub(crate) struct FakeLogin {
+    pub(crate) shows: bool,
+    pub(crate) outcome: Result<String, Failure>,
+    pub(crate) hold_cancel: bool,
+    pub(crate) waiting: std::sync::mpsc::Sender<()>,
+    pub(crate) gate: Mutex<std::sync::mpsc::Receiver<()>>,
+    pub(crate) release: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    pub(crate) cancelled: std::sync::mpsc::Sender<()>,
+    pub(crate) stopped: std::sync::atomic::AtomicBool,
+}
+type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+struct FakeDeviceLogin {
+    script: Option<Arc<FakeLogin>>,
+    shown: ShowCode,
+}
+impl crate::DeviceLogin for FakeDeviceLogin {
+    fn run(&self) -> Result<String, Failure> {
+        let Some(script) = self.script.as_ref() else {
+            return Err(Failure {
+                code: contract::ErrorCode::Usage,
+                message: "no scripted login".into(),
+                provider: None,
+                retry_after_ms: None,
+            });
+        };
+        if script.shows {
+            (self.shown)("https://device", "CODE");
+        }
+        script.waiting.send(()).unwrap_or(());
+        lock(&script.gate).recv().unwrap_or(());
+        if script.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(Failure {
+                code: contract::ErrorCode::AuthenticationFailed,
+                message: "cancelled".into(),
+                provider: None,
+                retry_after_ms: None,
+            })
+        } else {
+            script.outcome.clone()
+        }
+    }
+    fn cancel(&self) {
+        if let Some(script) = &self.script {
+            script
+                .stopped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            script.cancelled.send(()).unwrap_or(());
+            if let Some(release) = lock(&script.release).take()
+                && !script.hold_cancel
+            {
+                release.send(()).unwrap_or(());
+            }
+        }
+    }
+}
 impl crate::Machine for FakeMachine {
+    fn device_login(
+        &self,
+        _name: &str,
+        shown: ShowCode,
+        _clock: Arc<dyn contract::clock::Clock>,
+    ) -> Arc<dyn crate::DeviceLogin> {
+        Arc::new(FakeDeviceLogin {
+            script: lock(&self.logins).pop_front(),
+            shown,
+        })
+    }
     fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn crate::FileSearch> {
         lock(&self.calls).push(serde_json::json!({"search":[workspace, home]}));
         Box::new(FakeSearch(lock(&self.search_gate).clone()))

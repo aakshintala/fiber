@@ -11,15 +11,15 @@ use fakes::clock::FakeClock;
 use fakes::{Deadline, TempDir};
 use serde_json::{Value, json};
 
-struct Client {
-    socket: UnixStream,
-    answers: mpsc::Receiver<Value>,
+pub(crate) struct Client {
+    pub(crate) socket: UnixStream,
+    pub(crate) answers: mpsc::Receiver<Value>,
     ended: mpsc::Receiver<()>,
-    hub: Arc<Hub>,
+    pub(crate) hub: Arc<Hub>,
     _home: TempDir,
 }
 impl Client {
-    fn new(machine: Arc<FakeMachine>, fail: bool) -> Self {
+    pub(crate) fn new(machine: Arc<FakeMachine>, fail: bool) -> Self {
         let home = TempDir::new("search-hub");
         let h = hub(
             home.path(),
@@ -65,7 +65,7 @@ impl Client {
         assert_eq!(client.next()["kind"], "hub_hello");
         client
     }
-    fn send(&mut self, id: &str, command: &str, args: Value) {
+    pub(crate) fn send(&mut self, id: &str, command: &str, args: Value) {
         writeln!(
             self.socket,
             "{}",
@@ -80,10 +80,10 @@ impl Client {
             json!({"workspace":workspace,"text":text,"fresh":fresh}),
         );
     }
-    fn next(&self) -> Value {
+    pub(crate) fn next(&self) -> Value {
         Deadline::after(DEADLINE).recv_or_fail(&self.answers, "hub answer")
     }
-    fn barrier(&mut self) {
+    pub(crate) fn barrier(&mut self) {
         self.send("barrier", "status", json!({}));
         assert_eq!(self.next()["payload"]["command_id"], "barrier");
     }

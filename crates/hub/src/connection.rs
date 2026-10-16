@@ -593,6 +593,7 @@ fn disconnect(hub: &Hub, n: u64) {
 #[derive(Default)]
 struct Remote {
     search: crate::file_search::Search,
+    login: crate::device_login::Login,
     fed: Option<u64>,
 }
 
@@ -626,6 +627,15 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
+        "device_login" if hub.machine.is_some() => {
+            remote.login.start(&line.id, &line.args, hub, writer)
+        }
+        "device_login_result" if hub.machine.is_some() => {
+            remote.login.result(&line.id, &line.args, hub, writer)
+        }
+        "device_login_cancel" if hub.machine.is_some() => {
+            remote.login.cancel(&line.id, &line.args, hub, writer)
+        }
         "search_files" if hub.machine.is_some() => {
             remote.search.submit(&line.id, &line.args, hub, writer)
         }

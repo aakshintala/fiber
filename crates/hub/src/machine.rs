@@ -9,8 +9,17 @@ use serde_json::{Map, Value, json};
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
 
+type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+
 /// Configuration on the machine running the hub, not the terminal.
 pub trait Machine: Send + Sync {
+    /// Starts a device-code login on the hub's machine.
+    fn device_login(
+        &self,
+        name: &str,
+        shown: ShowCode,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn DeviceLogin>;
     /// Creates a retained workspace search, resolving `~/` against `home`.
     fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn FileSearch>;
     /// Runs one configuration operation with `operation` removed from `args`.
@@ -30,6 +39,14 @@ pub trait Machine: Send + Sync {
         text: &str,
         version: &str,
     ) -> Result<(), Failure>;
+}
+
+/// A device-code login owned by one hub connection.
+pub trait DeviceLogin: Send + Sync {
+    /// Waits for the login to end, returning its stored credentials path.
+    fn run(&self) -> Result<String, Failure>;
+    /// Returns once nothing more can be stored.
+    fn cancel(&self);
 }
 
 /// A connection's search core; only its search worker calls it.
