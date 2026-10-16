@@ -70,8 +70,8 @@ impl Setup {
     /// Runs `set` with stderr captured: its result and what it warned.
     fn set_capturing(&self, layer: Layer, key: &str, value: &str) -> (Result<(), Failure>, String) {
         let mut err = Vec::new();
-        let result = run_set(&self.home(), &self.workspace(), layer, key, value, &mut err)
-            .map(|_| ());
+        let result =
+            run_set(&self.home(), &self.workspace(), layer, key, value, &mut err).map(|_| ());
         (result, String::from_utf8(err).unwrap())
     }
 }

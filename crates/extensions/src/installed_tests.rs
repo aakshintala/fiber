@@ -307,7 +307,11 @@ fn removal_deletes_the_settings_files_in_every_layer() {
     removal.commit().unwrap();
     for layer in ["", "projects/p1", "projects/p2"] {
         assert!(
-            !home.path().join(layer).join(format!("config/{dir}.json")).exists(),
+            !home
+                .path()
+                .join(layer)
+                .join(format!("config/{dir}.json"))
+                .exists(),
             "{layer}: the settings file is gone"
         );
         assert!(
@@ -333,9 +337,7 @@ fn removal_deletes_a_damaged_extensions_settings() {
     fs::create_dir_all(&path).unwrap();
     fs::write(
         path.join("extension.json"),
-        format!(
-            r#"{{"name":"{name}","version":"v1.0.0","fiber":"0.1.0","api":1}}"#
-        ),
+        format!(r#"{{"name":"{name}","version":"v1.0.0","fiber":"0.1.0","api":1}}"#),
     )
     .unwrap();
     for layer in [home.path().to_path_buf(), home.path().join("projects/p1")] {
@@ -348,7 +350,12 @@ fn removal_deletes_a_damaged_extensions_settings() {
     assert_eq!(removal.names, [name]);
     removal.commit().unwrap();
     assert!(!home.path().join(format!("config/{dir}.json")).exists());
-    assert!(!home.path().join(format!("projects/p1/config/{dir}.json")).exists());
+    assert!(
+        !home
+            .path()
+            .join(format!("projects/p1/config/{dir}.json"))
+            .exists()
+    );
 }
 
 #[test]
@@ -393,5 +400,8 @@ fn a_settings_failure_names_the_file() {
         matches!(err, crate::Error::Config(_)),
         "the settings failure is a config error: {err}"
     );
-    assert!(err.to_string().contains(&settings.display().to_string()), "{err}");
+    assert!(
+        err.to_string().contains(&settings.display().to_string()),
+        "{err}"
+    );
 }

@@ -112,8 +112,8 @@ fn run_set(
             notices.extend(config.notices().iter().cloned());
         }
     }
-    let file =
-        config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))?;
+    let file = config::set(home, workspace, &project, layer, key, parsed)
+        .map_err(|e| failed(e.code(), e))?;
     print_notices(err, &notices);
     Ok(file)
 }

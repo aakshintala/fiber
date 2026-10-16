@@ -364,9 +364,9 @@ impl Config {
                 }
                 return Some(Some((value.clone(), source.clone())));
             }
-            if (1..key.len()).any(|len| {
-                path::get(seen, &key[..len]).is_some_and(|at| !at.is_object())
-            }) {
+            if (1..key.len())
+                .any(|len| path::get(seen, &key[..len]).is_some_and(|at| !at.is_object()))
+            {
                 hiding = true;
             }
         }

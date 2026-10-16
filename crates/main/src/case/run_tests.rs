@@ -677,10 +677,7 @@ fn the_case_config_is_written_whole_into_a_missing_home() {
     let config = json!({"handoff": {"tokens": 5}, "model": "a/b"});
     write_config(&home, &config).unwrap();
     let text = fs::read_to_string(home.join("config.json")).unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).unwrap(),
-        config
-    );
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), config);
     let leftovers: Vec<std::path::PathBuf> = fs::read_dir(&home)
         .unwrap()
         .map(|entry| entry.unwrap().path())

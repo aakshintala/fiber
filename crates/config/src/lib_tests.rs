@@ -154,8 +154,12 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         (
             vec![
                 default(),
-                global(json!({"providers": {"acme": {"credentials": {"work": {"command": ["w"], "extra": 1}}}}})),
-                project(json!({"providers": {"acme": {"credentials": {"work": {"command": ["h"]}}}}})),
+                global(
+                    json!({"providers": {"acme": {"credentials": {"work": {"command": ["w"], "extra": 1}}}}}),
+                ),
+                project(
+                    json!({"providers": {"acme": {"credentials": {"work": {"command": ["h"]}}}}}),
+                ),
             ],
             "providers.acme.credentials.work.extra",
             None,
@@ -211,7 +215,11 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         ),
         // A proper prefix of a union row: the union fill re-creates the
         // object, never the scalar.
-        (vec![default(), global(json!({"skills": 5}))], "skills", None),
+        (
+            vec![default(), global(json!({"skills": 5}))],
+            "skills",
+            None,
+        ),
         // A scalar over the key with no lower holder: the default.
         (
             vec![default(), global(json!({"extensions": 5}))],
