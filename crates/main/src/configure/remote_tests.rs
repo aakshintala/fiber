@@ -482,3 +482,245 @@ fn remote_config_write_takes_the_lock_before_comparing_the_version() {
     );
     assert_eq!(fs::read_to_string(path).unwrap(), "other");
 }
+
+#[test]
+fn remote_setting_shapes_preserve_values_layers_and_scope() {
+    for (shown, scope, expected) in [
+        (
+            Shown::Unset,
+            WriteScope::GlobalOnly,
+            json!({"shown":"unset","scope":"global_only"}),
+        ),
+        (
+            Shown::Redacted("names secret".into()),
+            WriteScope::RepoOnly,
+            json!({"shown":"redacted","value":"names secret","scope":"repo_only"}),
+        ),
+        (
+            Shown::Value("false".into()),
+            WriteScope::Any { repo: false },
+            json!({"shown":"value","value":"false","scope":"any","repo":false}),
+        ),
+        (
+            Shown::Union {
+                names: vec![("s".into(), "global".into())],
+                own: vec![
+                    (Layer::Global, "[]".into()),
+                    (Layer::Project, "[1]".into()),
+                    (Layer::Repository, "[2]".into()),
+                ],
+            },
+            WriteScope::PersonFiles,
+            json!({"shown":"union","names":[["s","global"]],"own":[["global","[]"],["project","[1]"],["repository","[2]"]],"scope":"person_files"}),
+        ),
+    ] {
+        let found = setting(tui::SettingRow {
+            key: "test".into(),
+            layer: "default".into(),
+            file: None,
+            value: shown,
+            scope,
+        });
+        let mut expected = expected;
+        expected["key"] = json!("test");
+        expected["layer"] = json!("default");
+        assert_eq!(found, expected);
+    }
+    assert_eq!(
+        lists(ToolLists {
+            enabled: Some(vec![]),
+            disabled: vec!["t".into()]
+        }),
+        json!({"enabled":[],"disabled":["t"]})
+    );
+}
+
+#[test]
+fn remote_rules_report_rows_removals_and_parse_errors() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let text = r#"{"decision":"allow","tool":"shell","prefix":"git status"}"#;
+    write(&dirs.home().join("rules"), text);
+    let rules = result(&seam, "rules", json!({"workspace":workspace}));
+    assert_eq!(
+        rules["global"]["rows"][0],
+        json!({"line":1,"text":text,"rule":{"decision":"allow","tool":"shell","prefix":"git status"}})
+    );
+    assert_eq!(
+        result(
+            &seam,
+            "revoke",
+            json!({"workspace":workspace,"scope":"global","line":1,"text":text})
+        ),
+        json!({"revoked":"removed"})
+    );
+    write(
+        &dirs.project_file(&workspace).with_file_name("rules"),
+        "invalid rule",
+    );
+    let rules = result(&seam, "rules", json!({"workspace":workspace}));
+    assert!(
+        rules["project"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("line 1")
+    );
+    assert!(rules["project"].get("rows").is_none());
+}
+
+#[test]
+fn remote_operations_preserve_other_layers_and_switch_forms() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    install(&dirs.home());
+    for (layer, file) in [
+        ("project", dirs.project_file(&workspace)),
+        ("repository", workspace.join(".fiber/config.json")),
+    ] {
+        assert_eq!(
+            result(
+                &seam,
+                "set",
+                json!({"workspace":workspace,"layer":layer,"key":"thinking","text":"high"})
+            )["file"],
+            json!(file)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(file).unwrap()).unwrap()["thinking"],
+            "high"
+        );
+    }
+    assert_eq!(
+        result(
+            &seam,
+            "store_key",
+            json!({"name":"acme","label":"work","key":"sk-work"})
+        ),
+        json!({"path":"credentials/acme/work","replaced":false})
+    );
+    assert_eq!(
+        call(&seam, "reviewer_models", json!({"name":"unknown"}))
+            .unwrap_err()
+            .code,
+        ErrorCode::Usage
+    );
+    crate::test_support::install_extension(
+        &dirs.home(),
+        "extensions/plain",
+        json!({"name":"plain","version":"v0.0.0","fiber":"0.0.0","api":1}),
+        &[(
+            "plain",
+            json!({"name":"plain","models":[{"id":"p","protocol":"openai-responses","base_url":"http://x/v1","context_window":1000}]}),
+        )],
+    );
+    assert_eq!(
+        result(&seam, "reviewer_models", json!({"name":"plain"})),
+        json!({"models":["p"],"notices":[]})
+    );
+    call(&seam,"switch_tool",json!({"workspace":workspace,"group":{"extension":"acme"},"tool":"t","scope":"everywhere","on":false})).unwrap();
+    let tools = result(&seam, "tool_switches", json!({"workspace":workspace}));
+    assert_eq!(tools["groups"][0]["group"], json!({"extension":"acme"}));
+    call(&seam,"switch_tool",json!({"workspace":workspace,"group":{"extension":"acme"},"tool":"t","scope":"everywhere","on":true})).unwrap();
+    assert_eq!(
+        result(&seam, "tool_switches", json!({"workspace":workspace}))["groups"][0]["everywhere"]["disabled"],
+        json!([])
+    );
+    call(
+        &seam,
+        "switch_skill",
+        json!({"workspace":workspace,"name":"s","scope":"project","on":false}),
+    )
+    .unwrap();
+    assert_eq!(
+        result(&seam, "skills_disabled", json!({"workspace":workspace}))["project"],
+        json!(["s"])
+    );
+    for group in [
+        json!({}),
+        json!({"mcp":null}),
+        json!({"extension":null}),
+        json!({"unknown":"x"}),
+    ] {
+        assert_eq!(
+            call(
+                &seam,
+                "switch_tool",
+                json!({"workspace":workspace,"group":group,"tool":"t","scope":"project","on":false})
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::InvalidArguments
+        );
+    }
+}
+
+#[test]
+fn remote_config_io_failures_name_the_file_and_skill_symlinks_are_allowed() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let directory = workspace.join("SKILL.md");
+    fs::create_dir(&directory).unwrap();
+    assert_eq!(
+        seam.read_config(&workspace, &directory).unwrap_err().code,
+        ErrorCode::IoFailed
+    );
+    fs::remove_dir(&directory).unwrap();
+    let target = workspace.join("body");
+    write(&target, "linked");
+    std::os::unix::fs::symlink(&target, &directory).unwrap();
+    assert_eq!(
+        seam.read_config(&workspace, &directory).unwrap().0,
+        "linked"
+    );
+    let config = dirs.home().join("config.json");
+    fs::create_dir(&config).unwrap();
+    assert_eq!(
+        seam.read_config(&workspace, &config).unwrap_err().code,
+        ErrorCode::IoFailed
+    );
+    assert_eq!(
+        seam.write_config(&workspace, &config, "x", "missing")
+            .unwrap_err()
+            .code,
+        ErrorCode::IoFailed
+    );
+}
+
+#[test]
+fn remote_operation_documentation_lists_the_complete_wire_surface() {
+    let doc = include_str!("../../../../docs/invocation.md");
+    let table = doc
+        .split("| Operation | Arguments besides `operation` | Result |\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\n")
+        .next()
+        .unwrap();
+    let names: Vec<_> = table
+        .lines()
+        .skip(1)
+        .map(|row| row.split('`').nth(1).unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "settings",
+            "set",
+            "global_file",
+            "rules",
+            "revoke",
+            "login_targets",
+            "store_key",
+            "reviewer_models",
+            "set_reviewer",
+            "tool_switches",
+            "switch_tool",
+            "skills_disabled",
+            "switch_skill",
+            "skill_text"
+        ]
+    );
+}

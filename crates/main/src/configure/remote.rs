@@ -102,63 +102,70 @@ fn layer_name(layer: Layer) -> &'static str {
 }
 
 fn setting(row: tui::SettingRow) -> Value {
-    let mut value = json!({"key":row.key, "layer":row.layer});
+    let mut value = Map::from_iter([
+        ("key".to_owned(), json!(row.key)),
+        ("layer".to_owned(), json!(row.layer)),
+    ]);
     if let Some(file) = row.file {
-        value["file"] = json!(file);
+        drop(value.insert("file".to_owned(), json!(file)));
     }
     match row.value {
-        Shown::Unset => value["shown"] = json!("unset"),
+        Shown::Unset => drop(value.insert("shown".to_owned(), json!("unset"))),
         Shown::Value(text) => {
-            value["shown"] = json!("value");
-            value["value"] = json!(text);
+            drop(value.insert("shown".to_owned(), json!("value")));
+            drop(value.insert("value".to_owned(), json!(text)));
         }
         Shown::Redacted(text) => {
-            value["shown"] = json!("redacted");
-            value["value"] = json!(text);
+            drop(value.insert("shown".to_owned(), json!("redacted")));
+            drop(value.insert("value".to_owned(), json!(text)));
         }
         Shown::Union { names, own } => {
-            value["shown"] = json!("union");
-            value["names"] = json!(names);
-            value["own"] = json!(
+            drop(value.insert("shown".to_owned(), json!("union")));
+            drop(value.insert("names".to_owned(), json!(names)));
+            drop(value.insert(
+                "own".to_owned(),
+                json!(
                 own.into_iter()
                     .map(|(layer, text)| (layer_name(layer), text))
                     .collect::<Vec<_>>()
-            );
+            ),
+            ));
         }
     }
     match row.scope {
         WriteScope::Any { repo } => {
-            value["scope"] = json!("any");
-            value["repo"] = json!(repo);
+            drop(value.insert("scope".to_owned(), json!("any")));
+            drop(value.insert("repo".to_owned(), json!(repo)));
         }
-        WriteScope::GlobalOnly => value["scope"] = json!("global_only"),
-        WriteScope::RepoOnly => value["scope"] = json!("repo_only"),
-        WriteScope::PersonFiles => value["scope"] = json!("person_files"),
+        WriteScope::GlobalOnly => drop(value.insert("scope".to_owned(), json!("global_only"))),
+        WriteScope::RepoOnly => drop(value.insert("scope".to_owned(), json!("repo_only"))),
+        WriteScope::PersonFiles => drop(value.insert("scope".to_owned(), json!("person_files"))),
     }
-    value
+    Value::Object(value)
 }
 
 fn section(section: RulesSection) -> Value {
-    let mut result = json!({"file":section.file});
+    let mut result = Map::from_iter([("file".to_owned(), json!(section.file))]);
     match section.rows {
-        Ok(rows) => {
-            result["rows"] = json!(
+        Ok(rows) => drop(result.insert(
+            "rows".to_owned(),
+            json!(
                 rows.into_iter()
                     .map(|row| json!({"line":row.line,"text":row.text,"rule":row.rule}))
                     .collect::<Vec<_>>()
-            )
-        }
-        Err(error) => result["error"] = json!(error),
+            ),
+        )),
+        Err(error) => drop(result.insert("error".to_owned(), json!(error))),
     }
-    result
+    Value::Object(result)
 }
 
 fn lists(lists: ToolLists) -> Value {
-    let mut value = json!({"disabled":lists.disabled});
+    let mut value = Map::from_iter([("disabled".to_owned(), json!(lists.disabled))]);
     if let Some(enabled) = lists.enabled {
-        value["enabled"] = json!(enabled);
+        drop(value.insert("enabled".to_owned(), json!(enabled)));
     }
-    value
+    Value::Object(value)
 }
 
 impl hub::Machine for Seam {
@@ -243,11 +250,14 @@ impl hub::Machine for Seam {
                 let models = self
                     .reviewer_models(a.string("name")?, clock)
                     .map_err(from_view)?;
-                let mut value = json!({"models":models.models,"notices":models.notices});
+                let mut value = Map::from_iter([
+                    ("models".to_owned(), json!(models.models)),
+                    ("notices".to_owned(), json!(models.notices)),
+                ]);
                 if let Some(selected) = models.selected {
-                    value["selected"] = json!(selected);
+                    drop(value.insert("selected".to_owned(), json!(selected)));
                 }
-                value
+                Value::Object(value)
             }
             "set_reviewer" => {
                 a.shape(&["name", "id"], &[])?;
