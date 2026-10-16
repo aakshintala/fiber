@@ -640,28 +640,72 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
     }
 }
 
-/// A changed item's diff: each hunk's `@@` line dim, removed lines in
-/// removed and added lines in added, as "Changed files" draws a hunk
-/// (`docs/tui.md`, "Swapped views"). `str::lines` drops a trailing `\r`,
-/// so a CRLF diff draws as an LF one.
+/// A changed item's diff through the shared renderer, indented as
+/// before: the dim gutter, `@@` lines dim, `-` lines in `removed` and
+/// `+` lines in `added`, the words that differ in reverse video when
+/// one removed line pairs with one added line, as "Changed files"
+/// draws a hunk (`docs/tui.md`, "Swapped views").
 fn diff_rows(diff: &str) -> Vec<Row> {
-    diff.lines()
+    let drawn = crate::turn::opened::diff_lines(diff);
+    let gutter = crate::turn::opened::gutter_width(drawn.iter().filter_map(|line| line.number));
+    drawn
+        .into_iter()
         .map(|line| {
-            let ink = if line.starts_with("@@") {
-                style(Role::Muted)
-            } else if ["+++", "---"].iter().any(|head| line.starts_with(head)) {
-                style(Role::Keyword)
-            } else if line.starts_with('+') {
-                style(Role::Added)
-            } else if line.starts_with('-') {
-                style(Role::Removed)
+            let mut spans = vec![Span::raw("    ")];
+            if gutter > 0 {
+                let text = match line.number {
+                    Some(number) => format!("{number:>gutter$} "),
+                    None => " ".repeat(gutter + 1),
+                };
+                spans.push(Span::styled(text, dim_style()));
+            }
+            let joined: String = line
+                .segments
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect();
+            match line.kind {
+                crate::turn::opened::DiffKind::Hunk | crate::turn::opened::DiffKind::Note => {
+                    spans.push(Span::styled(joined, dim_style()));
+                }
+                crate::turn::opened::DiffKind::Removed => {
+                    spans.extend(marked_spans(&line.segments, Role::Removed));
+                }
+                crate::turn::opened::DiffKind::Added => {
+                    spans.extend(marked_spans(&line.segments, Role::Added));
+                }
+                crate::turn::opened::DiffKind::Context => {
+                    spans.push(Span::raw(joined));
+                }
+            }
+            Row::text(Line::from(spans))
+        })
+        .collect()
+}
+
+/// The changed-files hunk look's dim: the muted colour, dimmed.
+fn dim_style() -> Style {
+    Style::new()
+        .fg(Role::Muted.color())
+        .add_modifier(Modifier::DIM)
+}
+
+/// Diff segments under their colour, the differing words in reverse
+/// video, as the changed-files hunk draws them.
+fn marked_spans(segments: &[(String, bool)], role: Role) -> Vec<Span<'static>> {
+    segments
+        .iter()
+        .map(|(text, marked)| {
+            if *marked {
+                Span::styled(
+                    text.clone(),
+                    Style::new()
+                        .fg(role.color())
+                        .add_modifier(Modifier::REVERSED),
+                )
             } else {
-                Style::new()
-            };
-            Row::text(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(line.to_owned(), ink),
-            ]))
+                Span::styled(text.clone(), style(role))
+            }
         })
         .collect()
 }
