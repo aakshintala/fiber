@@ -23,8 +23,8 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, Socket, expired, function_call, group_alive, hello, recv_answer, session_dir,
-    stream, until,
+    Deadline, SessionGuard, Setup, Socket, close_session, connect_hub, expired, function_call,
+    group_alive, hello, recv, recv_answer, session_dir, start_session, stream, until,
 };
 
 /// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
@@ -192,7 +192,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
 
     let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = support::recv(&client, "the subscribe acknowledgement");
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
 
@@ -292,7 +292,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
 
     let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = support::recv(&client, "the subscribe acknowledgement");
+    let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
 
     // The shell still blocks when the released turn ends and `close`
@@ -320,4 +320,170 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
             .all(|line| line["kind"] != "shell_command"),
         "a shell ending after settle logs no shell_command line"
     );
+}
+
+/// Every user text of an openai-responses request body, in order.
+fn request_texts(body: &[u8]) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body).unwrap();
+    body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["role"] == "user")
+        .flat_map(|item| match &item["content"] {
+            Value::String(text) => vec![text.clone()],
+            Value::Array(parts) => parts
+                .iter()
+                .filter(|part| part["type"] == "input_text")
+                .filter_map(|part| part["text"].as_str().map(str::to_owned))
+                .collect(),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => Vec::new(),
+        })
+        .collect()
+}
+
+fn user_texts(server: &ProviderServer) -> Vec<Vec<String>> {
+    server
+        .requests()
+        .iter()
+        .map(|request| request_texts(&request.body))
+        .collect()
+}
+
+/// Subscribes `direct` at `full`: the session socket takes no `session_id`.
+#[track_caller]
+fn subscribe_full(direct: &Socket) {
+    direct.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    let sub = recv(direct, "the subscribe acknowledgement");
+    assert_eq!(sub["kind"], "command_accepted", "{sub}");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+}
+
+/// The hub's session over, the direct socket closed, the hub killed and
+/// every session gone.
+#[track_caller]
+fn finish(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<support::HubProc>>>,
+    session: &str,
+    direct: Socket,
+    guard: SessionGuard,
+) {
+    drop(direct);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill_and_wait();
+    let closer = Socket::connect(setup.deadline, &setup.session_socket(session));
+    close_session(&closer);
+    drop(closer);
+    guard.wait_gone();
+}
+
+#[test]
+fn driver_shell_sent_joins_the_next_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let session = start_session(&client, &workspace, "first");
+    drop(client);
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
+    subscribe_full(&direct);
+    until(&direct, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    direct.send(r#"{"id":"c_shell","command":"shell","args":{"command":"echo MARK","send":true}}"#);
+    let lines = until(&direct, "the shell_command line", |line| {
+        line["kind"] == "shell_command"
+    });
+    let logged = lines.last().unwrap();
+    assert_eq!(logged["payload"]["command"], "echo MARK");
+    assert_eq!(logged["payload"]["output"], "MARK\nExit code 0.\n");
+    let ack = recv_answer(&direct, "c_shell", "the shell acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert!(
+        ack["payload"].get("result").is_none(),
+        "a sent shell answers with no result: {ack}"
+    );
+    direct.send(
+        r#"{"id":"c_p2","command":"prompt","args":{"content":[{"type":"text","text":"second"}]}}"#,
+    );
+    until(&direct, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let texts = user_texts(&server);
+    assert_eq!(texts.len(), 2);
+    assert!(
+        !texts[0].iter().any(|text| text.contains("MARK")),
+        "the first turn ended before the shell: {texts:?}"
+    );
+    assert!(
+        texts[1].iter().any(|text| text.contains("MARK")),
+        "the next turn reads the shell: {texts:?}"
+    );
+    finish(&setup, &hub, &session, direct, guard);
+}
+
+#[test]
+fn driver_shell_sent_during_a_turn_joins_the_next_turn_only() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    server.hold();
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let session = start_session(&client, &workspace, "first");
+    drop(client);
+    let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
+    subscribe_full(&direct);
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the held turn was requested"
+    );
+    let marker = setup.workspace().join("shell.done");
+    let shell = json!({
+        "id": "c_shell",
+        "command": "shell",
+        "args": {"command": format!("echo MARK && touch {}", shell_quote(&marker)), "send": true},
+    })
+    .to_string();
+    direct.send(&shell);
+    // The shell ends before the held turn is released, so its delivery is
+    // waiting when the turn's drains run and the next prompt names it.
+    loop {
+        if marker.exists() {
+            break;
+        }
+        if setup.deadline.left().is_zero() {
+            panic!("waited until the deadline for the sent shell to end");
+        }
+        std::thread::yield_now();
+    }
+    server.release();
+    until(&direct, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let texts = user_texts(&server);
+    assert_eq!(texts.len(), 1);
+    assert!(
+        !texts[0].iter().any(|text| text.contains("MARK")),
+        "the running turn never reads the shell: {texts:?}"
+    );
+    direct.send(
+        r#"{"id":"c_p2","command":"prompt","args":{"content":[{"type":"text","text":"second"}]}}"#,
+    );
+    until(&direct, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let texts = user_texts(&server);
+    assert_eq!(texts.len(), 2);
+    assert!(
+        texts[1].iter().any(|text| text.contains("MARK")),
+        "the next turn reads the shell: {texts:?}"
+    );
+    finish(&setup, &hub, &session, direct, guard);
 }
