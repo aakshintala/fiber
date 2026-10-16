@@ -773,7 +773,11 @@ fn every_output_shape_stays_within_fourteen_times_its_page() {
         // still reached. The 14x ratio does not depend on size: fixed
         // overhead raises the ratio on a smaller page, so this is
         // stricter, not looser.
-        assert!(html.len() > 2 * super::SLICE, "{what}: {} bytes", html.len());
+        assert!(
+            html.len() > 2 * super::SLICE,
+            "{what}: {} bytes",
+            html.len()
+        );
         let markdown = to_markdown(&html);
         assert_bounded(&html, &markdown, what);
     }

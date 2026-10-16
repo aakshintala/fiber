@@ -320,10 +320,7 @@ fn no_file_in(rig: &Rig) -> bool {
 fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
     // Two pieces of room and four pieces of page: the writer takes two
     // pieces, then fails mid-stream.
-    let server = serve([ok(
-        "text/html",
-        "<p>x</p>".repeat(4 * DOWNLOAD_PIECE / 8),
-    )]);
+    let server = serve([ok("text/html", "<p>x</p>".repeat(4 * DOWNLOAD_PIECE / 8))]);
     let rig = Rig::new().with(fills_up_after_two_pieces);
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
@@ -1634,10 +1631,9 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     );
 
     let bytes = page.into_bytes();
-    let server = serve([
-        Response::stall(200, bytes, announced)
-            .header("content-type", "text/html; charset=utf-8"),
-    ]);
+    let server =
+        serve([Response::stall(200, bytes, announced)
+            .header("content-type", "text/html; charset=utf-8")]);
     let rig = Rig::new();
     let writes = Arc::new(AtomicUsize::new(0));
     let observed_writes = Arc::clone(&writes);

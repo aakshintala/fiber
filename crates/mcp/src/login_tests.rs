@@ -2044,11 +2044,7 @@ fn drive_wait(
         let waiter = scope.spawn(|| {
             let result = match silent_polls {
                 Some(polls) => super::callback::wait_callback_within(
-                    &listener,
-                    &**clock,
-                    deadline,
-                    state,
-                    polls,
+                    &listener, &**clock, deadline, state, polls,
                 ),
                 None => wait_callback(&listener, &**clock, deadline, state),
             };
@@ -2507,11 +2503,7 @@ fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 sent.send(super::callback::answer_within(
-                    server,
-                    &*clock,
-                    deadline,
-                    "s1",
-                    3,
+                    server, &*clock, deadline, "s1", 3,
                 ))
                 .unwrap();
             });
@@ -2558,11 +2550,7 @@ fn a_connection_silent_for_the_given_count_is_dropped_on_that_poll() {
         std::thread::scope(|scope| {
             scope.spawn(|| {
                 sent.send(super::callback::answer_within(
-                    server,
-                    &*clock,
-                    deadline,
-                    "s1",
-                    16,
+                    server, &*clock, deadline, "s1", 16,
                 ))
                 .unwrap();
             });

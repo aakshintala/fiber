@@ -653,7 +653,10 @@ fn the_production_limit_is_64_mib() {
 #[test]
 fn an_object_stream_past_the_limit_is_refused_and_writes_nothing() {
     let dir = fakes::TempDir::new("fiber-pdf-objstm-over");
-    let bytes = objstm_pdf(super::MAX_DECOMPRESSED_BYTES + 1, super::MAX_DECOMPRESSED_BYTES);
+    let bytes = objstm_pdf(
+        super::MAX_DECOMPRESSED_BYTES + 1,
+        super::MAX_DECOMPRESSED_BYTES,
+    );
     let input = write_input(dir.path(), "in.pdf", &bytes);
     let arguments = vec![
         OsString::from("pdf"),
