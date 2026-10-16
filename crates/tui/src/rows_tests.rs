@@ -727,3 +727,18 @@ fn gap_inserts_one_plain_blank_row_at_the_index() {
         }
     );
 }
+
+/// A texts vector shorter than its rows ends the pad: the rows keep
+/// their shape instead of drawing half-moved.
+#[test]
+fn pad_with_a_missing_text_row_leaves_the_rows() {
+    let mut out = Rows {
+        rows: vec![(Line::raw("abc"), None)],
+        texts: Vec::new(),
+        scopes: Vec::new(),
+        all_open: false,
+    };
+    out.pad(0, 1, 10);
+    assert_eq!(out.rows.len(), 1);
+    assert_eq!(out.rows[0].0.to_string(), "abc");
+}

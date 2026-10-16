@@ -119,6 +119,18 @@ impl Rows {
         (self.rows, self.texts)
     }
 
+    /// Takes the row at `at`, leaving blank placeholders: the pad
+    /// loop moves each row out once instead of cloning it per row.
+    /// None when either side has no row there.
+    fn take_row(&mut self, at: usize) -> Option<((Line<'static>, Option<Target>), RowText)> {
+        let row = self.rows.get_mut(at)?;
+        let text = self.texts.get_mut(at)?;
+        let line = std::mem::take(&mut row.0);
+        let target = row.1.take();
+        let meta = std::mem::replace(text, RowText::plain());
+        Some(((line, target), meta))
+    }
+
     /// Prefixes every row from `from` with `pad` blank cells, splitting
     /// any row wider than `inner` first (`docs/tui.md`, "Turns":
     /// nothing inside the card is indented past its one-column padding).
@@ -134,9 +146,9 @@ impl Rows {
         let mut at = from;
         let original_len = self.rows.len();
         for _ in from..original_len {
-            let (Some((line, target)), Some(text)) =
-                (self.rows.get(at).cloned(), self.texts.get(at).cloned())
-            else {
+            // The row moves out without cloning: fitting rows move back
+            // below, split rows move into their pieces.
+            let Some(((line, target), text)) = self.take_row(at) else {
                 break;
             };
             let cells = cells_of(&line);
@@ -145,9 +157,14 @@ impl Rows {
             let room = usize::from(inner);
             let plans = plan(&cells, room);
             if plans.is_empty() || total <= room {
-                if let (Some(row), Some(row_text)) = (self.rows.get_mut(at), self.texts.get_mut(at))
+                let mut row = (line, target);
+                let mut row_text = text;
+                prefix_row(&mut row.0, &mut row_text, pad);
+                if let (Some(slot), Some(meta)) =
+                    (self.rows.get_mut(at), self.texts.get_mut(at))
                 {
-                    prefix_row(&mut row.0, row_text, pad);
+                    *slot = row;
+                    *meta = row_text;
                 }
                 at = at.saturating_add(1);
                 continue;
@@ -195,11 +212,16 @@ impl Rows {
                 pieces.push((row, piece_text));
             }
             let end = at + 1;
-            self.rows
-                .splice(at..end, pieces.iter().map(|(row, _)| row.clone()));
-            self.texts
-                .splice(at..end, pieces.iter().map(|(_, text)| text.clone()));
-            at = at.saturating_add(pieces.len());
+            let mut grown_rows = Vec::with_capacity(pieces.len());
+            let mut grown_texts = Vec::with_capacity(pieces.len());
+            for ((line, target), text) in pieces {
+                grown_rows.push((line, target));
+                grown_texts.push(text);
+            }
+            let grown = grown_rows.len();
+            self.rows.splice(at..end, grown_rows);
+            self.texts.splice(at..end, grown_texts);
+            at = at.saturating_add(grown);
         }
     }
 
