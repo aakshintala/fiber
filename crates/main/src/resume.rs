@@ -523,6 +523,7 @@ fn resumed_session(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
+    session.quota(switching.quota_reader());
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
