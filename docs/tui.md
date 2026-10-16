@@ -553,8 +553,8 @@ a click on it returns too. The views are:
   <command> · <elapsed> · <id>". The last row is "a row opens that item's
   view", dim.
 - **The model picker:** models by provider with roles marked, a chip for each
-  thinking level the model supports, and the size of the prompt-cache rebuild
-  a switch costs. Choosing a model saves the global `model`, and choosing a
+  thinking level the model supports, each model's input and output prices,
+  and what a switch to it costs to rebuild the prompt cache. Choosing a model saves the global `model`, and choosing a
   level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
@@ -579,8 +579,19 @@ a click on it returns too. The views are:
   `attention` while its list refreshes. Each model takes two rows. The first
   is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
   "● current" bold in `accent` on the session's model, "· scoped" dim on a
-  scoped model while every model shows, and the rebuild cost dim at the
-  right end ("~84k tokens · $0.31", "—" for the current model). The second,
+  scoped model while every model shows, then its input and output prices per
+  million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
+  and nothing for a model whose provider data names no cost. A model priced
+  by request size shows the prices of the tier the session's last call falls
+  in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
+  `docs/model-routing.md`, "Cost"), and its base prices before the session's
+  first call. On a screen too narrow for 60 columns inside the picker, the
+  prices are left out. Once the session has made a call, the switch cost is
+  dim at the right end: the prompt-cache rebuild a switch to that model costs
+  at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
+  at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
+  the current model). On home and before the session's first call, no row
+  shows a switch cost. The second,
   indented four columns, is "thinking" dim and the model's levels, or "fixed
   thinking" dim for a model with none. On the focused model the levels are in
   `attention`, its saved level bold, and the chosen chip bold in brackets
