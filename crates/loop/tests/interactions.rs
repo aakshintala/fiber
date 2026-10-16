@@ -51,7 +51,8 @@ use support::{
 type Make = Box<dyn Fn(&ActionId) -> Asking + Send + Sync>;
 
 /// A tool whose call makes each ask of `asks` in turn, after `before`
-/// opens when set, and returns each answer as a line of text.
+/// opens when set, holds the call open on `after` when set after the last
+/// answer, and returns each answer as a line of text.
 struct Asks {
     asks: Vec<Make>,
     before: Option<Arc<Gate>>,
@@ -61,29 +62,26 @@ struct Asks {
 
 impl Asks {
     fn new(asks: Vec<Make>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
-        Self::gated(asks, None)
+        Self::gated(asks, None, None)
     }
 
-    fn gated(asks: Vec<Make>, before: Option<Arc<Gate>>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
+    fn gated(
+        asks: Vec<Make>,
+        before: Option<Arc<Gate>>,
+        after: Option<Arc<Gate>>,
+    ) -> (Arc<Self>, mpsc::Receiver<Answered>) {
         let (tx, rx) = mpsc::channel();
         let tool = Self {
             asks,
             before,
-            after: None,
+            after,
             told: Mutex::new(tx),
         };
         (Arc::new(tool), rx)
     }
 
     fn held(asks: Vec<Make>, after: Arc<Gate>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
-        let (tx, rx) = mpsc::channel();
-        let tool = Self {
-            asks,
-            before: None,
-            after: Some(after),
-            told: Mutex::new(tx),
-        };
-        (Arc::new(tool), rx)
+        Self::gated(asks, None, Some(after))
     }
 }
 
@@ -212,6 +210,37 @@ fn acked() -> (Ack, mpsc::Receiver<contract::inbox::Answer>) {
         let _sent = tx.send(answer);
     }));
     (ack, rx)
+}
+
+/// Sends `answer` to `request` and returns the ack receiver without
+/// waiting: the send half of `support::answer`, so a test can send, open a
+/// hold, then receive.
+fn send_answer(
+    session: &Session,
+    request: &str,
+    answer: ReplyAnswer,
+) -> mpsc::Receiver<contract::inbox::Answer> {
+    let (ack, acked) = acked();
+    session
+        .inbox
+        .send(Delivery::Reply(
+            Reply {
+                request_id: RequestId(request.into()),
+                answer,
+            },
+            ack,
+        ))
+        .unwrap();
+    acked
+}
+
+/// Receives an answer sent by [`send_answer`]: the receive half of
+/// `support::answer`, waiting one [`DEADLINE`] instead of hanging.
+#[track_caller]
+fn recv_answer(acked: &mpsc::Receiver<contract::inbox::Answer>) -> contract::inbox::Answer {
+    Deadline::after(DEADLINE)
+        .recv(acked)
+        .expect("the reply is answered")
 }
 
 fn yes() -> ReplyAnswer {
@@ -480,24 +509,9 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
     // a drain inside the held turn, not from the test's own timing. Queue
     // the reply first and read its ack only after opening the hold; waiting
     // on the ack first would deadlock until DEADLINE.
-    let (ack, acked) = acked();
-    session
-        .inbox
-        .send(Delivery::Reply(
-            Reply {
-                request_id: RequestId(request.clone()),
-                answer: yes(),
-            },
-            ack,
-        ))
-        .unwrap();
+    let sent = send_answer(&session, &request, yes());
     hold.open();
-    rejected(
-        &Deadline::after(DEADLINE)
-            .recv(&acked)
-            .expect("the reply is answered"),
-        ErrorCode::StaleRequest,
-    );
+    rejected(&recv_answer(&sent), ErrorCode::StaleRequest);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
@@ -1289,7 +1303,7 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
 #[test]
 fn an_ask_after_the_cancel_is_declined_at_once() {
     let gate = Arc::new(Gate::default());
-    let (tool, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&gate)));
+    let (tool, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&gate)), None);
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();
@@ -1471,7 +1485,7 @@ fn a_log_failure_while_a_call_is_pending_releases_it() {
 fn a_log_failure_before_a_calls_first_ask_releases_it() {
     let first = Arc::new(Gate::default());
     let second = Arc::new(Gate::default());
-    let (asks, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&second)));
+    let (asks, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&second)), None);
     let mut session = failing(asks, &first);
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();
