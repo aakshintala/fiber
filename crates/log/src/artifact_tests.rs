@@ -97,12 +97,10 @@ fn the_lexical_check_alone_refuses_without_touching_the_disk() {
         );
     }
     // A missing directory is never consulted: the rule is lexical.
-    assert!(
-        matches!(
-            check_artifact_path("artifacts/../events.jsonl"),
-            Err(Refusal::Outside)
-        )
-    );
+    assert!(matches!(
+        check_artifact_path("artifacts/../events.jsonl"),
+        Err(Refusal::Outside)
+    ));
     assert!(check_artifact_path("artifacts/a.png").is_ok());
     assert!(check_artifact_path("artifacts/sub/../a.png").is_ok());
 }
@@ -239,10 +237,7 @@ fn a_directory_a_link_to_one_a_dot_link_or_a_fifo_is_not_regular() {
     std::os::unix::fs::symlink(".", artifacts.join("up")).unwrap();
     for path in ["artifacts/sub", "artifacts/dir.png", "artifacts/up"] {
         assert!(
-            matches!(
-                open_artifact(&temp.dir, path),
-                Err(Refusal::NotRegular)
-            ),
+            matches!(open_artifact(&temp.dir, path), Err(Refusal::NotRegular)),
             "{path}"
         );
     }

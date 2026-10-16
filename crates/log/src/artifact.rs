@@ -87,11 +87,7 @@ pub fn check_artifact_path(path: &str) -> Result<(), Refusal> {
             Component::RootDir | Component::Prefix(_) => return Err(Refusal::Outside),
         }
     }
-    if rest {
-        Ok(())
-    } else {
-        Err(Refusal::Outside)
-    }
+    if rest { Ok(()) } else { Err(Refusal::Outside) }
 }
 
 /// The session's real `artifacts/`, then the client's original `path`

@@ -50,7 +50,10 @@ pub(crate) enum PageError {
 /// [`BYTES`] bytes, a longer line cut at a character boundary. `size` is
 /// the handle's length at open, and the read never passes it.
 pub(crate) fn page(file: File, offset: u64) -> Result<Page, PageError> {
-    let size = file.metadata().map(|meta| meta.len()).map_err(PageError::Io)?;
+    let size = file
+        .metadata()
+        .map(|meta| meta.len())
+        .map_err(PageError::Io)?;
     page_at(file, offset, size, None)
 }
 
@@ -99,9 +102,7 @@ fn page_at(
     };
     // Whether the file runs past the region: only then can a line need
     // the next page.
-    let continues = offset
-        .checked_add(cap)
-        .is_some_and(|edge| edge != size);
+    let continues = offset.checked_add(cap).is_some_and(|edge| edge != size);
     // Whole lines while the count is below the line cap; a line running
     // past the byte cap starts the next page instead, unless it begins
     // this one, when it is cut at a character boundary.
@@ -208,10 +209,7 @@ fn is_inside(view: &[u8], seek: u64, size: u64, i: u64) -> bool {
     if stop > size {
         return false;
     }
-    let Some(from) = j
-        .checked_sub(seek)
-        .and_then(|at| usize::try_from(at).ok())
-    else {
+    let Some(from) = j.checked_sub(seek).and_then(|at| usize::try_from(at).ok()) else {
         return false;
     };
     let Some(len) = usize::try_from(len).ok() else {
