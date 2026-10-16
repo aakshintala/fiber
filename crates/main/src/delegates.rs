@@ -163,9 +163,14 @@ pub(crate) fn resolver(
     let config = config.clone();
     let listed = providers.clone();
     let read = config.clone();
+    let credential_providers = providers.clone();
+    let credential_config = config.clone();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
         catalogue: Arc::from(catalogue(&listed, &read)),
+        credential: Arc::new(move |argument| {
+            credential_for(&credential_providers, &credential_config, argument)
+        }),
     }
 }
 
@@ -182,6 +187,54 @@ fn lookup(
             .map_err(|reason| format!("Role {argument:?} maps to {target:?}: {reason}"));
     }
     resolve_reference(providers, config, argument)
+}
+
+/// A role's credential label as configured now: the object's string
+/// `credential`, whatever its `model` is. `None` for a string role, an
+/// object without one, a non-string `credential`, or a non-role argument.
+/// A repository's role names no credential: its winning source is the
+/// repository layer, and its `credential` is ignored, so it reads as
+/// `None` too (`docs/configuration.md`, `roles."<name>"`).
+fn role_credential(config: &config::Config, name: &str) -> Option<String> {
+    let key = format!("roles.{}", config::path::display(&[name.to_owned()]));
+    let (value, source) = config.get(&key, None)?;
+    if matches!(source, config::Source::Repository(_)) {
+        return None;
+    }
+    value.get("credential")?.as_str().map(str::to_owned)
+}
+
+/// The credential label the `model` argument's delegate runs under, for
+/// the `credential` closure: the role's label when it names one the
+/// provider has, `None` for a full reference or a role without one. A
+/// label that names no credential fails with `credential_missing`, naming
+/// the labels the provider has; a scripted provider takes no label, so
+/// any label asked for one fails the same way. The model sees only role
+/// names, never labels: the label never reaches the catalogue.
+fn credential_for(
+    providers: &extensions::Providers,
+    config: &config::Config,
+    argument: &str,
+) -> Result<Option<String>, String> {
+    let Some(label) = role_credential(config, argument) else {
+        return Ok(None);
+    };
+    let Some(target) = role_target(config, argument) else {
+        return Ok(None);
+    };
+    let rest = target.strip_prefix("fiber:").unwrap_or(&target);
+    let Ok(resolved) = providers.resolve(rest) else {
+        return Ok(None);
+    };
+    if let Err(failure) = crate::scripted::label(resolved.provider, Some(&label)) {
+        return Err(failure.message);
+    }
+    let labels = config.credentials().labels(resolved.provider);
+    if labels.contains(&label) {
+        Ok(Some(label))
+    } else {
+        Err(crate::credential::no_label(&resolved.provider.name, &label, &labels).message)
+    }
 }
 
 /// A role's target reference as configured now: a string value is the
@@ -334,6 +387,21 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         command.args(["--resume", &format!("--prompt={}", launched.prompt)]);
     } else {
         command.args(["--model", &launched.model, "--prompt", &launched.prompt]);
+        // A role naming a credential label runs the child under it: the
+        // label travels as a run override, so the child's `preamble_built`
+        // records it. The value is a JSON string, so a label that parses
+        // as JSON still arrives as a string. Nothing for no label, and
+        // nothing on a resume, which continues the recorded session.
+        if let Some(label) = launched.credential.as_deref() {
+            let provider = launched.model.split('/').next().unwrap_or_default();
+            let key = config::path::display(&[
+                "providers".to_owned(),
+                provider.to_owned(),
+                "credential".to_owned(),
+            ]);
+            let value = serde_json::Value::String(label.to_owned());
+            command.args(["-c", &format!("{key}={value}")]);
+        }
     }
     command.args([
         "--parent",

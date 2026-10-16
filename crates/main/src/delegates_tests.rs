@@ -25,6 +25,22 @@ use fakes::Deadline;
 /// that configuration.
 fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, config::Config) {
     let root = fakes::TempDir::new("fd");
+    rig_loaded(&root, roles, install, &[], None)
+}
+
+/// Loads a rig in `root`: the fake provider reads its key from the
+/// environment, so `default` is always a label it has, and `stored` are
+/// stored as `credentials/fake/<label>` on disk. `repo_roles` writes a
+/// repository-layer `{"roles": ...}` into the workspace. Callers needing
+/// the stored labels or the repository layer keep `root` alive: the label
+/// set is read from disk at call time.
+fn rig_loaded(
+    root: &fakes::TempDir,
+    roles: serde_json::Value,
+    install: bool,
+    stored: &[&str],
+    repo_roles: Option<&serde_json::Value>,
+) -> (extensions::Providers, config::Config) {
     let home = root.path().join("home");
     if install {
         install_extension(
@@ -37,7 +53,7 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
             &[(
                 "fake",
                 serde_json::from_str(
-                    r#"{"name": "fake", "models": [
+                    r#"{"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": [
             {"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
              "context_window": 1000, "thinking_levels": ["low", "high"], "thinking_default": "low"},
             {"id": "plain", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
@@ -50,6 +66,15 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
     } else {
         std::fs::create_dir_all(&home).unwrap();
     }
+    for label in stored {
+        config::store_credential(
+            &home,
+            "fake",
+            label,
+            &config::Secret::new(format!("{label}-key")),
+        )
+        .unwrap();
+    }
     std::fs::write(
         home.join("config.json"),
         json!({"roles": roles}).to_string(),
@@ -57,10 +82,31 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
     .unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    if let Some(repo_roles) = repo_roles {
+        let dir = workspace.join(".fiber");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            json!({"roles": repo_roles}).to_string(),
+        )
+        .unwrap();
+    }
     let config = load(&home, &workspace, "test", Vec::<String>::new());
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     // `root` is dropped here; the registry and configuration were read.
     (providers, config)
+}
+
+/// A rig with `stored` labels on disk for the fake provider, whose temp
+/// dir stays alive under the caller: the label set is read from disk at
+/// call time.
+fn stored_rig(
+    roles: serde_json::Value,
+    stored: &[&str],
+) -> (fakes::TempDir, extensions::Providers, config::Config) {
+    let root = fakes::TempDir::new("fd-label");
+    let (providers, config) = rig_loaded(&root, roles, true, stored, None);
+    (root, providers, config)
 }
 
 /// Installs the `fake` provider and returns the loaded registry with
@@ -293,6 +339,7 @@ fn launched() -> jobs::Launched {
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         resume: false,
+        credential: None,
     }
 }
 
@@ -361,6 +408,7 @@ fn tool_depth() -> u32 {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            credential: Arc::new(|_| Ok(None)),
         },
     )
     .tool()
@@ -504,6 +552,7 @@ fn resumed() -> jobs::Launched {
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         resume: true,
+        credential: None,
     }
 }
 
@@ -858,6 +907,7 @@ fn message_rig() -> (super::Delegates, Arc<jobs::Registry>) {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            credential: Arc::new(|_| Ok(None)),
         },
     );
     (delegates, jobs)
@@ -889,4 +939,163 @@ fn the_session_depth_reaches_the_message_tool() {
     assert_eq!(super::depth(), 1);
     let (delegates, _jobs) = message_rig();
     assert_eq!(delegates.message().depth, 1);
+}
+
+#[test]
+fn a_role_object_with_a_stored_label_resolves_to_that_label() {
+    let (_root, providers, config) = stored_rig(
+        json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}),
+        &["work"],
+    );
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
+    assert_eq!((resolve.credential)("fast"), Ok(Some("work".to_owned())));
+}
+
+#[test]
+fn a_role_naming_a_label_the_provider_lacks_is_refused_naming_the_labels() {
+    let (_root, providers, config) = stored_rig(
+        json!({"fast": {"model": "fiber:fake/plain", "credential": "gone"}}),
+        &["work"],
+    );
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
+    // The refusal names the label asked for and every label the provider
+    // has, sorted; the model sees only role names, never labels, so the
+    // catalogue stays without it.
+    assert_eq!(
+        (resolve.credential)("fast"),
+        Err(
+            "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missing() {
+    let root = fakes::TempDir::new("fd-scripted-label");
+    let (mut providers, config) = rig_loaded(
+        &root,
+        json!({"s": {"model": "fiber:scripted/a.json", "credential": "work"}}),
+        true,
+        &["work"],
+        None,
+    );
+    // The label is stored for the scripted provider too: membership alone
+    // must not let it through.
+    config::store_credential(
+        &root.path().join("home"),
+        "scripted",
+        "work",
+        &config::Secret::new("work-key".to_owned()),
+    )
+    .unwrap();
+    providers.add_scripted("scripted/a.json");
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("s").unwrap(), "scripted/a.json");
+    assert_eq!(
+        (resolve.credential)("s"),
+        Err(
+            "`scripted` has no credential label `work`. The labels for `scripted` are: none"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_full_reference_resolves_with_no_label() {
+    let (providers, config) = rig(json!({}));
+    let resolve = resolver(&providers, &config);
+    // A delegate started with a full reference uses the provider's
+    // configured label, so no override travels.
+    assert_eq!((resolve.credential)("fiber:fake/m"), Ok(None));
+}
+
+#[test]
+fn a_string_role_resolves_with_no_label() {
+    let (providers, config) = rig(json!({"deep": "fiber:fake/m:high"}));
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.credential)("deep"), Ok(None));
+}
+
+#[test]
+fn a_repository_layer_role_credential_is_ignored() {
+    let root = fakes::TempDir::new("fd-repo");
+    let (providers, config) = rig_loaded(
+        &root,
+        json!({}),
+        true,
+        &["work"],
+        Some(&json!({
+            "fast": {"model": "fiber:fake/plain", "credential": "work"},
+            "odd": {"model": "fiber:fake/plain", "credential": 5},
+        })),
+    );
+    let resolve = resolver(&providers, &config);
+    // A repository's role cannot name a credential: the label is ignored,
+    // and a non-string `credential` reads as no label too.
+    assert_eq!((resolve.credential)("fast"), Ok(None));
+    assert_eq!((resolve.credential)("odd"), Ok(None));
+    // The launch then passes no `-c`: the child reads the provider's
+    // configured label.
+    let mut launch = launched();
+    launch.credential = (resolve.credential)("fast").unwrap();
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(!argv.iter().any(|arg| arg == "-c"), "{argv:?}");
+}
+
+#[test]
+fn the_catalogue_never_prints_a_role_label() {
+    let object = rig(json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}));
+    let string = rig(json!({"fast": "fiber:fake/plain"}));
+    let labelled = resolver(&object.0, &object.1).catalogue;
+    let plain = resolver(&string.0, &string.1).catalogue;
+    assert_eq!(labelled.as_ref(), plain.as_ref());
+    assert!(!labelled.contains("work"), "{labelled}");
+}
+
+#[test]
+fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
+    let mut launch = launched();
+    launch.credential = Some("work".to_owned());
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // The override travels as one adjacent `-c` pair.
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"work\"",]),
+        "{argv:?}"
+    );
+}
+
+#[test]
+fn a_label_that_parses_as_json_is_still_a_string() {
+    let mut launch = launched();
+    launch.credential = Some("123".to_owned());
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"123\"",]),
+        "{argv:?}"
+    );
+}
+
+#[test]
+fn a_resume_launch_passes_no_credential_override() {
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&resumed());
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // A resume continues the recorded session: no `-c` may change its label.
+    assert!(!argv.iter().any(|arg| arg == "-c"), "{argv:?}");
 }
