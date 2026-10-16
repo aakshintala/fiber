@@ -77,9 +77,7 @@ impl Emit for Silent {
 /// Checks `command` and registers its cancel with `gate`, so a `cancel`
 /// read after this returns reaches it. Called on the reader thread.
 pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Option<Running> {
-    let Some(tool) = gate.driver_shell() else {
-        return None;
-    };
+    let tool = gate.driver_shell()?;
     let cancel = Arc::new(ShellCancel::new());
     gate.shells.track(Arc::clone(&cancel));
     let mut arguments = Map::new();
