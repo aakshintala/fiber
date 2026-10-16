@@ -172,13 +172,32 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     started.servers.stop();
 }
 
+/// A spec running the fixture, held until the test sends on the
+/// returned sender: the spawn waits on the test's release, never on
+/// the clock, so a held server holds no clock park.
+fn held_spec(setup: &Setup, name: &str) -> (super::ServerSpec, std::sync::mpsc::Sender<()>) {
+    let (release, held) = std::sync::mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let mut spec = setup.spec(name);
+    spec.stdio_mut().run = Some(super::Program {
+        command: fakes::mcp_fixture().display().to_string(),
+        args: vec![setup.dir.path().display().to_string()],
+        guard: std::sync::Arc::new(move || {
+            held.lock()
+                .expect("the test holds the release")
+                .recv()
+                .map_err(|_| "the test dropped the release".to_owned())
+        }),
+    });
+    (spec, release)
+}
+
 /// A start where one server never answers `initialize` still declares
 /// the other one: the silent server fails with its deadline once the
-/// test advances the fake clock to it, and a start with no advance
-/// fails naming the silent server. The whole test panics with that
-/// name, so the expectation below misses until the guard names it.
+/// test advances the fake clock to it, while the answering server waits
+/// off the clock for the release. A second start the test never
+/// releases fails on its wall guard, which names the servers in it.
 #[test]
-#[should_panic(expected = "the start of [quiet]")]
 fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     let silent = Setup::new();
     let answering = Setup::new();
@@ -193,30 +212,29 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     let mut stalled = silent.spec("quiet");
     stalled.stdio_mut().command = "/bin/bash".to_owned();
     stalled.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    let (held_two, release) = held_spec(&answering, "two");
     let fake = silent.fake.clone();
-    let cache = silent.cache();
     // Detached, not scoped: a scope joins its thread even after a
     // receive panic, so a hung start would hang the test.
     let (done, result) = std::sync::mpsc::channel();
-    let specs = vec![stalled, answering.spec("two")];
+    let specs = vec![stalled, held_two];
     std::thread::spawn(move || {
         done.send(silent.start(specs)).unwrap_or(());
-    });
-    // The answering server wrote its cache entry after its last clock
-    // wait, so only the silent server is still parked on the clock.
-    crate::test_support::await_until("the answering server to be listed", move || {
-        cache.join("two.json").exists()
     });
     let deadline = fake
         .now()
         .checked_add(DEFAULT_STARTUP_TIMEOUT)
         .expect("deadline");
+    // Only the silent server parks on the clock: the held server waits
+    // on the test's release, so the advance ends the silent start
+    // without touching the other one.
     fake.advance_when_parked(
         Some(deadline),
         None,
         DEFAULT_STARTUP_TIMEOUT,
         &Deadline::after(WITHIN),
     );
+    release.send(()).expect("the held spawn is released");
     let started = Deadline::after(WITHIN)
         .recv(&result)
         .unwrap_or_else(|_| panic!("the stalled start ends within {WITHIN:?}"));
@@ -237,16 +255,44 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     );
     started.servers.stop();
     watchdog.stand_down(WITHIN);
-    // With no advance the deadline never fires, so the guard below is
-    // the only bound, and its message holds the silent server's name.
+    // Neither held server spawns, so the wall guard below is the only
+    // bound: five seconds covers two thread spawns, and its message
+    // holds the servers in the start.
     let held = Setup::new();
-    let marker = held.dir.path().display().to_string();
-    let _watchdog = fakes::Watchdog::matching(&marker);
-    let quoted = marker.replace('\'', "'\\''");
-    let mut stalled = held.spec("quiet");
-    stalled.stdio_mut().command = "/bin/bash".to_owned();
-    stalled.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
-    held.start(vec![stalled]);
+    let (first, _first_release) = held_spec(&held, "quiet");
+    let (second, _second_release) = held_spec(&held, "two");
+    let workspace = held.workspace();
+    let artifacts = held.artifacts();
+    let cache = held.cache();
+    let clock = held.clock();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        fakes::within(
+            "the start of [quiet, two]",
+            Duration::from_secs(5),
+            move || {
+                start(
+                    vec![first, second],
+                    &workspace,
+                    &artifacts,
+                    FakeImages::ok(),
+                    &cache,
+                    &clock,
+                    "0.0.0",
+                )
+            },
+        )
+    }));
+    let message = match outcome {
+        Ok(_) => panic!("a held start ends only on its guard"),
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_else(|| "a non-string panic".to_owned()),
+    };
+    assert!(
+        message.contains("the start of [quiet, two]"),
+        "the guard names the servers in the start: {message}"
+    );
 }
 
 #[test]
