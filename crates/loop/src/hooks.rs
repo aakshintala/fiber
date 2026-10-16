@@ -151,7 +151,7 @@ impl Loop {
                 details,
                 artifact,
             } => {
-                let details = details.or(ran.details);
+                let details = details.or_else(|| if content.is_some() { without_matches(ran.details) } else { ran.details });
                 let (parts, full) = match content {
                     Some(text) if text.is_empty() => (Some(Vec::new()), text),
                     Some(text) => (None, text),
@@ -344,7 +344,7 @@ impl Loop {
                 details: hook_details,
                 artifact: hook_artifact,
             } => {
-                let details = hook_details.or(details);
+                let details = hook_details.or_else(|| if content.is_some() { without_matches(details) } else { details });
                 let replaces = content.is_some();
                 let full = match content {
                     Some(text) => lined(&text),
@@ -474,7 +474,7 @@ impl Loop {
                 details: hook_details,
                 artifact,
             } => {
-                let details = hook_details.or(details);
+                let details = hook_details.or_else(|| if content.is_some() { without_matches(details) } else { details });
                 match content {
                     // Replacement `content` is capped as without a spill:
                     // the hook's artifact text goes to `<action_id>.txt`.
@@ -566,6 +566,13 @@ fn cut_hook_content(content: &str, bound: Bound, path: &std::path::Path) -> (Str
         content.get(tail..).unwrap_or_default(),
     );
     (text, kept_ranges(head as u64, tail as u64, content.len() as u64))
+}
+
+fn without_matches(mut details: Option<Value>) -> Option<Value> {
+    if let Some(Value::Object(object)) = details.as_mut() {
+        object.remove("matches");
+    }
+    details
 }
 
 fn kept_ranges(head: u64, tail: u64, len: u64) -> Vec<[u64; 2]> {

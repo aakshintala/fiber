@@ -549,6 +549,48 @@ fn replaced_details_keep_the_tools_content() {
 }
 
 #[test]
+fn rewriting_content_drops_only_tool_match_details_in_every_output_shape() {
+    let original = json!({"command":"grep x a", "exit_code":0,
+        "matches":[{"path":"a","lines":[{"line":1,"text":"x","spans":[[0,1]]}]}]});
+    for shape in ["whole", "spilled", "unsaved"] {
+        for (content, details, artifact, expected) in [
+            (Some("redacted"), None, None, json!({"command":"grep x a", "exit_code":0})),
+            (Some("redacted"), Some(json!({"own":true})), None, json!({"own":true})),
+            (None, None, Some("artifact only"), original.clone()),
+            (None, None, None, original.clone()),
+        ] {
+            let home = fakes::TempDir::new("fiber-hook-match-redaction");
+            let mut tool = match shape {
+                "whole" => fixed(text("raw")),
+                "spilled" => spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT),
+                "unsaved" => unsaved("HHHH", "TTTT", 92, "disk failed".into(), None, Bound::DEFAULT),
+                _ => unreachable!(),
+            };
+            tool.output.details = Some(original.clone());
+            if let Some(make) = tool.make.take() {
+                let original = original.clone();
+                tool.make = Some(Arc::new(move || {
+                    let mut output = make();
+                    output.details = Some(original.clone());
+                    output
+                }));
+            }
+            let hooks = FakeHooks::new(changed(content, details, artifact), &["acme"], Vec::new());
+            let ran = run_spilled(home, tool, Some(hooks));
+            assert_eq!(ran.completed().payload["details"], expected, "{shape}, {content:?}");
+        }
+    }
+}
+
+#[test]
+fn replacement_preserves_nonobject_tool_details() {
+    let ran = run(fixed(Output { details: Some(json!("opaque")), ..text("raw") }),
+        script("probe", json!({})), Some(FakeHooks::new(changed(Some("redacted"), None, None), &["acme"], Vec::new())),
+        Arc::new(TurnCancel::default()));
+    assert_eq!(ran.completed().payload["details"], json!("opaque"));
+}
+
+#[test]
 fn a_change_with_no_details_keeps_the_tools_details() {
     let hooks = FakeHooks::new(changed(Some("new"), None, None), &["acme"], Vec::new());
     let ran = run(
