@@ -11,7 +11,7 @@ pub(crate) enum Rows {
     Slash(Vec<slash::Row>),
     /// The `@` window of paths.
     Files(Vec<String>),
-    /// The Ctrl+R panel's lines, query line first, as drawn.
+    /// The Ctrl+R panel's lines, query line first, as the frame draws them.
     Search(Vec<String>),
     /// One dim row: "no matches", "no files match", "No files: <error>".
     Message(String),

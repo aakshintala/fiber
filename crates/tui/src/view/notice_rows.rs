@@ -168,48 +168,46 @@ fn text_rows(text: &str, room: usize) -> Vec<Row> {
 
 /// Wraps styled `runs` at word boundaries into rows at most `room`
 /// columns wide, keeping each piece's style across its wrapped rows: a
-/// dim code stays dim, the text after it stays plain. A word wider than
-/// a row breaks where it reaches the edge; a newline starts a row, as
+/// dim code stays dim, the text after it stays plain. Runs join with
+/// nothing: a space reads only where the source holds one, so a marked
+/// hit split across runs stays one word. A word wider than a row breaks
+/// where it reaches the edge; a newline starts a row, as
 /// `format::wrap` does; consecutive spaces read as one.
-fn wrap_runs(runs: &[(String, Style)], room: usize) -> Vec<Vec<Span<'static>>> {
+pub(super) fn wrap_runs(runs: &[(String, Style)], room: usize) -> Vec<Vec<Span<'static>>> {
     let room = room.max(1);
     let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     let mut taken = 0usize;
-    // Whether a space separates the next word from its row so far.
-    let mut spaced = false;
-    // Pushes `word` (holding no space) in `style`, breaking a word
-    // wider than a row where it reaches the edge.
+    // Pushes `word` (holding no space) in `style`, with a space before
+    // it when the source holds one, breaking a word wider than a row
+    // where it reaches the edge.
     let push_word = |word: &str,
                      style: Style,
+                     space_before: bool,
                      rows: &mut Vec<Vec<Span<'static>>>,
-                     taken: &mut usize,
-                     spaced: &mut bool| {
+                     taken: &mut usize| {
         if word.is_empty() {
             return;
         }
         let mut rest = word;
+        let mut leading = space_before;
         while !rest.is_empty() {
             let wide = format::width(rest);
-            let gap = usize::from(*spaced);
+            let gap = usize::from(leading);
             if *taken + gap + wide <= room {
-                if *spaced {
-                    let Some(row) = rows.last_mut() else {
-                        return;
-                    };
-                    row.push(Span::styled(" ".to_owned(), style));
-                }
                 let Some(row) = rows.last_mut() else {
                     return;
                 };
+                if leading {
+                    row.push(Span::styled(" ".to_owned(), style));
+                }
                 row.push(Span::styled(rest.to_owned(), style));
                 *taken += gap + wide;
-                *spaced = true;
                 return;
             }
             if *taken > 0 {
                 rows.push(Vec::new());
                 *taken = 0;
-                *spaced = false;
+                leading = false;
                 continue;
             }
             // At the row's start a word wider than the row breaks at
@@ -230,29 +228,39 @@ fn wrap_runs(runs: &[(String, Style)], room: usize) -> Vec<Vec<Span<'static>>> {
             rest = &rest[chunk.len()..];
             if rest.is_empty() {
                 *taken += format::width(&chunk);
-                *spaced = true;
             } else {
                 rows.push(Vec::new());
             }
+            leading = false;
         }
     };
+    // Whether the run before ended its text with a space, so a run
+    // starting without one still follows it.
+    let mut prev_ended_with_space = false;
+    // Whether any word has been pushed: the paragraph's own leading
+    // spaces drop, as a wrap does.
+    let mut started = false;
     for (text, style) in runs {
         for (line_no, line) in text.split('\n').enumerate() {
             if line_no > 0 {
                 rows.push(Vec::new());
                 taken = 0;
-                spaced = false;
             }
-            let mut first = true;
-            for word in line.split(' ') {
-                if first {
-                    first = false;
+            for (word_no, word) in line.split(' ').enumerate() {
+                let space_before = if word_no > 0 {
+                    true
+                } else if line_no == 0 {
+                    (line.starts_with(' ') || prev_ended_with_space) && started
                 } else {
-                    spaced = true;
+                    false
+                };
+                if !word.is_empty() {
+                    started = true;
                 }
-                push_word(word, *style, &mut rows, &mut taken, &mut spaced);
+                push_word(word, *style, space_before, &mut rows, &mut taken);
             }
         }
+        prev_ended_with_space = text.ends_with(' ');
     }
     rows
 }

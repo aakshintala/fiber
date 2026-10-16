@@ -839,11 +839,12 @@ fn up_moves_within_a_recalled_entry_wrapped_at_the_inset() {
 }
 
 /// The search panel's structured rows: the Ctrl+R kind with its query,
-/// window and match count, reserving its lines below the conversation.
+/// window and match count, reserving no rows below the conversation.
 #[test]
-fn the_search_panel_is_search_rows_and_reserves_its_lines() {
+fn the_search_panel_is_search_rows_and_reserves_nothing() {
     let mut app = connected();
     type_text(&mut app, "draft");
+    let closed = app.below_rows();
     let request = asks(&mut app, Key::CtrlR);
     answer(
         &mut app,
@@ -865,5 +866,5 @@ fn the_search_panel_is_search_rows_and_reserves_its_lines() {
         completions.lines(),
         ["search prompts: build", "Fix the Build"]
     );
-    assert_eq!(app.completion_rows(), completions.lines().len());
+    assert_eq!(app.below_rows(), closed);
 }

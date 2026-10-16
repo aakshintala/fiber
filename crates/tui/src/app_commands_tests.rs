@@ -1182,7 +1182,6 @@ fn slash_completions_carry_their_window() {
         ]
     );
     // The `/` panel draws over the conversation, reserving nothing.
-    assert_eq!(app.completion_rows(), 0);
 }
 
 /// A long `/` list windows around the selection, keeping it in view.
@@ -1226,7 +1225,6 @@ fn an_empty_slash_list_shows_no_matches() {
     assert_eq!(completions.selected, None);
     assert_eq!(completions.lines(), ["no matches"]);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
-    assert_eq!(app.completion_rows(), 0);
 }
 
 /// The structured `@` panel: the windowed paths and the query behind
@@ -1249,7 +1247,6 @@ fn file_completions_carry_their_window() {
         }
     }
     assert_eq!(completions.lines(), ["src/a.rs", "src/b.rs"]);
-    assert_eq!(app.completion_rows(), 0);
 }
 
 /// An empty `@` result shows its dim row, with no selection and no range.

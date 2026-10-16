@@ -1243,20 +1243,38 @@ fn search_panel() {
     }
     app.on_key(Key::Down, now);
     insta::assert_snapshot!("search_panel", sized(&mut app, 80, 24));
-    let (shown, buf) = wide(&mut app);
-    let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows[HEIGHT as usize - 6], "search prompts: fix", "{shown}");
-    let reversed = |row: u16| {
-        buf.cell((0, row))
-            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
-    };
-    assert!(!reversed(HEIGHT - 6), "{shown}");
-    assert!(!reversed(HEIGHT - 5), "{shown}");
-    assert!(reversed(HEIGHT - 4), "{shown}");
-    // Nothing matching says so.
+    // The panel draws centred on the overlay frame, in no reserved rows.
+    app.set_size(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    assert!(shown.contains("Prompt history"), "{shown}");
+    assert!(shown.contains("› fix"), "{shown}");
+    assert!(shown.contains("2 matches · newest first"), "{shown}");
+    assert!(shown.contains("Enter recalls · Esc closes"), "{shown}");
+    assert!(!shown.contains("this session"), "{shown}");
+    // The draft waits in the input box, which keeps its own rows.
+    assert!(shown.contains("draft"), "{shown}");
+    // Exactly one barred row: the second match, recall order newest first.
+    let bars: Vec<u16> = (0..24)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::markdown::Role::Accent.color()))
+        .collect();
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row: String = (0..80)
+        .map(|x| buf[(x, bars[0])].symbol().to_owned())
+        .collect();
+    assert!(row.contains("fix the build"), "{row:?}");
+    // Nothing matching says so, with nothing barred.
     app.on_key(Key::Char('z'), now);
-    let (shown, _) = wide(&mut app);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
     assert!(shown.contains("no matching prompts"), "{shown}");
+    assert!(
+        (0..24).all(|y| (0..80).all(|x| buf[(x, y)].bg != crate::markdown::Role::Accent.color())),
+        "{shown}"
+    );
 }
 
 #[test]

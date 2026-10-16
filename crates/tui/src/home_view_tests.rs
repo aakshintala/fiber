@@ -2497,3 +2497,76 @@ fn no_color_home_navigation_follows_the_rendered_rows() {
     assert_eq!(buf[(0, box_top)].symbol(), "┌");
     assert_eq!(buf[(39, box_top)].symbol(), "┐");
 }
+
+/// The panel slab's bounds: the ▄ edge above the title and the ▀ edge
+/// below the footer. Home's own box edges share those rows, so the
+/// panel's edge is the run covering the screen's middle column.
+fn panel_slab(shown: &str, middle: usize) -> (usize, usize, usize, usize) {
+    /// A run of `edge` covering `middle`, if any.
+    fn run(row: &str, edge: char, middle: usize) -> Option<(usize, usize)> {
+        let cells: Vec<char> = row.chars().collect();
+        let mut at = 0;
+        while at < cells.len() {
+            if cells[at] == edge {
+                let mut end = at;
+                while end < cells.len() && cells[end] == edge {
+                    end += 1;
+                }
+                if at <= middle && middle < end {
+                    return Some((at, end - at));
+                }
+                at = end;
+            } else {
+                at += 1;
+            }
+        }
+        None
+    }
+    let rows: Vec<&str> = shown.lines().collect();
+    let title = rows
+        .iter()
+        .position(|row| row.contains("Prompt history"))
+        .expect("the panel title");
+    let (top, (x0, wide)) = (0..title)
+        .rev()
+        .filter_map(|y| run(rows[y], '▄', middle).map(|run| (y, run)))
+        .next()
+        .expect("the top edge");
+    let (bottom, _) = (title..rows.len())
+        .filter_map(|y| run(rows[y], '▀', middle).map(|run| (y, run)))
+        .next()
+        .expect("the bottom edge");
+    (x0, top, wide, bottom + 1 - top)
+}
+
+#[test]
+fn the_search_panel_centres_over_homes_area() {
+    let mut app = home(80, 24);
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlR, now);
+    assert!(app.completions().is_some());
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("Prompt history"), "{shown}");
+    assert!(shown.contains("no matching prompts"), "{shown}");
+    // Centred across and down home's whole area, as the quit question is.
+    let (x0, y0, wide, high) = panel_slab(&shown, 40);
+    assert_eq!(x0, (80 - wide) / 2, "{shown}");
+    assert_eq!(y0, (24 - high) / 2, "{shown}");
+}
+
+#[test]
+fn the_search_panel_gives_way_on_a_short_home() {
+    let mut app = home(80, 24);
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlR, now);
+    assert!(app.completions().is_some());
+    // Nine rows leave the query row alone: the title and query stay,
+    // the no-match row gives way, and no entry row clips.
+    let area = Rect::new(0, 0, 80, 9);
+    let mut buf = Buffer::empty(area);
+    home_only(&app, area, &mut buf);
+    let shown = crate::view::text(&buf);
+    assert!(shown.contains("Prompt history"), "{shown}");
+    assert!(shown.contains("›"), "{shown}");
+    assert!(!shown.contains("no matching prompts"), "{shown}");
+}

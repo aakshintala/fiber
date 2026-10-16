@@ -11,7 +11,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::App;
-use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -19,6 +18,7 @@ pub(crate) mod banner;
 pub(crate) mod chrome;
 mod completions;
 mod drag;
+mod history;
 #[path = "home_view.rs"]
 mod home;
 mod input_box;
@@ -261,15 +261,11 @@ pub(crate) fn render(
         }
     }
     drag::draw(app, buf, pointer);
-    // The `/` and `@` panels draw over the conversation's bottom rows,
+    // The completion panels draw over the conversation's bottom rows,
     // above the input box's top edge, after everything under them, so
-    // their cells win. The Ctrl+R panel drew in its reserved rows.
-    if let Some(completions) = app.completions()
-        && matches!(
-            completions.rows,
-            Rows::Slash(_) | Rows::Files(_) | Rows::Message(_)
-        )
-    {
+    // their cells win. The Ctrl+R panel draws centred over the
+    // conversation instead of in reserved rows.
+    if let Some(completions) = app.completions() {
         completions::draw(&completions, conversation, box_top, buf, &mut targets);
     }
     if app.quit_open() {

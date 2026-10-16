@@ -351,7 +351,7 @@ impl App {
         send(line.into_iter().collect())
     }
 
-    /// The search panel, drawn as the `/` panel is: its query line, then
+    /// The search panel for the overlay frame: its query line, then
     /// the matches in a window that keeps the selection in view.
     pub(super) fn search_panel(&self) -> Option<Completions> {
         let search = self.history.search.as_ref()?;

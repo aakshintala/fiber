@@ -493,3 +493,22 @@ fn wrap_runs_starts_a_row_at_a_newline() {
     assert_eq!(rows[0][0].content, "a");
     assert_eq!(rows[1][0].content, "b");
 }
+
+#[test]
+fn wrap_runs_joins_split_runs_with_no_space() {
+    use ratatui::style::Style;
+    let plain = Style::new();
+    // A marked hit split across runs stays one word: runs join with
+    // nothing, and a space reads only where the source holds one.
+    let rows = super::wrap_runs(
+        &[
+            ("how do I ".to_owned(), plain),
+            ("back".to_owned(), plain),
+            ("fill it".to_owned(), plain),
+        ],
+        67,
+    );
+    assert_eq!(rows.len(), 1);
+    let text: String = rows[0].iter().map(|span| span.content.as_ref()).collect();
+    assert_eq!(text, "how do I backfill it");
+}
