@@ -206,7 +206,7 @@ fn startup(names: &[&str]) -> Credentials {
 /// The `Switching` over the fixture with `overrides` and the credential
 /// map holding `fake` and `claude` under `default`, as `parts_in` builds
 /// it.
-fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
+pub(super) fn switching(fixture: &Fixture, overrides: &[&str]) -> Arc<Switching> {
     assembled(
         &fixture.home,
         config(fixture, overrides),
@@ -1541,9 +1541,6 @@ fn vm_runs(counter: &Path) -> usize {
     std::fs::read_to_string(counter).map_or(0, |text| text.len())
 }
 
-/// A Lua-only provider the session unloaded at start is started for the
-/// switch: a bare id only it names resolves, its token is read, and once
-/// the switch applies it stays loaded, so a second switch starts no VM.
 #[test]
 fn a_dead_start_lock_entry_restarts_the_provider() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-dead-start");
@@ -1569,6 +1566,9 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
     );
 }
 
+/// A Lua-only provider the session unloaded at start is started for the
+/// switch: a bare id only it names resolves, its token is read, and once
+/// the switch applies it stays loaded, so a second switch starts no VM.
 #[test]
 fn an_unloaded_lua_provider_is_started_for_the_switch_once() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-lua-start");

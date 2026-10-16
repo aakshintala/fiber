@@ -56,6 +56,7 @@ pub struct Session {
 }
 
 type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+const DEFAULT_QUOTA_NOTICE_AT: f64 = 80.0;
 
 /// What every connection thread shares. The session holds it strongly; the
 /// log is weak, so [`Session::close`] is what releases the lock.
@@ -323,7 +324,7 @@ impl Session {
     }
 
     /// Wires the non-waiting cached quota reader before the session runs.
-    pub fn quota(&self, read: Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>) {
+    pub fn quota(&self, read: QuotaRead) {
         let stored = self.gate.quota.set(read);
         debug_assert!(stored.is_ok(), "quota is wired once");
     }
@@ -601,7 +602,7 @@ impl Gate {
     pub(crate) fn quota(&self) -> (Vec<QuotaInfo>, f64) {
         self.quota
             .get()
-            .map_or_else(|| (Vec::new(), 80.0), |read| read())
+            .map_or_else(|| (Vec::new(), DEFAULT_QUOTA_NOTICE_AT), |read| read())
     }
 
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {

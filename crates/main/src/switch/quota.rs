@@ -67,7 +67,7 @@ impl Switching {
                 .config
                 .get("quota.notice_at", None)
                 .and_then(|(value, _)| value.as_f64())
-                .unwrap_or(80.0),
+                .expect("quota.notice_at has a numeric configured default"),
             state: Mutex::default(),
             #[cfg(test)]
             labels_pause: Mutex::default(),
@@ -79,6 +79,18 @@ impl Switching {
 
 impl Store {
     fn answer(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
+        self.answer_with_spawn(|store| {
+            std::thread::Builder::new()
+                .name("fiber-quota-load".into())
+                .spawn(move || store.load())
+                .map(|_| ())
+        })
+    }
+
+    fn answer_with_spawn(
+        self: &Arc<Self>,
+        spawn: impl FnOnce(Arc<Self>) -> std::io::Result<()>,
+    ) -> (Vec<QuotaInfo>, f64) {
         let (start, labels, mut quota) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let start = !state.started;
@@ -86,10 +98,12 @@ impl Store {
             (start, state.labels.clone(), state.failed.clone())
         };
         if start {
-            let store = Arc::clone(self);
-            let _spawned = std::thread::Builder::new()
-                .name("fiber-quota-load".into())
-                .spawn(move || store.load());
+            if spawn(Arc::clone(self)).is_err() {
+                self.state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .started = false;
+            }
         }
         quota.extend(labels.into_iter().filter_map(|label| {
             info(
@@ -117,31 +131,19 @@ impl Store {
                 let Some(started) = this.started.upgrade() else {
                     return (Vec::new(), Vec::new());
                 };
+                let failures = labels
+                    .iter()
+                    .map(|label| failed(&data.name, label))
+                    .collect();
                 let lua = started.start(&this.loader, &this.config, &data.name, &extension);
                 drop(started);
                 let lua = match lua {
                     Ok(lua) => lua,
-                    Err(_) => {
-                        return (
-                            Vec::new(),
-                            labels
-                                .iter()
-                                .map(|label| failed(&data.name, label))
-                                .collect(),
-                        );
-                    }
+                    Err(_) => return (Vec::new(), failures),
                 };
                 match lua.registers("quota") {
                     Ok(false) => return (Vec::new(), Vec::new()),
-                    Err(_) => {
-                        return (
-                            Vec::new(),
-                            labels
-                                .iter()
-                                .map(|label| failed(&data.name, label))
-                                .collect(),
-                        );
-                    }
+                    Err(_) => return (Vec::new(), failures),
                     Ok(true) => {}
                 }
                 #[cfg(test)]
@@ -289,3 +291,29 @@ fn info(provider: &str, label: &str, entry: QuotaEntry) -> Option<QuotaInfo> {
 #[cfg(test)]
 #[path = "quota_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod spawn_tests {
+    use crate::switch::tests::{fixture, switching};
+
+    #[test]
+    fn a_failed_quota_loader_spawn_retries_but_a_successful_one_does_not() {
+        let fixture = fixture("fiber-quota-spawn-retry");
+        let switching = switching(&fixture, &[]);
+        let store = switching.quota_store();
+        let failed = store.answer_with_spawn(|_| Err(std::io::Error::other("spawn refused")));
+        assert!(failed.0.is_empty());
+        assert_eq!(failed.1, 80.0);
+        assert!(!store.state.lock().unwrap().started);
+
+        let mut starts = 0;
+        store.answer_with_spawn(|store| {
+            starts += 1;
+            store.load();
+            Ok(())
+        });
+        assert_eq!(starts, 1, "the next command retries the failed spawn");
+        assert!(store.state.lock().unwrap().started);
+        store.answer_with_spawn(|_| panic!("a successful loader is started only once"));
+    }
+}
