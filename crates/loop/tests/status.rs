@@ -74,7 +74,7 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
     session.inbox.send(delivery("say hi")).unwrap();
     let finished = run(session.looped.take().unwrap());
     let (_watcher, seen) = statuses_until(watcher, idle_named("say hi"));
-    // The first status is the one written at the start: nothing has run.
+    // The first status is written before any work, and still includes turns at zero.
     assert_eq!(seen[0].payload["state"], "idle");
     assert_eq!(seen[0].payload["name"], "");
     assert_eq!(seen[0].payload["turns"], 0);
