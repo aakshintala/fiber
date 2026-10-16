@@ -607,13 +607,33 @@ fn a_person_handoff_turn_with_no_input_ends_completed_after_the_hook_note() {
         ],
     );
     let done = of_kind(&lines, "handoff_completed");
+    // No reply measured this context, so its size is estimated from the
+    // conversation the hook saw. That starts with the opening message,
+    // which embeds the temp workspace and session-log paths (plus
+    // os/arch), so its length differs between macOS and Linux: derive
+    // the expectation with the same `ceil(bytes / 4)` estimate instead
+    // of hardcoding it (as `handoff.rs`'s person-handoff test does).
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    let expected_tokens: u64 = seen[0]
+        .conversation
+        .iter()
+        .map(|input| {
+            let bytes = match input {
+                Input::User { text, .. } | Input::Assistant { text, .. } => text.len(),
+                Input::Reasoning { text, .. } | Input::ToolResult { text, .. } => text.len(),
+                Input::ToolCall { call, .. } => call.name.len() + call.arguments.to_string().len(),
+            };
+            bytes.div_ceil(4) as u64
+        })
+        .sum();
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
         json!({
             "outcome": "completed",
             "note_text": "Hook note.",
             "extension": "fiber.test/notes",
-            "tokens_before": 120,
+            "tokens_before": expected_tokens,
             "instructions": "focus on tests",
         })
     );
