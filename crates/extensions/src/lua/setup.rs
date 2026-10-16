@@ -83,6 +83,28 @@ pub(crate) fn install_prelude(
     Ok((commands, providers, hooks, problems, failures))
 }
 
+/// Observers waiting for the next load of one file, keyed by canonical
+/// path. Test-only: no public API can see the moment before the loader
+/// opens the file, so the `go_module` signal in tests needs this pause.
+/// Each registration fires once, and the loader holds no lock while it
+/// runs, so a test stays free to answer.
+#[cfg(any(test, feature = "test-hooks"))]
+type LoadObserver = (PathBuf, Box<dyn FnOnce() + Send>);
+
+#[cfg(any(test, feature = "test-hooks"))]
+static LOAD_OBSERVERS: std::sync::Mutex<Vec<LoadObserver>> = std::sync::Mutex::new(Vec::new());
+
+/// Runs `notify` once, before the next load of the file at canonical `path`
+/// opens it. Test-only: the load signal a `require` of an empty module
+/// gives, without the fifo `go_module` used to need.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn observe_load(path: PathBuf, notify: Box<dyn FnOnce() + Send>) {
+    LOAD_OBSERVERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((path, notify));
+}
+
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
 /// error names the file and line. The inner error is the reason it cannot be
 /// loaded, for Lua to raise at the caller's line. A file larger than the
@@ -102,6 +124,22 @@ pub(super) fn load_file(
         }
         Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
     };
+    // A test observer for this file fires here, after the directory check
+    // and before the open, holding no lock while it runs.
+    #[cfg(any(test, feature = "test-hooks"))]
+    let notify = {
+        let mut observers = LOAD_OBSERVERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observers
+            .iter()
+            .position(|(watched, _)| *watched == path)
+            .map(|found| observers.remove(found).1)
+    };
+    #[cfg(any(test, feature = "test-hooks"))]
+    if let Some(notify) = notify {
+        notify();
+    }
     let mut source = Vec::new();
     // One byte past the cap tells a file at the cap from one over it. The
     // bound is on the read itself, so a file that grows cannot pass it.
@@ -222,4 +260,78 @@ impl Deadline {
 
 fn timed_out() -> mlua::Error {
     mlua::Error::RuntimeError("the callback passed its timeout".to_owned())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+#[allow(clippy::expect_used, reason = "test code; a failure is the test's")]
+#[allow(clippy::panic, reason = "the test's wait deadline is its failure")]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use fakes::Deadline;
+
+    use super::super::MEMORY_CAP;
+    use super::*;
+
+    /// Wall-clock bound on the wait for the observer's signal.
+    const WAIT: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn a_load_observer_fires_once_before_the_read() {
+        let dir = fakes::TempDir::new("fiber-load-observer");
+        let lua = Lua::new();
+        // Canonicalized, as the loader's directory check compares against
+        // the canonicalized file: on macOS `/var` resolves to
+        // `/private/var`.
+        let dir = dir.path().canonicalize().unwrap();
+        let watched = dir.join("go_signal.lua");
+        std::fs::write(&watched, "").unwrap();
+        std::fs::write(dir.join("other.lua"), "return 8").unwrap();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel();
+        let marking = Arc::clone(&fired);
+        let writing = watched.clone();
+        observe_load(
+            watched.canonicalize().unwrap(),
+            Box::new(move || {
+                // The read below sees this write, which proves the observer
+                // ran before the loader opened the file.
+                std::fs::write(&writing, "return 7").unwrap();
+                marking.fetch_add(1, Ordering::SeqCst);
+                tx.send(()).unwrap();
+            }),
+        );
+        // A load of another file leaves the registration alone.
+        let untouched: i64 = load_file(&lua, &dir, "other.lua", MEMORY_CAP)
+            .unwrap()
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(untouched, 8);
+        assert!(rx.try_recv().is_err(), "no signal for another file");
+        assert_eq!(fired.load(Ordering::SeqCst), 0);
+        // The first load of the watched file fires the observer, and its
+        // read sees the observer's write.
+        let loaded = load_file(&lua, &dir, "go_signal.lua", MEMORY_CAP)
+            .unwrap()
+            .unwrap();
+        Deadline::after(WAIT)
+            .recv(&rx)
+            .expect("the observer fires before the read");
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        let value: i64 = loaded.call(()).unwrap();
+        assert_eq!(value, 7);
+        // A second load finds the registration spent.
+        let again: i64 = load_file(&lua, &dir, "go_signal.lua", MEMORY_CAP)
+            .unwrap()
+            .unwrap()
+            .call(())
+            .unwrap();
+        assert_eq!(again, 7);
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+        assert!(rx.try_recv().is_err(), "the observer fires once");
+    }
 }
