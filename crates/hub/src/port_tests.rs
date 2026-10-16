@@ -1077,12 +1077,18 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     // The pump ends, the TCP side closes, and the served read loop
     // returns: a closer that shut only the Unix halves would leave the
     // pump and the TCP stream hanging.
-    Deadline::after(SHUT)
-        .recv(&pump_rx)
-        .expect("the pump to end");
-    tcp_client.set_read_timeout(Some(SHUT)).unwrap();
+    // One deadline for the pump's end and the TCP drain together: the
+    // per-read timeout is only a poll pause, so a stalled drain fails
+    // this wait by name instead of hanging the loop.
+    let shut = Deadline::after(SHUT);
+    shut.recv(&pump_rx).expect("the pump to end");
     let mut buf = [0; 8];
     loop {
+        let left = shut.left();
+        if left.is_zero() {
+            panic!("the TCP side closes");
+        }
+        tcp_client.set_read_timeout(Some(left)).unwrap();
         match tcp_client.read(&mut buf) {
             Ok(0) => break,
             Ok(_) => {}
