@@ -853,6 +853,187 @@ fn the_running_lists_match_the_doc() {
     }
 }
 
+/// The two no-file results, with their complete labels and match inks.
+fn search_results_ready(grid: &Grid) -> bool {
+    if col_at_or(grid, 0, " Search  ⌕ lock").is_none() {
+        return false;
+    }
+    let (first, last) = top_run(grid, "Search");
+    if !(first..=last).all(|x| grid.cell(x, 0).bg == SURFACE) {
+        return false;
+    }
+    for (text, bold) in [("Search", true), ("⌕ lock", false), ("Esc returns", false)] {
+        let Some(x) = col_at_or(grid, 0, text) else {
+            return false;
+        };
+        if !(0..text.chars().count() as u16).all(|dx| {
+            if bold {
+                grid.cell(x + dx, 0).bold
+            } else {
+                grid.cell(x + dx, 0).dim
+            }
+        }) {
+            return false;
+        }
+    }
+    let Some(count) = row_with_or(&grid.rows, "of 2 · ⌕ lock") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, count, "of 2 · ⌕ lock") else {
+        return false;
+    };
+    if !(0.."of 2 · ⌕ lock".chars().count() as u16).all(|dx| grid.cell(x + dx, count).dim) {
+        return false;
+    }
+    for label in ["turn 1", "turn 2"] {
+        let Some(y) = row_with_or(&grid.rows, label) else {
+            return false;
+        };
+        let text: String = (first..=last).map(|x| grid.cell(x, y).symbol).collect();
+        if text.trim() != label {
+            return false;
+        }
+        if !(last - 5..=last).all(|x| grid.cell(x, y).dim) {
+            return false;
+        }
+    }
+    let Some(hint) = row_with_or(&grid.rows, "Enter jumps to the match") else {
+        return false;
+    };
+    if !(0..23).all(|dx| grid.cell(first + dx, hint).dim) {
+        return false;
+    }
+    if grid.cell((first + last) / 2, hint + 1).symbol != "▄" {
+        return false;
+    }
+    let cells = (0..grid.size().1)
+        .flat_map(|y| (first..=last).map(move |x| (x, y)))
+        .map(|(x, y)| grid.cell(x, y));
+    let (mut matched, mut current) = (false, false);
+    for cell in cells {
+        if cell.bg == MATCH {
+            if cell.fg != WHITE {
+                return false;
+            }
+            matched = true;
+        }
+        if cell.bg == CURRENT {
+            if cell.fg != BLACK {
+                return false;
+            }
+            current = true;
+        }
+    }
+    matched && current
+}
+
+#[test]
+fn the_search_results_rows_match_the_doc() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "filehit\n").unwrap();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"text": ["lock one"]}, {"text": ["lock two"]}
+        ]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    let mut run = turned(&setup, "first");
+    let from = run.output().len();
+    run.write(b"second\r");
+    run.turn_finished(from);
+    run.write(b"\x06lock");
+    run.wait_screen("the two search matches", |grid| {
+        grid.contents.contains("of 2")
+    });
+    run.write(b"\x06");
+    let grid = run.wait_screen("the result rows, labels and inks", search_results_ready);
+    assert!(search_results_ready(&grid));
+    let (first, last) = assert_top_row(&grid, "Search", "⌕ lock");
+    click(&mut run, (first + last) / 2, 0);
+    run.wait_screen(
+        "the conversation after the search top row returns",
+        |grid| {
+            grid.contents.contains("lock two")
+                && !grid.contents.contains("Enter jumps to the match")
+        },
+    );
+    run.write(b"\x1b[27u");
+    run.wait_screen("the closed search bar", |grid| !grid.contents.contains('⌕'));
+    run.write(b"\x1b[<35;1;21M");
+    run.write(b"\x06filehit");
+    run.wait_screen("the file-call match", |grid| grid.contents.contains("of 1"));
+    run.write(b"\x06");
+    let grid = run.wait_screen("the file-call path and turn", |grid| {
+        let Some(y) = row_with_or(&grid.rows, "turn 1") else {
+            return false;
+        };
+        let Some(path) = col_at_or(grid, y, "a.txt") else {
+            return false;
+        };
+        let Some(turn) = col_at_or(grid, y, "turn 1") else {
+            return false;
+        };
+        (0..5).all(|dx| grid.cell(path + dx, y).bold)
+            && (0..6).all(|dx| grid.cell(turn + dx, y).dim)
+    });
+    let y = row_with(&grid, "turn 1");
+    assert!(grid.rows[usize::from(y)].contains("a.txt"));
+    let (_, last) = assert_top_row(&grid, "Search", "⌕ filehit");
+    assert_eq!(col_at(&grid, y, "turn 1") + 5, last);
+}
+
+fn changed_file_row_ready(grid: &Grid) -> bool {
+    if !grid.rows[0].contains(" Changed files  diff against HEAD") {
+        return false;
+    }
+    let Some(y) = row_with_or(&grid.rows, "changed.txt · +2 −0") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, y, "changed.txt · +2 −0") else {
+        return false;
+    };
+    (0..11).all(|dx| grid.cell(x + dx, y).bold)
+        && (11..14).all(|dx| grid.cell(x + dx, y).dim)
+        && (14..16).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
+        && (17..19).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
+}
+
+#[test]
+fn the_changed_files_rows_match_the_doc() {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "write", "arguments": {"path": "changed.txt", "content": "one\ntwo\n"}}]},
+            {"text": [REPLY]}
+        ]}),
+    );
+    write_json(
+        &setup.workspace().join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"}, "hub": {"idle_exit_ms": 1000}
+        }),
+    );
+    let mut run = turned(&setup, "go");
+    let grid = run.wait_screen("the changed-files panel card", |grid| {
+        panel_item_at(grid, "changed.txt").is_some()
+    });
+    let (_, y) = panel_item_at(&grid, "changed.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+2");
+    click(&mut run, x, y + 1);
+    let grid = run.wait_screen("the changed-file row and inks", changed_file_row_ready);
+    assert!(changed_file_row_ready(&grid));
+}
+
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
     grid.rows.iter().enumerate().find_map(|(y, _)| {
         let y = u16::try_from(y).ok()?;

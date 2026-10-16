@@ -170,6 +170,7 @@ fn a_match_outside_any_turn_has_no_turn() {
     let found = super::resident(app.pages(), 0, "needle").unwrap();
     assert!(!found.is_empty());
     assert!(found.iter().all(|hit| hit.3.turn.is_none()));
+    assert!(found.iter().all(|hit| hit.3.path.is_empty()));
 }
 
 #[test]
