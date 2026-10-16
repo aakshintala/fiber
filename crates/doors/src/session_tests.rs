@@ -1425,6 +1425,197 @@ fn a_shell_registered_after_close_is_cancelled() {
         .expect("close returned without the tool's timeout");
 }
 
+/// A driver shell that answers at once: when the cancel token already
+/// fired it reports the stop before start exactly as the shell tool does
+/// (its text, no error, no process), and otherwise a finished command.
+/// The shell thread waits for the test's release before `finish`, so the
+/// test's stop lands before `Tool::run`: the pause point before the run.
+struct StopFirstShell;
+
+impl Tool for StopFirstShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        if cancel.is_cancelled() {
+            return Output {
+                content: vec![ContentPart::Text {
+                    text: "Cancelled before it started.\n".to_owned(),
+                }],
+                ..Output::default()
+            };
+        }
+        Output {
+            content: vec![ContentPart::Text {
+                text: "done\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+/// A driver shell whose command really cannot start: the tool's own
+/// failure, with its error and no process.
+struct UnstartableShell;
+
+impl Tool for UnstartableShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: "nope\n".to_owned(),
+            }],
+            error: Some(contract::shapes::Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "nope.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+/// Runs one driver shell through `finish` on a thread of its own, as the
+/// reader does, and answers what the stop before its start says: the
+/// thread pauses before `finish`, the test stops the shell, then releases
+/// it, so `stop` lands before `Tool::run`.
+fn stopped_before_start_answer(
+    stop: impl FnOnce(&Gate),
+    tool: Arc<dyn Tool>,
+) -> contract::inbox::Answer {
+    let opened = Opened::open(Vec::new());
+    opened.session.shell(tool);
+    let gate = Arc::clone(&opened.session.gate);
+    let thread_gate = Arc::clone(&gate);
+    let args = contract::commands::Shell {
+        command: "true".to_owned(),
+        send: false,
+    };
+    let running = crate::shell::start(&gate, &args).expect("the driver shell is wired");
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let (answer_tx, answer_rx) = mpsc::channel();
+    thread::spawn(move || {
+        ready_tx.send(()).expect("the test waits for the pause point");
+        go_rx.recv().expect("the test releases the shell");
+        running.finish(
+            &thread_gate,
+            contract::inbox::Ack(Box::new(move |answer| {
+                answer_tx.send(answer).expect("the test waits for the answer");
+            })),
+        );
+    });
+    Deadline::after(DEADLINE)
+        .recv(&ready_rx)
+        .expect("the shell thread reached the pause point");
+    stop(&gate);
+    go_tx.send(()).expect("the shell thread waits for release");
+    let answer = Deadline::after(DEADLINE)
+        .recv(&answer_rx)
+        .expect("the shell answered");
+    close_within(opened.session, opened.log);
+    answer
+}
+
+#[test]
+fn a_shell_stopped_by_cancel_before_it_starts_is_rejected_cancelled() {
+    let answer = stopped_before_start_answer(
+        |gate| {
+            gate.stop_running();
+        },
+        Arc::new(StopFirstShell),
+    );
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell stopped before it starts is rejected"),
+    };
+    assert_eq!(
+        rejection.code,
+        ErrorCode::Cancelled,
+        "a cancel stop is cancelled"
+    );
+    assert_eq!(
+        rejection.message, "Cancelled before it started.",
+        "a cancel stop keeps the tool's words"
+    );
+}
+
+#[test]
+fn a_shell_stopped_by_close_before_it_starts_is_rejected_closing() {
+    let answer = stopped_before_start_answer(
+        |gate| {
+            gate.mark_closed();
+            gate.cancel_shells();
+        },
+        Arc::new(StopFirstShell),
+    );
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell stopped before it starts is rejected"),
+    };
+    assert_eq!(rejection.code, ErrorCode::Closing, "a close stop is closing");
+    assert_eq!(
+        rejection.message,
+        crate::client::ENDED,
+        "a close stop answers as a running shell does"
+    );
+}
+
+#[test]
+fn a_shell_whose_command_cannot_start_keeps_invalid_arguments() {
+    let answer = stopped_before_start_answer(|_| {}, Arc::new(UnstartableShell));
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell that cannot start is rejected"),
+    };
+    assert_eq!(
+        rejection.code,
+        ErrorCode::InvalidArguments,
+        "a real no-process failure keeps its code"
+    );
+    assert_eq!(rejection.message, "nope.", "a real failure keeps its words");
+}
+
 #[test]
 fn run_sends_the_jobs_ends_to_the_loops_inbox() {
     use contract::jobs::{Jobs as _, Opening, Stop};
