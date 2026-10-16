@@ -181,6 +181,7 @@ impl Group {
             | Target::Image(_)
             | Target::Note(_)
             | Target::Orphans(_)
+            | Target::CallView(_)
             | Target::Copy { .. } => None,
         };
         flag.map(|flag| *flag = open).is_some()

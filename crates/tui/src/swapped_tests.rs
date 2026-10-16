@@ -467,3 +467,10 @@ fn a_caret_past_the_field_is_not_drawn() {
     assert_eq!(text(&buf, 2), ">");
     assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
 }
+
+#[test]
+fn marked_ink_draws_the_role_colour_reversed() {
+    let style = Ink::Marked(Role::Added).style();
+    assert_eq!(style.fg, Some(Role::Added.color()));
+    assert!(style.add_modifier.contains(Modifier::REVERSED));
+}

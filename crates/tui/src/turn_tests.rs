@@ -2383,3 +2383,31 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
     assert_eq!(call.content, "x\ny");
     assert_eq!(call.lines, 2);
 }
+
+#[test]
+fn toggle_of_a_call_view_changes_nothing() {
+    use contract::events::ToolCallRequested;
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    turn.call_requested(
+        "a_1",
+        ToolCallRequested {
+            name: "read".to_owned(),
+            arguments: json!({"path": "a.rs"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+        0,
+        &mut fold,
+    );
+    let id = super::target_id("a_1");
+    assert_eq!(turn.toggle(Target::CallView(id)), None);
+    assert!(
+        turn.groups()
+            .flat_map(|group| group.calls())
+            .next()
+            .is_none_or(|call| !call.open)
+    );
+}

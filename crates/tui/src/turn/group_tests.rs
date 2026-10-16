@@ -1477,3 +1477,14 @@ fn pad_target_keeps_a_target_that_fills_its_room() {
     assert_eq!(super::pad_target("ab界cd", 4), "ab… ");
     assert_eq!(crate::format::width(&super::pad_target("ab界cd", 4)), 4);
 }
+
+/// A call-view target opens nothing: the call stays as it was.
+#[test]
+fn set_open_ignores_a_call_view_target() {
+    let mut group = opened_group(open_read_call(1, 2));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+    assert!(!group.set_open(&crate::app::Target::CallView(1), true));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+    assert!(!group.set_open(&crate::app::Target::CallView(1), false));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+}

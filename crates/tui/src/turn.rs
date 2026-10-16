@@ -536,7 +536,7 @@ impl Turn {
                 | Entry::Band(_)
                 | Entry::Answers(_) => None,
             }),
-            Target::Login | Target::Image(_) | Target::Copy { .. } => None,
+            Target::Login | Target::Image(_) | Target::Copy { .. } | Target::CallView(_) => None,
         }
     }
 
