@@ -80,6 +80,13 @@ impl Transcript<'_> {
     ) -> Result<(), Error> {
         let line = log.append(event, turn.cloned(), action.cloned())?;
         if event.class() == Class::Durable {
+            // A written `shell_command` waits for the next turn under its
+            // line's `seq`: the `turn_started` naming it releases it.
+            if let Event::ShellCommand(shell) = event
+                && let Some(seq) = line.seq.map(|seq| seq.0)
+            {
+                self.carry.hold(seq, shell);
+            }
             crate::conversation::render(
                 self.conversation,
                 event,

@@ -1007,6 +1007,7 @@ fn a_sent_shell_idle_is_written_then_acked_and_starts_no_turn() {
     let (delivery, rx) = shell_delivery("echo hi", "hi\n");
     looped.admit_idle(delivery, &mut input).unwrap();
     assert!(input.pieces.is_empty(), "a sent shell starts no turn idle");
+    assert!(input.prompts.is_empty(), "a sent shell answers at its take");
     assert!(
         matches!(answered(&rx), Ok(None)),
         "a sent shell is accepted with no answer"
