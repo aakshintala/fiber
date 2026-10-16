@@ -1,13 +1,13 @@
 //! The in-process driver (`docs/extensions.md`, "Host calls"): what an
 //! extension's `host.drive` sends through. It builds the same JSON line a
-//! socket client would send and runs it through the same `classify`,
-//! `built` and `CommandLine` checks and the same `dispatch` as a socket
+//! socket client would send and runs it through the same `classify` and
+//! `CommandLine` checks and the same `dispatch` as a socket
 //! line, as a connection already subscribed (so a `subscribe` is rejected
 //! `invalid_arguments` as a second one). Its acknowledgement goes to the
 //! host call, not to any stream, through the answer sink on its driven
 //! connection (`client.rs`).
 
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 
 use contract::commands::{Command, CommandLine, ReplyAnswer};
 use contract::inbox::{Ack, Rejection};
@@ -171,22 +171,39 @@ pub(crate) fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
     })
 }
 
-/// The `built` and `CommandLine` checks, shared by the socket line and the
-/// in-process driver: `classify` runs first in both.
+/// The `CommandLine` check, shared by the socket line and the
+/// in-process driver: `classify` runs first in both. A line that reads as
+/// a command goes on; a line whose name is not built answers
+/// `unknown_command`; a line that reads as neither answers
+/// `invalid_arguments`.
 pub(crate) fn parse(
     line: Classified,
 ) -> Result<(CommandLine, String), (CommandId, ErrorCode, String)> {
-    if !client::built(&line.command) {
-        let message = client::not_built(&line.command);
-        return Err((line.id, ErrorCode::UnknownCommand, message));
-    }
     match serde_json::from_value::<CommandLine>(line.value) {
-        Ok(parsed) => Ok((parsed, line.command)),
-        Err(_) => Err((
-            line.id,
-            ErrorCode::InvalidArguments,
-            client::UNFIT.to_owned(),
-        )),
+        Ok(parsed) => {
+            if matches!(parsed.command, Command::Unknown) {
+                let message = client::not_built(&line.command);
+                return Err((line.id, ErrorCode::UnknownCommand, message));
+            }
+            Ok((parsed, line.command))
+        }
+        Err(_) => {
+            // The name alone decides which rejection: an unbuilt name
+            // answers `unknown_command`, anything else `invalid_arguments`.
+            let mut name = Map::new();
+            name.insert("command".into(), Value::String(line.command.clone()));
+            match serde_json::from_value::<Command>(Value::Object(name)) {
+                Ok(Command::Unknown) => {
+                    let message = client::not_built(&line.command);
+                    Err((line.id, ErrorCode::UnknownCommand, message))
+                }
+                _ => Err((
+                    line.id,
+                    ErrorCode::InvalidArguments,
+                    client::UNFIT.to_owned(),
+                )),
+            }
+        }
     }
 }
 
@@ -197,22 +214,13 @@ impl client::Conn {
             id: 0,
             gate,
             sink: client::Sink::Driven {
-                answer: Arc::new(Mutex::new(Some(answer))),
+                answer,
                 origin: Origin::Extension {
                     extension: extension.to_owned(),
                 },
             },
-            subscribed: true,
             full: true,
             gone: false,
-        }
-    }
-
-    /// The sender a driven `prompt` or `steer` carries; a socket's is `Driver`.
-    pub(crate) fn origin(&self) -> Origin {
-        match &self.sink {
-            client::Sink::Driven { origin, .. } => origin.clone(),
-            client::Sink::Socket { .. } => Origin::Driver,
         }
     }
 }

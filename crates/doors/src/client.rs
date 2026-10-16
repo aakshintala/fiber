@@ -56,44 +56,79 @@ pub(crate) struct Conn {
     pub(crate) id: u64,
     pub(crate) gate: Arc<Gate>,
     pub(crate) sink: Sink,
-    pub(crate) subscribed: bool,
     pub(crate) full: bool,
     pub(crate) gone: bool,
 }
 
-/// Where a connection's answers go: a socket writes its lines, and the
-/// in-process driver answers its host call. The two never mix, so a
-/// second send on a driven connection finds the taken answer instead of
-/// another stream.
+/// Where a connection's answers go: `Direct` writes its lines straight to
+/// the socket until it subscribes, `Writer` routes them through the writer
+/// thread, and the in-process driver answers its host call exactly once,
+/// moving `Driven` to `Answered`.
 pub(crate) enum Sink {
-    Socket {
-        direct: Option<UnixStream>,
-        writer: Option<Box<dyn Write + Send>>,
-        subscription: Option<(level::Outbox, mpsc::Sender<level::Switch>)>,
+    Direct {
+        direct: UnixStream,
+        writer: Box<dyn Write + Send>,
+    },
+    Writer {
+        outbox: level::Outbox,
+        switches: mpsc::Sender<level::Switch>,
     },
     Driven {
-        /// The host call's answer, taken by the first send: shared so an
-        /// acknowledgement held for the loop still finds it when a send
-        /// took it first, and taking it twice is a visible miss, never a
-        /// panic. The id stays reserved, so a retry is a duplicate.
-        answer: Arc<Mutex<Option<Ack>>>,
+        /// The host call's answer, taken exactly once by the first of
+        /// `send` and `inbox_ack`. The id stays reserved, so a retry is a
+        /// duplicate.
+        answer: Ack,
         /// What a driven `prompt` or `steer` carries; a socket's is `Driver`.
+        origin: Origin,
+    },
+    Answered {
+        /// What the answered `prompt` or `steer` carried.
         origin: Origin,
     },
 }
 
 impl Conn {
+    /// Whether the connection has subscribed: every sink but the
+    /// not-yet-subscribed `Direct` one.
+    pub(crate) fn subscribed(&self) -> bool {
+        !matches!(self.sink, Sink::Direct { .. })
+    }
+
     /// The subscribed connection's route to its writer, if it has one.
-    pub(crate) fn outbox(&self) -> Option<level::Outbox> {
+    pub(crate) fn subscription(&self) -> Option<(level::Outbox, mpsc::Sender<level::Switch>)> {
         match &self.sink {
-            Sink::Socket {
-                subscription: Some((outbox, _)),
-                ..
-            } => Some(outbox.clone()),
-            Sink::Socket {
-                subscription: None, ..
-            }
-            | Sink::Driven { .. } => None,
+            Sink::Writer { outbox, switches } => Some((outbox.clone(), switches.clone())),
+            Sink::Direct { .. } | Sink::Driven { .. } | Sink::Answered { .. } => None,
+        }
+    }
+
+    /// The subscribed connection's route to its writer's queue, if it has one.
+    pub(crate) fn outbox(&self) -> Option<level::Outbox> {
+        self.subscription().map(|(outbox, _)| outbox)
+    }
+
+    /// The sender a driven `prompt` or `steer` carries; a socket's is `Driver`.
+    pub(crate) fn origin(&self) -> Origin {
+        match &self.sink {
+            Sink::Direct { .. } => Origin::Driver,
+            Sink::Writer { .. } => Origin::Driver,
+            Sink::Driven { origin, .. } => origin.clone(),
+            Sink::Answered { origin } => origin.clone(),
+        }
+    }
+}
+
+/// Takes the socket halves out of a `Direct` sink, leaving an `Answered`
+/// placeholder with the connection's own origin behind: `subscribe` calls
+/// this only on a `Direct` sink and overwrites the placeholder with
+/// `Writer` before returning, so the placeholder is never observed.
+fn take_direct(conn: &mut Conn) -> Option<(UnixStream, Box<dyn Write + Send>)> {
+    let origin = conn.origin();
+    match std::mem::replace(&mut conn.sink, Sink::Answered { origin }) {
+        Sink::Direct { direct, writer } => Some((direct, writer)),
+        other @ (Sink::Writer { .. } | Sink::Driven { .. } | Sink::Answered { .. }) => {
+            conn.sink = other;
+            None
         }
     }
 }
@@ -128,12 +163,7 @@ pub(crate) fn serve_connection(
     let mut conn = Conn {
         id,
         gate,
-        sink: Sink::Socket {
-            direct: Some(direct),
-            writer: Some(writer),
-            subscription: None,
-        },
-        subscribed: false,
+        sink: Sink::Direct { direct, writer },
         full: false,
         gone: false,
     };
@@ -213,7 +243,7 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
         return;
     }
-    if !conn.subscribed && line.command != "subscribe" {
+    if !conn.subscribed() && line.command != "subscribe" {
         reject(
             conn,
             Some(line.id),
@@ -232,41 +262,11 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
     dispatch(conn, parsed, &name);
 }
 
-pub(crate) fn built(command: &str) -> bool {
-    matches!(
-        command,
-        "subscribe"
-            | "prompt"
-            | "steer"
-            | "steer_drop"
-            | "message"
-            | "reply"
-            | "cancel"
-            | "tools"
-            | "commands"
-            | "skills"
-            | "quota"
-            | "history"
-            | "artifact_page"
-            | "model"
-            | "credential"
-            | "name"
-            | "close"
-            | "shell"
-            | "job_stop"
-            | "job_input"
-            | "background"
-            | "handoff"
-            | "rewind"
-            | "command"
-    )
-}
-
 pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
         Command::Subscribe(args) => {
-            if conn.subscribed {
+            if conn.subscribed() {
                 level::change(conn, id, args.level, args.credential);
             } else {
                 subscribe(conn, id, args.level, args.credential);
@@ -374,7 +374,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             answer(conn, id, moving, NO_CALL);
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
-        Command::Reload => unknown(conn, id, name),
+        Command::Reload | Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
 }
@@ -524,15 +524,7 @@ fn subscribe(
     // answer, which the writer emits before folded history. A refused
     // switch keeps this successful subscription.
     if let Some(label) = credential {
-        let Sink::Socket {
-            direct,
-            writer,
-            subscription,
-        } = &mut conn.sink
-        else {
-            return;
-        };
-        let Some(stream) = writer.take() else {
+        let Some((direct, stream)) = take_direct(conn) else {
             return;
         };
         let (ack, response, cancel) = settle_response(&conn.gate, id, last_seq);
@@ -546,10 +538,9 @@ fn subscribe(
             contract::commands::CredentialArgs { label },
             ack,
         ));
-        conn.subscribed = true;
-        *subscription = Some((
+        conn.sink = Sink::Writer {
             outbox,
-            spawn_writer(
+            switches: spawn_writer(
                 Arc::clone(&conn.gate),
                 conn.id,
                 watcher,
@@ -560,9 +551,9 @@ fn subscribe(
                     after: snapshots,
                 }),
             ),
-        ));
+        };
         // The writer is the only writer from here.
-        drop(direct.take());
+        drop(direct);
         return;
     }
     // The acknowledgement is written here, before the writer starts, so it
@@ -582,32 +573,21 @@ fn subscribe(
     }
     if summary {
         for line in [status, extensions].into_iter().flatten() {
-            if let Sink::Socket {
-                direct: Some(direct),
-                ..
-            } = &mut conn.sink
-                && write_line(direct, &line).is_err()
-            {
+            let Sink::Direct { direct, .. } = &mut conn.sink else {
+                return;
+            };
+            if write_line(direct, &line).is_err() {
                 conn.gone = true;
                 return;
             }
         }
     }
-    conn.subscribed = true;
-    let Sink::Socket {
-        direct,
-        writer,
-        subscription,
-    } = &mut conn.sink
-    else {
+    let Some((direct, stream)) = take_direct(conn) else {
         return;
     };
-    let Some(stream) = writer.take() else {
-        return;
-    };
-    *subscription = Some((
+    conn.sink = Sink::Writer {
         outbox,
-        spawn_writer(
+        switches: spawn_writer(
             Arc::clone(&conn.gate),
             conn.id,
             watcher,
@@ -615,9 +595,9 @@ fn subscribe(
             summary,
             None,
         ),
-    ));
+    };
     // The writer is the only writer from here.
-    drop(direct.take());
+    drop(direct);
 }
 
 fn deliver_message(
@@ -708,12 +688,16 @@ pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, me
 
 fn send(conn: &mut Conn, event: Event) {
     // The driver's acknowledgement goes to the host call, not to any
-    // stream: the first send takes it, and a send past it finds the
-    // answer taken instead of another answer.
-    if let Sink::Driven { answer, .. } = &conn.sink {
-        let taken = lock(answer).take();
-        let Some(answer) = taken else {
-            return;
+    // stream: the first of `send` and `inbox_ack` takes it and moves the
+    // sink to `Answered`. A send on an answered connection writes nowhere:
+    // every `dispatch` arm answers a driven connection once, so the single
+    // answer is never lost.
+    if matches!(conn.sink, Sink::Driven { .. }) {
+        let origin = conn.origin();
+        let Sink::Driven { answer, .. } =
+            std::mem::replace(&mut conn.sink, Sink::Answered { origin })
+        else {
+            unreachable!("the sink was just matched as Driven");
         };
         if let Event::CommandAccepted(accepted) = event {
             answer.0(Ok(accepted.result));
@@ -731,16 +715,15 @@ fn send(conn: &mut Conn, event: Event) {
         }
         return;
     }
+    if matches!(conn.sink, Sink::Answered { .. }) {
+        return;
+    }
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
     if let Some(outbox) = conn.outbox() {
         outbox.push_kept(line);
         return;
     }
-    let Sink::Socket {
-        direct: Some(direct),
-        ..
-    } = &mut conn.sink
-    else {
+    let Sink::Direct { direct, .. } = &mut conn.sink else {
         return;
     };
     if write_line(direct, &line).is_err() {
@@ -830,17 +813,18 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
     // The driver's acknowledgement goes to the host call, as the socket
-    // path's does to its outbox: the guard shares the answer, so a send
-    // that took it first leaves the guard nothing to answer, and the id
-    // stays reserved, so a retry is a duplicate.
-    if let Sink::Driven { answer, .. } = &conn.sink {
-        let shared = Arc::clone(answer);
+    // path's does to its outbox: the first of `inbox_ack` and `send` takes
+    // it and moves the sink to `Answered`, and the id stays reserved, so a
+    // retry is a duplicate.
+    if matches!(conn.sink, Sink::Driven { .. }) {
+        let origin = conn.origin();
+        let Sink::Driven { answer, .. } =
+            std::mem::replace(&mut conn.sink, Sink::Answered { origin })
+        else {
+            unreachable!("the sink was just matched as Driven");
+        };
         let gate = Arc::clone(&conn.gate);
         return guard(move |result| {
-            let taken = lock(&shared).take();
-            let Some(answer) = taken else {
-                return;
-            };
             if result.is_err() {
                 gate.accepted.release(&id);
             }

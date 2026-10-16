@@ -4271,7 +4271,7 @@ fn a_level_change_with_a_failing_label_notices_before_new_history() {
 }
 
 #[test]
-fn a_second_send_on_a_driven_connection_writes() {
+fn a_second_send_on_a_driven_connection_writes_nothing() {
     reset();
     let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
@@ -4283,24 +4283,24 @@ fn a_second_send_on_a_driven_connection_writes() {
         })),
         "fiber.test/a",
     );
-    // The first acknowledgement is held for the loop; the at-once answer
-    // that follows is the connection's second send.
-    let ack = crate::client::inbox_ack(&mut conn, CommandId("c_1".into()));
+    // The at-once answer takes the driven answer; the acknowledgement held
+    // for the loop finds the sink answered and writes nothing more.
     crate::client::accept(&mut conn, CommandId("c_2".into()), None);
+    let ack = crate::client::inbox_ack(&mut conn, CommandId("c_1".into()));
     let answered = Deadline::after(DEADLINE)
         .recv(&rx)
-        .expect("the second send writes its answer");
+        .expect("the first send writes its answer");
     assert!(
         matches!(answered, Ok(None)),
-        "the second send answers acceptance: {answered:?}"
+        "the first send answers acceptance: {answered:?}"
     );
     // The held acknowledgement finds the answer taken and writes nothing
-    // more: the first call's answer is not replayed.
+    // more: the answer is answered once, so the sender is consumed and the
+    // channel disconnects. If the answer were still held, the sender would
+    // be alive and this would see `Empty`, not `Disconnected`.
     drop(ack);
     assert!(
-        Deadline::after(Duration::from_millis(100))
-            .recv(&rx)
-            .is_err(),
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
         "the taken answer is answered once"
     );
     close_within(opened.session, opened.log);
