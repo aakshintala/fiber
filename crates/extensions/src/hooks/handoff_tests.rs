@@ -157,10 +157,7 @@ fn each_hook_sees_the_note_before_it_and_the_last_note_wins() {
     }];
     // Both return a note: the second wins and names its extension.
     let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation.clone());
-    assert_eq!(
-        note(&answer),
-        Some(("second saw first", "fiber.test/two"))
-    );
+    assert_eq!(note(&answer), Some(("second saw first", "fiber.test/two")));
     // The second returns nothing: the first note stands and names the first.
     let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
     assert_eq!(note(&answer), Some(("first", "fiber.test/one")));
@@ -240,7 +237,10 @@ fn bad_returns_fail_the_hook() {
             );
             if on_failure == "blocking" {
                 let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
-                    panic!("{shape}: a blocking failure ends the chain, not {:?}", answer.outcome)
+                    panic!(
+                        "{shape}: a blocking failure ends the chain, not {:?}",
+                        answer.outcome
+                    )
                 };
                 assert_eq!(failure.extension, "fiber.test/aaa", "{shape}");
                 assert!(!failure.message.is_empty(), "{shape}");
@@ -304,7 +304,10 @@ fn a_json_null_returns_nothing_and_a_function_fails_the_hook() {
         );
         if on_failure == "blocking" {
             let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
-                panic!("a blocking failure ends the chain, not {:?}", answer.outcome)
+                panic!(
+                    "a blocking failure ends the chain, not {:?}",
+                    answer.outcome
+                )
             };
             assert_eq!(failure.extension, "fiber.test/fun");
         } else {
@@ -336,7 +339,10 @@ fn a_blocking_failure_drops_an_earlier_note_and_runs_no_later_hook() {
     // The failure carries no note: the earlier note is dropped, and the
     // later hook, which would have returned one, never ran.
     let BeforeHandoffOutcome::Failed(failure) = &answer.outcome else {
-        panic!("a blocking failure ends the chain, not {:?}", answer.outcome)
+        panic!(
+            "a blocking failure ends the chain, not {:?}",
+            answer.outcome
+        )
     };
     assert_eq!(failure.extension, "fiber.test/two");
     assert!(failure.message.contains("boom"), "{}", failure.message);
@@ -459,7 +465,10 @@ fn the_conversation_renders_as_neutral_messages() {
     let home = Home::new();
     home.install(
         "echo",
-        &hook("non-blocking", r#"return { note = json.encode(call.messages) }"#),
+        &hook(
+            "non-blocking",
+            r#"return { note = json.encode(call.messages) }"#,
+        ),
     );
     let session = home.load(&[]);
     let read = ActionId("a_read".into());
@@ -609,7 +618,10 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
     );
     assert_eq!(note(&answer), Some(("small", "fiber.test/small")));
     let home = Home::new();
-    home.install("soft", &hook("non-blocking", r#"return { note = "small" }"#));
+    home.install(
+        "soft",
+        &hook("non-blocking", r#"return { note = "small" }"#),
+    );
     let session = home.load(&[]);
     let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation());
     assert_eq!(answer.outcome, BeforeHandoffOutcome::NoNote);

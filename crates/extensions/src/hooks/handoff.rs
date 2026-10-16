@@ -4,9 +4,7 @@
 
 use contract::ErrorCode;
 use contract::events::Notice;
-use contract::hook::{
-    BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, HookFailure,
-};
+use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, HookFailure};
 use contract::provider::Input;
 use serde_json::{Map, Value};
 
@@ -203,10 +201,7 @@ fn image_part(image: &contract::provider::ImageRef) -> Value {
     let mut part = Map::new();
     part.insert("type".into(), Value::String("image".into()));
     part.insert("path".into(), Value::String(image.path.clone()));
-    part.insert(
-        "mime_type".into(),
-        Value::String(image.mime_type.clone()),
-    );
+    part.insert("mime_type".into(), Value::String(image.mime_type.clone()));
     part.insert("width".into(), Value::Number(image.width.into()));
     part.insert("height".into(), Value::Number(image.height.into()));
     Value::Object(part)
@@ -218,10 +213,7 @@ fn pdf_part(pdf: &contract::provider::PdfRef) -> Value {
     let mut part = Map::new();
     part.insert("type".into(), Value::String("pdf".into()));
     part.insert("path".into(), Value::String(pdf.path.clone()));
-    part.insert(
-        "page_count".into(),
-        Value::Number(pdf.page_count.into()),
-    );
+    part.insert("page_count".into(), Value::Number(pdf.page_count.into()));
     if let Some(pages) = &pdf.pages {
         part.insert(
             "pages".into(),

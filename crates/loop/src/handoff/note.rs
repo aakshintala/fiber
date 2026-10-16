@@ -40,7 +40,10 @@ pub(super) enum Noted {
     Note(ActionId),
     /// A `before_handoff` hook wrote the note instead; no note request
     /// was made.
-    Hook { note_text: String, extension: String },
+    Hook {
+        note_text: String,
+        extension: String,
+    },
     /// The request or the reply failed.
     Failed(Failure),
     /// A person cancelled the turn.

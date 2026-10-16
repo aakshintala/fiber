@@ -14,9 +14,10 @@ use contract::clock::Clock;
 use contract::events::{CallStatus, ExtensionExec, ExtensionLog, HandoffTrigger};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
-    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeModelCall,
-    BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer, CheckOutcome, Context,
-    ContextAnswer, ContextOutcome, Hooks, SessionStart, StartReason, TurnEnd,
+    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
+    BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Context, ContextAnswer, ContextOutcome, Hooks, SessionStart, StartReason,
+    TurnEnd,
 };
 use contract::inbox::Delivery;
 use contract::provider::Input;
@@ -1917,10 +1918,7 @@ fn a_non_blocking_before_handoff_hook_past_its_timeout_is_dropped() {
     assert_eq!(extension, "fiber.test/b");
     assert_eq!(answer.notices.len(), 1);
     assert_eq!(answer.notices[0].code, ErrorCode::HookFailed);
-    assert_eq!(
-        answer.notices[0].extension.as_deref(),
-        Some("fiber.test/a")
-    );
+    assert_eq!(answer.notices[0].extension.as_deref(), Some("fiber.test/a"));
     assert!(
         answer.notices[0].message.contains("50 ms timeout"),
         "{}",

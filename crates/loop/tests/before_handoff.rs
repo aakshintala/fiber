@@ -14,8 +14,8 @@
 mod support;
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, mpsc};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::events::{HandoffTrigger, Notice, TurnOutcome};
@@ -324,12 +324,23 @@ fn is_opening(input: &Input) -> bool {
 fn a_hook_note_completes_the_handoff_with_no_note_request() {
     let hooks = HandoffHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HOOK_HANDED_OFF, REPLY, ENDED],
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HOOK_HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -392,7 +403,15 @@ fn no_hook_note_leaves_the_note_to_the_model() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, MODEL_HANDED_OFF, REPLY, ENDED],
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            MODEL_HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -406,7 +425,10 @@ fn no_hook_note_leaves_the_note_to_the_model() {
 fn a_blocking_hook_failure_fails_the_handoff_and_blocks_the_rest_of_the_turn() {
     let hooks = HandoffHooks::new();
     hooks.failed("fiber.test/notes", "boom");
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
@@ -459,7 +481,10 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
         },
         notices: vec![hook_failed("fiber.test/notes", "a soft failure")],
     });
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
@@ -480,7 +505,10 @@ fn hook_notices_ride_with_the_handoff_and_the_note_request() {
     );
     // No note: the notice lands before the note request.
     let hooks = HandoffHooks::new();
-    hooks.answer(no_note(vec![hook_failed("fiber.test/notes", "a soft failure")]));
+    hooks.answer(no_note(vec![hook_failed(
+        "fiber.test/notes",
+        "a soft failure",
+    )]));
     let mut session = hooked(
         vec![
             called(TRIGGER - 1),
@@ -531,7 +559,15 @@ fn a_person_handoff_hands_the_hook_its_instructions() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HOOK_HANDED_OFF, REPLY, ENDED],
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HOOK_HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -660,10 +696,7 @@ fn an_overflow_handoff_hands_the_hook_the_moved_results() {
         .collect();
     assert_eq!(results.len(), 2);
     for result in results {
-        assert!(
-            result.contains("moved out of your context"),
-            "{result}"
-        );
+        assert!(result.contains("moved out of your context"), "{result}");
     }
     // A hook note sends the step's request from the new context.
     let requests = session.requests();
@@ -715,7 +748,10 @@ fn a_failed_overflow_hook_fails_the_turn_context_overflow() {
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Failed));
-    assert_eq!(lines.last().unwrap().payload["error"]["code"], "context_overflow");
+    assert_eq!(
+        lines.last().unwrap().payload["error"]["code"],
+        "context_overflow"
+    );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
 }
@@ -770,7 +806,10 @@ fn a_tool_started_handoff_never_calls_the_hook() {
 fn a_cancel_during_the_hook_ends_the_turn_interrupted() {
     let hooks = HandoffHooks::new();
     hooks.note("Hook note.", "fiber.test/notes");
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
     hooks.cancel_inside(Arc::clone(&session.cancel));
     hooks.note("Second note.", "fiber.test/notes");
 
@@ -835,12 +874,7 @@ impl Tool for TripTool {
         })
     }
 
-    fn run(
-        &self,
-        _: &Map<String, Value>,
-        _: &dyn Cancel,
-        _: &dyn contract::emit::Emit,
-    ) -> Output {
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn contract::emit::Emit) -> Output {
         if let Some(cancel) = self.cancel.lock().unwrap().clone() {
             cancel.cancel();
         }
@@ -933,8 +967,7 @@ fn a_shutdown_while_the_step_tool_runs_runs_no_hook() {
             assert_eq!(hooks.calls(), 0);
         }
         let lines = session.lines();
-        let kinds_now: Vec<String> =
-            kinds(&lines).into_iter().map(str::to_owned).collect();
+        let kinds_now: Vec<String> = kinds(&lines).into_iter().map(str::to_owned).collect();
         all_kinds.push(kinds_now);
     }
     assert_eq!(outcomes[0], outcomes[1], "the outcomes match");
@@ -972,7 +1005,15 @@ fn the_live_conversation_after_a_hook_note_is_what_a_rebuild_renders() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HOOK_HANDED_OFF, REPLY, ENDED],
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HOOK_HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
     );
 
     let requests = session.requests();
@@ -989,7 +1030,10 @@ fn a_hook_note_runs_session_start_with_reason_handoff() {
     hooks.note("Hook note.", "fiber.test/notes");
     hooks.start_answer(start_empty());
     hooks.start_answer(start_added("fiber.test/inbox", "at handoff"));
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1028,7 +1072,10 @@ fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
     hooks.note("Hook note.", "fiber.test/notes");
     hooks.start_answer(start_empty());
     hooks.start_answer(start_failed("fiber.test/inbox", "no context"));
-    let mut session = hooked(vec![called(TRIGGER - 1), said("Done.", 50)], Arc::clone(&hooks));
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
 
     let (outcome, lines) = run(&mut session, "hi");
     // The handoff failed, but the turn goes on from the old context.

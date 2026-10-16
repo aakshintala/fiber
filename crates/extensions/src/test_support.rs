@@ -68,10 +68,7 @@ impl Home {
     /// The session's extensions, loaded on a thread under a deadline: the
     /// fake clock never ends a wait the runtime does not end itself.
     #[track_caller]
-    pub(crate) fn load(
-        &self,
-        overrides: &[&str],
-    ) -> std::sync::Arc<crate::SessionExtensions> {
+    pub(crate) fn load(&self, overrides: &[&str]) -> std::sync::Arc<crate::SessionExtensions> {
         use config::{Config, ProjectKey, Sources};
         let config = Config::load(Sources {
             home: self.home(),

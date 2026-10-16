@@ -16,9 +16,9 @@ use contract::TurnId;
 use contract::events::{HandoffTrigger, Outcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
-    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeModelCall,
-    BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer, CheckOutcome, ContextAnswer,
-    ContextOutcome, Hooks,
+    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
+    BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, ContextAnswer, ContextOutcome, Hooks,
 };
 use contract::inbox::Delivery;
 use fakes::clock::FakeClock;
