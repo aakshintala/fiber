@@ -160,9 +160,7 @@ impl Rows {
                 let mut row = (line, target);
                 let mut row_text = text;
                 prefix_row(&mut row.0, &mut row_text, pad);
-                if let (Some(slot), Some(meta)) =
-                    (self.rows.get_mut(at), self.texts.get_mut(at))
-                {
+                if let (Some(slot), Some(meta)) = (self.rows.get_mut(at), self.texts.get_mut(at)) {
                     *slot = row;
                     *meta = row_text;
                 }
