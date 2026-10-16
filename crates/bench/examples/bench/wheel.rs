@@ -63,10 +63,13 @@ const READ_LINES: usize = 300;
 /// lines. The filler reply, the prompt and the ledger row hold no "L0".
 const OUTPUT_MARK: &str = "L0";
 
-/// Conversation columns kept for compares: every column left of the panel,
-/// the rail's columns included. The panel is 21% of 160, so 34 columns
-/// plus its edge (`docs/tui.md`, "Layout").
-const CONV: usize = COLS as usize - 35;
+/// The rail's columns, left of the conversation: 15% of 160 (`docs/tui.md`,
+/// "Layout"). Its cards show a running time, so compares skip them.
+const RAIL: usize = 24;
+
+/// Conversation columns kept for compares: every column after the rail and
+/// left of the panel. The panel is 21% of 160, so 34 columns plus its edge.
+const CONV: usize = COLS as usize - 35 - RAIL;
 
 /// Silence proving the terminal settled: no new frame for this long.
 const QUIESCE: Duration = Duration::from_millis(500);
@@ -83,11 +86,12 @@ fn sgr_wheel(up: bool, col: u16, row: u16) -> String {
     format!("\x1b[<{button};{};{}M", col + 1, row + 1)
 }
 
-/// Each row's first [`CONV`] columns, joined with newlines: the
-/// conversation without the panel, whose cards may show times that change.
+/// Each row's conversation columns ([`RAIL`] skipped, then [`CONV`] kept),
+/// joined with newlines: the conversation without the rail and the panel,
+/// whose cards may show times that change.
 fn conversation(text: &str) -> String {
     text.lines()
-        .map(|line| line.chars().take(CONV).collect::<String>())
+        .map(|line| line.chars().skip(RAIL).take(CONV).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -747,6 +751,9 @@ fn sample_once(
         "the first frame",
         |frames| !frames.is_empty(),
     )?;
+    // The attach replays the log after its first frame: a bottom taken
+    // before the finished turn draws is a blank screen.
+    terminal.wait_for(ctx.clock, spawned + READY, "completed")?;
     if open_call {
         open_read_call(ctx.clock, &mut terminal, spawned)?;
     }
