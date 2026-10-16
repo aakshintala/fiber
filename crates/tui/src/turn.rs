@@ -30,6 +30,7 @@ mod group;
 mod handoff;
 pub(crate) mod images;
 mod live;
+mod opened;
 mod steer;
 
 #[cfg(test)]
