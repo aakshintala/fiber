@@ -5,6 +5,12 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 
+use contract::commands::ArtifactPageArgs;
+use contract::events::CommandResult;
+use contract::{CommandId, ErrorCode};
+
+use crate::client::{Conn, ENDED, accept, reject};
+
 /// At most this many lines in one page: the page size of history paging
 /// (`docs/tui.md`, "History and paging").
 const LINES: u64 = 64;
@@ -239,6 +245,76 @@ fn too_big() -> PageError {
         io::ErrorKind::Other,
         "the page does not fit memory",
     ))
+}
+
+/// `artifact_page`: one page of a file under the session's `artifacts/`.
+/// Runs on the reader thread, as `history` does: one bounded read, and
+/// the log is dropped before it, so this connection does not hold the
+/// session lock.
+pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ArtifactPageArgs) {
+    let Some(log) = conn.gate.log.upgrade() else {
+        reject(conn, Some(id), ErrorCode::Closing, ENDED);
+        return;
+    };
+    let dir = log.dir().to_path_buf();
+    drop(log);
+    let path = args.path.clone();
+    let file = match log::open_artifact(&dir, &path) {
+        Ok(file) => file,
+        Err(refusal) => {
+            let (code, message) = refused(&path, &refusal);
+            reject(conn, Some(id), code, &message);
+            return;
+        }
+    };
+    match page(file, args.offset) {
+        Ok(found) => accept(
+            conn,
+            id,
+            Some(CommandResult::ArtifactPage {
+                text: found.text,
+                next: found.next,
+                size: found.size,
+            }),
+        ),
+        Err(PageError::Past) => reject(
+            conn,
+            Some(id),
+            ErrorCode::InvalidArguments,
+            "`offset` is past the end of the file.",
+        ),
+        Err(PageError::Inside) => reject(
+            conn,
+            Some(id),
+            ErrorCode::InvalidArguments,
+            "`offset` is inside a character.",
+        ),
+        Err(PageError::Io(error)) => reject(
+            conn,
+            Some(id),
+            ErrorCode::IoFailed,
+            &format!("`{path}` could not be read: {error}."),
+        ),
+    }
+}
+
+/// The code comes from the shared refusal; the wording mirrors hub's,
+/// over the session socket, which names no session.
+fn refused(path: &str, refusal: &log::Refusal) -> (ErrorCode, String) {
+    let code = refusal.code();
+    let message = match refusal {
+        log::Refusal::Outside => {
+            format!("`{path}` is not a file under the session's `artifacts/`.")
+        }
+        log::Refusal::NotRegular => format!("`{path}` is not a regular file."),
+        log::Refusal::NoArtifacts | log::Refusal::Missing => {
+            format!("No file `{path}` in this session.")
+        }
+        log::Refusal::RootUnreadable(error) | log::Refusal::Unreadable(error) => {
+            format!("`{path}` could not be read: {error}.")
+        }
+    };
+    (code, message)
 }
 
 #[cfg(test)]
