@@ -849,8 +849,10 @@ fn a_worker_that_never_started_answers_every_search_with_why() {
 fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
     let (out, rx) = mpsc::channel();
     let (release, gate) = mpsc::channel::<()>();
+    let (started, listing) = mpsc::channel();
     let search = Search::spawn(
         move || {
+            started.send(()).map_err(|err| err.to_string())?;
             gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
@@ -858,6 +860,8 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
         out,
     );
     search.search(1, "a".to_owned());
+    // Hold an in-flight listing, rather than race drop against a queued job.
+    Deadline::after(DEADLINE).recv_or_fail(&listing, "workspace listing started");
     drop(search);
     release
         .send(())
