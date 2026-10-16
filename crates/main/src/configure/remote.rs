@@ -5,6 +5,7 @@ use std::io::Read;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -168,7 +169,88 @@ fn lists(lists: ToolLists) -> Value {
     Value::Object(value)
 }
 
+struct FileSearch {
+    listing: tui::files::Listing,
+    roots: tui::files::Roots,
+}
+impl hub::FileSearch for FileSearch {
+    fn search(
+        &mut self,
+        text: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Result<Vec<String>, String>> {
+        tui::files::search(&mut self.listing, &self.roots, text, cancelled)
+    }
+}
+type ShowCode = Box<dyn Fn(&str, &str) + Send + Sync>;
+struct DeviceShow {
+    shown: ShowCode,
+    opened: Arc<AtomicBool>,
+}
+impl tui::LoginShow for DeviceShow {
+    fn open(&self, _url: &str) {
+        self.opened.store(true, Ordering::SeqCst);
+    }
+    fn show(&self, url: &str, code: &str) {
+        (self.shown)(url, code);
+    }
+}
+struct DeviceLogin {
+    login: Arc<dyn tui::BrowserLogin>,
+    opened: Arc<AtomicBool>,
+    name: String,
+}
+impl hub::DeviceLogin for DeviceLogin {
+    fn run(&self) -> Result<String, Failure> {
+        let result = self.login.run();
+        if self.opened.load(Ordering::SeqCst) {
+            return Err(failure(
+                ErrorCode::AuthenticationFailed,
+                format!("`{}` has no device-code form.", self.name),
+            ));
+        }
+        result.map(|stored| stored.path).map_err(from_view)
+    }
+    fn cancel(&self) {
+        self.login.cancel();
+    }
+}
 impl hub::Machine for Seam {
+    fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn hub::FileSearch> {
+        let workspace = workspace.to_path_buf();
+        let roots = tui::files::Roots::new(
+            workspace.clone(),
+            home.map(|home| home.as_os_str().to_owned()),
+        );
+        Box::new(FileSearch {
+            listing: tui::files::Listing::new(move || tui::files::list(&workspace)),
+            roots,
+        })
+    }
+    fn device_login(
+        &self,
+        name: &str,
+        shown: ShowCode,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<dyn hub::DeviceLogin> {
+        let opened = Arc::new(AtomicBool::new(false));
+        let shown = Arc::new(DeviceShow {
+            shown,
+            opened: opened.clone(),
+        });
+        let login = super::login::browser_login(
+            &self.home,
+            name,
+            shown,
+            clock,
+            extensions::LoginMethod::Device,
+        );
+        Arc::new(DeviceLogin {
+            login,
+            opened,
+            name: name.to_owned(),
+        })
+    }
     fn configure(
         &self,
         operation: &str,
