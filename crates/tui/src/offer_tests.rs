@@ -711,28 +711,63 @@ fn a_changed_item_draws_its_hunk_as_changed_files_does() {
         Some("--- a/index.ts\n+++ b/index.ts\n@@ -1 +1 @@\n-old()\n+new()\n context")
     )]));
     let rows = spans(&offer, 80);
-    // After the header and its install line: the marker, then the hunk.
-    let hunk = &rows[4..11];
+    // After the header and its install line: the marker, then the hunk
+    // without the diff's own headers.
+    let hunk = &rows[4..9];
     let plain = || ("    ".to_owned(), Style::new());
+    let gutter = || {
+        (
+            "1 ".to_owned(),
+            Style::new()
+                .fg(Role::Muted.color())
+                .add_modifier(Modifier::DIM),
+        )
+    };
+    let marked = |text: &str, role: Role| {
+        (
+            text.to_owned(),
+            Style::new()
+                .fg(role.color())
+                .add_modifier(Modifier::REVERSED),
+        )
+    };
     assert_eq!(hunk[0], [("  the declaration changed".to_owned(), dim())]);
     assert_eq!(
         hunk[1],
-        [plain(), ("--- a/index.ts".to_owned(), style(Role::Keyword))]
+        [
+            plain(),
+            (
+                "  ".to_owned(),
+                Style::new()
+                    .fg(Role::Muted.color())
+                    .add_modifier(Modifier::DIM)
+            ),
+            (
+                "@@ -1 +1 @@".to_owned(),
+                Style::new()
+                    .fg(Role::Muted.color())
+                    .add_modifier(Modifier::DIM)
+            ),
+        ]
     );
     assert_eq!(
         hunk[2],
-        [plain(), ("+++ b/index.ts".to_owned(), style(Role::Keyword))]
+        [plain(), gutter(), marked("-old()", Role::Removed)]
     );
-    assert_eq!(hunk[3], [plain(), ("@@ -1 +1 @@".to_owned(), dim())]);
+    assert_eq!(hunk[3], [plain(), gutter(), marked("+new()", Role::Added)]);
     assert_eq!(
         hunk[4],
-        [plain(), ("-old()".to_owned(), style(Role::Removed))]
+        [
+            plain(),
+            (
+                "2 ".to_owned(),
+                Style::new()
+                    .fg(Role::Muted.color())
+                    .add_modifier(Modifier::DIM)
+            ),
+            (" context".to_owned(), Style::new()),
+        ]
     );
-    assert_eq!(
-        hunk[5],
-        [plain(), ("+new()".to_owned(), style(Role::Added))]
-    );
-    assert_eq!(hunk[6], [plain(), (" context".to_owned(), Style::new())]);
 }
 
 #[test]
