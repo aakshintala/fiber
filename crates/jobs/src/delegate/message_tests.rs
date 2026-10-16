@@ -93,6 +93,8 @@ struct Script {
     called: Condvar,
     replies: Mutex<VecDeque<SteerReply>>,
     commits: Mutex<Vec<bool>>,
+    /// Notified on every recorded commit decision.
+    committed: Condvar,
     /// Entered holds, counting each.
     holds: Mutex<usize>,
     held: Condvar,
@@ -105,6 +107,7 @@ impl Script {
             called: Condvar::new(),
             replies: Mutex::new(replies.into()),
             commits: Mutex::new(Vec::new()),
+            committed: Condvar::new(),
             holds: Mutex::new(0),
             held: Condvar::new(),
         })
@@ -141,13 +144,16 @@ impl Script {
             // The commit is refused before the tool's own runs, as a
             // cancelled or stale gate refuses it.
             self.commits.lock().unwrap().push(false);
+            self.committed.notify_all();
             return Steered::Withheld;
         }
         if !commit() {
             self.commits.lock().unwrap().push(false);
+            self.committed.notify_all();
             return Steered::Withheld;
         }
         self.commits.lock().unwrap().push(true);
+        self.committed.notify_all();
         if let Some(hold) = reply.hold {
             *self.holds.lock().unwrap() += 1;
             self.held.notify_all();
@@ -196,6 +202,18 @@ impl Script {
             .wait_timeout_while(self.holds.lock().unwrap(), within, |holds| *holds < n)
             .unwrap();
         *holds >= n
+    }
+
+    /// Waits, at most `within` of real time, until the steer recorded `n`
+    /// commit decisions. True once it has; false at the deadline.
+    fn await_commits(&self, n: usize, within: Duration) -> bool {
+        let (commits, _) = self
+            .committed
+            .wait_timeout_while(self.commits.lock().unwrap(), within, |commits| {
+                commits.len() < n
+            })
+            .unwrap();
+        commits.len() >= n
     }
 
     /// Waits, at most `within` of real time, until the steer ran `n`
@@ -955,8 +973,13 @@ fn a_cancel_before_the_commit_delivers_nothing() {
     // Releasing afterwards, the commit is refused and nothing is written.
     hold_tx.send(()).unwrap();
     assert!(
-        rig.script.commits.lock().unwrap().is_empty(),
-        "the commit never ran"
+        rig.script.await_commits(1, DEADLINE),
+        "the steer recorded its refusal"
+    );
+    assert_eq!(
+        *rig.script.commits.lock().unwrap(),
+        vec![false],
+        "the commit was offered and refused and nothing was written"
     );
 }
 
