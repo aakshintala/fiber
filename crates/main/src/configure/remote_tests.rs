@@ -827,27 +827,37 @@ fn remote_search_reports_the_first_git_error_line_and_caps_both_modes() {
 }
 
 fn remote_install_codex(home: &Path, server: &fakes::OauthServer) {
-    let dest = home.join("extensions/codex");
-    for (file, text) in [
-        (
-            "extension.json",
-            include_str!("../../../../providers/codex/extension.json"),
+    crate::test_support::install_extension(
+        home,
+        "extensions/codex",
+        json!({"name":"codex","version":"v0.0.0","fiber":"0.0.0","api":1}),
+        &[(
+            "codex",
+            json!({"name":"codex","login":"browser","models":[{"id":"m","protocol":"openai-responses","base_url":"http://x/v1","context_window":1000}]}),
+        )],
+    );
+    // This provider exercises the hub adapter, not a vendor's OAuth protocol.
+    write(
+        &home.join("extensions/codex/providers/codex.lua"),
+        &format!(
+            r#"
+        fiber.provider("codex", {{ credential = {{ timeout = 60000, run = function(arg)
+            assert(arg.login == "device", "the hub must ask for the device method")
+            local email
+            local stored = host.oauth.refresh(function()
+                local reply = host.http({{ url = "{base}/device", method = "POST" }})
+                local started = json.decode(reply.body)
+                host.oauth.show("{base}/codex/device", started.user_code)
+                local token = host.oauth.poll({{ url = "{base}/token", pending = {{403}}, interval = started.interval }})
+                email = token.email
+                return {{token = token.token, refresh_token = token.refresh_token, expires_at = 4102444800}}
+            end)
+            return {{token = stored.token, expires_at = stored.expires_at, email = email}}
+        end }} }})
+    "#,
+            base = server.url()
         ),
-        (
-            "providers/codex.json",
-            include_str!("../../../../providers/codex/providers/codex.json"),
-        ),
-        (
-            "providers/codex.lua",
-            include_str!("../../../../providers/codex/providers/codex.lua"),
-        ),
-    ] {
-        write(
-            &dest.join(file),
-            &text.replace("https://auth.openai.com", &server.url()),
-        );
-    }
-    crate::test_support::write_record(&dest);
+    );
 }
 
 type LoginOutcome = Result<String, Failure>;
@@ -909,20 +919,23 @@ impl Clock for PollClock {
 
 #[test]
 fn remote_device_login_shows_the_code_and_stores_or_cancels_during_the_poll() {
-    use fakes::{Deadline, OauthReply, OauthServer, jwt};
+    use fakes::{Deadline, OauthReply, OauthServer};
     use std::time::Duration;
     for cancel in [false, true] {
         let dirs = Dirs::new();
         let home = dirs.home();
-        let access = jwt(
-            &json!({"https://api.openai.com/auth":{"chatgpt_account_id":"acct_1"},"exp":4102444800u64}),
-        );
-        let id = jwt(&json!({"email":"alice@example.com"}));
+        let access = "device-access-token";
         let server = OauthServer::start(vec![
-            OauthReply::raw(200, &json!({"device_auth_id":"da_1","user_code":"ABCD-1234","interval":1}).to_string()),
+            OauthReply::raw(
+                200,
+                &json!({"device_auth_id":"da_1","user_code":"ABCD-1234","interval":1}).to_string(),
+            ),
             OauthReply::raw(403, "{}"),
-            OauthReply::raw(200, r#"{"authorization_code":"authcode-1","code_verifier":"verifier-1"}"#),
-            OauthReply::raw(200, &json!({"access_token":access,"id_token":id,"refresh_token":"rt_1","expires_in":864000}).to_string()),
+            OauthReply::raw(
+                200,
+                &json!({"token":access,"email":"alice@example.com","refresh_token":"rt_1"})
+                    .to_string(),
+            ),
         ]);
         remote_install_codex(&home, &server);
         let clock = fakes::clock::FakeClock::new();
@@ -944,7 +957,10 @@ fn remote_device_login_shows_the_code_and_stores_or_cancels_during_the_poll() {
         let run = RemoteLoginRun::start(login);
         let deadline = Deadline::after(Duration::from_secs(10));
         assert_eq!(
-            deadline.recv_or_fail(&codes, "device code"),
+            deadline.recv(&codes).unwrap_or_else(|error| panic!(
+                "device code: {error}; outcome: {:?}",
+                run.result.try_recv()
+            )),
             (format!("{}/codex/device", server.url()), "ABCD-1234".into())
         );
         let thread = deadline.recv_or_fail(&parks, "poll waiting past its clock check");

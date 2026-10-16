@@ -976,7 +976,7 @@ session's commands are. A client offers the workspaces of recent sessions
 first when it asks where to start one, and lists directories with
 `directories`.
 
-`search_files` runs both file-panel modes (`docs/tui.md`, "File search") on
+`search_files` runs both file-panel modes (`docs/tui.md`, "Keys") on
 the hub's machine. `~/` starts at the hub's home; `../` starts at `workspace`.
 The connection's search worker lists git's tracked files on its first
 workspace query and reuses that listing. `fresh: true` or a different
