@@ -6,7 +6,7 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use super::{
-    Kind, Kinds, content_text, count, cut, duration, headline, heading, kind, money, seconds,
+    Kind, Kinds, content_text, count, cut, duration, heading, headline, kind, money, seconds,
     summary, tokens, wrap, wrap_joined,
 };
 

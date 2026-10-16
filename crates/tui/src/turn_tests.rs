@@ -1167,10 +1167,7 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
             "{row}"
         );
         assert_eq!(
-            dim(&styled(
-                &app,
-                shown.first().copied().unwrap_or_default()
-            )),
+            dim(&styled(&app, shown.first().copied().unwrap_or_default())),
             lit,
             "{row}"
         );

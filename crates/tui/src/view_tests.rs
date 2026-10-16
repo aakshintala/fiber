@@ -1988,7 +1988,11 @@ fn ledger_rows_are_targets_over_their_rows() {
             Target::Group(_) => 'g',
             Target::Thought(_) => 't',
             Target::Call(_) => 'c',
-            Target::Login | Target::Image(_) | Target::Note(_) | Target::Orphans(_) | Target::CallView(_) => 'o',
+            Target::Login
+            | Target::Image(_)
+            | Target::Note(_)
+            | Target::Orphans(_)
+            | Target::CallView(_) => 'o',
             Target::Copy { .. } => 'y',
         })
         .collect();
