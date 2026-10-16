@@ -240,7 +240,7 @@ fn a_nonzero_exit_is_nonzero_exit() {
 
 #[test]
 fn a_signal_fiber_did_not_send_is_signal() {
-    let dir = fakes::TempDir::new("fiber-shell-segv");
+    let dir = fakes::TempDir::new("fiber-shell-usr1");
     let output = run(dir.path(), "kill -USR1 $$");
     assert_eq!(code(&output), Some(ErrorCode::Signal));
     assert!(
