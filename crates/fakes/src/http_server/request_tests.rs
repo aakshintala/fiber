@@ -521,9 +521,7 @@ fn check_phase(prefix: &[u8], phase: &'static str, progress: &[u8]) {
             "one tick before the bound the {phase} parks again instead of ending"
         );
         assert!(
-            Deadline::after(Duration::from_millis(200))
-                .recv(&rx)
-                .is_err(),
+            rx.try_recv().is_err(),
             "one tick before the bound the {phase} is still waiting"
         );
         clock.advance(Duration::from_nanos(1));
