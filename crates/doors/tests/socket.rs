@@ -4043,6 +4043,8 @@ fn spilled_ok(
         }],
         process: Some(spilled_process(code)),
         spilled: Some(Spilled {
+            head_bytes: head.len() as u64,
+            tail_bytes: tail.len() as u64,
             head: head.to_owned(),
             tail: tail.to_owned(),
             removed,
@@ -4077,6 +4079,8 @@ fn spilled_unsaved(
         error,
         process,
         spilled: Some(Spilled {
+            head_bytes: head.len() as u64,
+            tail_bytes: tail.len() as u64,
             head: head.to_owned(),
             tail: tail.to_owned(),
             removed,

@@ -807,6 +807,8 @@ impl ProbeTool {
                 let bytes = b"spilled output";
                 std::fs::write(&path, bytes).expect("the spill file writes");
                 Some(contract::tool::Spilled {
+                    head_bytes: 8,
+                    tail_bytes: 6,
                     head: "spilled ".into(),
                     tail: "output".into(),
                     removed: 0,
@@ -817,6 +819,8 @@ impl ProbeTool {
                 })
             }
             SpillMode::Unsaved => Some(contract::tool::Spilled {
+                head_bytes: 8,
+                tail_bytes: 6,
                 head: "spilled ".into(),
                 tail: "output".into(),
                 removed: 3,
@@ -826,6 +830,8 @@ impl ProbeTool {
                 }),
             }),
             SpillMode::UnsavedBadLeft => Some(contract::tool::Spilled {
+                head_bytes: 8,
+                tail_bytes: 6,
                 head: "spilled ".into(),
                 tail: "output".into(),
                 removed: 3,

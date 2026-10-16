@@ -1491,6 +1491,8 @@ fn spilling(
             Output {
                 content: Vec::new(),
                 spilled: Some(Spilled {
+                    head_bytes: head.len() as u64,
+                    tail_bytes: tail.len() as u64,
                     head: head.clone(),
                     tail: tail.clone(),
                     removed,
@@ -1525,6 +1527,58 @@ fn cut_of(path: &std::path::Path) -> String {
         "HHHH\n[92 bytes cut. The full output is in {}; read it with `read`.]\nTTTT",
         path.display()
     )
+}
+
+#[test]
+fn spilled_kept_ranges_index_raw_bytes_and_survive_artifact_only_hooks() {
+    for hook in [None, Some(FakeHooks::new(changed(None, None, Some("new artifact")), &["acme"], Vec::new()))] {
+        let home = fakes::TempDir::new("fiber-spilled-ranges");
+        let dir = home.path().join("s_test/artifacts");
+        let tool = Fixed { make: Some(Arc::new(move || {
+            let bytes = b"\xffa123456z\xff";
+            std::fs::write(dir.join(SPILL_NAME), bytes).unwrap();
+            Output { spilled: Some(Spilled {
+                head: "�a".into(), tail: "z�".into(), head_bytes: 2, tail_bytes: 2,
+                removed: 6, file: Ok(SpillFile { path: dir.join(SPILL_NAME), size: 10 }),
+            }), ..Output::default() }
+        })), ..fixed(text("unused")) };
+        let no_hook = hook.is_none();
+        let ran = run_spilled(home, tool, hook);
+        assert_eq!(ran.completed().payload["kept"], json!([[0,2],[8,10]]));
+        if no_hook {
+            let bytes = std::fs::read(ran.session.join("artifacts").join(SPILL_NAME)).unwrap();
+            assert_eq!(&bytes[..2], b"\xffa");
+            assert_eq!(&bytes[8..], b"z\xff");
+        }
+    }
+}
+
+#[test]
+fn spill_replacement_content_has_its_own_ranges() {
+    for saved in [false, true] {
+        for replacement in ["abc", "abcd", "abcde"] {
+            let home = fakes::TempDir::new("fiber-spilled-replacement-ranges");
+            let tool = if saved {
+                spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound { start: 4, end: 0 })
+            } else {
+                unsaved("HHHH", "TTTT", 92, "disk failed".into(), None, Bound { start: 4, end: 0 })
+            };
+            let hooks = FakeHooks::new(changed(Some(replacement), None, None), &["acme"], Vec::new());
+            let ran = run_spilled(home, tool, Some(hooks));
+            let expected = (replacement.len() > 4).then(|| json!([[0,4]]));
+            assert_eq!(ran.completed().payload.get("kept"), expected.as_ref());
+        }
+    }
+}
+
+#[test]
+fn unsaved_spill_ranges_describe_the_output_stream() {
+    for removed in [1, 92] {
+        let home = fakes::TempDir::new("fiber-unsaved-ranges");
+        let tool = unsaved("HHHH", "TTTT", removed, "disk failed".into(), None, Bound::DEFAULT);
+        let ran = run_spilled(home, tool, None);
+        assert_eq!(ran.completed().payload["kept"], json!([[0,4],[4+removed,8+removed]]));
+    }
 }
 
 #[test]
@@ -1732,6 +1786,8 @@ fn a_spilled_call_shaped_under_a_shutdown_keeps_no_file() {
             Output {
                 content: Vec::new(),
                 spilled: Some(Spilled {
+                    head_bytes: 4,
+                    tail_bytes: 4,
                     head: "HHHH".into(),
                     tail: "TTTT".into(),
                     removed: 92,
@@ -1784,6 +1840,8 @@ fn unsaved(
         make: Some(Arc::new(move || Output {
             content: Vec::new(),
             spilled: Some(Spilled {
+                head_bytes: head.len() as u64,
+                tail_bytes: tail.len() as u64,
                 head: head.clone(),
                 tail: tail.clone(),
                 removed,
@@ -1923,6 +1981,8 @@ fn a_left_file_is_removed_before_the_completion_is_written() {
                 Output {
                     content: Vec::new(),
                     spilled: Some(Spilled {
+                        head_bytes: 4,
+                        tail_bytes: 4,
                         head: "HHHH".into(),
                         tail: "TTTT".into(),
                         removed: 92,
@@ -1981,6 +2041,7 @@ fn a_spill_with_nothing_removed_joins_head_and_tail_with_no_notice() {
     let completed = ran.completed();
     assert_eq!(completed.payload["content"][0]["text"], "HHHHTTTT");
     assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert!(completed.payload.get("kept").is_none());
 }
 
 #[test]
@@ -2009,6 +2070,8 @@ fn text_parts_beside_a_spill_are_ignored_and_images_are_kept() {
                     },
                 ],
                 spilled: Some(Spilled {
+                    head_bytes: 4,
+                    tail_bytes: 4,
                     head: "HHHH".into(),
                     tail: "TTTT".into(),
                     removed: 92,
@@ -2049,6 +2112,8 @@ fn a_spill_outside_the_session_is_replaced_at_its_own_path() {
         make: Some(Arc::new(move || Output {
             content: Vec::new(),
             spilled: Some(Spilled {
+                head_bytes: 4,
+                tail_bytes: 5,
                 head: "raw ".into(),
                 tail: "bytes".into(),
                 removed: 6,
@@ -2098,6 +2163,8 @@ fn a_shutdown_with_an_unsaved_spill_removes_its_left_file() {
             Output {
                 content: Vec::new(),
                 spilled: Some(Spilled {
+                    head_bytes: 4,
+                    tail_bytes: 4,
                     head: "HHHH".into(),
                     tail: "TTTT".into(),
                     removed: 92,

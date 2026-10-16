@@ -241,6 +241,9 @@ impl Loop {
             Some(line) => format!("{line}\n{text}"),
             None => text.to_owned(),
         };
+        let tail = spilled.head_bytes.saturating_add(spilled.removed);
+        let len = tail.saturating_add(spilled.tail_bytes);
+        let kept = (spilled.removed > 0).then(|| kept_ranges(spilled.head_bytes, tail, len));
         let persisted = match spilled.file {
             Ok(file) => file,
             Err(failed) => {
@@ -258,6 +261,7 @@ impl Loop {
                     spilled.head,
                     spilled.tail,
                     spilled.removed,
+                    kept,
                     failed.message,
                     failed.left,
                 );
@@ -309,7 +313,7 @@ impl Loop {
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: Some(artifact),
-                kept: None,
+                kept,
                 changed_by: None,
                 error: None,
             },
@@ -354,13 +358,14 @@ impl Loop {
                 // text keeps its notice: cutting it again would report the
                 // notice's bytes as the removed count instead of the
                 // command's missing bytes.
+                let kept = if replaces { None } else { kept };
                 let (content, kept) = if full.is_empty() {
                     (Vec::new(), None)
                 } else if replaces && full.len() > cap {
                     let (text, ranges) = cut_hook_content(&full, bound, &path);
                     (vec![ContentPart::Text { text }], Some(ranges))
                 } else {
-                    (vec![ContentPart::Text { text: full }], None)
+                    (vec![ContentPart::Text { text: full }], kept)
                 };
                 if let Some(hook_artifact) = hook_artifact {
                     replace_spilled(&self.log, &path, hook_artifact.as_bytes())?;
@@ -403,6 +408,7 @@ impl Loop {
         head: String,
         tail: String,
         removed: u64,
+        kept: Option<Vec<[u64; 2]>>,
         message: String,
         left: Option<std::path::PathBuf>,
     ) -> Result<Shaped, Error> {
@@ -445,7 +451,7 @@ impl Loop {
                 content: vec![ContentPart::Text { text: shown }],
                 details,
                 artifact: None,
-                kept: None,
+                kept,
                 changed_by: None,
                 error: None,
             },
@@ -498,7 +504,7 @@ impl Loop {
                             content: vec![ContentPart::Text { text: shown }],
                             details,
                             artifact,
-                            kept: None,
+                            kept,
                             changed_by: None,
                             error: None,
                         }
