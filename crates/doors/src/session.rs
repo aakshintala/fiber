@@ -17,7 +17,7 @@ use crate::{failure, mint};
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
-use contract::events::{Clients, CommandInfo, Event, SkillInfo, ToolInfo};
+use contract::events::{Clients, CommandInfo, Event, QuotaInfo, SkillInfo, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
@@ -70,6 +70,7 @@ pub(crate) struct Gate {
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
     skills: OnceLock<Vec<SkillInfo>>,
+    quota: OnceLock<Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
@@ -317,6 +318,12 @@ impl Session {
     pub fn skills(&self, skills: Vec<SkillInfo>) {
         let stored = self.gate.skills.set(skills);
         debug_assert!(stored.is_ok(), "skills is wired once");
+    }
+
+    /// Wires the non-waiting cached quota reader before the session runs.
+    pub fn quota(&self, read: Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>) {
+        let stored = self.gate.quota.set(read);
+        debug_assert!(stored.is_ok(), "quota is wired once");
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
@@ -589,6 +596,10 @@ impl Gate {
         self.commands.get().cloned().unwrap_or_default()
     }
 
+    pub(crate) fn quota(&self) -> (Vec<QuotaInfo>, f64) {
+        self.quota.get().map_or_else(|| (Vec::new(), 80.0), |read| read())
+    }
+
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
         self.skills.get().cloned().unwrap_or_default()
     }
@@ -683,6 +694,7 @@ fn open_in(
         tools: Mutex::new(tools),
         commands: OnceLock::new(),
         skills: OnceLock::new(),
+        quota: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
         cancel: OnceLock::new(),
