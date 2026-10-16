@@ -205,7 +205,8 @@ puts it aside", both dim.
 
 Home lists every project, in the rail's order: the launch project first, then
 the others in the order their first session started. Each project is a
-section, and the sections scroll when they outgrow the screen:
+section, and the sections scroll when they outgrow the screen. When the
+list is one row tall, it shows the focused row's first line.
 
 - **The section's header** is the project's name, bold in the accent colour,
   and a "+" that starts a session in that project, as on the rail; then, dim,
