@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use contract::events::CommandResult;
 
 use crate::format;
-use crate::swapped::{Frame, Ink, List};
+use crate::swapped::{Frame, Ink, List, Spot};
+use crate::theme::Role;
+use crate::turn::opened::{DiffKind, DiffLine, diff_lines, gutter_width, safe_line};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -113,15 +115,19 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
             Vec::new(),
         ),
-        Diff::Lines { lines, cut } => (
-            lines
-                .iter()
-                .map(|line| vec![(line.clone(), None, Ink::Plain)])
-                .collect(),
-            cut.iter()
-                .map(|artifact| format!("Cut: the whole diff is in {artifact}"))
-                .collect(),
-        ),
+        Diff::Lines { lines, cut } => {
+            let drawn = diff_lines(&lines.join("\n"));
+            let gutter = gutter_width(drawn.iter().filter_map(|line| line.number));
+            (
+                drawn
+                    .into_iter()
+                    .map(|line| hunk_row(line, gutter))
+                    .collect(),
+                cut.iter()
+                    .map(|artifact| format!("Cut: the whole diff is in {artifact}"))
+                    .collect(),
+            )
+        }
         Diff::Empty => (
             vec![vec![(
                 "No changes against HEAD.".to_owned(),
@@ -159,18 +165,48 @@ fn totals(changes: &BTreeMap<String, (u64, u64)>) -> (u64, u64, u64) {
         })
 }
 
-/// Removes terminal controls from a line; tabs use four spaces so file
-/// content cannot send terminal escapes through the view.
-fn safe_line(line: &str) -> String {
-    let mut safe = String::with_capacity(line.len());
-    for ch in line.chars() {
-        if ch == '\t' {
-            safe.push_str("    ");
-        } else if !ch.is_control() {
-            safe.push(ch);
-        }
+/// One diff line as swapped cells: the dim gutter, then the text under
+/// its ink, the differing words in reverse video. The gutter fits the
+/// widest number in the diff.
+fn hunk_row(line: DiffLine, gutter: usize) -> Vec<(String, Option<Spot>, Ink)> {
+    let mut cells = Vec::new();
+    if gutter > 0 {
+        let text = match line.number {
+            Some(number) => format!("{number:>gutter$} "),
+            None => " ".repeat(gutter + 1),
+        };
+        cells.push((text, None, Ink::Muted));
     }
-    safe
+    let joined: String = line
+        .segments
+        .iter()
+        .map(|(text, _)| text.as_str())
+        .collect();
+    match line.kind {
+        DiffKind::Hunk | DiffKind::Note => cells.push((joined, None, Ink::Muted)),
+        DiffKind::Removed => cells.extend(marked_cells(&line.segments, Role::Removed)),
+        DiffKind::Added => cells.extend(marked_cells(&line.segments, Role::Added)),
+        DiffKind::Context => cells.push((joined, None, Ink::Plain)),
+    }
+    cells
+}
+
+/// Diff segments under their role's ink, the differing words marked.
+fn marked_cells(segments: &[(String, bool)], role: Role) -> Vec<(String, Option<Spot>, Ink)> {
+    segments
+        .iter()
+        .map(|(text, marked)| {
+            (
+                text.clone(),
+                None,
+                if *marked {
+                    Ink::Marked(role)
+                } else {
+                    Ink::Role(role)
+                },
+            )
+        })
+        .collect()
 }
 
 /// The standard unreadable-diff answer.

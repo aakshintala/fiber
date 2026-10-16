@@ -30,7 +30,7 @@ mod group;
 mod handoff;
 pub(crate) mod images;
 mod live;
-mod opened;
+pub(crate) mod opened;
 mod steer;
 
 #[cfg(test)]
@@ -423,10 +423,7 @@ impl Turn {
                 call.changes = done.changes.clone().unwrap_or_default();
                 // A `null` details counts as none: the views fall back
                 // to the content, never to a `content` argument.
-                call.details = done
-                    .details
-                    .clone()
-                    .filter(|details| !details.is_null());
+                call.details = done.details.clone().filter(|details| !details.is_null());
                 call.artifact = done.artifact.clone();
                 call.kept = done.kept.clone();
                 call.signal = done

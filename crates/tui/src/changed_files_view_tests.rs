@@ -380,3 +380,93 @@ fn list_and_diff_screens_render_as_whole_80_by_24_frames() {
     insta::assert_snapshot!("changed_files_80x24", screen(&app_with_files()));
     insta::assert_snapshot!("changed_files_diff_80x24", screen(&app_with_diff()));
 }
+
+/// The diff frame over `lines` for `src/a.rs`.
+fn diff_frame_of(lines: &[&str]) -> crate::swapped::Frame {
+    let diff = Diff::Lines {
+        lines: lines.iter().map(|line| line.to_string()).collect(),
+        cut: None,
+    };
+    frame(
+        &changes(&[("src/a.rs", 1, 1)]),
+        Some(("src/a.rs", &diff)),
+        List::default(),
+    )
+}
+
+#[test]
+fn the_diff_frame_drops_git_headers() {
+    let frame = diff_frame_of(&[
+        "diff --git a/a.rs b/a.rs",
+        "index 123..456 100644",
+        "--- a/a.rs",
+        "+++ b/a.rs",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+    ]);
+    let texts: Vec<String> = frame
+        .rows
+        .iter()
+        .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            "  @@ -1 +1 @@".to_owned(),
+            "1 -old".to_owned(),
+            "1 +new".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn the_diff_frame_has_a_gutter_from_the_hunk_header() {
+    let frame = diff_frame_of(&["@@ -9 +10 @@", "-old", "+new"]);
+    let guttered: Vec<String> = frame.rows[1..]
+        .iter()
+        .map(|cells| cells.iter().map(|(text, _, _)| text.as_str()).collect())
+        .collect();
+    assert_eq!(guttered[0], " 9 -old");
+    assert_eq!(guttered[1], "10 +new");
+    // The gutter is dim; the hunk row is dim too.
+    assert!(matches!(frame.rows[1][0].2, crate::swapped::Ink::Muted));
+    assert!(matches!(frame.rows[0][1].2, crate::swapped::Ink::Muted));
+}
+
+#[test]
+fn a_paired_line_marks_its_words_with_ink_marked() {
+    use crate::theme::Role;
+    let frame = diff_frame_of(&["@@ -1 +1 @@", "-call foo(a);", "+call bar(a);"]);
+    let removed = &frame.rows[1];
+    let marked: Vec<_> = removed
+        .iter()
+        .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
+        .collect();
+    assert_eq!(marked.len(), 1);
+    assert_eq!(marked[0].0, "foo(a);");
+    assert!(matches!(
+        marked[0].2,
+        crate::swapped::Ink::Marked(Role::Removed)
+    ));
+    let added = &frame.rows[2];
+    let marked: Vec<_> = added
+        .iter()
+        .filter(|(_, _, ink)| matches!(ink, crate::swapped::Ink::Marked(_)))
+        .collect();
+    assert_eq!(marked.len(), 1);
+    assert_eq!(marked[0].0, "bar(a);");
+}
+
+#[test]
+fn an_unpaired_run_marks_nothing() {
+    let frame = diff_frame_of(&["@@ -1,2 +1 @@", "-one", "-two", "+both"]);
+    assert!(
+        frame
+            .rows
+            .iter()
+            .flatten()
+            .all(|(_, _, ink)| !matches!(ink, crate::swapped::Ink::Marked(_))),
+        "{frame:?}"
+    );
+}
