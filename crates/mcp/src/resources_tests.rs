@@ -81,58 +81,42 @@ fn request_reads_each_action() {
         (
             "read without a uri fails",
             json!({"action": "read", "server": "docs"}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`read` needs `server` and `uri`.".to_owned(),
-            }),
+            Err(McpError::ResourceReadNeedsServerAndUri),
         ),
         (
             "read without a server fails",
             json!({"action": "read", "uri": "u"}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`read` needs `server` and `uri`.".to_owned(),
-            }),
+            Err(McpError::ResourceReadNeedsServerAndUri),
         ),
         (
             "another action fails",
             json!({"action": "write"}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`action` must be `list` or `read`.".to_owned(),
-            }),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "no action fails",
             json!({}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`action` must be `list` or `read`.".to_owned(),
-            }),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "a non-string action fails",
             json!({"action": 7}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`action` must be `list` or `read`.".to_owned(),
-            }),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "a non-string server fails",
             json!({"action": "list", "server": 5}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`server` must be a string.".to_owned(),
-            }),
+            Err(McpError::ResourceFieldNotString { field: "server" }),
         ),
         (
             "a non-string uri fails",
             json!({"action": "read", "server": "docs", "uri": 5}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`uri` must be a string.".to_owned(),
-            }),
+            Err(McpError::ResourceFieldNotString { field: "uri" }),
         ),
         (
             "a non-string cursor fails",
             json!({"action": "list", "server": "docs", "cursor": 5}),
-            Err(McpError::ResourceRequestInvalid {
-                message: "`cursor` must be a string.".to_owned(),
-            }),
+            Err(McpError::ResourceFieldNotString { field: "cursor" }),
         ),
     ];
     for (name, arguments, expected) in rows {

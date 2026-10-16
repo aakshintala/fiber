@@ -1,10 +1,9 @@
 //! Every MCP failure as its own case (`docs/errors.md`, "Where a code
 //! comes from"): one fixed code per case, mapped in [`McpError::code`]
 //! with no wildcard arm, so a new case does not compile until it has one.
-//! Nothing a person sees changes: each message is the sentence the call
-//! site built before, and the contract records (`Output.error`,
-//! `McpServerFailed.error`) are built from a case at the edge through
-//! `From<&McpError> for Failure`.
+//! Each case's message is the sentence shown for it, and the contract
+//! records (`Output.error`, `McpServerFailed.error`) are built from a case
+//! at the edge through `From<&McpError> for Failure`.
 
 use contract::ErrorCode;
 use contract::shapes::Failure;
@@ -143,10 +142,18 @@ pub(crate) enum McpError {
     /// Decoded bytes the image child refused, with its own sentence.
     #[error("{message}")]
     ImageFailed { message: String },
-    /// An `mcp_resources` call whose arguments do not parse, with the
-    /// parser's own sentence.
-    #[error("{message}")]
-    ResourceRequestInvalid { message: String },
+    /// An `mcp_resources` call whose named field is not a string.
+    #[error("`{field}` must be a string.")]
+    ResourceFieldNotString {
+        /// The field that is not a string: `server`, `cursor` or `uri`.
+        field: &'static str,
+    },
+    /// An `mcp_resources` `read` without both its `server` and its `uri`.
+    #[error("`read` needs `server` and `uri`.")]
+    ResourceReadNeedsServerAndUri,
+    /// An `mcp_resources` call whose `action` is not `list` or `read`.
+    #[error("`action` must be `list` or `read`.")]
+    ResourceActionUnknown,
     /// The call names no server that offers resources.
     #[error(
         "No MCP server named `{server}` offers resources; \
@@ -250,9 +257,10 @@ impl McpError {
             | Self::ImageNotBase64String
             | Self::ImageUndecodable(_)
             | Self::ImageUnreadable { .. } => ErrorCode::UnsupportedFile,
-            Self::ResourceRequestInvalid { .. } | Self::NoResources { .. } => {
-                ErrorCode::InvalidArguments
-            }
+            Self::ResourceFieldNotString { .. }
+            | Self::ResourceReadNeedsServerAndUri
+            | Self::ResourceActionUnknown
+            | Self::NoResources { .. } => ErrorCode::InvalidArguments,
             Self::ResourceContentsMissing { .. } | Self::ResourceListMissing { .. } => {
                 ErrorCode::ToolError
             }
@@ -278,12 +286,6 @@ impl From<&McpError> for Failure {
             retry_after_ms: None,
             provider: None,
         }
-    }
-}
-
-impl From<McpError> for Failure {
-    fn from(error: McpError) -> Failure {
-        Failure::from(&error)
     }
 }
 
@@ -319,7 +321,7 @@ fn secret_key(name: &str) -> &str {
 }
 
 /// The cause as the "was not run" sentence's end: without its leading
-/// "The ", exactly as the old sentence built it.
+/// "The ", so the cause reads as the sentence's end.
 fn without_the(cause: &str) -> String {
     cause.strip_prefix("The ").unwrap_or(cause).to_owned()
 }

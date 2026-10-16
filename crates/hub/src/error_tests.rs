@@ -66,11 +66,6 @@ fn each_start_error_maps_to_its_code_sentence_and_record() {
     for (name, error, code, message) in &rows {
         assert_eq!(&error.code(), code, "code, row: {name}");
         assert_eq!(&error.to_string(), message, "message, row: {name}");
-        let record = Failure::from(error);
-        assert_eq!(&record.code, code, "record code, row: {name}");
-        assert_eq!(&record.message, message, "record message, row: {name}");
-        assert_eq!(record.retry_after_ms, None, "record retry, row: {name}");
-        assert_eq!(record.provider, None, "record provider, row: {name}");
     }
     let forwarded = failure(ErrorCode::AuthenticationFailed, "denied");
     let configure = StartError::Configure(forwarded);
@@ -88,16 +83,6 @@ fn each_start_error_maps_to_its_code_sentence_and_record() {
 
 #[test]
 fn each_device_login_error_maps_to_its_code_sentence_and_record() {
-    let kept = Failure {
-        code: ErrorCode::StaleRequest,
-        message: "stale".to_owned(),
-        retry_after_ms: Some(7),
-        provider: Some(contract::shapes::ProviderFailure {
-            name: "test".to_owned(),
-            status: None,
-            message: "provider said".to_owned(),
-        }),
-    };
     let rows: Vec<(&str, DeviceLoginError, ErrorCode, String)> = vec![
         (
             "no device-code form",
@@ -123,18 +108,5 @@ fn each_device_login_error_maps_to_its_code_sentence_and_record() {
     for (name, error, code, message) in &rows {
         assert_eq!(&error.code(), code, "code, row: {name}");
         assert_eq!(&error.to_string(), message, "message, row: {name}");
-        let record = Failure::from(error);
-        assert_eq!(&record.code, code, "record code, row: {name}");
-        assert_eq!(&record.message, message, "record message, row: {name}");
     }
-    assert_eq!(
-        &Failure::from(&DeviceLoginError::Forwarded(kept.clone())),
-        &kept,
-        "a forwarded failure is returned unchanged"
-    );
-    let formed = Failure::from(&DeviceLoginError::NoDeviceCodeForm {
-        name: "test".to_owned(),
-    });
-    assert_eq!(formed.retry_after_ms, None, "a formed record has no retry");
-    assert_eq!(formed.provider, None, "a formed record has no provider");
 }

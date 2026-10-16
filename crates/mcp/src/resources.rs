@@ -301,9 +301,6 @@ enum Request {
 /// else `cursor` and `uri` are ignored. A missing or non-string required
 /// field is its own invalid-arguments case.
 fn request(arguments: &Map<String, Value>) -> Result<Request, McpError> {
-    let invalid = |message: &str| McpError::ResourceRequestInvalid {
-        message: message.to_owned(),
-    };
     let action = arguments.get("action").and_then(Value::as_str);
     match action {
         Some("list") => {
@@ -311,7 +308,7 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, McpError> {
                 None => return Ok(Request::Servers),
                 Some(value) => value
                     .as_str()
-                    .ok_or_else(|| invalid("`server` must be a string."))?
+                    .ok_or(McpError::ResourceFieldNotString { field: "server" })?
                     .to_owned(),
             };
             let cursor = match arguments.get("cursor") {
@@ -319,7 +316,7 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, McpError> {
                 Some(value) => Some(
                     value
                         .as_str()
-                        .ok_or_else(|| invalid("`cursor` must be a string."))?
+                        .ok_or(McpError::ResourceFieldNotString { field: "cursor" })?
                         .to_owned(),
                 ),
             };
@@ -327,22 +324,22 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, McpError> {
         }
         Some("read") => {
             let server = match arguments.get("server") {
-                None => return Err(invalid("`read` needs `server` and `uri`.")),
+                None => return Err(McpError::ResourceReadNeedsServerAndUri),
                 Some(value) => value
                     .as_str()
-                    .ok_or_else(|| invalid("`server` must be a string."))?
+                    .ok_or(McpError::ResourceFieldNotString { field: "server" })?
                     .to_owned(),
             };
             let uri = match arguments.get("uri") {
-                None => return Err(invalid("`read` needs `server` and `uri`.")),
+                None => return Err(McpError::ResourceReadNeedsServerAndUri),
                 Some(value) => value
                     .as_str()
-                    .ok_or_else(|| invalid("`uri` must be a string."))?
+                    .ok_or(McpError::ResourceFieldNotString { field: "uri" })?
                     .to_owned(),
             };
             Ok(Request::Read { server, uri })
         }
-        _ => Err(invalid("`action` must be `list` or `read`.")),
+        _ => Err(McpError::ResourceActionUnknown),
     }
 }
 

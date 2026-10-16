@@ -310,41 +310,31 @@ fn rows() -> Vec<Row> {
         },
         Row {
             name: "request without an action",
-            error: McpError::ResourceRequestInvalid {
-                message: "`action` must be `list` or `read`.".to_owned(),
-            },
+            error: McpError::ResourceActionUnknown,
             code: ErrorCode::InvalidArguments,
             message: "`action` must be `list` or `read`.",
         },
         Row {
             name: "request with a non-string server",
-            error: McpError::ResourceRequestInvalid {
-                message: "`server` must be a string.".to_owned(),
-            },
+            error: McpError::ResourceFieldNotString { field: "server" },
             code: ErrorCode::InvalidArguments,
             message: "`server` must be a string.",
         },
         Row {
             name: "request with a non-string cursor",
-            error: McpError::ResourceRequestInvalid {
-                message: "`cursor` must be a string.".to_owned(),
-            },
+            error: McpError::ResourceFieldNotString { field: "cursor" },
             code: ErrorCode::InvalidArguments,
             message: "`cursor` must be a string.",
         },
         Row {
             name: "read without its server and uri",
-            error: McpError::ResourceRequestInvalid {
-                message: "`read` needs `server` and `uri`.".to_owned(),
-            },
+            error: McpError::ResourceReadNeedsServerAndUri,
             code: ErrorCode::InvalidArguments,
             message: "`read` needs `server` and `uri`.",
         },
         Row {
             name: "read with a non-string uri",
-            error: McpError::ResourceRequestInvalid {
-                message: "`uri` must be a string.".to_owned(),
-            },
+            error: McpError::ResourceFieldNotString { field: "uri" },
             code: ErrorCode::InvalidArguments,
             message: "`uri` must be a string.",
         },
@@ -494,7 +484,6 @@ fn each_case_maps_to_its_code_sentence_and_record() {
             "message, row: {}",
             row.name
         );
-        assert_eq!(row.error.clone(), row.error, "clone, row: {}", row.name);
         let record = Failure::from(&row.error);
         assert_eq!(record.code, row.code, "record code, row: {}", row.name);
         assert_eq!(
@@ -508,7 +497,5 @@ fn each_case_maps_to_its_code_sentence_and_record() {
             row.name
         );
         assert_eq!(record.provider, None, "record provider, row: {}", row.name);
-        let owned = Failure::from(row.error.clone());
-        assert_eq!(owned, record, "owned record, row: {}", row.name);
     }
 }

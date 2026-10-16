@@ -33,7 +33,15 @@ fn login(
     (
         Arc::new(FakeLogin {
             shows,
-            outcome: outcome.map_err(|error| Failure::from(&error)),
+            outcome: outcome.map_err(|error| match error {
+                DeviceLoginError::Forwarded(failure) => failure,
+                other @ DeviceLoginError::NoDeviceCodeForm { .. } => Failure {
+                    code: other.code(),
+                    message: other.to_string(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            }),
             hold_cancel,
             waiting,
             gate: std::sync::Mutex::new(gate),
