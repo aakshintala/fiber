@@ -1127,3 +1127,34 @@ fn a_session_start_failure_after_a_hook_note_fails_the_handoff_with_no_note() {
     assert!(!done[0].payload.contains_key("note_text"));
     assert!(!done[0].payload.contains_key("note"));
 }
+
+#[test]
+fn a_failed_hook_note_handoff_blocks_the_rest_of_the_turn() {
+    // A hook note whose `session_start` fails ends the handoff `failed`:
+    // the automatic trigger does not fire again in that turn, so a later
+    // step that crosses the trigger runs no second hook. Under `!=` the
+    // block is never set on failure and the hook runs twice.
+    let hooks = HandoffHooks::new();
+    hooks.note("Hook note.", "fiber.test/notes");
+    hooks.note("Second note.", "fiber.test/notes");
+    hooks.start_answer(start_empty());
+    hooks.start_answer(start_failed("fiber.test/inbox", "no context"));
+    // The second step reports a full trigger of tokens, so the check
+    // before the third step crosses the trigger again: with the block
+    // the hook still ran once, without it twice.
+    let mut session = hooked(
+        vec![called(TRIGGER - 1), called(TRIGGER), said("Done.", 50)],
+        Arc::clone(&hooks),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // The failed handoff blocks the automatic trigger for the rest of
+    // the turn: the hook ran once, even though the later step stays over
+    // the trigger.
+    assert_eq!(hooks.calls(), 1);
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["outcome"], "failed");
+    assert_eq!(done[0].payload["error"]["code"], "hook_failed");
+}

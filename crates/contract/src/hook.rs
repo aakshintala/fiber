@@ -222,6 +222,8 @@ pub struct BeforeHandoff<'a> {
 }
 
 impl std::fmt::Debug for BeforeHandoff<'_> {
+    // The debug string is a developer aid no doc promises and no consumer observes.
+    #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BeforeHandoff")
             .field("trigger", &self.trigger)

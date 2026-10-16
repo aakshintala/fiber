@@ -21,7 +21,7 @@ use contract::ActionId;
 use contract::ErrorCode;
 use contract::events::{HandoffTrigger, ToolCallRequested};
 use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, Hooks};
-use contract::provider::{ImageRef, Input};
+use contract::provider::{ImageRef, Input, PdfRef};
 use contract::tool::Cancel;
 use fakes::Deadline;
 use serde_json::{Value, json};
@@ -218,6 +218,7 @@ fn bad_returns_fail_the_hook() {
         ("a string", r#"return "x""#),
         ("a number", r#"return 5"#),
         ("a boolean", r#"return true"#),
+        ("an array", r#"return { "x" }"#),
         ("another key", r#"return { other = "x" }"#),
         ("a note of another kind", r#"return { note = 5 }"#),
     ] {
@@ -766,4 +767,103 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         .recv(&done_rx)
         .expect("waited for the chain");
     assert_eq!(note(&answer), Some(("first:0+second", "fiber.test/gate")));
+}
+
+#[test]
+fn a_cancel_before_the_call_still_runs_the_first_hook() {
+    // The chain checks the cancel between hooks only (`at > 0`): a
+    // cancel that fired before the call still runs the first hook.
+    // Under `>=` the chain would return `NoNote` before it.
+    let home = Home::new();
+    home.install("one", &hook("non-blocking", r#"return { note = "first" }"#));
+    let session = home.load(&[]);
+    let answer = bounded({
+        let session = Arc::clone(&session);
+        move || {
+            let cancel = Flag {
+                fired: AtomicBool::new(true),
+            };
+            let conversation = vec![Input::User {
+                text: "hi".into(),
+                images: Vec::new(),
+            }];
+            session.before_handoff(&BeforeHandoff {
+                trigger: HandoffTrigger::Auto,
+                instructions: None,
+                conversation: &conversation,
+                cancel: &cancel,
+            })
+        }
+    });
+    assert_eq!(note(&answer), Some(("first", "fiber.test/one")));
+}
+
+#[test]
+fn pdf_parts_render_with_and_without_pages() {
+    let home = Home::new();
+    home.install(
+        "echo",
+        &hook(
+            "non-blocking",
+            r#"return { note = json.encode(call.messages) }"#,
+        ),
+    );
+    let session = home.load(&[]);
+    let action = ActionId("a_read".into());
+    let image = ImageRef {
+        path: "artifacts/i.png".into(),
+        mime_type: "image/png".into(),
+        width: 4,
+        height: 4,
+    };
+    let conversation = vec![
+        Input::ToolCall {
+            action_id: action.clone(),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.rs"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "fake/m".into(),
+        },
+        Input::ToolResult {
+            action_id: action,
+            text: "body".into(),
+            is_error: false,
+            images: Vec::new(),
+            pdfs: vec![
+                PdfRef {
+                    path: "artifacts/a.pdf".into(),
+                    page_count: 2,
+                    pages: Some(vec![image.clone()]),
+                },
+                PdfRef {
+                    path: "artifacts/b.pdf".into(),
+                    page_count: 3,
+                    pages: None,
+                },
+            ],
+        },
+    ];
+    let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+    let (text, _) = note(&answer).expect("a hook wrote a note");
+    let messages: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "Called the tool read with arguments {\"path\":\"a.rs\"}"},
+            ]},
+            {"role": "user", "content": [
+                {"type": "text", "text": "The tool read returned:\nbody"},
+                {"type": "pdf", "path": "artifacts/a.pdf", "page_count": 2, "pages": [
+                    {"type": "image", "path": "artifacts/i.png", "mime_type": "image/png", "width": 4, "height": 4},
+                ]},
+                {"type": "pdf", "path": "artifacts/b.pdf", "page_count": 3},
+            ]},
+        ])
+    );
 }
