@@ -212,6 +212,27 @@ pub(crate) fn split(width: u16, height: u16, shares: &Shares, want: &Want) -> La
     }
 }
 
+/// The session screen's rail width and conversation column range at
+/// `width` by `height` with the default shares and wants: the rail 15%,
+/// the panel 21%, both wanted. The rail width is 0 while the rail is not
+/// drawn; the range is the conversation column's columns.
+pub fn session_columns(width: u16, height: u16) -> (u16, std::ops::Range<u16>) {
+    let shares = Shares {
+        rail: 15.0,
+        panel: 21.0,
+    };
+    let want = Want {
+        rail: true,
+        rail_by_count: true,
+        panel: true,
+    };
+    let layout = split(width, height, &shares, &want);
+    let rail = layout.rail.map_or(0, |rail| rail.width);
+    let start = layout.column.x;
+    let end = start.saturating_add(layout.column.width);
+    (rail, start..end)
+}
+
 #[cfg(test)]
 #[path = "layout_tests.rs"]
 mod tests;
