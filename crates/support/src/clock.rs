@@ -169,10 +169,23 @@ impl Parker {
     /// Parks on the parker's own counter until a bump past `seen`, `until`
     /// passes on `clock`, or the clock wakes it: [`park`] over the counter.
     pub fn park(&self, clock: &dyn Clock, until: Option<Instant>, seen: u64) {
+        self.park_polled(clock, until, None, seen);
+    }
+
+    /// [`park`](Parker::park) with a real-time poll cap: the wait ends at
+    /// most `poll` past its start even with no bump and no clock move, so
+    /// a missed exit is re-checked instead of slept through.
+    pub fn park_polled(
+        &self,
+        clock: &dyn Clock,
+        until: Option<Instant>,
+        poll: Option<Duration>,
+        seen: u64,
+    ) {
         let _guard = park(
             clock,
             until,
-            None,
+            poll,
             &self.changed,
             crate::lock(&self.seq),
             |seq| *seq != seen,

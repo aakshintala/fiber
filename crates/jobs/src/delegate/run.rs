@@ -26,7 +26,7 @@ use super::group;
 use super::outcome::{Termination, outcome};
 use crate::registry::Unreported;
 use support::clock::Parker;
-use support::group::Listing;
+use support::group::{GROUP_POLL, Listing};
 
 /// Builds the child's command from its launch. The runner sets the stdio,
 /// the process group and the lifeline around it.
@@ -342,6 +342,13 @@ impl Runner {
         let mut backoff = START_BACKOFF;
         let mut next_retry = self.clock.now();
         let mut exited_seen = false;
+        // The drain's last line, taken once its sender answers: the
+        // drain thread sends exactly one message at EOF and then its
+        // sender drops, so any answer but `Empty` means stdout reached
+        // EOF while the leader may still be unreaped. Kept here so the
+        // reap below still folds it, and so the park at the end of the
+        // loop can bound its wait once no stdout event can wake it.
+        let mut drained: Option<Option<FiberExited>> = None;
         loop {
             // Snapshotted before the checks below: a watcher poke or
             // clock move in between trips the wait at the end instead
@@ -362,9 +369,20 @@ impl Runner {
                 self.shared.halt(Termination::OutputCap);
             }
             // Reaped only under the list's lock: the reap cannot race a
-            // signal to a retired group. Then the fold waits for the drain.
+            // signal to a retired group. Then the fold takes the drain's
+            // line, waiting for it when none arrived yet.
+            if drained.is_none() {
+                match drain_rx.try_recv() {
+                    Ok(line) => drained = Some(line),
+                    Err(mpsc::TryRecvError::Disconnected) => drained = Some(None),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
             if let Some(status) = group::reap_locked(&mut child, &mut listing) {
-                let stdout = self.await_drain(&drain_rx);
+                let stdout = match drained {
+                    Some(line) => line,
+                    None => self.await_drain(&drain_rx),
+                };
                 drop(_lifeline);
                 let socket = lock(&fold).socket.clone();
                 let (completed, finished) = outcome(
@@ -429,7 +447,14 @@ impl Runner {
                     None
                 },
             );
-            self.park.park(self.clock.as_ref(), Some(due), seen);
+            // Past stdout EOF with the leader still unreaped, no event
+            // wakes the runner when the leader exits, and a fake clock
+            // never moves on its own: the park carries a real-time poll
+            // cap, so the next iteration reaps. Until EOF the drain's own
+            // wake ends the park, so the wait stays unbounded.
+            let poll = drained.is_some().then_some(GROUP_POLL);
+            self.park
+                .park_polled(self.clock.as_ref(), Some(due), poll, seen);
         }
     }
 

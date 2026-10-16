@@ -587,6 +587,58 @@ fn timeout_spawn_stops_and_reaps_its_child() {
 }
 
 #[test]
+fn eof_before_exit_reports_without_a_clock_move() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let fifo = rig._dir.path().join("fifo");
+    let made = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo creates the fifo");
+    let pid = rig._dir.path().join("child.pid");
+    let fifo_arg = fifo.clone();
+    spawned.launch = Arc::new(move |_: &Launched| {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            &format!(
+                "echo $$ > '{}'; exec >&-; read _ < '{}'; exit 0",
+                pid.display(),
+                fifo_arg.display()
+            ),
+        ]);
+        command
+    });
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    // The child closed stdout before blocking on the fifo, so its exit
+    // follows this write with no stdout event and no clock move: the
+    // runner must still reap it and report.
+    within("the child reads the fifo", DEADLINE, move || {
+        std::fs::write(&fifo, "\n").unwrap();
+    });
+    let deadline = Deadline::after(DEADLINE);
+    let Delivery::Job(notice) = deadline
+        .recv(&rig.inbox)
+        .expect("the exited delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(notice.completed.status, contract::events::Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.unwrap().code,
+        contract::ErrorCode::Indeterminate
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn depth_edges_refuse_by_tool_name() {
     assert!(super::depth_refusal(1, "delegate_spawn").is_none());
     for depth in [2, 3] {
