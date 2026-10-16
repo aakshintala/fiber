@@ -912,6 +912,27 @@ fn home_four_row_logo_80x24() {
 }
 
 #[test]
+fn home_one_row_logo_at_the_height_limit() {
+    let frame = screen(&home(80, 11), 80, 11);
+    assert!(frame.contains("⌇ fiber 0.0.1"), "the one-row logo");
+    assert!(
+        frame.lines().take(4).all(|row| !row.contains('█')),
+        "no pixel rows at the height limit"
+    );
+    insta::assert_snapshot!("home_one_row_logo_at_the_height_limit", frame);
+}
+
+#[test]
+fn the_logo_glyph_setting_changes_the_one_row_logo() {
+    let tall = screen(&home_with_glyph(80, 12, "≈"), 80, 12);
+    assert!(tall.contains('█'), "the four-row logo at 12 rows");
+    assert!(!tall.contains('≈'), "the four-row logo ignores the setting");
+    let short = screen(&home_with_glyph(80, 11, "≈"), 80, 11);
+    assert!(short.contains("≈ fiber 0.0.1"), "the one-row glyph setting");
+    assert!(!short.contains('⌇'), "no wave where the glyph goes");
+}
+
+#[test]
 fn a_screen_narrower_than_the_logo_gets_one_row() {
     let area = Rect::new(0, 0, 20, 24);
     let mut buf = Buffer::empty(area);
