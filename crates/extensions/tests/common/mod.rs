@@ -562,8 +562,8 @@ pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoIt
     let digest = hash(&mut Index::load(&setup.home()), &found).unwrap();
     (found, digest)
 }
-/// How long a blocking store operation may take before the test fails
-/// instead of hanging.
+/// How long a blocking store operation may stay silent (no new git work)
+/// before the test fails instead of hanging.
 const STORE_OPERATION_WITHIN: Duration = Duration::from_secs(10);
 
 /// Git work started across the test process, bumped whenever a repository
