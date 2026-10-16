@@ -699,6 +699,29 @@ fn price_text(m: &Model, session: Option<u64>) -> Option<String> {
     }
 }
 
+/// The right-aligned switch cell: the rebuild cost labelled as a switch
+/// when the session has conversation to rebuild, `—` for the current
+/// model, nothing with no conversation.
+fn switch_text(m: &Model, session: Option<u64>) -> Option<String> {
+    match (m.current, session) {
+        (true, Some(_)) => Some("—".to_string()),
+        (false, Some(_)) => Some(format!("switch {}", m.rebuild)),
+        _ => None,
+    }
+}
+
+/// The inner width below which rows drop their prices: the name and the
+/// switch cost matter more than the per-million rates.
+const PRICE_MIN_INNER: usize = 60;
+
+/// What one model row draws past its name: the dim per-million price and
+/// the right-aligned switch cost, each `None` when there is nothing to show.
+#[derive(Clone)]
+struct Costs {
+    price: Option<String>,
+    switch: Option<String>,
+}
+
 /// A model row, with a mark between the gutter and the id in the checklist case.
 fn model_row(
     f: usize,
@@ -707,7 +730,7 @@ fn model_row(
     checklist: Option<bool>,
     scoped_mark: bool,
     hits: &[usize],
-    price: Option<String>,
+    costs: Costs,
 ) -> Row {
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
@@ -746,10 +769,12 @@ fn model_row(
     if scoped_mark {
         spans.push(sp("· scoped ", dim()));
     }
-    if let Some(p) = price {
+    if let Some(p) = costs.price {
         spans.push(sp(format!("{p} "), dim()));
     }
-    spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
+    if let Some(sw) = costs.switch {
+        spans.extend([sp("\t", Style::new()), sp(sw, dim())]);
+    }
     // The focused model reads bold throughout, like every focused choice.
     if focused {
         for s in spans.iter_mut().skip(rest) {
@@ -918,12 +943,31 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let focused = vis[pos] == f;
             let scoped_mark = !s.checklist && s.show_all && s.scoped.contains(&f);
             let hits = id_hits(&s.query, m.id);
-            let price = price_text(m, s.session);
+            // A narrow panel drops the prices before the name cell.
+            let price = if inner >= PRICE_MIN_INNER {
+                price_text(m, s.session)
+            } else {
+                None
+            };
+            let switch = switch_text(m, s.session);
             // The checklist marks instead of scoping: its rows carry a mark,
             // its thinking row stays dim with no click targets, and it never
             // takes the session-only note.
             let mark = s.checklist.then(|| s.marked.contains(&f));
-            let mk = || model_row(f, m, focused, mark, scoped_mark, &hits, price.clone());
+            let mk = || {
+                model_row(
+                    f,
+                    m,
+                    focused,
+                    mark,
+                    scoped_mark,
+                    &hits,
+                    Costs {
+                        price: price.clone(),
+                        switch: switch.clone(),
+                    },
+                )
+            };
             if focused {
                 out.extend(panel::bar(vec![mk()]));
             } else {
@@ -2100,6 +2144,144 @@ mod tests {
         assert!(p.show_all);
         assert!(p.refreshing.is_empty());
         assert_eq!(p.marked, SCOPED.to_vec());
+    }
+
+    #[test]
+    fn the_switch_cost_is_labelled_and_needs_conversation() {
+        // With conversation every non-current row labels its rebuild cost a switch.
+        let t = text(&view(&for_case("prices"), 160));
+        assert!(
+            t.contains("switch ~84k tokens · $0.31"),
+            "switch cost not labelled"
+        );
+        assert!(t.contains("—"), "the current model lost its dash");
+        // With no conversation no row names any switch cost.
+        let t = text(&view(&for_case("prices-empty"), 160));
+        assert!(!t.contains("switch"), "switch leaks with no conversation");
+        assert!(
+            !t.contains("tokens · $"),
+            "a cost leaks with no conversation"
+        );
+        assert!(!t.contains("—"), "a dash leaks with no conversation");
+    }
+
+    #[test]
+    fn the_free_row_reads_free_and_the_unpriced_row_names_no_price() {
+        let rows = view(&for_case("prices-free"), 160);
+        let line = rows
+            .iter()
+            .map(plain)
+            .find(|l| l.contains("gemma-3-27b"))
+            .unwrap();
+        assert!(line.contains("free"), "free row does not read free");
+        assert!(!line.contains("/M"), "free row still prices: {line}");
+        let rows = view(&for_case("prices-noprice"), 160);
+        let line = rows
+            .iter()
+            .map(plain)
+            .find(|l| l.contains("gpt-6-nano"))
+            .unwrap();
+        assert!(
+            line.contains("switch ~58k tokens · $0.03"),
+            "unpriced row lost its switch cost"
+        );
+        assert!(!line.contains("/M"), "unpriced row names a price: {line}");
+        assert!(!line.contains("free"), "unpriced row reads free: {line}");
+        assert!(
+            !text(&rows).contains("$0.00"),
+            "a zero rate formatted as $0.00 instead of free"
+        );
+    }
+
+    #[test]
+    fn the_tier_turns_over_at_its_minimum() {
+        let f = fixture();
+        let sonnet = &f[0].models[1];
+        // With no conversation there is no size to tier on: the base rates win.
+        let (i, o, t) = rates(sonnet, None);
+        assert_eq!((i, o), (Some(3.00), Some(15.00)));
+        assert!(t.is_none(), "a tier with no conversation");
+        // Just below the minimum the base rates still win.
+        let (i, o, t) = rates(sonnet, Some(199_999));
+        assert_eq!((i, o), (Some(3.00), Some(15.00)));
+        assert!(t.is_none(), "a tier below the minimum");
+        // At and above the minimum the tiered rates apply.
+        let (i, o, t) = rates(sonnet, Some(200_000));
+        assert_eq!((i, o), (Some(6.00), Some(30.00)));
+        assert!(t.is_some(), "no tier at the minimum");
+        let (i, o, t) = rates(sonnet, Some(200_001));
+        assert_eq!((i, o), (Some(6.00), Some(30.00)));
+        assert!(t.is_some(), "no tier above the minimum");
+    }
+
+    #[test]
+    fn only_both_rates_at_zero_read_free() {
+        let unpriced = |input: Option<f64>, output: Option<f64>| Model {
+            id: "",
+            name: "",
+            roles: vec![],
+            current: false,
+            levels: vec![],
+            level: None,
+            rebuild: "",
+            input,
+            output,
+            tier: None,
+        };
+        assert_eq!(
+            price_text(&unpriced(Some(0.00), Some(0.00)), Some(1)),
+            Some("free".to_string())
+        );
+        // Either side above zero is a priced row, not a free one.
+        for (input, output) in [(Some(0.00), Some(1.00)), (Some(1.00), Some(0.00))] {
+            let p = price_text(&unpriced(input, output), Some(1)).unwrap();
+            assert!(p.contains("/M"), "half-zero row reads free: {p}");
+        }
+    }
+
+    #[test]
+    fn the_switch_cell_covers_current_and_conversation() {
+        let f = fixture();
+        let (opus, sonnet) = (&f[0].models[0], &f[0].models[1]);
+        assert_eq!(switch_text(opus, Some(1)), Some("—".to_string()));
+        assert_eq!(switch_text(opus, None), None);
+        assert_eq!(
+            switch_text(sonnet, Some(1)),
+            Some("switch ~84k tokens · $0.31".to_string())
+        );
+        assert_eq!(switch_text(sonnet, None), None);
+    }
+
+    #[test]
+    fn a_narrow_panel_drops_the_prices_before_the_name() {
+        // Just below the edge the names and switch costs stay but no price does.
+        let t = body(&for_case("prices"), 59)
+            .iter()
+            .map(plain)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            t.contains("claude-opus-5-5"),
+            "the name went before the prices"
+        );
+        assert!(
+            t.contains("switch ~84k tokens · $0.31"),
+            "the switch went first"
+        );
+        assert!(!t.contains("/M"), "prices survive the narrow panel");
+        assert!(!t.contains("free"), "free survives the narrow panel");
+        // At and above the edge the prices draw.
+        for inner in [60, 61] {
+            let t = body(&for_case("prices"), inner)
+                .iter()
+                .map(plain)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                t.contains("$15.00 in · $75.00 out /M"),
+                "no prices at inner {inner}"
+            );
+        }
     }
 
     #[test]
