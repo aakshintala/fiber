@@ -3,7 +3,9 @@
 
 use std::path::PathBuf;
 
+use crate::theme::Role;
 use contract::SessionId;
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::*;
@@ -172,12 +174,16 @@ fn serials(frame: &Frame) -> Vec<u64> {
     frame
         .rows
         .iter()
+        .filter(|cells| !cells.is_empty())
         .map(|cells| {
-            assert_eq!(cells.len(), 1);
-            match cells[0].1 {
-                Some(Spot::Item(serial)) => serial,
-                _ => panic!("one serial cell per row"),
-            }
+            let serial = cells[0].1;
+            assert!(cells.iter().all(|cell| cell.1 == serial));
+            serial
+        })
+        .filter_map(|spot| match spot {
+            Some(Spot::Item(serial)) => Some(serial),
+            None => None,
+            _ => panic!("only item targets in a running list"),
         })
         .collect()
 }
@@ -190,7 +196,11 @@ fn delegates_frame_lists_two_rows_per_delegate_in_start_order() {
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
     let frame = delegates_frame(&app, List::default());
     assert_eq!(frame.title, "Running delegates");
-    assert_eq!(frame.rows.len(), 4);
+    assert_eq!(frame.rows.len(), 7);
+    assert_eq!(
+        frame.rows[0],
+        [("Delegates · 2 running".to_owned(), None, Ink::Heading)]
+    );
     let first = app
         .serial_of_job(&contract::JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
@@ -198,10 +208,15 @@ fn delegates_frame_lists_two_rows_per_delegate_in_start_order() {
         .serial_of_job(&contract::JobId("j_2".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
     assert_eq!(serials(&frame), [first, first, second, second]);
-    assert!(frame.rows[0][0].0.contains("test/model"));
     assert!(frame.rows[1][0].0.contains("task j_1"));
+    assert!(frame.rows[2][0].0.contains("test/model"));
     assert!(frame.rows[3][0].0.contains("task j_2"));
-    assert_eq!(frame.footer, "↑↓ move · Enter open · Esc close");
+    assert!(frame.rows[5].is_empty());
+    assert_eq!(
+        frame.rows[6],
+        [("a row opens that item's view".to_owned(), None, Ink::Muted)]
+    );
+    assert!(frame.footer.is_empty());
 }
 
 #[test]
@@ -213,7 +228,11 @@ fn jobs_frame_lists_one_row_per_job_and_no_delegate() {
     start_job(&mut app, "j_3");
     let frame = jobs_frame(&app, List::default());
     assert_eq!(frame.title, "Running jobs");
-    assert_eq!(frame.rows.len(), 2);
+    assert_eq!(frame.rows.len(), 5);
+    assert_eq!(
+        frame.rows[0],
+        [("Jobs · 2 running".to_owned(), None, Ink::Heading)]
+    );
     let first = app
         .serial_of_job(&contract::JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
@@ -221,8 +240,184 @@ fn jobs_frame_lists_one_row_per_job_and_no_delegate() {
         .serial_of_job(&contract::JobId("j_3".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
     assert_eq!(serials(&frame), [first, third]);
-    assert!(frame.rows[0][0].0.contains("task j_1"));
-    assert!(frame.rows[1][0].0.contains("task j_3"));
+    assert!(frame.rows[1][0].0.contains("task j_1"));
+    assert!(frame.rows[2][0].0.contains("task j_3"));
+    assert!(frame.footer.is_empty());
+}
+
+fn text(cells: &[(String, Option<Spot>, Ink)]) -> String {
+    cells.iter().map(|cell| cell.0.as_str()).collect()
+}
+
+#[test]
+fn the_delegates_frame_matches_the_doc() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    let wall = contract::clock::wall_ms(clock.wall());
+    app.set_now(clock.now(), wall);
+    let mut line = session_line(
+        "job_started",
+        json!({
+            "job_id": "j_1", "description": "task j_1", "output_path": "/tmp/out"
+        }),
+    );
+    if let Line::Session(line) = &mut line {
+        line.ts = wall.saturating_sub(61_000);
+    }
+    app.on_line(line);
+    app.on_line(session_line(
+        "delegate_started",
+        json!({
+            "job_id": "j_1", "delegate_session_id": "s_dddddddddddddddd",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"
+        }),
+    ));
+    start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        json!({
+            "state": "streaming", "parent": SESSION, "thinking": "high", "calls": 3,
+            "spend": {"tokens": {"input": 650, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": 0.42, "subscription_cost": 0.0},
+            "context": {"tokens": 650, "window": 1000}
+        }),
+    ));
+    let frame = delegates_frame(&app, List::default());
+    let serial = app
+        .serial_of_job(&contract::JobId("j_1".to_owned()))
+        .unwrap();
+    assert_eq!(
+        frame.rows[1],
+        [(
+            "◆ task j_1 · 1m".to_owned(),
+            Some(Spot::Item(serial)),
+            Ink::Plain
+        )]
+    );
+    assert_eq!(
+        frame.rows[2],
+        [
+            (
+                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
+                Some(Spot::Item(serial)),
+                Ink::Muted
+            ),
+            (
+                "▆".repeat(6),
+                Some(Spot::Item(serial)),
+                Ink::Role(Role::Warning)
+            ),
+            (
+                "░".repeat(4),
+                Some(Spot::Item(serial)),
+                Ink::Role(Role::Rule)
+            ),
+            (" 65%".to_owned(), Some(Spot::Item(serial)), Ink::Muted),
+        ]
+    );
+}
+
+#[test]
+fn the_bar_fill_turns_at_60_and_85_percent() {
+    for (tokens, filled, role, pct) in [
+        (0, 0, Role::Accent, 0),
+        (590, 5, Role::Accent, 59),
+        (599, 5, Role::Accent, 59),
+        (600, 6, Role::Warning, 60),
+        (601, 6, Role::Warning, 60),
+        (840, 8, Role::Warning, 84),
+        (849, 8, Role::Warning, 84),
+        (850, 8, Role::Error, 85),
+        (851, 8, Role::Error, 85),
+        (999, 9, Role::Error, 99),
+        (1000, 10, Role::Error, 100),
+        (1001, 10, Role::Error, 100),
+        (1500, 10, Role::Error, 150),
+    ] {
+        assert_eq!(bar(tokens, 1000), (filled, role, pct), "{tokens}");
+    }
+}
+
+#[test]
+fn a_delegate_without_a_level_status_or_context_leaves_them_out() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    assert_eq!(
+        text(&delegates_frame(&app, List::default()).rows[2]),
+        "  test/model · s_dddddddddddddddd"
+    );
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        json!({"state": "streaming", "parent": SESSION}),
+    ));
+    assert_eq!(
+        text(&delegates_frame(&app, List::default()).rows[2]),
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+    );
+}
+
+#[test]
+fn a_context_with_a_window_of_zero_draws_no_bar() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
+    app.on_line(live(
+        "s_dddddddddddddddd",
+        json!({
+            "state": "streaming", "parent": SESSION, "context": {"tokens": 5, "window": 0}
+        }),
+    ));
+    let frame = delegates_frame(&app, List::default());
+    assert_eq!(frame.rows[2].len(), 1);
+    assert_eq!(
+        text(&frame.rows[2]),
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+    );
+}
+
+#[test]
+fn the_jobs_frame_matches_the_doc() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    let wall = contract::clock::wall_ms(clock.wall());
+    app.set_now(clock.now(), wall);
+    let mut line = session_line(
+        "job_started",
+        json!({
+            "job_id": "j_1", "description": "task j_1", "output_path": "/tmp/out"
+        }),
+    );
+    if let Line::Session(line) = &mut line {
+        line.ts = wall.saturating_sub(61_000);
+    }
+    app.on_line(line);
+    start_job(&mut app, "j_2");
+    let frame = jobs_frame(&app, List::default());
+    assert_eq!(text(&frame.rows[1]), "◆ task j_1 · 1m · j_1");
+    assert_eq!(text(&frame.rows[4]), "a row opens that item's view");
+    assert_eq!(serials(&frame).len(), 2);
+}
+
+#[test]
+fn enter_on_the_heading_opens_nothing_and_on_an_item_row_opens_it() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::JobList,
+    ));
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    assert!(!app.item_open());
+    assert!(app.session_view_screen(80).is_some());
+    app.on_key(crate::keys::Key::Down, clock.now());
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    assert!(app.item_open());
+    assert!(app.session_view_screen(80).is_none());
+    assert_eq!(app.item_view().unwrap().description, "task j_1");
 }
 
 #[test]
