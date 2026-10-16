@@ -150,25 +150,24 @@ pub(crate) fn bounded<T: Send + 'static>(
     fakes::within(what, deadline.left(), work)
 }
 
-/// `fakes::kill_group` bounded by `deadline.cleanup()`: it sends a signal,
-/// it does not wait on the code under test.
+/// Sends `signal` to process group `group` through `fakes::kill_group`: a
+/// kill(2) call that starts no process, so it runs directly with no bound.
+/// It keeps its deadline so every signal site reads the same.
 #[track_caller]
-pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -> io::Result<bool> {
-    fakes::within(
-        &format!("kill -{signal} of process group {group}"),
-        deadline.cleanup(),
-        move || fakes::kill_group(group, signal),
-    )
+pub(crate) fn kill_group(
+    _deadline: Deadline,
+    group: u32,
+    signal: &'static str,
+) -> io::Result<bool> {
+    fakes::kill_group(group, signal)
 }
 
-/// `fakes::kill_pid` bounded by `deadline.cleanup()`.
+/// Sends `signal` to process `pid` through `fakes::kill_pid`: a kill(2)
+/// call that starts no process, so it runs directly with no bound. It
+/// keeps its deadline so every signal site reads the same.
 #[track_caller]
-pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
-    fakes::within(
-        &format!("kill -{signal} of pid {pid}"),
-        deadline.cleanup(),
-        move || fakes::kill_pid(pid, signal),
-    )
+pub(crate) fn kill_pid(_deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
+    fakes::kill_pid(pid, signal)
 }
 
 /// `fakes::kill_matching` bounded by `deadline.cleanup()`.
@@ -182,10 +181,12 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     )
 }
 
-/// Whether any process remains in process group `group`.
+/// Whether any process remains in process group `group`, probed directly:
+/// a kill(2) call starts no process, so it runs with no bound. It keeps
+/// its deadline so every signal site reads the same.
 #[track_caller]
-pub(crate) fn group_alive(deadline: Deadline, group: u32) -> bool {
-    kill_group(deadline, group, "0").unwrap()
+pub(crate) fn group_alive(_deadline: Deadline, group: u32) -> bool {
+    fakes::kill_group(group, "0").unwrap()
 }
 
 /// For `Drop` impls: sends `signal` to `group` on a thread and returns at
