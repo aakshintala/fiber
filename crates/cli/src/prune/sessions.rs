@@ -93,7 +93,7 @@ struct Candidate {
 /// and no session is listed.
 pub(crate) fn select(
     home: &Path,
-    started: &[log::Started],
+    all: &[log::Started],
     workspace: &Path,
     older_than: Option<Duration>,
     cascade: bool,
@@ -105,7 +105,6 @@ pub(crate) fn select(
             deletes: Vec::new(),
         };
     };
-    let all = started;
     let mut by_id: HashMap<String, (PathBuf, Option<String>)> = HashMap::new();
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for started in all {

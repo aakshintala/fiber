@@ -123,14 +123,13 @@ pub(crate) struct RemovedWorktrees {
 /// is not listed. Dropping the plan releases every kept lock.
 pub(crate) fn select(
     home: &Path,
-    started: &[log::Started],
+    users: &[log::Started],
     workspace: &Path,
     force: bool,
     dry_run: bool,
     now: SystemTime,
 ) -> Planned {
     let keys = scope_keys(home, workspace);
-    let users = started;
     let mut planned = Planned {
         rows: Vec::new(),
         removals: Vec::new(),
@@ -498,9 +497,6 @@ fn revalidate(home: &Path, planned: &mut Planned, removal: &PlannedRemoval) -> R
         .join(&removal.project)
         .join("sessions");
     for started in log::started_sessions_in(&sessions) {
-        if started.dir.parent() != Some(sessions.as_path()) {
-            continue;
-        }
         if !is_user(&started.workspace, &canonical) {
             continue;
         }
