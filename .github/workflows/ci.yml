@@ -509,11 +509,14 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
       - *toolchain
-      - name: Install the musl target and C compiler
+      - name: Install the musl and gnu targets and C compiler
         # A mirror that stops answering must fail the step, not hold the job to its bound.
         timeout-minutes: 5
         run: |
           rustup target add x86_64-unknown-linux-musl
+          # PROBE (see #2360; dropped before merge): the probe builds the
+          # paging jig for gnu as well as musl.
+          rustup target add x86_64-unknown-linux-gnu
           # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS update
           # shellcheck disable=SC2086 # APT_OPTS is a list of options
@@ -627,6 +630,61 @@ jobs:
             --paging "$RUNNER_TEMP/release/head/paging" \
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
+      # PROBE (see #2360; dropped before merge): profiles the musl jigs'
+      # scale-16 re-count under perf record -g for head and base in this
+      # same job and prints each perf report (self time) to the log, plus
+      # the gnu scale-1 re-count for head and base. It only reports, never
+      # fails; a missing jig reports unavailable.
+      - name: Probe the paging re-count under perf
+        if: always()
+        run: |
+          tmp=$RUNNER_TEMP/probe-paging
+          mkdir -p "$tmp"
+          if ! command -v perf >/dev/null 2>&1; then
+            echo "probe-paging: perf not installed; installing"
+            # shellcheck disable=SC2086 # APT_OPTS is a list of options
+            sudo apt-get $APT_OPTS update || true
+            # shellcheck disable=SC2086 # APT_OPTS is a list of options
+            sudo apt-get $APT_OPTS install -y --no-install-recommends linux-tools-common linux-tools-generic || true
+          fi
+          perf --version || true
+          sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
+          # The gnu scale-1 re-count of the jig at $1, named $2: one run,
+          # printed to the log.
+          probe_gnu() {
+            if [ ! -x "$1" ]; then
+              echo "probe-paging: $2: no gnu jig; unavailable"
+              return 0
+            fi
+            line=$("$1" 1 160 48 2>/dev/null | grep '^slowest re-count at a new width:' || true)
+            echo "probe-paging: $2 gnu scale-1 re-count: ${line:-missing}"
+          }
+          # The musl jig's scale-16 re-count at $1, named $2, under
+          # perf record -g, with its perf report (self time) in the log.
+          probe_perf() {
+            if [ ! -x "$1" ]; then
+              echo "probe-paging: $2: no musl jig; unavailable"
+              return 0
+            fi
+            data="$tmp/$2.data"
+            echo "probe-paging: $2: recording the scale-16 re-count under perf"
+            if perf record -g -o "$data" -- "$1" 16 160 48 > "$tmp/$2-jig.log" 2>&1; then
+              grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-paging: $2 musl scale-16 re-count: /" || true
+              echo "probe-paging: $2: perf report --no-children (self time)"
+              perf report --no-children --stdio -i "$data" 2>&1 | head -n 120 || true
+              echo "probe-paging: $2: top 15 symbols by self time"
+              perf report --no-children --stdio -i "$data" 2>/dev/null | grep -E '^[[:space:]]+[0-9]+\.[0-9]+%' | head -n 15 || true
+            else
+              echo "probe-paging: $2: perf record failed; falling back to perf stat"
+              perf stat -o "$tmp/$2-stat.log" -- "$1" 16 160 48 > "$tmp/$2-fallback.log" 2>&1 || true
+              grep '^slowest re-count at a new width:' "$tmp/$2-fallback.log" | sed "s/^/probe-paging: $2 musl scale-16 re-count (stat fallback): /" || true
+              cat "$tmp/$2-stat.log" || true
+            fi
+          }
+          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head
+          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base
+          probe_perf "$RUNNER_TEMP/release/head/paging" head-musl
+          probe_perf "$RUNNER_TEMP/release/base/paging" base-musl
       - name: Print the attach stages
         run: |
           table=$(jq -r '
