@@ -171,17 +171,11 @@ fn proxy_basic_credentials_and_buffered_bytes_survive() {
 #[test]
 fn refused_and_unsupported_proxies_are_named_without_passwords() {
     fakes::within("proxy failures", Duration::from_secs(5), || {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let (mut peer, _) = listener.accept().unwrap();
-            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-            handshake::headers(&mut peer).unwrap();
-            peer.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+        let server =
+            fakes::RawHttpServer::start(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
                 .unwrap();
-        });
         let mut via = via();
-        via.proxy = Some(ureq::Proxy::new(&format!("http://127.0.0.1:{port}")).unwrap());
+        via.proxy = Some(ureq::Proxy::new(&server.url()).unwrap());
         assert!(
             matches!(connect(&endpoint(1),&via),Err(Error::ProxyRefused{status_line}) if status_line.contains("407"))
         );
