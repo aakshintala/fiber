@@ -201,7 +201,9 @@ impl Tool for Read {
         match slice_text(body, offset, limit, self.cap) {
             Ok(shown) => {
                 self.shared.set_seen(&path, hash_bytes(text.as_bytes()));
-                text_output(shown)
+                let mut output = text_output(shown);
+                output.details = Some(json!({"start_line": offset}));
+                output
             }
             Err(message) => failed(ErrorCode::InvalidArguments, message),
         }
