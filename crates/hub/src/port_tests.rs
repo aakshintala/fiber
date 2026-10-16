@@ -1030,61 +1030,44 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
         .attention
         .listen(Arc::clone(&owned), closer, retired)
         .unwrap();
-    // The first small line blocks the writer: the bridge is still full
-    // from the fill phase, which the held mutex proves.
-    let first = waiting_with("run r0");
-    drop(
-        hub.feed
-            .attention
-            .notify("s_0000000000000000", None, &first, false),
-    );
-    // Force the drained order from the outside peer: read until the
-    // first small line's bytes arrive, which proves the pump drained the
-    // bridge and the line went through, then stop reading. The writer is
-    // idle from here on, so the block wait below fails.
-    let drained = Deadline::after(DEADLINE);
-    let needle: &[u8] = b"run r0";
-    let mut overlap = Vec::new();
-    loop {
-        if drained.left().is_zero() {
-            panic!("the TCP peer to drain the first small line");
+    // Notify one small line per wait poll until the queue bound fires
+    // and hands back the shutdowns: with the peer not reading, the bridge
+    // fills and the bound fires whatever order the fill phase left, and
+    // a bridge that never fills fails this wait by name. The cap fails by
+    // name through the assert below.
+    let bound_lines = Arc::new(AtomicU64::new(0));
+    let bound_hub = Arc::clone(&hub);
+    let bound_closers: Arc<Mutex<Vec<crate::feed::Closer>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let bound_out = Arc::clone(&bound_closers);
+    await_true("the bound to fire", move || {
+        let mut out = lock(&bound_out);
+        if !out.is_empty() {
+            return true;
         }
-        let mut chunk = [0u8; 4096];
-        let n = match tcp_client.read(&mut chunk) {
-            Ok(0) => panic!(
-                "the TCP peer to drain the first small line: the stream closed"
-            ),
-            Ok(n) => n,
-            Err(error) => panic!(
-                "the TCP peer to drain the first small line: {error}"
-            ),
-        };
-        // The frame may split the needle across reads, so each search
-        // covers the new chunk plus the previous needle-length overlap.
-        overlap.extend_from_slice(&chunk[..n]);
-        if overlap.windows(needle.len()).any(|w| w == needle) {
-            break;
+        let n = bound_lines.fetch_add(1, Ordering::SeqCst);
+        if n > 20_000 {
+            return true;
         }
-        let keep = overlap.len().min(needle.len() - 1);
-        overlap.drain(..overlap.len() - keep);
-    }
+        let session = format!("s_{n:016x}");
+        let status = waiting_with(&format!("run r{n}"));
+        out.extend(
+            bound_hub
+                .feed
+                .attention
+                .notify(&session, None, &status, false),
+        );
+        !out.is_empty()
+    });
+    let closers = {
+        let mut out = lock(&bound_closers);
+        std::mem::take(&mut *out)
+    };
+    assert!(!closers.is_empty(), "the bound fired");
     let blocked = Arc::clone(&owned);
     await_true("the Unix writer to block in its write", move || {
         blocked.try_lock().is_err()
     });
-    // Further small lines: the bound fires once QUEUE are queued behind
-    // the blocked writer. The loop allows for the dequeued empty snapshot
-    // and stops at the report; the assert below pins that it fired.
-    let mut closers = Vec::new();
-    for n in 1..crate::feed::QUEUE + 10 {
-        if !closers.is_empty() {
-            break;
-        }
-        let session = format!("s_{n:016x}");
-        let status = waiting_with(&format!("run r{n}"));
-        closers.extend(hub.feed.attention.notify(&session, None, &status, false));
-    }
-    assert!(!closers.is_empty(), "the bound fired");
     crate::feed::close_connections(closers, UnixStream::shutdown);
     assert_eq!(
         hub.feed.attention.listeners(),
