@@ -163,12 +163,13 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     .unwrap();
 
     let server = ProviderServer::start([
-        // The turn's first step runs `sleep 1`: the sent shell ends while
-        // the step runs, so every drain after it takes the delivery.
+        // The turn's first step returns at once: the sent shell already
+        // ended while the provider was held, so every drain after release
+        // takes the delivery.
         stream(&[function_call(
             "call_1",
             "shell",
-            &json!({"command": "sleep 1"}),
+            &json!({"command": "true"}),
         )]),
         hello(),
     ])
@@ -178,7 +179,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sleep 1"})
+            json!({"decision": "allow", "tool": "shell", "prefix": "true"})
         ),
     )
     .unwrap();
@@ -464,9 +465,20 @@ fn driver_shell_sent_during_a_turn_joins_the_next_turn_only() {
         std::thread::yield_now();
     }
     server.release();
-    until(&direct, "the first turn_completed", |line| {
+    // The marker runs before process exit, the cut and the delivery:
+    // the delivery can still be in flight when the first turn completes.
+    // Wait for both the turn and the `shell_command` line, in either
+    // order, so the next turn starts only after the loop has taken the
+    // delivery and holds it.
+    let mut first = until(&direct, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
+    if !first.iter().any(|line| line["kind"] == "shell_command") {
+        let shell_lines = until(&direct, "the shell_command line", |line| {
+            line["kind"] == "shell_command"
+        });
+        first.extend(shell_lines);
+    }
     let texts = user_texts(&server);
     assert_eq!(texts.len(), 1);
     assert!(
