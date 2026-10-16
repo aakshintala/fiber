@@ -422,6 +422,10 @@ fn measure_all(
         let mut head_alive = true;
         let mut base_alive = paired;
         for n in 1..=repeats {
+            // debt: the head and base side-measurement branches duplicate progress
+            // reporting, measurement, note collection, sample accumulation and failure
+            // handling; extract one per-side measurement operation called in head/base
+            // order on the next change to the side-measurement branches.
             if head_alive {
                 eprintln!(
                     "bench: running {} (run {n} of {repeats}, samples {runs}) [{}]",
@@ -434,13 +438,14 @@ fn measure_all(
                 )]
                 let _ = std::io::Write::flush(&mut std::io::stderr());
                 let mut notes = Vec::new();
-                match measure(head.side, workload, runs, n, &mut notes) {
+                let result = measure(head.side, workload, runs, n, &mut notes);
+                head.failures.extend(
+                    notes
+                        .into_iter()
+                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
+                );
+                match result {
                     Ok(samples) => {
-                        head.failures.extend(
-                            notes
-                                .into_iter()
-                                .map(|note| format!("{}, run {n}: {note}", workload.name)),
-                        );
                         for (id, sample) in samples {
                             head_samples.entry(id).or_default().push(sample);
                         }
@@ -465,13 +470,14 @@ fn measure_all(
                 )]
                 let _ = std::io::Write::flush(&mut std::io::stderr());
                 let mut notes = Vec::new();
-                match measure(base.side, workload, runs, n, &mut notes) {
+                let result = measure(base.side, workload, runs, n, &mut notes);
+                base.failures.extend(
+                    notes
+                        .into_iter()
+                        .map(|note| format!("{}, run {n}: {note}", workload.name)),
+                );
+                match result {
                     Ok(samples) => {
-                        base.failures.extend(
-                            notes
-                                .into_iter()
-                                .map(|note| format!("{}, run {n}: {note}", workload.name)),
-                        );
                         for (id, sample) in samples {
                             base_samples.entry(id).or_default().push(sample);
                         }

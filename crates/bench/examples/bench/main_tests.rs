@@ -566,6 +566,58 @@ fn a_base_error_leaves_the_head_its_metrics() {
 }
 
 #[test]
+fn an_error_keeps_its_notes_on_both_sides() {
+    // The old `repeat` recorded notes before it inspected the result; a
+    // mutant recording notes only on `Ok` drops the shutdown warning
+    // below, on either side and in a head-only run.
+    let lone_start = || {
+        argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "3",
+            "--timing-runs",
+            "3",
+            "--only",
+            "timing",
+            "--skip-rows",
+            "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+        ])
+        .unwrap()
+    };
+    let base_args = || args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
+    let mut head = Pass::new(Side::Head, lone_start());
+    let mut base = Pass::new(Side::Base, base_args());
+    measure_all(&mut head, Some(&mut base), |_, _, _, _, notes| {
+        notes.push("shutdown warning".to_owned());
+        Err("boom".to_owned())
+    });
+    for pass in [&head, &base] {
+        assert_eq!(
+            pass.failures,
+            [
+                "session start, run 1: shutdown warning",
+                "session start, run 1: boom",
+            ]
+        );
+    }
+    let mut head = Pass::new(Side::Head, lone_start());
+    measure_all(&mut head, None, |_, workload, _, run, notes| {
+        notes.push("shutdown warning".to_owned());
+        Err(format!("boom run {run} of {}", workload.name))
+    });
+    assert_eq!(
+        head.failures,
+        [
+            "session start, run 1: shutdown warning",
+            "session start, run 1: boom run 1 of session start",
+        ]
+    );
+}
+
+#[test]
 fn untimed_rows_and_a_missing_base_jig_run_on_the_head_alone() {
     let (head_args, base_args) = sides(
         &argv(&[
