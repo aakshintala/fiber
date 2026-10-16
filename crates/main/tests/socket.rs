@@ -841,15 +841,15 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
 #[test]
 fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     let setup = Setup::new_with_fa_root();
-    // The first reply runs `sleep 5`, so the turn stays open after the
-    // prompt: the message, sent to the session's own socket, is delivered
-    // and applied at the step boundary, inside the turn. A standing rule
-    // allows the command without asking.
+    // The held reply, released after the message is acknowledged, keeps the
+    // turn open after the prompt: the message, sent to the session's own
+    // socket, is delivered and applied at the step boundary, inside the
+    // turn. A standing rule allows the command the step runs without asking.
     let server = ProviderServer::start([
         support::stream(&[support::function_call(
             "call_1",
             "shell",
-            &json!({"command": "sleep 5"}),
+            &json!({"command": "true"}),
         )]),
         support::text_reply("Done."),
     ])
@@ -860,7 +860,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "sleep 5"})
+            json!({"decision": "allow", "tool": "shell", "prefix": "true"})
         ),
     )
     .unwrap();
