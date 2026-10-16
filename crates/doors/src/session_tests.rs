@@ -4269,3 +4269,39 @@ fn a_level_change_with_a_failing_label_notices_before_new_history() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+#[test]
+fn a_second_send_on_a_driven_connection_writes() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let mut conn = crate::client::Conn::driven(
+        gate,
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // The first acknowledgement is held for the loop; the at-once answer
+    // that follows is the connection's second send.
+    let ack = crate::client::inbox_ack(&mut conn, CommandId("c_1".into()));
+    crate::client::accept(&mut conn, CommandId("c_2".into()), None);
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the second send writes its answer");
+    assert!(
+        matches!(answered, Ok(None)),
+        "the second send answers acceptance: {answered:?}"
+    );
+    // The held acknowledgement finds the answer taken and writes nothing
+    // more: the first call's answer is not replayed.
+    drop(ack);
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&rx)
+            .is_err(),
+        "the taken answer is answered once"
+    );
+    close_within(opened.session, opened.log);
+}
