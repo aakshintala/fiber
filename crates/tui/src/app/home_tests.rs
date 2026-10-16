@@ -543,6 +543,16 @@ fn keys(app: &App) -> Vec<u64> {
         .unwrap_or_default()
 }
 
+/// The first hidden exited row's key for `project`.
+fn more_key(app: &App, project: &str) -> Option<u64> {
+    let home = app.home.as_ref()?;
+    home.sessions
+        .sections(&home.launch.project)
+        .into_iter()
+        .find(|section| section.project == project)
+        .and_then(|section| section.exited.get(section.shown_exited).map(|row| row.key))
+}
+
 /// Opens the row with `key`, with the parsed lines going out.
 fn open(app: &mut App, key: u64) -> Vec<Value> {
     match app.home_click(Spot::Entry(key)) {
@@ -652,6 +662,18 @@ fn exited(session: &str, name: &str) -> Value {
         "ts": 0,
         "project": "-w",
         "workspace": "/w",
+        "name": name,
+        "how": "exited",
+    })
+}
+
+/// One exited recent row in `workspace` and `project`.
+fn exited_in(session: &str, name: &str, workspace: &str, project: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": project,
+        "workspace": workspace,
         "name": name,
         "how": "exited",
     })
@@ -2105,18 +2127,18 @@ fn waiting(session: &str, name: &str, workspace: &str, project: &str) -> Line {
 }
 
 #[test]
-fn recent_names_the_project_only_when_scoped() {
+fn the_first_recent_page_names_no_project() {
     let mut app = git_home();
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines[1]["args"], json!({"project": "-w"}));
-    let mut plain = home();
-    let lines = commands(plain.on_line(hello()));
-    assert!(lines[1].get("args").is_none());
+    let id = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(lines[1], json!({"id": id, "command": "recent"}));
 }
 
 #[test]
-fn down_on_the_last_recent_row_asks_the_next_page() {
-    let mut app = home();
+fn down_from_the_last_row_asks_the_next_page_before_the_last_loaded_recent_row() {
+    let mut app = git_home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -2169,7 +2191,7 @@ fn no_page_is_asked_from_a_feed_row() {
 }
 
 #[test]
-fn none_after_an_empty_page() {
+fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
@@ -2200,6 +2222,128 @@ fn none_after_an_empty_page() {
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+}
+
+#[test]
+fn enter_on_more_expands_in_place_and_focuses_the_first_revealed_row() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == crate::mouse::TargetId::Home(Spot::More(key)) })
+    );
+    app.drawn(&targets);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(key)))
+    );
+    let screen = app.home_screen().unwrap();
+    assert!(screen.list.iter().any(|line| matches!(
+        line,
+        crate::home::ListLine::Exited { key: shown, .. } if *shown == key
+    )));
+    assert!(
+        !screen
+            .list
+            .iter()
+            .any(|line| matches!(line, crate::home::ListLine::More { .. }))
+    );
+}
+
+#[test]
+fn a_click_on_more_expands_the_same_project_only() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let rows = [
+        ("s_aaaaaaaaaaaaaaaa", "a1", "/w", "-w"),
+        ("s_bbbbbbbbbbbbbbbb", "a2", "/w", "-w"),
+        ("s_cccccccccccccccc", "a3", "/w", "-w"),
+        ("s_dddddddddddddddd", "a4", "/w", "-w"),
+        ("s_eeeeeeeeeeeeeeee", "b1", "/other", "-other"),
+        ("s_ffffffffffffffff", "b2", "/other", "-other"),
+        ("s_1111111111111111", "b3", "/other", "-other"),
+        ("s_2222222222222222", "b4", "/other", "-other"),
+    ]
+    .into_iter()
+    .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
+    .collect::<Vec<_>>();
+    assert!(
+        app.on_line(accepted(&recent, json!({"sessions": rows})))
+            .is_empty()
+    );
+    let first_hidden = more_key(&app, "-w").expect("first project has more");
+    let second_hidden = more_key(&app, "-other").expect("second project has more");
+    assert_eq!(app.home_click(Spot::More(first_hidden)), Effect::None);
+    let screen = app.home_screen().unwrap();
+    let shown = screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            crate::home::ListLine::Head { .. }
+            | crate::home::ListLine::Live { .. }
+            | crate::home::ListLine::ExitedHead { .. }
+            | crate::home::ListLine::More { .. } => None,
+            crate::home::ListLine::Exited { key, .. } => Some(*key),
+        })
+        .collect::<Vec<_>>();
+    assert!(shown.contains(&first_hidden));
+    assert!(!shown.contains(&second_hidden));
+    assert_eq!(
+        screen
+            .list
+            .iter()
+            .filter_map(|line| match line {
+                crate::home::ListLine::Head { .. }
+                | crate::home::ListLine::Live { .. }
+                | crate::home::ListLine::ExitedHead { .. }
+                | crate::home::ListLine::Exited { .. } => None,
+                crate::home::ListLine::More { key, .. } => Some(*key),
+            })
+            .collect::<Vec<_>>(),
+        [second_hidden]
+    );
+}
+
+#[test]
+fn y_on_more_copies_its_label() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_key(Key::Char('y'), now),
+        Effect::Copy("… 1 more".to_owned())
     );
 }
 
@@ -3465,7 +3609,7 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
 }
 
 #[test]
-fn an_accepted_delete_in_git_scopes_its_recent_refill() {
+fn an_accepted_delete_asks_the_first_page_unscoped() {
     let mut app = git_home();
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
@@ -3484,15 +3628,14 @@ fn an_accepted_delete_in_git_scopes_its_recent_refill() {
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
         .to_owned();
-    // Scoped, the refill names the launch project again.
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert_eq!(lines[0]["args"], json!({"project": "-w"}));
+    assert!(lines[0].get("args").is_none());
 }
 
 #[test]
-fn the_next_page_in_git_names_the_launch_project() {
+fn the_next_page_in_git_is_unscoped() {
     let mut app = git_home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
@@ -3511,8 +3654,7 @@ fn the_next_page_in_git_names_the_launch_project() {
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
-    assert_eq!(line["args"]["before"], "s_bbbbbbbbbbbbbbbb");
-    assert_eq!(line["args"]["project"], "-w");
+    assert_eq!(line["args"], json!({"before": "s_bbbbbbbbbbbbbbbb"}));
 }
 
 /// A live `session_status` for `session` in `workspace`, in git on

@@ -438,10 +438,6 @@ impl Sessions {
     }
 
     /// Reveal every loaded exited row of this project for this terminal run.
-    #[allow(
-        dead_code,
-        reason = "the More-row handler uses this in the next home task"
-    )]
     pub(crate) fn expand(&mut self, project: &str) {
         self.expanded.insert(project.to_owned());
     }

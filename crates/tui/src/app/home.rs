@@ -359,8 +359,8 @@ impl App {
     }
 
     /// The hub lines home asks for, once the link is up: `feed`, then the
-    /// first `recent` page, naming the launch project while scoped. The
-    /// session list fills in when the hub's feed arrives.
+    /// first unscoped `recent` page. The session list fills in when the
+    /// hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
@@ -379,9 +379,7 @@ impl App {
         let recent = mint();
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git;
-        let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
+        let recent = recent_line(&recent, None);
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
         out.extend(self.launch_lines());
         out.append(&mut asks);
@@ -701,9 +699,9 @@ impl App {
     }
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
-    /// live session or asks to delete an exited one, the toggle flips
-    /// the scope, the workspace chip opens the picker, the worktree
-    /// switch toggles it, the model chip opens the model picker, the
+    /// live session or asks to delete an exited one, a `More` row reveals
+    /// its project's loaded exited rows, the workspace chip opens the
+    /// picker, the worktree switch toggles it, the model chip opens the model picker, the
     /// thinking chip opens it at the model's thinking chips, a picker
     /// row chooses its workspace, and a quit choice does what its key
     /// does while the quit question is open, on home or over a session.
@@ -719,19 +717,33 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::More(key) => {
+                let project = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.sessions.by_key(key))
+                    .map(|row| row.project.clone());
+                if let Some(project) = project
+                    && let Some(home) = self.home.as_mut()
+                {
+                    home.sessions.expand(&project);
+                    self.focus = Some(TargetId::Home(Spot::Entry(key)));
+                }
+                Effect::None
+            }
             Spot::Keep => {
                 self.close_delete_prompt();
                 Effect::None
             }
             Spot::Question => Effect::None,
-            Spot::Start(_) | Spot::More(_) => Effect::None,
+            Spot::Start(_) => Effect::None,
             Spot::Quit(_) => Effect::None,
         }
     }
 
-    /// Asks the first `recent` page again, naming the launch project
-    /// `on_edit`: the delete question when it exited, swallowed
-    /// otherwise. The workspace picker owns every edit while open, so
+    /// An edit on home: Delete asks about an exited row; otherwise the
+    /// picker and chip row get first refusal, and unhandled edits reach the
+    /// draft. The workspace picker owns every edit while open, so
     /// nothing reaches the chip row or the draft behind it. A focused
     /// chip takes its edits first: ← → move
     /// between chips, every other edit returns to the entry bar. With
@@ -777,8 +789,8 @@ impl App {
         }
     }
 
-    /// Asks the first `recent` page again, naming the launch project
-    /// while scoped: an accepted delete fills the gap it left.
+    /// Asks the first unscoped `recent` page again: an accepted delete
+    /// fills the gap it left.
     fn ask_recent_first(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
@@ -786,21 +798,17 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git;
         let id = mint();
         home.recent_ask = Some((id.clone(), true));
-        vec![recent_line(&id, None, scoped.then_some(project.as_str()))]
+        vec![recent_line(&id, None)]
     }
 
-    /// Asks the next `recent` page past the focused last row: `before`
-    /// its id, naming the launch project while scoped. `None` unless the
-    /// focused row ends the list and is its last recent row, the last
+    /// Asks the next unscoped `recent` page past the focused last row,
+    /// using its id as `before`. `None` unless the focused row ends the
+    /// list and is its last recent row, the last
     /// answer was not empty, and no `recent` is in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let home = self.home.as_mut()?;
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git;
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
         }
@@ -813,11 +821,7 @@ impl App {
             .clone();
         let id = mint();
         home.recent_ask = Some((id.clone(), false));
-        Some(Effect::Send(vec![recent_line(
-            &id,
-            Some(before.as_str()),
-            scoped.then_some(project.as_str()),
-        )]))
+        Some(Effect::Send(vec![recent_line(&id, Some(before.as_str()))]))
     }
 
     /// The text y copies and Ctrl+G opens for `spot`: the row's line;
@@ -829,9 +833,19 @@ impl App {
                 let row = home.sessions.by_key(key)?;
                 Some(line(row, &home.launch.project))
             }
+            Spot::More(key) => {
+                let home = self.home.as_ref()?;
+                let row = home.sessions.by_key(key)?;
+                let section = home
+                    .sessions
+                    .sections(&home.launch.project)
+                    .into_iter()
+                    .find(|section| section.project == row.project)?;
+                let hidden = section.hidden();
+                (hidden > 0).then(|| format!("… {hidden} more"))
+            }
             Spot::Stop(_)
             | Spot::Start(_)
-            | Spot::More(_)
             | Spot::Workspace
             | Spot::Worktree
             | Spot::Model
@@ -884,20 +898,13 @@ impl App {
     }
 }
 
-/// A `recent` line: the first page, or past `before`, naming `project`
-/// while scoped.
-fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String {
-    let mut args = serde_json::Map::new();
-    if let Some(before) = before {
-        args.insert("before".to_owned(), Value::String(before.to_owned()));
-    }
-    if let Some(project) = project {
-        args.insert("project".to_owned(), Value::String(project.to_owned()));
-    }
-    if args.is_empty() {
-        json!({"id": id, "command": "recent"}).to_string()
-    } else {
-        json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
+/// A `recent` line: the first page, or past `before`.
+fn recent_line(id: &str, before: Option<&str>) -> String {
+    match before {
+        Some(before) => {
+            json!({"id": id, "command": "recent", "args": {"before": before}}).to_string()
+        }
+        None => json!({"id": id, "command": "recent"}).to_string(),
     }
 }
 
