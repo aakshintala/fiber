@@ -805,7 +805,7 @@ fn the_park_deadline_is_the_earlier_of_the_timeout_and_thirty_seconds() {
 fn a_missing_exit_code_is_reported_as_zero() {
     assert_eq!(exit_code_of(None), 0);
     let killed = Command::new("sh")
-        .args(["-c", "kill -ABRT $$"])
+        .args(["-c", "kill -USR1 $$"])
         .status()
         .unwrap();
     assert!(killed.code().is_none());
