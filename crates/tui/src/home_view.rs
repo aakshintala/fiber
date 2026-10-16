@@ -90,8 +90,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     // logo's width.
     let need = pad + 4 + boxed + 3 + 1;
     let need = need.saturating_add(super::to_u16(blockers.len()));
-    let four =
-        area.height > need && area.width >= super::to_u16(logo::width_cells(&screen.version));
+    let four = area.height > need && area.width >= super::to_u16(logo::width_cells());
     let logo_rows = if four { 4 } else { 1 };
     let logo = area.y.saturating_add(pad);
     let box_top = logo
@@ -324,12 +323,12 @@ pub(super) fn render(
     let placed = layout(app, screen, area);
     if placed.logo_rows == 4 {
         // The four-row logo is pixel letters drawn with half blocks,
-        // centred, with the version dim on its fourth row.
-        let cells = super::to_u16(logo::width_cells(&screen.version));
+        // centred in the available width.
+        let cells = super::to_u16(logo::width_cells());
         let at = placed
             .x
             .saturating_add(placed.width.saturating_sub(cells) / 2);
-        logo::draw(buf, at, placed.logo, &screen.version);
+        logo::draw(buf, at, placed.logo);
     } else {
         // The logo is `⌇ fiber <version>`: the ⌇ and the name in the accent
         // colour, the version dim. The logo row always draws: the pad
