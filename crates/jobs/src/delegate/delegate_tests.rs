@@ -797,8 +797,10 @@ fn a_missing_label_fails_credential_missing_and_spawns_nothing() {
     let rig = rig();
     let mut spawned = tool(&rig);
     spawned.resolve.credential = Arc::new(|_| {
-        Err("`fake` has no credential label `gone`. The labels for `fake` are: default, work"
-            .to_owned())
+        Err(
+            "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+                .to_owned(),
+        )
     });
     let output = spawned.run(
         &arguments("deep"),

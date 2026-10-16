@@ -949,10 +949,7 @@ fn a_role_object_with_a_stored_label_resolves_to_that_label() {
     );
     let resolve = resolver(&providers, &config);
     assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
-    assert_eq!(
-        (resolve.credential)("fast"),
-        Ok(Some("work".to_owned()))
-    );
+    assert_eq!((resolve.credential)("fast"), Ok(Some("work".to_owned())));
 }
 
 #[test]
@@ -968,8 +965,10 @@ fn a_role_naming_a_label_the_provider_lacks_is_refused_naming_the_labels() {
     // catalogue stays without it.
     assert_eq!(
         (resolve.credential)("fast"),
-        Err("`fake` has no credential label `gone`. The labels for `fake` are: default, work"
-            .to_owned())
+        Err(
+            "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+                .to_owned()
+        )
     );
 }
 
@@ -986,8 +985,10 @@ fn a_scripted_provider_role_with_a_label_is_refused() {
     // fails with `credential_missing`.
     assert_eq!(
         (resolve.credential)("s"),
-        Err("`scripted` has no credential label `late`. The labels for `scripted` are: none"
-            .to_owned())
+        Err(
+            "`scripted` has no credential label `late`. The labels for `scripted` are: none"
+                .to_owned()
+        )
     );
 }
 
@@ -1015,8 +1016,10 @@ fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missi
     assert_eq!((resolve.lookup)("s").unwrap(), "scripted/a.json");
     assert_eq!(
         (resolve.credential)("s"),
-        Err("`scripted` has no credential label `work`. The labels for `scripted` are: none"
-            .to_owned())
+        Err(
+            "`scripted` has no credential label `work`. The labels for `scripted` are: none"
+                .to_owned()
+        )
     );
 }
 
@@ -1085,11 +1088,8 @@ fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
         .collect();
     // The override follows `--prompt <text>` as one adjacent pair.
     assert!(
-        argv.windows(2).any(|pair| pair
-            == [
-                "-c",
-                "providers.\"fake\".credential=\"work\"",
-            ]),
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.\"fake\".credential=\"work\"",]),
         "{argv:?}"
     );
 }
@@ -1103,11 +1103,8 @@ fn a_label_that_parses_as_json_is_still_a_string() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     assert!(
-        argv.windows(2).any(|pair| pair
-            == [
-                "-c",
-                "providers.\"fake\".credential=\"123\"",
-            ]),
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.\"fake\".credential=\"123\"",]),
         "{argv:?}"
     );
 }

@@ -396,7 +396,10 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
             && let Ok(value) = serde_json::to_string(label)
         {
             let provider = launched.model.split('/').next().unwrap_or_default();
-            command.args(["-c", &format!("providers.\"{provider}\".credential={value}")]);
+            command.args([
+                "-c",
+                &format!("providers.\"{provider}\".credential={value}"),
+            ]);
         }
     }
     command.args([

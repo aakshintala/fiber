@@ -3658,8 +3658,11 @@ fn delegate_child_preamble(model: &str, roles: &Value, stored: &[&str]) -> (Vec<
 
 #[test]
 fn a_delegate_started_with_a_role_runs_on_the_role_label() {
-    let (lines, preamble) =
-        delegate_child_preamble("w", &json!({"w": {"model": "fiber:pb/m", "credential": "work"}}), &["work"]);
+    let (lines, preamble) = delegate_child_preamble(
+        "w",
+        &json!({"w": {"model": "fiber:pb/m", "credential": "work"}}),
+        &["work"],
+    );
     // The child's session records the role's label, while the provider's
     // configured label is `default`.
     assert_eq!(preamble["credential"], "work");
@@ -3708,10 +3711,7 @@ fn a_role_naming_a_missing_label_fails_the_spawn_with_credential_missing() {
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
     let completed = completed_for(&lines, "delegate_spawn");
     assert_eq!(completed["payload"]["status"], "failed");
-    assert_eq!(
-        completed["payload"]["error"]["code"],
-        "credential_missing"
-    );
+    assert_eq!(completed["payload"]["error"]["code"], "credential_missing");
     assert_eq!(
         completed["payload"]["error"]["message"],
         "`pb` has no credential label `gone`. The labels for `pb` are: default, work"
