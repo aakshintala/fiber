@@ -24,21 +24,6 @@ use crate::session::Gate;
 
 pub(crate) const COULD_NOT_START: &str = "The command could not start.";
 
-/// Why a `shell` does not start, answered on the reader.
-pub(crate) enum Refused {
-    Unknown,
-    // No reader check rejects this way since `send` true was built;
-    // the variant stays so the reader's answer shape does not change.
-    #[allow(
-        dead_code,
-        reason = "no reader check rejects since `send` true was built"
-    )]
-    Rejected {
-        code: ErrorCode,
-        message: String,
-    },
-}
-
 /// A driver shell that passed its checks, with its cancel registered.
 pub(crate) struct Running {
     tool: Arc<dyn Tool>,
@@ -91,15 +76,15 @@ impl Emit for Silent {
 
 /// Checks `command` and registers its cancel with `gate`, so a `cancel`
 /// read after this returns reaches it. Called on the reader thread.
-pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Result<Running, Refused> {
+pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Option<Running> {
     let Some(tool) = gate.driver_shell() else {
-        return Err(Refused::Unknown);
+        return None;
     };
     let cancel = Arc::new(ShellCancel::new());
     gate.shells.track(Arc::clone(&cancel));
     let mut arguments = Map::new();
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
-    Ok(Running {
+    Some(Running {
         tool,
         cancel,
         arguments,

@@ -81,21 +81,18 @@ fn shell_quote(path: &std::path::Path) -> String {
 
 /// The session id on the ask's first stdout line.
 #[track_caller]
-fn session_of(running: &Running) -> (String, String) {
+fn session_of(running: &Running) -> String {
     let first_raw: String = running
         .deadline
         .recv(&running.stdout)
         .expect("waited until the deadline for fiber_started");
     let started: Value = serde_json::from_str(&first_raw).unwrap();
-    (
-        started["session_id"].as_str().unwrap().to_owned(),
-        first_raw,
-    )
+    started["session_id"].as_str().unwrap().to_owned()
 }
 
 /// Drains `running` to its exit, asserting it left no process behind.
 #[track_caller]
-fn exit_cleanly(running: Running, first_raw: String) {
+fn exit_cleanly(running: Running) {
     let Running {
         mut child,
         watchdog,
@@ -104,14 +101,11 @@ fn exit_cleanly(running: Running, first_raw: String) {
         stderr,
         deadline,
     } = running;
-    let mut raw = vec![first_raw];
     loop {
         match deadline.recv(&stdout) {
             Ok(line) => {
                 let done: Value = serde_json::from_str(&line).unwrap();
-                let exited = done["kind"] == "fiber_exited";
-                raw.push(line);
-                if exited {
+                if done["kind"] == "fiber_exited" {
                     break;
                 }
             }
@@ -185,7 +179,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     .unwrap();
     server.hold();
     let running = start(&setup, &["ask", "go"]);
-    let (session_id, first_raw) = session_of(&running);
+    let session_id = session_of(&running);
     assert!(
         server.await_requests(1, running.deadline.left()),
         "the held tool call was requested"
@@ -275,7 +269,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
     );
 
     drop(client);
-    exit_cleanly(running, first_raw);
+    exit_cleanly(running);
 }
 
 #[test]
@@ -285,7 +279,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
     setup.provider(&server);
     server.hold();
     let running = start(&setup, &["ask", "go"]);
-    let (session_id, first_raw) = session_of(&running);
+    let session_id = session_of(&running);
     assert!(
         server.await_requests(1, running.deadline.left()),
         "the held response was requested"
@@ -311,7 +305,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
         "The session ended before answering."
     );
     drop(client);
-    exit_cleanly(running, first_raw);
+    exit_cleanly(running);
 
     let events = fs::read_to_string(session_dir(&setup, &session_id).join("events.jsonl")).unwrap();
     assert!(

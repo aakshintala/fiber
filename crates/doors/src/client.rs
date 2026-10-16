@@ -420,12 +420,8 @@ fn cancel(conn: &mut Conn, id: CommandId) {
 /// before this returns. The thread gets the shell and its answer only once
 /// it has started; if it cannot start, the reader answers `io_failed`.
 fn shell(conn: &mut Conn, id: CommandId, args: &contract::commands::Shell, name: &str) {
-    let running = match crate::shell::start(&conn.gate, args) {
-        Ok(running) => running,
-        Err(crate::shell::Refused::Unknown) => return unknown(conn, id, name),
-        Err(crate::shell::Refused::Rejected { code, message }) => {
-            return reject(conn, Some(id), code, &message);
-        }
+    let Some(running) = crate::shell::start(&conn.gate, args) else {
+        return unknown(conn, id, name);
     };
     let gate = Arc::clone(&conn.gate);
     let (tx, rx) = mpsc::channel::<(crate::shell::Running, Ack)>();
