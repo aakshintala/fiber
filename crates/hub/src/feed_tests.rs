@@ -721,7 +721,10 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
         let refused = feed.recent(&args(bad.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
     }
-    assert_eq!(feed.recent(&Map::new()), Ok(Some(json!({"sessions": []}))));
+    assert_eq!(
+        feed.recent(&Map::new()),
+        Ok(Some(json!({"sessions": [], "total": 0})))
+    );
 }
 
 #[test]
@@ -746,15 +749,30 @@ fn recent_answers_a_page_without_running_sessions() {
             .map(|row| row["session_id"].as_str().unwrap().to_owned())
             .collect()
     };
+    let total = |page: Option<Value>| -> u64 {
+        page.unwrap()["total"].as_u64().unwrap()
+    };
     assert_eq!(ids(feed.recent(&Map::new()).unwrap()), [id(2), id(1)]);
+    assert_eq!(total(feed.recent(&Map::new()).unwrap()), 2);
     assert_eq!(
         ids(feed.recent(&args(json!({"project": "p"}))).unwrap()),
         [id(1)]
     );
     assert_eq!(
+        total(feed.recent(&args(json!({"project": "p"}))).unwrap()),
+        1
+    );
+    assert_eq!(
         ids(feed.recent(&args(json!({"before": id(2)}))).unwrap()),
         [id(1)]
     );
+    for n in 4..=54 {
+        temp.session(n, "p", "fiber_exited");
+        temp.append(&row(n, "p", "exited", None));
+    }
+    let page = feed.recent(&Map::new()).unwrap().unwrap();
+    assert_eq!(page["sessions"].as_array().unwrap().len(), 50);
+    assert_eq!(page["total"].as_u64().unwrap(), 53);
     stop_within(&feed);
 }
 
