@@ -385,7 +385,7 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
 
 /// The project keys in scope: the repository's project inside one, every
 /// project under `projects/` outside one.
-fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
+pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
     let resolved = doors::resolve_project(workspace);
     if resolved.in_repository {
         return vec![log::project_key(&resolved.path)];
