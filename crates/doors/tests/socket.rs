@@ -354,6 +354,15 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 ),
             );
 
+            send(
+                &client,
+                r#"{"id":"c_reload_args","command":"reload","args":{"x":1}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_reload_args")),
+                ("invalid_arguments", UNFIT)
+            );
+
             // `artifact_page` answers a 200-line file in four pages: the
             // texts concatenate to the file, each page carries its size.
             let mut offset = 0u64;

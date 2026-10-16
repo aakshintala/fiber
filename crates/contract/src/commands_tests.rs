@@ -450,8 +450,8 @@ fn an_unknown_command_reads_as_unknown() {
 }
 
 #[test]
-fn an_unbuilt_command_reads_as_unknown() {
-    // A bare unbuilt name reads as `Unknown`; with args the line does not
+fn an_unknown_name_reads_as_unknown_and_refuses_args() {
+    // A bare unknown name reads as `Unknown`; with args the line does not
     // read as a command line at all, and the driver re-reads the name
     // alone to answer `unknown_command`.
     assert_eq!(
@@ -463,7 +463,7 @@ fn an_unbuilt_command_reads_as_unknown() {
         parse(r#"{"id":"c","command":"frob","args":{"x":1}}"#).is_err(),
         "frob with args"
     );
-    // Built commands still read as themselves beside `Unknown`.
+    // The unbuilt `reload` still reads as itself beside `Unknown`.
     assert_eq!(
         parse(r#"{"id":"c","command":"reload"}"#).unwrap().command,
         Command::Reload
