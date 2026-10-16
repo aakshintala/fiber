@@ -3609,3 +3609,113 @@ fn a_depth_two_session_refuses_delegate_message() {
     );
     assert!(child.requests().is_empty());
 }
+
+/// Runs one `ask` whose first reply spawns `model`: `roles` are configured
+/// and `stored` stored for provider `pb`. Waits for the delegate to finish
+/// and the session to exit, and returns the parent's lines with the child's
+/// `preamble_built` payload.
+fn delegate_child_preamble(model: &str, roles: &Value, stored: &[&str]) -> (Vec<Value>, Value) {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[spawn_call(model)]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([text_reply("done")]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    for label in stored {
+        config::store_credential(
+            &setup.home(),
+            "pb",
+            label,
+            &config::Secret::new(format!("{label}-key")),
+        )
+        .unwrap();
+    }
+    let path = setup.home().join("config.json");
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["roles"] = roles.clone();
+    support::write_json(&path, &config);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    running.wait_line("the delegate to finish", |line| {
+        line["kind"] == "delegate_finished"
+    });
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let delegate = one(&lines, "delegate_started");
+    let child_id = delegate["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    let preamble = one(&child_lines, "preamble_built");
+    (lines, preamble)
+}
+
+#[test]
+fn a_delegate_started_with_a_role_runs_on_the_role_label() {
+    let (lines, preamble) =
+        delegate_child_preamble("w", &json!({"w": {"model": "fiber:pb/m", "credential": "work"}}), &["work"]);
+    // The child's session records the role's label, while the provider's
+    // configured label is `default`.
+    assert_eq!(preamble["credential"], "work");
+    let completed = completed_for(&lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "completed");
+
+    // A second spawn with a full reference records the configured label.
+    let (lines, preamble) = delegate_child_preamble("fiber:pb/m", &json!({}), &[]);
+    assert_eq!(preamble["credential"], "default");
+    let completed = completed_for(&lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "completed");
+}
+
+#[test]
+fn a_role_naming_a_missing_label_fails_the_spawn_with_credential_missing() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[spawn_call("w")]),
+        text_reply("allow"),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([text_reply("unused")]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    // `work` is stored, but the role names `gone`.
+    config::store_credential(
+        &setup.home(),
+        "pb",
+        "work",
+        &config::Secret::new("work-key".to_owned()),
+    )
+    .unwrap();
+    let path = setup.home().join("config.json");
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    config["roles"] = json!({"w": {"model": "fiber:pb/m", "credential": "gone"}});
+    support::write_json(&path, &config);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    running.wait_line("the refused spawn", |line| {
+        line["kind"] == "tool_call_completed"
+    });
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let completed = completed_for(&lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(
+        completed["payload"]["error"]["code"],
+        "credential_missing"
+    );
+    assert_eq!(
+        completed["payload"]["error"]["message"],
+        "`pb` has no credential label `gone`. The labels for `pb` are: default, work"
+    );
+    assert!(lines.iter().all(|line| line["kind"] != "delegate_started"));
+    assert!(child.requests().is_empty());
+}
