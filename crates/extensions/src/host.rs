@@ -28,6 +28,9 @@ mod fs;
 mod log;
 pub(crate) mod script;
 mod settings;
+pub(crate) mod state;
+#[cfg(test)]
+mod state_tests;
 pub(crate) mod timers;
 pub(crate) mod tool;
 mod ui;
