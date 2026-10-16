@@ -5,7 +5,7 @@
 //! values.
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use config::{Config, Layer, ProjectKey, Sources};
 use contract::ErrorCode;
@@ -91,7 +91,7 @@ fn run_set(
     key: &str,
     value: &str,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<PathBuf, Failure> {
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
     let mut notices = Vec::new();
@@ -112,28 +112,32 @@ fn run_set(
             notices.extend(config.notices().iter().cloned());
         }
     }
-    config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))?;
+    let file =
+        config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))?;
     print_notices(err, &notices);
-    Ok(())
+    Ok(file)
 }
 
 /// `fiber config set` for another front end, such as the terminal's
 /// `/settings`: the same parsing, type check, layer refusal and `model`
 /// check, with each warning line `set` prints on standard error returned
-/// instead.
+/// instead, and the file `set` wrote.
 pub fn config_set_text(
     home: &Path,
     workspace: &Path,
     layer: Layer,
     key: &str,
     text: &str,
-) -> Result<Vec<String>, Failure> {
+) -> Result<(Vec<String>, PathBuf), Failure> {
     let mut err = Vec::new();
-    run_set(home, workspace, layer, key, text, &mut err)?;
-    Ok(String::from_utf8_lossy(&err)
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    let file = run_set(home, workspace, layer, key, text, &mut err)?;
+    Ok((
+        String::from_utf8_lossy(&err)
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+        file,
+    ))
 }
 
 /// Checks a `model` value against the installed providers' cached model
@@ -282,7 +286,9 @@ pub fn config_get(key: &str) -> i32 {
 /// `fiber config set [--project | --repo] <key> <value>` in the current
 /// directory: writes one key in one layer's file.
 pub fn config_set(layer: Layer, key: &str, value: &str) -> i32 {
-    with_dirs(|home, workspace| run_set(home, workspace, layer, key, value, &mut io::stderr()))
+    with_dirs(|home, workspace| {
+        run_set(home, workspace, layer, key, value, &mut io::stderr()).map(|_| ())
+    })
 }
 
 #[cfg(test)]

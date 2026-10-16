@@ -64,12 +64,14 @@ impl Setup {
             value,
             &mut std::io::sink(),
         )
+        .map(|_| ())
     }
 
     /// Runs `set` with stderr captured: its result and what it warned.
     fn set_capturing(&self, layer: Layer, key: &str, value: &str) -> (Result<(), Failure>, String) {
         let mut err = Vec::new();
-        let result = run_set(&self.home(), &self.workspace(), layer, key, value, &mut err);
+        let result = run_set(&self.home(), &self.workspace(), layer, key, value, &mut err)
+            .map(|_| ());
         (result, String::from_utf8(err).unwrap())
     }
 }
@@ -661,7 +663,7 @@ fn config_set_of_an_unconfigured_model_warns_and_exits_zero() {
 fn config_set_text_writes_and_returns_the_warning_lines() {
     let setup = Setup::new();
     install_host(&setup.home(), "acme", "acme", json!({"workspace": {}}));
-    let lines = super::config_set_text(
+    let (lines, file) = super::config_set_text(
         &setup.home(),
         &setup.workspace(),
         Layer::Global,
@@ -680,6 +682,37 @@ fn config_set_text_writes_and_returns_the_warning_lines() {
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
             .unwrap();
     assert_eq!(written, json!({"model": "acme/m"}));
+    assert_eq!(file, setup.home().join("config.json"));
+}
+
+#[test]
+fn config_set_text_returns_the_layers_file_for_project_and_repository() {
+    let setup = Setup::new();
+    let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+    let project_file = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config.json");
+    let (_, project_file_returned) = super::config_set_text(
+        &setup.home(),
+        &setup.workspace(),
+        Layer::Project,
+        "handoff.tokens",
+        "100",
+    )
+    .unwrap();
+    assert_eq!(project_file_returned, project_file);
+    let repository_file = setup.workspace().join(".fiber/config.json");
+    let (_, repository_file_returned) = super::config_set_text(
+        &setup.home(),
+        &setup.workspace(),
+        Layer::Repository,
+        "handoff.tokens",
+        "50",
+    )
+    .unwrap();
+    assert_eq!(repository_file_returned, repository_file);
 }
 
 #[test]
