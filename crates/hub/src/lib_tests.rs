@@ -117,6 +117,7 @@ fn serve_in_env(
             starter,
             fakes::clock::FakeClock::new(),
             environments,
+            Arc::new(crate::fake::FakeMachine::default()),
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -145,6 +146,7 @@ fn serve_in_with(home: &Path, mode: Mode, settings: crate::Settings) -> Result<i
                 vars: Vec::new(),
                 source: contract::events::VariablesSource::Inherited,
             }),
+            Arc::new(crate::fake::FakeMachine::default()),
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -394,6 +396,7 @@ fn serve_captures_first_then_reports_the_fallback() {
             starter,
             clock_serve,
             environments,
+            Arc::new(crate::fake::FakeMachine::default()),
         );
         done_tx.send(result).unwrap_or(());
     });
