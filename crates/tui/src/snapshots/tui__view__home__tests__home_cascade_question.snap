@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 945
 expression: "screen(&app, 80, 24)"
 ---
 
@@ -8,18 +9,18 @@ expression: "screen(&app, 80, 24)"
                      ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
                      ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
                      ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts
+▄▄▄▄▄▄▄  Delete session                                               ✕  ▄▄▄▄▄▄▄
+› █? fo
+         Delete fix the parser (s_0123456789abcdef) and 2 sessions that
+         continue it: s_1111111111111111, s_2222222222222222?
+[w]  [n
+▀▀▀▀▀▀▀  It cannot be undone.                                            ▀▀▀▀▀▀▀
+○  fix                                                                         ✕
+         Enter delete all · Esc keep
 
-
-[w]  [no model]  [thinking: default]  Enter starts a session
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it:
-s_1111111111111111, s_2222222222222222? It cannot be undone · Enter delete all ·
-Esc keep
-○  fix the parser                                                              ✕
+       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 

@@ -136,7 +136,7 @@ cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
   scrolled, with an "↑ N more · ↓ M more" indicator; run it in a 100x40 tmux.
 - `quit`: the quit question for 2 working sessions, with the three ways out.
 - `delete`: home's delete question for the exited "docs: rail spec" session,
-  naming what `--cascade` would add.
+  naming the session and its id.
 - `history`: the Ctrl+R panel with the typed query `back`, every hit marked
   and the first match selected.
 - `history-one`: the same panel with one matching prompt, `1 match · newest

@@ -159,9 +159,8 @@ impl App {
             .map(|name| name.to_string_lossy().into_owned())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| workspace.display().to_string());
-        // The delete question wraps over as many rows as needed in
-        // the list's place, naming the session and everything
-        // `--cascade` would add.
+        // The delete question names the session and everything
+        // `--cascade` would add; the frame wraps and scrolls it.
         let (question, question_scroll) = match home.questions.prompt() {
             Some(Prompt::Delete { id, expect, scroll }) => (
                 home.sessions.row(id).map(|row| match expect {
@@ -630,6 +629,11 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::Keep => {
+                self.close_delete_prompt();
+                Effect::None
+            }
+            Spot::Question => Effect::None,
             Spot::Quit(_) => Effect::None,
         }
     }
@@ -762,6 +766,8 @@ impl App {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::Keep
+            | Spot::Question
             | Spot::Quit(_) => None,
         }
     }

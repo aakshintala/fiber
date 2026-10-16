@@ -997,29 +997,38 @@ fn the_delete_question_scrolls_past_the_screen() {
     app.on_line(left("s_0123456789abcdef", "exited"));
     let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
     ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
-    // More wrapped rows than fit: the first id draws, the last does not.
+    let area = Rect::new(0, 0, 80, 14);
+    let drawn = app.home_screen().unwrap_or_else(|| panic!("home draws"));
+    let max = super::max_question_scroll(&app, &drawn, area);
+    assert!(max > 0, "the body runs past the frame");
+    // The first window shows the first id, not the last body row.
     let first = screen(&app, 80, 14);
     assert!(first.contains("s_0000000000000001"), "the first id draws");
     assert!(
-        !first.contains("s_0000000000000014"),
-        "the last id is past the screen"
+        !first.contains("It cannot be undone."),
+        "the last body row is past the frame"
     );
-    // Down scrolls until every id can be seen before Enter.
+    // Down to the end shows the last body row and holds there.
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..20 {
         app.on_key(Key::Down, now);
     }
-    let last = screen(&app, 80, 14);
-    assert!(last.contains("s_0000000000000014"), "the last id draws");
-    // Up scrolls back to the first rows.
-    for _ in 0..20 {
-        app.on_key(Key::Up, now);
-    }
-    let back = screen(&app, 80, 14);
-    assert!(back.contains("s_0000000000000001"), "the first id draws");
+    assert_eq!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("home draws"))
+            .question_scroll,
+        max,
+        "Down holds at the last window"
+    );
     assert!(
-        !back.contains("s_0000000000000014"),
-        "the last id is past the screen again"
+        screen(&app, 80, 14).contains("It cannot be undone."),
+        "the last body row draws"
+    );
+    // One Up hides it again, one row higher.
+    app.on_key(Key::Up, now);
+    assert!(
+        !screen(&app, 80, 14).contains("It cannot be undone."),
+        "one Up scrolls the last row back out"
     );
 }
 
@@ -1064,6 +1073,303 @@ fn one_up_after_down_past_the_end_moves_up_one_row() {
         frames[frames.len() - 2],
         "one Up scrolls the view up by one row"
     );
+}
+
+#[test]
+fn home_delete_question_80x14_clipped() {
+    let mut app = home(80, 14);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    let drawn = screen(&app, 80, 14);
+    // The title row keeps its ✕ and the footer its legend while the
+    // body clips.
+    let title = drawn
+        .lines()
+        .find(|row| row.contains("Delete session"))
+        .unwrap_or_else(|| panic!("a title row"));
+    assert!(title.contains("✕"), "the ✕ draws");
+    assert!(
+        drawn.contains("Enter delete all · Esc keep"),
+        "the footer draws"
+    );
+    assert!(drawn.contains("s_0000000000000001"), "the first id draws");
+    assert!(!drawn.contains("It cannot be undone."), "the body clips");
+    insta::assert_snapshot!("home_delete_question_80x14_clipped", drawn);
+}
+
+#[test]
+fn the_delete_frame_keeps_its_title_cross_and_footer_when_clipped() {
+    let mut app = home(80, 14);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    let now = fakes::clock::FakeClock::new().now();
+    // The title row and the footer stay visible in every window: the
+    // frame clips the body, never its chrome.
+    for _ in 0..=20 {
+        let drawn = screen(&app, 80, 14);
+        let title = drawn
+            .lines()
+            .find(|row| row.contains("Delete session"))
+            .unwrap_or_else(|| panic!("a title row"));
+        assert!(title.contains("✕"), "the ✕ draws");
+        assert!(
+            drawn.contains("Enter delete all · Esc keep"),
+            "the footer draws"
+        );
+        app.on_key(Key::Down, now);
+    }
+}
+
+#[test]
+fn max_question_scroll_is_body_rows_minus_capacity() {
+    // The plain question's body is three rows: the head, a blank row
+    // and that deleting is permanent. The frame keeps two edges, two
+    // pad rows, the title and its gap and the footer and its gap, so
+    // the capacity is the height past 8 rows, floored at one row.
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    let max = |app: &App, width: u16, height: u16| {
+        let drawn = app.home_screen().unwrap_or_else(|| panic!("home draws"));
+        super::max_question_scroll(app, &drawn, Rect::new(0, 0, width, height))
+    };
+    assert_eq!(max(&app, 80, 12), 0, "three body rows in four fit");
+    assert_eq!(max(&app, 80, 11), 0, "three body rows in three fit");
+    assert_eq!(max(&app, 80, 10), 1, "three body rows in two scroll one");
+    assert_eq!(max(&app, 80, 9), 2, "three body rows in one scroll two");
+    assert_eq!(max(&app, 80, 8), 2, "the capacity floors at one row");
+    // The head wraps at the frame's inner width: 43 columns take two
+    // rows at 35 to 37 columns, so the body is four rows there.
+    assert_eq!(max(&app, 41, 10), 2, "two body rows past two scroll two");
+    assert_eq!(max(&app, 40, 10), 2, "two body rows past two scroll two");
+    assert_eq!(max(&app, 39, 10), 2, "two body rows past two scroll two");
+    // With no question nothing scrolls.
+    let plain = home(80, 24);
+    let drawn = plain.home_screen().unwrap_or_else(|| panic!("home draws"));
+    assert_eq!(
+        super::max_question_scroll(&plain, &drawn, Rect::new(0, 0, 80, 10)),
+        0,
+        "no question scrolls nothing"
+    );
+}
+
+#[test]
+fn a_session_named_with_the_footer_words_keeps_one_legend() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status(
+        "s_aaaaaaaaaaaaaaaa",
+        "a · Enter delete · Esc keep",
+        live(),
+    ));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    let drawn = screen(&app, 80, 24);
+    // The head keeps the session's name whole, footer words and all.
+    let head = drawn
+        .lines()
+        .find(|row| row.contains("(s_aaaaaaaaaaaaaaaa)"))
+        .unwrap_or_else(|| panic!("a head row"));
+    assert!(
+        head.contains("Delete a · Enter delete · Esc keep"),
+        "the name stays whole: {head}"
+    );
+    // The name's legend and the footer's single legend, nothing else.
+    assert_eq!(
+        drawn.matches("Enter delete · Esc keep").count(),
+        2,
+        "the name and the one footer"
+    );
+    assert!(!drawn.contains("delete all"), "no cascade legend");
+}
+
+#[test]
+fn the_plain_question_has_no_cascade_text() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    let drawn = screen(&app, 80, 24);
+    assert!(drawn.contains("Delete session"), "the frame draws");
+    assert!(
+        drawn.contains("It cannot be undone."),
+        "the last body row draws"
+    );
+    assert!(
+        drawn.contains("Enter delete · Esc keep"),
+        "the footer draws"
+    );
+    assert!(!drawn.contains("--cascade"), "no cascade text");
+    assert!(!drawn.contains("delete all"), "no cascade legend");
+}
+
+#[test]
+fn the_cascade_question_names_the_added_sessions() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    stop_first(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let crate::app::Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete: serde_json::Value =
+        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    let id = delete["id"].as_str().unwrap_or_else(|| panic!("delete id"));
+    app.on_line(refused(
+        id,
+        "session_has_dependents",
+        "Session `s_0123456789abcdef` has sessions that continue it: \
+        `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too.",
+    ));
+    let drawn = screen(&app, 80, 24);
+    assert!(
+        drawn.contains("s_1111111111111111"),
+        "the first added id draws"
+    );
+    assert!(
+        drawn.contains("s_2222222222222222"),
+        "the second added id draws"
+    );
+    assert!(
+        drawn.contains("Enter delete all · Esc keep"),
+        "the cascade footer draws"
+    );
+}
+
+#[test]
+fn enter_in_the_delete_question_sends_delete_naming_the_session() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    assert_eq!(lines.len(), 1);
+    let line: serde_json::Value =
+        serde_json::from_str(lines.first().unwrap_or_else(|| panic!("a delete line")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(line["command"], "delete");
+    assert_eq!(line["args"]["session"], "s_aaaaaaaaaaaaaaaa");
+    assert!(line["args"].get("cascade").is_none(), "no cascade");
+}
+
+#[test]
+fn esc_in_the_delete_question_keeps_the_session() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    assert!(screen(&app, 80, 24).contains("Delete session"));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    let drawn = screen(&app, 80, 24);
+    assert!(!drawn.contains("Delete session"), "the question closes");
+    assert!(drawn.contains("fix the parser"), "the session row remains");
+}
+
+#[test]
+fn up_and_down_at_the_clip_change_the_drawn_rows() {
+    let mut app = home(80, 14);
+    app.on_line(hello());
+    app.on_line(status("s_0123456789abcdef", "fix the parser", live()));
+    app.on_line(left("s_0123456789abcdef", "exited"));
+    let dependents: Vec<String> = (1..=20u8).map(|n| format!("s_{n:016x}")).collect();
+    ask_cascade(&mut app, "s_0123456789abcdef", &dependents);
+    let now = fakes::clock::FakeClock::new().now();
+    let top = screen(&app, 80, 14);
+    app.on_key(Key::Down, now);
+    assert_ne!(screen(&app, 80, 14), top, "Down moves the window");
+    for _ in 0..20 {
+        app.on_key(Key::Down, now);
+    }
+    assert!(
+        screen(&app, 80, 14).contains("It cannot be undone."),
+        "Down holds at the last window"
+    );
+    for _ in 0..20 {
+        app.on_key(Key::Up, now);
+    }
+    assert_eq!(screen(&app, 80, 14), top, "Up returns to the first window");
+}
+
+#[test]
+fn other_keys_leave_the_delete_question_open() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    stop_first(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
+    assert!(
+        screen(&app, 80, 24).contains("Delete session"),
+        "the question stays open"
+    );
+}
+
+#[test]
+fn focus_does_not_paint_through_the_delete_question() {
+    use ratatui::style::Modifier;
+
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    // Down to the chip row, Down to the first row, Backspace opens
+    // the delete question with focus still on that row.
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Backspace, now);
+    assert!(
+        app.home_screen()
+            .unwrap_or_else(|| panic!("home draws"))
+            .question
+            .is_some(),
+        "Backspace opens the question"
+    );
+    assert!(
+        matches!(
+            app.focused(),
+            Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
+        ),
+        "focus stays on the row under the box"
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let slab = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Question))
+        .map(|target| target.rect)
+        .unwrap_or_else(|| panic!("a delete slab target"));
+    for y in slab.top()..slab.bottom() {
+        for x in slab.left()..slab.right() {
+            assert!(
+                !buf[(x, y)].modifier.contains(Modifier::REVERSED),
+                "no reversed cell inside the delete box at ({x}, {y})"
+            );
+        }
+    }
 }
 fn ask_quit(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();

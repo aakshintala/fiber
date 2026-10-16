@@ -214,6 +214,17 @@ impl App {
         }
     }
 
+    /// Closes the delete question, keeping the session: a
+    /// `Prompt::Delete` only. The quit question and no prompt stay as
+    /// they are.
+    pub(super) fn close_delete_prompt(&mut self) {
+        if let Some(home) = self.home.as_mut()
+            && matches!(home.questions.prompt, Some(Prompt::Delete { .. }))
+        {
+            home.questions.prompt = None;
+        }
+    }
+
     /// Scrolls the delete question one row: Up toward its first rows,
     /// Down toward its later ones, clamped to the wrapped rows past the
     /// screen. Scrolling a short question changes nothing drawn, and
