@@ -44,6 +44,10 @@ impl Switching {
         Arc::new(move || store.answer())
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "Config validates quota.notice_at as a number and supplies its built-in default"
+    )]
     fn quota_store(&self) -> Arc<Store> {
         let providers = self
             .loader
@@ -97,13 +101,11 @@ impl Store {
             state.started = true;
             (start, state.labels.clone(), state.failed.clone())
         };
-        if start {
-            if spawn(Arc::clone(self)).is_err() {
-                self.state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .started = false;
-            }
+        if start && spawn(Arc::clone(self)).is_err() {
+            self.state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .started = false;
         }
         quota.extend(labels.into_iter().filter_map(|label| {
             info(
