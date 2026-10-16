@@ -195,6 +195,13 @@ impl Hooks for Replaces {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
         drop(inbox);
     }

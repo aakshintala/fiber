@@ -1536,6 +1536,12 @@ impl Session {
         self
     }
 
+    /// Runs the session's hooks.
+    pub(crate) fn hooks(mut self, hooks: Arc<dyn contract::hook::Hooks>) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.hooks(hooks));
+        self
+    }
+
     /// Retries a failed model call with `retry`.
     pub(crate) fn retry(mut self, retry: r#loop::Retry) -> Self {
         self.looped = self.looped.take().map(|looped| looped.retry(retry));
@@ -2186,6 +2192,13 @@ impl contract::hook::Hooks for CountingHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
 
@@ -2406,6 +2419,13 @@ impl contract::hook::Hooks for StartHooks {
             outcome: contract::hook::ContextOutcome::Added(Vec::new()),
             notices: Vec::new(),
         }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}

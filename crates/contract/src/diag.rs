@@ -219,6 +219,8 @@ pub enum HookChain {
     BeforeModelCall,
     /// A turn's end.
     TurnEnd,
+    /// Before a handoff's note is written.
+    BeforeHandoff,
 }
 
 impl HookChain {
@@ -231,6 +233,7 @@ impl HookChain {
             Self::BeforeMessage => "hook.before_message",
             Self::BeforeModelCall => "hook.before_model_call",
             Self::TurnEnd => "hook.turn_end",
+            Self::BeforeHandoff => "hook.before_handoff",
         }
     }
 }

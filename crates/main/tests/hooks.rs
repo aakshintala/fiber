@@ -1850,3 +1850,321 @@ fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_sessi
     let end = run.first("turn_completed");
     assert_eq!(end["payload"]["outcome"], "completed");
 }
+
+/// Installs `fiber.test/<short>` with `init` as its entry script.
+fn install_hook_extension(setup: &Setup, short: &str, init: &str) {
+    let source = setup.root.path().join(format!("src-{short}"));
+    write(
+        &source.join("extension.json"),
+        &json!({"name": format!("fiber.test/{short}"), "version": "0.1.0", "fiber": "0.1.0", "api": 1})
+            .to_string(),
+    );
+    write(&source.join("init.lua"), init);
+    setup.install(source);
+}
+
+/// The diagnostic lines of one file.
+fn diagnostic_file(setup: &Setup, name: &str) -> Vec<Value> {
+    let text = fs::read_to_string(setup.home().join("logs").join(name)).unwrap();
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A `before_handoff` hook whose run is `body`.
+fn noting_hook(on_failure: &str, body: &str) -> String {
+    format!(
+        "fiber.hook(\"before_handoff\", {{ timeout = 60000, on_failure = \"{on_failure}\",\n\
+           run = function(h) {body} end }})\n"
+    )
+}
+
+/// Runs `fiber ask` where the model reads a file, then the five-token
+/// trigger hands off, with `init` installed and `extra` configured.
+fn handoff_run(
+    setup: &Setup,
+    init: &str,
+    script: Vec<Response>,
+    extra: &Value,
+) -> (Run, ProviderServer) {
+    install_hook_extension(setup, "notes", init);
+    fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
+    let server = ProviderServer::start(script).unwrap();
+    setup.provider_with_extra(&server, extra);
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    (run, server)
+}
+
+/// The complete event kinds of a handoff turn whose note a hook wrote:
+/// `tools.rs`'s `HANDOFF_TURN` without the note reply's six lines. Each
+/// `hello` below streams its answer in one delta.
+const HOOK_HANDOFF_TURN: &[&str] = &[
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "handoff_started",
+    "handoff_completed",
+    "opening_message",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+fn handoff_prefix() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+    ]
+}
+
+#[test]
+fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
+    let setup = Setup::new();
+    let (run, server) = handoff_run(
+        &setup,
+        &noting_hook(
+            "non-blocking",
+            r#"return { note = "Hook note: " .. #h.messages .. " messages" }"#,
+        ),
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({"handoff": {"tokens": 5}, "diagnostics": {"level": "debug"}}),
+    );
+    assert_eq!(
+        run.kinds(),
+        [handoff_prefix(), HOOK_HANDOFF_TURN.into()].concat()
+    );
+    let completed = run.first("handoff_completed");
+    let note_text = completed["payload"]["note_text"].as_str().unwrap();
+    assert!(note_text.starts_with("Hook note: "), "{note_text}");
+    assert_eq!(completed["payload"]["extension"], "fiber.test/notes");
+    assert!(completed["payload"].get("note").is_none());
+    // Two requests, not three: the note request never ran, and the second
+    // holds the hook's note.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let body = second.to_string();
+    assert!(body.contains(note_text), "{body}");
+    // The debug log holds the hook's chain scope and no `turn.request`
+    // line for the handoff: the call's and the answer's lines only.
+    let id = run.session_id().to_owned();
+    let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
+    let timings: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["code"] == "op_timing")
+        .collect();
+    assert_eq!(
+        timings
+            .iter()
+            .filter(|line| line["data"]["op"] == "hook.before_handoff")
+            .count(),
+        1
+    );
+    assert_eq!(
+        timings
+            .iter()
+            .filter(|line| line["data"]["op"] == "turn.request")
+            .count(),
+        2,
+        "{timings:?}"
+    );
+}
+
+#[test]
+fn a_before_handoff_hook_that_returns_nothing_leaves_the_note_to_the_model() {
+    let setup = Setup::new();
+    let (run, server) = handoff_run(
+        &setup,
+        &noting_hook("non-blocking", r#"return nil"#),
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+            hello(),
+        ],
+        &json!({"handoff": {"tokens": 5}}),
+    );
+    assert_eq!(
+        run.kinds(),
+        [
+            handoff_prefix(),
+            vec![
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "tool_call_started",
+                "tool_call_completed",
+                "step_started",
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "opening_message",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "fiber_exited",
+            ],
+        ]
+        .concat()
+    );
+    assert_eq!(server.requests().len(), 3);
+}
+
+#[test]
+fn a_non_blocking_before_handoff_hook_with_a_bad_return_leaves_the_note_to_the_model() {
+    let setup = Setup::new();
+    let (run, server) = handoff_run(
+        &setup,
+        &noting_hook("non-blocking", r#"return "x""#),
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+            hello(),
+        ],
+        &json!({"handoff": {"tokens": 5}}),
+    );
+    // The model's turn, with the hook's failure as a notice after
+    // `handoff_started`.
+    let mut want = handoff_prefix();
+    want.extend([
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "handoff_started",
+        "notice",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "handoff_completed",
+        "opening_message",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), want);
+    let notice = run.first("notice");
+    assert_eq!(notice["payload"]["code"], "hook_failed");
+    assert_eq!(notice["payload"]["extension"], "fiber.test/notes");
+    let completed = run.first("handoff_completed");
+    assert_eq!(completed["payload"]["outcome"], "completed");
+    assert!(completed["payload"].get("note").is_some());
+    assert_eq!(server.requests().len(), 3);
+}
+
+#[test]
+fn a_blocking_before_handoff_failure_fails_the_handoff_hook_failed() {
+    let setup = Setup::new();
+    let (run, server) = handoff_run(
+        &setup,
+        &noting_hook("blocking", r#"error("boom")"#),
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({"handoff": {"tokens": 5}}),
+    );
+    let completed = run.first("handoff_completed");
+    assert_eq!(completed["payload"]["outcome"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "hook_failed");
+    let message = completed["payload"]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("fiber.test/notes"), "{message}");
+    assert!(message.contains("boom"), "{message}");
+    // No note request: the turn completes from the old context.
+    assert_eq!(server.requests().len(), 2);
+    assert_eq!(run.kinds().last(), Some(&"fiber_exited"));
+}
+
+#[test]
+fn a_hook_note_survives_resume() {
+    let setup = Setup::new();
+    let (run, server) = handoff_run(
+        &setup,
+        &noting_hook(
+            "non-blocking",
+            r#"return { note = "Hook note: " .. #h.messages .. " messages" }"#,
+        ),
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+            hello(),
+        ],
+        &json!({"handoff": {"tokens": 5}}),
+    );
+    let id = run.session_id().to_owned();
+    let note_text = run.first("handoff_completed")["payload"]["note_text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resumed = setup.run(&["ask", "--resume", &id, "again"]);
+    assert_eq!(resumed.code, Some(0), "stderr: {}", resumed.stderr);
+    // The resumed request carries the whole rebuilt conversation: the
+    // hook's note among it, read through `Note::Hook`.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    let third: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let body = third.to_string();
+    assert!(body.contains(&note_text), "{body}");
+    assert!(body.contains("again"), "{body}");
+    assert!(
+        body.contains("This message is from Fiber"),
+        "the rebuilt conversation starts from the opening message: {body}"
+    );
+}

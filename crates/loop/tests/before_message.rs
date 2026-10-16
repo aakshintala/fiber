@@ -174,6 +174,13 @@ impl Hooks for FakeHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
 

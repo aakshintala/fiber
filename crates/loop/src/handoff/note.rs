@@ -6,7 +6,7 @@ use contract::events::{
     ContextAdded, Event, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome,
     TurnCompleted, TurnOutcome,
 };
-use contract::provider::{Finish, Input, Reply, ReplyAction};
+use contract::provider::{Finish, Input, ModelRequest, Reply, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, TurnId};
 
@@ -35,9 +35,15 @@ pub(super) fn cancelled(outcome: Outcome) -> Option<TurnCompleted> {
 }
 
 /// What the note request came to.
-enum Noted {
+pub(super) enum Noted {
     /// The reply is the note; its message action carries it.
     Note(ActionId),
+    /// A `before_handoff` hook wrote the note instead; no note request
+    /// was made.
+    Hook {
+        note_text: String,
+        extension: String,
+    },
     /// The request or the reply failed.
     Failed(Failure),
     /// A person cancelled the turn.
@@ -64,6 +70,48 @@ pub(crate) fn reply_note(reply: &Reply) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// One handoff's completion from its note: `Completed` keeps the note,
+/// a `session_start` failure or cancel drops it.
+fn finished(
+    note: Option<Note>,
+    tokens_before: u64,
+    instructions: Option<String>,
+    started: Started,
+) -> (HandoffCompleted, Vec<ContextAdded>) {
+    match started {
+        Started::Contexts(contexts) => (
+            HandoffCompleted {
+                outcome: Outcome::Completed,
+                error: None,
+                note,
+                tokens_before,
+                instructions,
+            },
+            contexts,
+        ),
+        Started::Failed(failure) => (
+            HandoffCompleted {
+                outcome: Outcome::Failed,
+                error: Some(failure),
+                note: None,
+                tokens_before,
+                instructions,
+            },
+            Vec::new(),
+        ),
+        Started::Cancelled => (
+            HandoffCompleted {
+                outcome: Outcome::Cancelled,
+                error: None,
+                note: None,
+                tokens_before,
+                instructions,
+            },
+            Vec::new(),
+        ),
+    }
 }
 
 /// What one handoff runs from: a requested note, or the tool calls'
@@ -211,56 +259,94 @@ impl Loop {
             turn,
             None,
         )?;
-        let noted = self.request_note(turn, trigger, instructions.as_deref())?;
-        match noted {
-            // The hook runs once the note is ready, with the reason and
-            // not the note; its contexts follow the new opening message.
-            // A `blocking` failure ends the handoff `failed` with
-            // `hook_failed`, and the session goes on. The automatic
-            // trigger does not fire again in that turn.
-            Noted::Note(id) => {
-                let note = Some(Note::Actions { note: vec![id] });
-                // debt: the same three-case map from `Started` to `HandoffCompleted`
-                // is written here and in the tool path; one helper would take the note,
-                // token count and instructions. Upgrade when a third handoff path needs it.
-                let (done, contexts) = match self.handoff_start(turn)? {
-                    Started::Contexts(contexts) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Completed,
-                            error: None,
-                            note,
-                            tokens_before,
-                            instructions,
-                        },
-                        contexts,
-                    ),
-                    Started::Failed(failure) => (
-                        HandoffCompleted {
-                            outcome: Outcome::Failed,
-                            error: Some(failure),
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
-                    Started::Cancelled => (
-                        HandoffCompleted {
-                            outcome: Outcome::Cancelled,
-                            error: None,
-                            note: None,
-                            tokens_before,
-                            instructions,
-                        },
-                        Vec::new(),
-                    ),
+        // The conversation the note request uses, built once: the
+        // hook chain sees it without the note request, which belongs
+        // to Fiber's own request, and the note request, when one is made,
+        // is built from the same conversation, so the overflow hook and
+        // the request see the same moved results and no artifact is written
+        // twice.
+        let has_preamble = self.preamble.is_some();
+        let mut request_timer = has_preamble
+            .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
+            .flatten();
+        let mut full = if trigger == HandoffTrigger::Overflow {
+            self.moved_results()
+        } else {
+            self.conversation.clone()
+        };
+        full.push(Input::User {
+            text: note_request_text(&self.handoff.carry.session_log, instructions.as_deref()),
+            images: Vec::new(),
+        });
+        let request = self.request_for(full);
+        #[cfg(test)]
+        crate::timing_tests::request_note_exit(self.log.clock().as_ref());
+        if let Some(timer) = request_timer.as_mut() {
+            timer.stop();
+        }
+        // The request is built before the hook even when a hook note
+        // leaves it unused, so a missing preamble still fails here and
+        // the hook never sees a corrupt log.
+        let noted = match request {
+            Some(request) => {
+                // The hook runs before the budget check: a hook's note needs
+                // no model call, so the budget never stops it. It sees the
+                // conversation without the note request, borrowed from the
+                // built request, so no second copy is made.
+                let hooked = {
+                    let conversation: &[Input] = request
+                        .conversation
+                        .split_last()
+                        .map_or(&[], |(_, init)| init);
+                    self.hook_note(turn, trigger, instructions.as_deref(), conversation)?
                 };
-                let outcome = self.restarted(turn, done, contexts)?;
-                if outcome == Outcome::Failed {
-                    self.handoff.blocked = true;
+                match hooked {
+                    Some(noted) => {
+                        // A hook note, a hook failure and a cancel write no
+                        // `turn.request` line, because no request is made.
+                        if let Some(timer) = request_timer {
+                            timer.discard();
+                        }
+                        noted
+                    }
+                    // The request path drops the stamped span: one line, with the
+                    // assembly's milliseconds and none of the hook's time.
+                    None => {
+                        drop(request_timer);
+                        self.request_note(turn, request)?
+                    }
                 }
-                Ok(outcome)
             }
+            None => {
+                // No request is made on this path, so the held span writes
+                // no line.
+                if let Some(timer) = request_timer {
+                    timer.discard();
+                }
+                Noted::Failed(failure(
+                    ErrorCode::LogCorrupt,
+                    "The preamble was not built.",
+                ))
+            }
+        };
+        // The hook runs once the note is ready, with the reason and
+        // not the note; its contexts follow the new opening message.
+        // A `blocking` failure ends the handoff `failed` with
+        // `hook_failed`, and the session goes on. The automatic
+        // trigger does not fire again in that turn. A hook's note
+        // completes like the model's: `handoff_start` maps it the same
+        // way, so a `session_start` failure or cancel after it ends the
+        // handoff `failed` or `cancelled` with no note, as after the
+        // model's.
+        let note = match noted {
+            Noted::Note(id) => Note::Actions { note: vec![id] },
+            Noted::Hook {
+                note_text,
+                extension,
+            } => Note::Hook {
+                note_text,
+                extension,
+            },
             Noted::Failed(failure) => {
                 #[cfg(test)]
                 if crate::timing_tests::take_fail_handoff_completed() {
@@ -278,7 +364,7 @@ impl Loop {
                     None,
                 )?;
                 self.handoff.blocked = true;
-                Ok(Outcome::Failed)
+                return Ok(Outcome::Failed);
             }
             Noted::Cancelled => {
                 #[cfg(test)]
@@ -296,9 +382,20 @@ impl Loop {
                     turn,
                     None,
                 )?;
-                Ok(Outcome::Cancelled)
+                return Ok(Outcome::Cancelled);
             }
+        };
+        let (done, contexts) = finished(
+            Some(note),
+            tokens_before,
+            instructions,
+            self.handoff_start(turn)?,
+        );
+        let outcome = self.restarted(turn, done, contexts)?;
+        if outcome == Outcome::Failed {
+            self.handoff.blocked = true;
         }
+        Ok(outcome)
     }
 
     /// A tool-started handoff: no `started` and no note request, with the
@@ -313,41 +410,7 @@ impl Loop {
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         let taken = Some(Note::Actions { note });
-        // debt: the same three-case map from `Started` to `HandoffCompleted` is
-        // written here and in the tool path; one helper would take the note,
-        // token count and instructions. Upgrade when a third handoff path needs it.
-        let (done, contexts) = match self.handoff_start(turn)? {
-            Started::Contexts(contexts) => (
-                HandoffCompleted {
-                    outcome: Outcome::Completed,
-                    error: None,
-                    note: taken,
-                    tokens_before,
-                    instructions: None,
-                },
-                contexts,
-            ),
-            Started::Failed(failure) => (
-                HandoffCompleted {
-                    outcome: Outcome::Failed,
-                    error: Some(failure),
-                    note: None,
-                    tokens_before,
-                    instructions: None,
-                },
-                Vec::new(),
-            ),
-            Started::Cancelled => (
-                HandoffCompleted {
-                    outcome: Outcome::Cancelled,
-                    error: None,
-                    note: None,
-                    tokens_before,
-                    instructions: None,
-                },
-                Vec::new(),
-            ),
-        };
+        let (done, contexts) = finished(taken, tokens_before, None, self.handoff_start(turn)?);
         let outcome = self.restarted(turn, done, contexts)?;
         if outcome != Outcome::Completed {
             self.handoff.step_ran = true;
@@ -355,40 +418,9 @@ impl Loop {
         Ok(outcome)
     }
 
-    /// Asks the model for its note: the conversation and one more user
-    /// input, which is never logged. A cancel that landed before the call
+    /// Sends the built note request. A cancel that landed before the call
     /// ends it at once, as it ends any call (`cancel::run_cancellable`).
-    fn request_note(
-        &mut self,
-        turn: &TurnId,
-        trigger: HandoffTrigger,
-        instructions: Option<&str>,
-    ) -> Result<Noted, Error> {
-        // The scope covers assembling the note input plus the request,
-        // including the overflow's moved results and their artifact
-        // writes. A missing preamble only means no timer starts.
-        let has_preamble = self.preamble.is_some();
-        let _timer = has_preamble
-            .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
-            .flatten();
-        let mut conversation = if trigger == HandoffTrigger::Overflow {
-            self.moved_results()
-        } else {
-            self.conversation.clone()
-        };
-        conversation.push(Input::User {
-            text: note_request_text(&self.handoff.carry.session_log, instructions),
-            images: Vec::new(),
-        });
-        let Some(request) = self.request_for(conversation) else {
-            return Ok(Noted::Failed(failure(
-                ErrorCode::LogCorrupt,
-                "The preamble was not built.",
-            )));
-        };
-        #[cfg(test)]
-        crate::timing_tests::request_note_exit(self.log.clock().as_ref());
-        drop(_timer);
+    fn request_note(&mut self, turn: &TurnId, request: ModelRequest) -> Result<Noted, Error> {
         if let Some(over) = self.over_budget().and_then(|ended| ended.error) {
             return Ok(Noted::Failed(over));
         }

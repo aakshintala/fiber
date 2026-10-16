@@ -347,6 +347,13 @@ impl Hooks for FakeHooks {
             .unwrap_or_else(|| added(Vec::new()))
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}
 }
 

@@ -11,14 +11,16 @@ use common::{Setup, go_module, install_lua, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::{CallStatus, ExtensionExec, ExtensionLog};
+use contract::events::{CallStatus, ExtensionExec, ExtensionLog, HandoffTrigger};
 use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
-    BeforeMessageOutcome, BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome,
-    CheckAnswer, CheckOutcome, Context, ContextAnswer, ContextOutcome, Hooks, SessionStart,
-    StartReason, TurnEnd,
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
+    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
+    BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Context, ContextAnswer, ContextOutcome, Hooks, SessionStart, StartReason,
+    TurnEnd,
 };
 use contract::inbox::Delivery;
+use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects};
 use extensions::{LuaExtension, SessionExtensions};
 use fakes::clock::FakeClock;
@@ -1825,4 +1827,111 @@ fn held_session_start(started: &str) {
     assert!(context.is_empty(), "{context:?}");
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
     assert!(!dir.join("b_ran").exists(), "the second hook never started");
+}
+
+/// Asks the `before_handoff` hooks about a short conversation, on its own
+/// thread. The cancel never fires, so the chain runs every hook.
+fn ask_handoff(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeHandoffAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let cancel = fakes::CancelToken::new();
+        let conversation = vec![Input::User {
+            text: "hi".into(),
+            images: Vec::new(),
+        }];
+        let answer = session.before_handoff(&BeforeHandoff {
+            trigger: HandoffTrigger::Auto,
+            instructions: None,
+            conversation: &conversation,
+            cancel: &cancel,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_blocking_before_handoff_hook_past_its_timeout_fails() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("before_handoff", "blocking", 50, "{ note = \"late\" }"),
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_handoff(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let BeforeHandoffOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(
+        failure.message.contains("50 ms timeout"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_non_blocking_before_handoff_hook_past_its_timeout_is_dropped() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("before_handoff", "non-blocking", 50, "{ note = \"late\" }"),
+    );
+    install_lua(
+        &setup,
+        "b",
+        &json!({}),
+        "fiber.hook(\"before_handoff\", { timeout = 1000, on_failure = \"blocking\",\n\
+           run = function(call) return { note = (call.note or \"none\") .. \"|b\" } end })\n",
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_handoff(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let BeforeHandoffOutcome::Note { text, extension } = answer.outcome else {
+        panic!("the chain goes on: {:?}", answer.outcome);
+    };
+    assert_eq!(text, "none|b");
+    assert_eq!(extension, "fiber.test/b");
+    assert_eq!(answer.notices.len(), 1);
+    assert_eq!(answer.notices[0].code, ErrorCode::HookFailed);
+    assert_eq!(answer.notices[0].extension.as_deref(), Some("fiber.test/a"));
+    assert!(
+        answer.notices[0].message.contains("50 ms timeout"),
+        "{}",
+        answer.notices[0].message
+    );
+    // The hook stopped the loop and left the VM up: the next call runs it.
+    let again = Deadline::after(WAIT)
+        .recv(&ask_handoff(&session))
+        .expect("waited for the second answer");
+    let BeforeHandoffOutcome::Note { text, extension } = again.outcome else {
+        panic!("the hook runs again: {:?}", again.outcome);
+    };
+    assert_eq!(text, "late|b");
+    assert_eq!(extension, "fiber.test/b");
+    assert!(again.notices.is_empty(), "{:?}", again.notices);
 }

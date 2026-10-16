@@ -27,6 +27,9 @@ pub(super) const BEFORE_TOOL: &str = "before_tool";
 /// The `before_message` hook point.
 pub(super) const BEFORE_MESSAGE: &str = "before_message";
 
+/// The `before_handoff` hook point.
+pub(super) const BEFORE_HANDOFF: &str = "before_handoff";
+
 /// One hook in a chain.
 pub(super) struct Entry {
     /// Its extension, in [`SessionExtensions::lua`].
@@ -46,8 +49,8 @@ pub(super) struct Builder {
     entries: BTreeMap<&'static str, Vec<(HookPhase, String, Entry)>>,
 }
 
-/// The `session_start`, `turn_start`, `before_model_call` and `turn_end`
-/// chains, in run order.
+/// The `session_start`, `turn_start`, `before_model_call`, `turn_end` and
+/// `before_handoff` chains, in run order.
 #[derive(Default)]
 pub(super) struct Lifecycle {
     /// The `session_start` chain, in run order.
@@ -58,6 +61,8 @@ pub(super) struct Lifecycle {
     pub(super) before_model_call: Vec<Entry>,
     /// The `turn_end` chain, in run order.
     pub(super) turn_end: Vec<Entry>,
+    /// The `before_handoff` chain, in run order.
+    pub(super) before_handoff: Vec<Entry>,
 }
 
 impl Builder {
@@ -70,6 +75,7 @@ impl Builder {
             TURN_START,
             BEFORE_MODEL_CALL,
             TURN_END,
+            BEFORE_HANDOFF,
             BEFORE_TOOL,
             BEFORE_MESSAGE,
             super::AFTER_TOOL,
@@ -106,6 +112,8 @@ impl Builder {
         session.lifecycle.before_model_call =
             sorted(config, BEFORE_MODEL_CALL, entries.remove(BEFORE_MODEL_CALL));
         session.lifecycle.turn_end = sorted(config, TURN_END, entries.remove(TURN_END));
+        session.lifecycle.before_handoff =
+            sorted(config, BEFORE_HANDOFF, entries.remove(BEFORE_HANDOFF));
         session.before_tool = sorted(config, BEFORE_TOOL, entries.remove(BEFORE_TOOL));
         session.before_message = sorted(config, BEFORE_MESSAGE, entries.remove(BEFORE_MESSAGE));
         session.after_tool = sorted(config, super::AFTER_TOOL, entries.remove(super::AFTER_TOOL));

@@ -15,9 +15,9 @@ use contract::diag::{DebugLog, HookChain, Op, Timing};
 use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
-    BeforeModelCall, BeforeToolAnswer, BeforeToolCall, CheckAnswer, ContextAnswer, Hooks,
-    SessionStart, TurnEnd, TurnStart,
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
+    BeforeMessage, BeforeMessageAnswer, BeforeModelCall, BeforeToolAnswer, BeforeToolCall,
+    CheckAnswer, ContextAnswer, Hooks, SessionStart, TurnEnd, TurnStart,
 };
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
@@ -32,6 +32,7 @@ use crate::{API, Error, LuaProvider, LuaTool};
 mod before;
 mod chain;
 mod door;
+mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
@@ -719,6 +720,11 @@ impl Hooks for SessionExtensions {
     fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer {
         let _timer = self.timed(HookChain::TurnEnd);
         lifecycle::turn_end(self, end)
+    }
+
+    fn before_handoff(&self, handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer {
+        let _timer = self.timed(HookChain::BeforeHandoff);
+        handoff::before_handoff(self, handoff)
     }
 
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {

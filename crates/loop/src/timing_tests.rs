@@ -1623,7 +1623,170 @@ impl contract::hook::Hooks for RefusingHooks {
         }
     }
 
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
     fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
+}
+
+/// Hooks answering `before_handoff` with one answer and passing
+/// everything else.
+struct HandoffHooks {
+    answer: Mutex<contract::hook::BeforeHandoffAnswer>,
+}
+
+impl HandoffHooks {
+    fn noting() -> Arc<Self> {
+        Arc::new(Self {
+            answer: Mutex::new(contract::hook::BeforeHandoffAnswer {
+                outcome: contract::hook::BeforeHandoffOutcome::Note {
+                    text: "Hook note.".into(),
+                    extension: "fiber.test/notes".into(),
+                },
+                notices: Vec::new(),
+            }),
+        })
+    }
+
+    fn passing() -> Arc<Self> {
+        Arc::new(Self {
+            answer: Mutex::new(contract::hook::BeforeHandoffAnswer {
+                outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+                notices: Vec::new(),
+            }),
+        })
+    }
+}
+
+impl contract::hook::Hooks for HandoffHooks {
+    fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(
+        &self,
+        _: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(&self, _: &contract::hook::SessionStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        self.answer.lock().unwrap().clone()
+    }
+
+    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
+}
+
+// A handoff whose note a hook wrote holds no `turn.request` scope: the
+// assembly's span is stamped, held across the hook, then discarded.
+#[test]
+fn a_hook_note_writes_no_request_scope_for_the_handoff() {
+    let mut world = build(Build {
+        hooks: Some(HandoffHooks::noting()),
+        ..plain_build(vec![run_answer("Done.", 0)])
+    });
+    arm_request_note_advance(4);
+    person_handoff(&world, Some("focus"));
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
+    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    // The answer's own request is the only `turn.request` line: the
+    // handoff's assembly, with its 4 ms advance, wrote none.
+    let requests = ops(&world, "turn.request");
+    assert_eq!(requests.len(), 1, "{:?}", op_records(&world));
+    assert_eq!(requests[0].ms, 0);
+    assert_wire(&p7_records(&world));
+    assert!(
+        kinds(&world).contains(&"handoff_completed".to_owned()),
+        "a handoff ran: {:?}",
+        kinds(&world)
+    );
+    assert_eq!(world.provider.requests.lock().unwrap().len(), 1);
+}
+
+// With no hook note the handoff's assembly writes exactly one
+// `turn.request` line, carrying the exit hook's advance.
+#[test]
+fn a_model_note_writes_one_request_scope_for_the_handoff() {
+    let mut world = build(Build {
+        hooks: Some(HandoffHooks::passing()),
+        ..plain_build(vec![run_answer("Note.", 0), run_answer("Done.", 0)])
+    });
+    arm_request_note_advance(4);
+    person_handoff(&world, Some("focus"));
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
+    let requests = ops(&world, "turn.request");
+    assert_eq!(requests.len(), 2, "{:?}", op_records(&world));
+    assert_eq!(requests[0].ms, 4, "the note assembly carries its hold");
+    assert_eq!(requests[1].ms, 0, "the ordinary send advanced nothing");
+    assert_wire(&p7_records(&world));
+    assert_eq!(world.provider.requests.lock().unwrap().len(), 2);
 }
 
 #[test]

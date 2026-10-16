@@ -20,10 +20,10 @@ use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::clock::Wake;
-use contract::events::{CallStatus, InputItem, Notice};
+use contract::events::{CallStatus, HandoffTrigger, InputItem, Notice};
 use contract::hook::{
-    AfterToolCall, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks, SessionStart,
-    StartReason, TurnEnd, TurnStart,
+    AfterToolCall, BeforeHandoff, BeforeMessage, BeforeModelCall, BeforeToolCall, Hooks,
+    SessionStart, StartReason, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process, Tokens, Usage};
 use contract::tool::Cancel;
@@ -178,6 +178,7 @@ const SUPPORTED: &[(&str, &[&str])] = &[
     ("before_model_call", &["refuse"]),
     ("after_tool", &["content", "details", "artifact"]),
     ("turn_end", &["message"]),
+    ("before_handoff", &["note"]),
 ];
 
 /// A hook returning `key`'s valid value at `point`. Panics on a key
@@ -198,6 +199,7 @@ fn returning(point: &str, key: &str) -> String {
         ("after_tool", "content") => "return { content = \"y\" }".to_owned(),
         ("after_tool", "details") => "return { details = { n = 1 } }".to_owned(),
         ("after_tool", "artifact") => "return { artifact = \"a\" }".to_owned(),
+        ("before_handoff", "note") => "return { note = \"Next.\" }".to_owned(),
         _ => panic!("no valid `{key}` value for `{point}`"),
     };
     hook(point, &body)
@@ -278,6 +280,20 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
             let content = vec![ContentPart::Text { text: "x".into() }];
             session
                 .before_message(&BeforeMessage { content: &content })
+                .notices
+        }
+        "before_handoff" => {
+            let conversation = vec![contract::provider::Input::User {
+                text: "hi".into(),
+                images: Vec::new(),
+            }];
+            session
+                .before_handoff(&BeforeHandoff {
+                    trigger: HandoffTrigger::Auto,
+                    instructions: Some("Focus."),
+                    conversation: &conversation,
+                    cancel: &NEVER,
+                })
                 .notices
         }
         "before_tool" => {
@@ -369,6 +385,16 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                 .before_message(&BeforeMessage { content: &content })
                 .notices
         }
+        "before_handoff" => {
+            session
+                .before_handoff(&BeforeHandoff {
+                    trigger: HandoffTrigger::Auto,
+                    instructions: None,
+                    conversation: &[],
+                    cancel: &NEVER,
+                })
+                .notices
+        }
         "before_tool" => {
             let arguments = Map::from_iter([("path".to_owned(), Value::String("a".into()))]);
             let declared = DeclaredEffects {
@@ -402,7 +428,7 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
 }
 
 #[test]
-fn the_table_names_the_seven_points() {
+fn the_table_names_the_eight_points() {
     let points: Vec<String> = table_rows().iter().map(|row| row.0.clone()).collect();
     assert_eq!(
         points,
@@ -413,7 +439,8 @@ fn the_table_names_the_seven_points() {
             "before_tool",
             "before_model_call",
             "after_tool",
-            "turn_end"
+            "turn_end",
+            "before_handoff"
         ]
     );
 }
@@ -423,14 +450,23 @@ fn each_point_is_given_exactly_the_tables_keys() {
     for (point, mut given, _) in table_rows() {
         given.sort();
         let home = Home::new();
-        home.install(
-            "a",
-            &hook(
-                &point,
-                "local keys = {} for k in pairs(call) do keys[#keys + 1] = k end \
-                 table.sort(keys) error(table.concat(keys, \",\"))",
-            ),
-        );
+        // `note` is shown only from the second hook on: the first hook
+        // returns one, and the probe errors with what it was shown.
+        let probe = "local keys = {} for k in pairs(call) do keys[#keys + 1] = k end \
+             table.sort(keys) error(table.concat(keys, \",\"))";
+        if point == "before_handoff" {
+            home.install("a", &hook(&point, r#"return { note = "earlier" }"#));
+            home.install("b", &hook(&point, probe));
+        } else {
+            home.install(
+                "a",
+                &hook(
+                    &point,
+                    "local keys = {} for k in pairs(call) do keys[#keys + 1] = k end \
+                     table.sort(keys) error(table.concat(keys, \",\"))",
+                ),
+            );
+        }
         let notices = ask_full(&home.load(), &point);
         assert_eq!(notices.len(), 1, "{point}");
         assert_eq!(notices[0].code, ErrorCode::HookFailed);

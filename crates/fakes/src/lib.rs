@@ -16,6 +16,7 @@ pub mod deadline;
 pub mod emit;
 mod finished;
 mod gated_http;
+mod handoff;
 pub(crate) mod http_server;
 pub mod jobs;
 mod locks;
@@ -52,6 +53,7 @@ pub mod git;
 /// The dropped server's own state, read after the drop: the public path
 /// for integration tests, which reach only the public wrappers.
 #[doc(hidden)]
+pub use handoff::no_note;
 pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
