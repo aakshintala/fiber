@@ -376,7 +376,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
-| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. Rejected `stale_request` if no turn is running and no `shell` command is. |
+| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. A `shell` that `cancel` stops before its command starts is rejected `cancelled`. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
 | `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
@@ -401,7 +401,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
