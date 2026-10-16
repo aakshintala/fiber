@@ -10,7 +10,8 @@ use std::thread;
 
 use common::{PROJECT, Setup, key};
 use config::{
-    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global_if_unset,
+    Layer, Scope, get_global, has_manifest, remove_extension_settings, replace_global, set,
+    set_global_if_unset,
 };
 use contract::ErrorCode;
 use serde_json::json;
@@ -503,6 +504,23 @@ fn removing_an_extension_whose_file_cannot_be_deleted_fails() {
     .unwrap();
     let e = remove_extension_settings(&setup.home(), ACME).unwrap_err();
     assert_eq!(e.code(), ErrorCode::IoFailed);
+}
+
+#[test]
+fn has_manifest_is_true_only_for_a_regular_file() {
+    let setup = Setup::new();
+    let package = setup.home().join("package");
+    assert!(!has_manifest(&package));
+    fs::create_dir_all(&package).unwrap();
+    assert!(!has_manifest(&package));
+    setup.write(&package.join("extension.json"), "{}");
+    assert!(has_manifest(&package));
+    fs::remove_file(package.join("extension.json")).unwrap();
+    fs::create_dir_all(package.join("extension.json")).unwrap();
+    assert!(
+        !has_manifest(&package),
+        "a directory named extension.json is not a manifest"
+    );
 }
 
 #[test]

@@ -47,7 +47,7 @@ pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
     Binary, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
-    provider_files, read_manifest, read_package_text, read_providers,
+    has_manifest, provider_files, read_manifest, read_package_text, read_providers,
 };
 pub use extension_settings::ExtensionSettings;
 pub use home::{
