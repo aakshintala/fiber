@@ -205,10 +205,9 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     answering.tools(&json!([{"name": "alpha"}]));
     answering.result("alpha", r#"{"content":[]}"#);
     // Silent: `sleep` answers nothing, so only the deadline ends its
-    // start. Armed before the start: the marker survives `exec` as
-    // argv[0], so a failure below still kills the detached group.
+    // start. The marker survives `exec` as argv[0], matching the
+    // setup's guard.
     let marker = silent.dir.path().display().to_string();
-    let watchdog = fakes::Watchdog::matching(&marker);
     let quoted = marker.replace('\'', "'\\''");
     let mut stalled = silent.spec("quiet");
     stalled.stdio_mut().command = "/bin/bash".to_owned();
@@ -255,7 +254,6 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
         },]
     );
     started.servers.stop();
-    watchdog.stand_down(WITHIN);
     // The refused server reports at once, so only the held server is
     // still outstanding when the wall guard below fires: the message
     // names it and not the server that already reported.
