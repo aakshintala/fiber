@@ -24,7 +24,7 @@ use serde_json::json;
 
 use super::super::declared_tests::Repo;
 use super::super::{Index, RepoItem, hash};
-use super::{CopyRemoval, Store, set_lock_attempt};
+use super::{CopyRemoval, Store, set_lock_attempt, set_record_pause};
 use crate::Error;
 
 const KEY: &str = "-tmp-project-.git";
@@ -131,6 +131,33 @@ impl LockAttempt {
 impl Drop for LockAttempt {
     fn drop(&mut self) {
         set_lock_attempt(None);
+    }
+}
+
+/// The record pause for one home, cleared on drop so a failure cannot leak
+/// it into another test in this process.
+struct RecordPause {
+    home: PathBuf,
+}
+
+impl RecordPause {
+    fn arm(home: &Path) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (entered, parked) = mpsc::channel();
+        let (release, held) = mpsc::channel();
+        set_record_pause(home, Some((entered, held)));
+        (
+            Self {
+                home: home.to_owned(),
+            },
+            parked,
+            release,
+        )
+    }
+}
+
+impl Drop for RecordPause {
+    fn drop(&mut self) {
+        set_record_pause(&self.home, None);
     }
 }
 
@@ -662,5 +689,107 @@ fn check_runs_once_after_the_pinned_lock_is_free() {
             .join(&digest)
             .symlink_metadata()
             .is_err()
+    );
+}
+
+#[test]
+fn a_prune_between_pinning_and_recording_keeps_the_copy() {
+    let repo = Repo::new();
+    let item = hook(&repo);
+    let home = repo.home();
+    let mut index = Index::load(&home);
+    let digest = hash(&mut index, &item).unwrap();
+    index.save().unwrap();
+    // Every channel below is created inside the scope, so a failure drops
+    // the release sender before the scope joins the parked approver: the
+    // hold releases instead of hanging the test. Each worker takes its
+    // sender by move and borrows the rest, so nothing outlives the scope.
+    let approver = store(&repo, KEY);
+    std::thread::scope(|s| {
+        // The file gate arms the pause between pinning and recording in
+        // `approve`, the same shape as the #2521 repro.
+        fs::write(home.join("approve-pause"), b"").unwrap();
+        let (_pause, parked, release) = RecordPause::arm(&home);
+        let (approved, approval) = mpsc::channel();
+        let (removed, removal) = mpsc::channel();
+        s.spawn({
+            let approved = approved;
+            let approver = approver;
+            let item = &item;
+            let digest = &digest;
+            move || {
+                approved.send(approver.approve(item, digest)).unwrap();
+            }
+        });
+        // The approver parked after pinning, before recording: the copy
+        // and marker are there, the approval is not.
+        Deadline::after(WAIT)
+            .recv_or_fail(&parked, "approve parking between pinning and recording");
+        assert!(home.join("pinned").join(&digest).is_dir());
+        assert!(ready(&home, &digest).is_file());
+        let record = || {
+            home.join("projects")
+                .join(KEY)
+                .join("approvals")
+                .join(&digest)
+        };
+        assert!(record().symlink_metadata().is_err());
+        // A prune run during the pause, with prune's own revalidation: it
+        // refuses once the approval it missed lands.
+        s.spawn({
+            let removed = removed;
+            let home = &home;
+            let digest = &digest;
+            move || {
+                let record = home
+                    .join("projects")
+                    .join(KEY)
+                    .join("approvals")
+                    .join(digest);
+                let mut check = || {
+                    if record.symlink_metadata().is_ok() {
+                        Err::<(), String>(
+                            "its approvals changed since it was listed".to_owned(),
+                        )
+                    } else {
+                        Ok(())
+                    }
+                };
+                removed
+                    .send(Store::remove_copy(home, digest, false, &mut check))
+                    .unwrap();
+            }
+        });
+        // The removal blocks on `pinned/.lock`, which the parked approval
+        // holds: a bounded receive, not a sleep, proves no answer arrives
+        // while the pause lasts, and the copy stays.
+        assert!(
+            matches!(
+                Deadline::after(HELD).recv(&removal),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "no removal while the approval holds the pinned lock"
+        );
+        assert!(home.join("pinned").join(&digest).is_dir());
+        release.send(()).unwrap();
+        assert_eq!(
+            found(Deadline::after(WAIT).recv_or_fail(&removal, "the prune's answer")),
+            CopyRemoval::Refused("its approvals changed since it was listed".to_owned())
+        );
+        assert!(
+            Deadline::after(WAIT)
+                .recv_or_fail(&approval, "the approval")
+                .is_ok()
+        );
+    });
+    // The approval recorded, its copy kept.
+    assert!(home.join("pinned").join(&digest).is_dir());
+    assert!(ready(&home, &digest).is_file());
+    assert!(
+        home.join("projects")
+            .join(KEY)
+            .join("approvals")
+            .join(&digest)
+            .is_file()
     );
 }

@@ -195,15 +195,23 @@ impl Store {
     /// and an earlier approval stays.
     pub fn approve(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
         check(item, hash)?;
+        // One `pinned/.lock` from the copy through the record: `global_lock`
+        // is the only place that takes it, so `approve` and `never` share
+        // its order with `ensure_copy` and `remove_copy`. A prune running
+        // under the same lock cannot miss the record being written.
+        let (_lock, pinned) = self.global_lock(item)?;
         let copy = self.copy_dir(hash);
-        self.pin(item, hash, &copy)?;
+        self.pin_locked(item, hash, &copy, &pinned)?;
+        pause_before_record(self);
         self.record(item, hash, "approve")
     }
 
     /// Records never for this content, replacing an approval. No copy is
-    /// made.
+    /// made. The lock is still held across the record, as in `approve`, so
+    /// a prune revalidation running under `pinned/.lock` sees the decision.
     pub fn never(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
         check(item, hash)?;
+        let (_lock, _pinned) = self.global_lock(item)?;
         self.record(item, hash, "never")
     }
 
@@ -370,21 +378,6 @@ impl Store {
             .map_err(io_error(&marker))?;
         ready.lock_shared().map_err(io_error(&marker))?;
         Ok(CopyHold { _ready: ready })
-    }
-
-    /// Builds the copy at its final path, under the lock in
-    /// `pinned/.lock`, which serialises concurrent approvals. The path
-    /// `pinned/<hash>/` is known before the step runs, so the copy is
-    /// built in place there: a step such as creating a Python virtualenv
-    /// records its own location. The empty file `pinned/<hash>.ready` is
-    /// written last, so a copy with no `.ready` is an unfinished attempt
-    /// and is removed and built again, while a copy with one is kept. On
-    /// any error after the directory was made, the copy is removed, so a
-    /// failing step leaves no copy. A step failure is the step's own
-    /// error, unchanged.
-    fn pin(&self, item: &RepoItem, hash: &str, copy: &Path) -> Result<(), Error> {
-        let (_lock, pinned) = self.global_lock(item)?;
-        self.pin_locked(item, hash, copy, &pinned)
     }
 
     /// `pinned/.lock`, held: what serialises concurrent approvals. The
@@ -904,6 +897,61 @@ fn signal_lock_attempt() {
         tx.send(()).unwrap_or(());
     }
 }
+
+/// Approvals parked between pinning and recording, keyed by home: only the
+/// store whose test armed one pauses, so concurrent approvals in other
+/// tests never park on it.
+#[cfg(test)]
+static RECORD_PAUSES: std::sync::Mutex<
+    Vec<(
+        PathBuf,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+> = std::sync::Mutex::new(Vec::new());
+
+/// Arms the pause between pinning and recording in `approve` for `home`:
+/// while the file `home/approve-pause` exists, the approving thread signals
+/// `entered` and blocks until the test releases `release` (dropping the
+/// test's sender releases it too). Passing `None` disarms it. Only tests
+/// set it; production never pauses. The gate is a file, the same shape as
+/// the #2521 repro, because a test cannot pass it through the environment.
+#[cfg(test)]
+pub(crate) fn set_record_pause(
+    home: &Path,
+    pause: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+) {
+    let mut pauses = RECORD_PAUSES.lock().unwrap();
+    pauses.retain(|(registered, _, _)| registered != home);
+    if let Some((entered, release)) = pause {
+        pauses.push((home.to_owned(), entered, release));
+    }
+}
+
+/// The file-gated pause in `approve`, between the copy and the record. The
+/// lock in `pinned/.lock` is held across it, so a prune running under the
+/// same lock waits rather than missing the record.
+#[cfg(test)]
+fn pause_before_record(store: &Store) {
+    let taken = {
+        let mut pauses = RECORD_PAUSES.lock().unwrap();
+        pauses
+            .iter()
+            .position(|(registered, _, _)| registered == &store.home)
+            .map(|at| pauses.remove(at))
+    };
+    let Some((_, entered, release)) = taken else {
+        return;
+    };
+    if !store.home.join("approve-pause").exists() {
+        return;
+    }
+    entered.send(()).unwrap_or(());
+    release.recv().unwrap_or(());
+}
+
+#[cfg(not(test))]
+fn pause_before_record(_store: &Store) {}
 
 #[cfg(not(test))]
 fn signal_lock_attempt() {}
