@@ -2760,7 +2760,7 @@ fn clicking_the_drawn_cross_keeps_the_session() {
         .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Keep))
         .collect();
     assert_eq!(keep.len(), 1, "one ✕ target");
-    assert_eq!(keep[0].rect.y, title as u16);
+    assert_eq!(keep[0].rect.y, u16::try_from(title).unwrap_or(u16::MAX));
     assert_eq!((keep[0].rect.width, keep[0].rect.height), (1, 1));
     let row = text
         .lines()
@@ -2883,18 +2883,24 @@ fn clicks_on_the_delete_frame_do_nothing() {
     assert_eq!(slabs.len(), 1, "one slab target");
     let slab = slabs[0].rect;
     let rows: Vec<&str> = text.lines().collect();
-    let title = rows
-        .iter()
-        .position(|row| row.contains("Delete session"))
-        .unwrap_or_else(|| panic!("a title row")) as u16;
-    let body = rows
-        .iter()
-        .position(|row| row.contains("Delete old work"))
-        .unwrap_or_else(|| panic!("a body row")) as u16;
-    let footer = rows
-        .iter()
-        .position(|row| row.contains("Enter delete · Esc keep"))
-        .unwrap_or_else(|| panic!("a footer row")) as u16;
+    let title = u16::try_from(
+        rows.iter()
+            .position(|row| row.contains("Delete session"))
+            .unwrap_or_else(|| panic!("a title row")),
+    )
+    .unwrap_or(u16::MAX);
+    let body = u16::try_from(
+        rows.iter()
+            .position(|row| row.contains("Delete old work"))
+            .unwrap_or_else(|| panic!("a body row")),
+    )
+    .unwrap_or(u16::MAX);
+    let footer = u16::try_from(
+        rows.iter()
+            .position(|row| row.contains("Enter delete · Esc keep"))
+            .unwrap_or_else(|| panic!("a footer row")),
+    )
+    .unwrap_or(u16::MAX);
     // The title row away from the ✕, both edge rows, a pad row, a
     // body row and the footer row all hit the slab, and clicking
     // opens nothing and replaces no question.

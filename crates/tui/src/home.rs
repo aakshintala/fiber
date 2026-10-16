@@ -169,9 +169,9 @@ pub(crate) struct HomeScreen {
     pub(crate) picker: Option<PickerScreen>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
     pub(crate) foot: String,
-    /// The delete question, unwrapped: it wraps over as many rows as
-    /// needed in the list's place, naming the session and everything
-    /// `--cascade` adds, and scrolls past the screen.
+    /// The delete question, unwrapped: the frame wraps its head naming
+    /// the session and everything `--cascade` adds, and its body
+    /// scrolls past the frame.
     pub(crate) question: Option<String>,
     /// The delete question's scroll offset: Up shows earlier rows,
     /// Down later ones.
