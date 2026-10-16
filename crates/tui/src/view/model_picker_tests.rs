@@ -166,19 +166,34 @@ fn priced() -> Catalogue {
     let fixture = catalogue();
     let prices = [
         fixture.models[0].price.clone(),
-        Some(Price { micros_per_mtok: 0, input: 0, output: 0, tiers: vec![] }),
+        Some(Price {
+            micros_per_mtok: 0,
+            input: 0,
+            output: 0,
+            tiers: vec![],
+        }),
         None,
         fixture.models[3].price.clone(),
     ];
     Catalogue {
-        models: prices.into_iter().enumerate().map(|(at, price)| {
-            let id = format!("p{}", at + 1);
-            ModelEntry {
-                reference: format!("acme/{id}"), provider: "acme".to_owned(), id,
-                name: None, levels: vec![], default_level: None, configured: None,
-                roles: vec![], price,
-            }
-        }).collect(),
+        models: prices
+            .into_iter()
+            .enumerate()
+            .map(|(at, price)| {
+                let id = format!("p{}", at + 1);
+                ModelEntry {
+                    reference: format!("acme/{id}"),
+                    provider: "acme".to_owned(),
+                    id,
+                    name: None,
+                    levels: vec![],
+                    default_level: None,
+                    configured: None,
+                    roles: vec![],
+                    price,
+                }
+            })
+            .collect(),
         ..Default::default()
     }
 }
@@ -189,13 +204,19 @@ fn priced_session(usage: Option<u64>) -> App {
     let mut event = contract::Envelope {
         kind: "preamble_built".to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
-        ts: 0, schema_version: contract::SCHEMA_VERSION,
-        turn_id: None, action_id: None, seq: None,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
         payload: serde_json::json!({
             "reason": "start", "model": "acme/p1", "context_window": 200000,
             "trigger_at": 150000, "thinking": null, "tool_choice": "auto",
             "cache_lifetime": "5m", "system_prompt": "", "tools": [],
-        }).as_object().unwrap().clone(),
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
     };
     app.on_line(crate::link::Line::Session(event.clone()));
     if let Some(input) = usage {
@@ -204,7 +225,10 @@ fn priced_session(usage: Option<u64>) -> App {
             "generation_id": "g_1", "model": "acme/p1",
             "tokens": {"input": input, "cache_read": 0, "cache_write": {}, "output": 0},
             "input_bytes": 1, "cost": null,
-        }).as_object().unwrap().clone();
+        })
+        .as_object()
+        .unwrap()
+        .clone();
         app.on_line(crate::link::Line::Session(event));
     }
     app.on_models(Ok(priced()));
@@ -260,7 +284,10 @@ fn the_tier_in_force_turns_over_past_its_threshold() {
         let app = priced_session(Some(usage));
         let (_, row) = find_row(&screen(&app, 160, 48), "p4");
         if usage == 100_001 {
-            assert!(row.contains("$3.00 in · $12.00 out /M · tier 100k+"), "{row}");
+            assert!(
+                row.contains("$3.00 in · $12.00 out /M · tier 100k+"),
+                "{row}"
+            );
             assert!(row.contains("switch ~100k · $0.30"), "{row}");
         } else {
             assert!(row.contains("$2.00 in · $8.00 out /M"), "{row}");
@@ -276,7 +303,11 @@ fn a_narrow_screen_drops_the_prices_whole() {
     let view = app.model_picker_view().unwrap();
     for (width, priced) in [(63, false), (64, true), (65, true)] {
         let rows = body(&view, width, 48);
-        let text: String = rows.iter().flat_map(|row| row.spans.iter().chain(&row.right)).map(|span| span.content.as_ref()).collect();
+        let text: String = rows
+            .iter()
+            .flat_map(|row| row.spans.iter().chain(&row.right))
+            .map(|span| span.content.as_ref())
+            .collect();
         for id in ["p1", "p2", "p3", "p4"] {
             assert!(text.contains(id), "{text}");
         }
@@ -292,10 +323,13 @@ fn the_prices_cell_takes_no_click_target() {
     let view = app.model_picker_view().unwrap();
     for model in [&view.sections[0].models[0], &view.sections[0].models[2]] {
         let row = super::model_first_row(model, false, true);
-        assert_eq!(row.targets, [
-            (0, u16::MAX, TargetId::View(Spot::Row(model.at))),
-            (2, 4, TargetId::View(Spot::Cell(model.at, 0))),
-        ]);
+        assert_eq!(
+            row.targets,
+            [
+                (0, u16::MAX, TargetId::View(Spot::Row(model.at))),
+                (2, 4, TargetId::View(Spot::Cell(model.at, 0))),
+            ]
+        );
     }
 }
 
@@ -312,7 +346,11 @@ fn checklist_rows_carry_prices_and_the_switch_label() {
     assert!(p1.contains("$3.00 in · $15.00 out /M"), "{p1}");
     let view = app.model_picker_view().unwrap();
     let narrow = body(&view, 63, 48);
-    let text: String = narrow.iter().flat_map(|row| &row.spans).map(|span| span.content.as_ref()).collect();
+    let text: String = narrow
+        .iter()
+        .flat_map(|row| &row.spans)
+        .map(|span| span.content.as_ref())
+        .collect();
     assert!(!text.contains("/M"), "{text}");
     assert!(!text.contains("free"), "{text}");
 }

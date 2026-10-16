@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 217
+assertion_line: 373
 expression: "screen(&app, 160, 48)"
 ---
  Models  /model                                                                                                                                      Esc returns
@@ -9,15 +9,15 @@ expression: "screen(&app, 160, 48)"
                                    Type to search █
                                    4 models                                                                     ⟳ refresh all
                                    acme
-                                   › m1 [deep] [review] ● current                                                           —
+                                   › m1 [deep] [review] ● current $3.00 in · $15.00 out /M                                  —
                                          thinking low [high]
-                                     m2                                                                          ~201k tokens
+                                     m2                                                                   switch ~201k tokens
                                          fixed thinking
 
                                    zeta
-                                     z1                                                                          ~201k tokens
+                                     z1                                                                   switch ~201k tokens
                                          thinking [low]
-                                     z2 [chat]                                                                  ~201k · $0.60
+                                     z2 [chat] $3.00 in · $12.00 out /M · tier 100k+                     switch ~201k · $0.60
                                          thinking low [high]
 
                                    ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close

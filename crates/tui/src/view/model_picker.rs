@@ -211,7 +211,11 @@ fn model_first_row(model: &ModelRow, focused: bool, priced: bool) -> Row {
             .cost
             .clone()
             .map(|cost| {
-                let text = if model.current { cost } else { format!("switch {cost}") };
+                let text = if model.current {
+                    cost
+                } else {
+                    format!("switch {cost}")
+                };
                 vec![Span::styled(text, dim)]
             })
             .unwrap_or_default(),
@@ -349,7 +353,11 @@ fn scope_row(model: &ModelRow, focused: bool, priced: bool) -> Row {
             .cost
             .clone()
             .map(|cost| {
-                let text = if model.current { cost } else { format!("switch {cost}") };
+                let text = if model.current {
+                    cost
+                } else {
+                    format!("switch {cost}")
+                };
                 vec![Span::styled(text, dim)]
             })
             .unwrap_or_default(),
