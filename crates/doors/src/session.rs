@@ -597,7 +597,9 @@ impl Gate {
     }
 
     pub(crate) fn quota(&self) -> (Vec<QuotaInfo>, f64) {
-        self.quota.get().map_or_else(|| (Vec::new(), 80.0), |read| read())
+        self.quota
+            .get()
+            .map_or_else(|| (Vec::new(), 80.0), |read| read())
     }
 
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {

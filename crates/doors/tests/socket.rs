@@ -3473,7 +3473,9 @@ fn quota_answers_without_waiting_for_the_inbox() {
     let opened = Opened::open(vec![]);
     let rows = serde_json::json!([{"provider": "p", "credential": "work", "credit": {"remaining": 4.2, "limit": 10.0}, "unreachable": true}]);
     let quota: Vec<contract::events::QuotaInfo> = serde_json::from_value(rows.clone()).unwrap();
-    opened.session.quota(Arc::new(move || (quota.clone(), 70.0)));
+    opened
+        .session
+        .quota(Arc::new(move || (quota.clone(), 70.0)));
     let socket = opened.socket.clone();
     opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
         let client = Client::connect(&socket).unwrap();
@@ -3496,15 +3498,21 @@ fn quota_answers_without_waiting_for_the_inbox() {
 fn quota_without_a_reader_answers_empty() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
-    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
-        let client = Client::connect(&socket).unwrap();
-        subscribe(&client, "sub", "full");
-        send(&client, r#"{"id":"quota","command":"quota","args":{}}"#);
-        let answer = response(&client, "quota");
-        assert_eq!(kind(&answer), "command_accepted");
-        assert_eq!(answer["payload"]["result"], serde_json::json!({"quota": [], "notice_at": 80.0}));
-        Ok(())
-    }).unwrap();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(&client, r#"{"id":"quota","command":"quota","args":{}}"#);
+            let answer = response(&client, "quota");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"quota": [], "notice_at": 80.0})
+            );
+            Ok(())
+        })
+        .unwrap();
     opened.close();
 }
 
@@ -5044,13 +5052,31 @@ fn reopened_log(sessions: PathBuf, id: SessionId, clock: Arc<dyn Clock>) -> Arc<
 fn drive_quota_is_a_built_command() {
     let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
-    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || driver.drive("fiber.test/a", "quota", Map::new(), Ack(Box::new(move |answer| { tx.send(answer).unwrap(); }))));
-        let answer = Deadline::after(DEADLINE).recv_or_fail(&rx, "the quota drive answer");
-        assert_eq!(answer.unwrap(), Some(contract::events::CommandResult::Quota { quota: vec![], notice_at: 80.0 }));
-        Ok(())
-    }).unwrap();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let (tx, rx) = mpsc::channel();
+            thread::spawn(move || {
+                driver.drive(
+                    "fiber.test/a",
+                    "quota",
+                    Map::new(),
+                    Ack(Box::new(move |answer| {
+                        tx.send(answer).unwrap();
+                    })),
+                )
+            });
+            let answer = Deadline::after(DEADLINE).recv_or_fail(&rx, "the quota drive answer");
+            assert_eq!(
+                answer.unwrap(),
+                Some(contract::events::CommandResult::Quota {
+                    quota: vec![],
+                    notice_at: 80.0
+                })
+            );
+            Ok(())
+        })
+        .unwrap();
     opened.close();
 }
 

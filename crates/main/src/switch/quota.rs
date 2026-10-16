@@ -45,23 +45,34 @@ impl Switching {
     }
 
     fn quota_store(&self) -> Arc<Store> {
-        let providers = self.loader.owners.iter().filter_map(|(name, extension)| {
-            self.registry.get(name).map(|data| {
-                let mut data = data.clone();
-                data.models.clear();
-                (extension.clone(), data)
+        let providers = self
+            .loader
+            .owners
+            .iter()
+            .filter_map(|(name, extension)| {
+                self.registry.get(name).map(|data| {
+                    let mut data = data.clone();
+                    data.models.clear();
+                    (extension.clone(), data)
+                })
             })
-        }).collect();
+            .collect();
         Arc::new(Store {
             providers,
             config: self.config.clone(),
             loader: self.loader.clone(),
             started: Arc::downgrade(&self.started),
             reads: self.reads.clone(),
-            notice_at: self.config.get("quota.notice_at", None).and_then(|(value, _)| value.as_f64()).unwrap_or(80.0),
+            notice_at: self
+                .config
+                .get("quota.notice_at", None)
+                .and_then(|(value, _)| value.as_f64())
+                .unwrap_or(80.0),
             state: Mutex::default(),
-            #[cfg(test)] labels_pause: Mutex::default(),
-            #[cfg(test)] loaded_note: Mutex::default(),
+            #[cfg(test)]
+            labels_pause: Mutex::default(),
+            #[cfg(test)]
+            loaded_note: Mutex::default(),
         })
     }
 }
@@ -76,10 +87,16 @@ impl Store {
         };
         if start {
             let store = Arc::clone(self);
-            let _spawned = std::thread::Builder::new().name("fiber-quota-load".into()).spawn(move || store.load());
+            let _spawned = std::thread::Builder::new()
+                .name("fiber-quota-load".into())
+                .spawn(move || store.load());
         }
         quota.extend(labels.into_iter().filter_map(|label| {
-            info(&label.provider, &label.label, label.lua.quota_now(&label.pair, label.key.as_ref()))
+            info(
+                &label.provider,
+                &label.label,
+                label.lua.quota_now(&label.pair, label.key.as_ref()),
+            )
         }));
         quota.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
         (quota, self.notice_at)
@@ -90,21 +107,41 @@ impl Store {
         let _ended = Loaded(self);
         for (extension, data) in &self.providers {
             let labels = self.config.credentials().labels(data);
-            if labels.is_empty() { continue; }
+            if labels.is_empty() {
+                continue;
+            }
             let this = Arc::clone(self);
             let extension = extension.clone();
             let data = data.clone();
             let outcome = self.reads.run(move || {
-                let Some(started) = this.started.upgrade() else { return (Vec::new(), Vec::new()); };
+                let Some(started) = this.started.upgrade() else {
+                    return (Vec::new(), Vec::new());
+                };
                 let lua = started.start(&this.loader, &this.config, &data.name, &extension);
                 drop(started);
                 let lua = match lua {
                     Ok(lua) => lua,
-                    Err(_) => return (Vec::new(), labels.iter().map(|label| failed(&data.name, label)).collect()),
+                    Err(_) => {
+                        return (
+                            Vec::new(),
+                            labels
+                                .iter()
+                                .map(|label| failed(&data.name, label))
+                                .collect(),
+                        );
+                    }
                 };
                 match lua.registers("quota") {
                     Ok(false) => return (Vec::new(), Vec::new()),
-                    Err(_) => return (Vec::new(), labels.iter().map(|label| failed(&data.name, label)).collect()),
+                    Err(_) => {
+                        return (
+                            Vec::new(),
+                            labels
+                                .iter()
+                                .map(|label| failed(&data.name, label))
+                                .collect(),
+                        );
+                    }
                     Ok(true) => {}
                 }
                 #[cfg(test)]
@@ -112,29 +149,48 @@ impl Store {
                 let mut held = Vec::new();
                 let mut failures = Vec::new();
                 for label in labels {
-                    let run = |command: &mut std::process::Command, timeout| this.reads.credential(command, timeout, &*this.loader.clock);
-                    let key = crate::lua_providers::session_credential(Some(&lua), &data, &label, || {
-                        crate::credential::switch_credential(&this.config, &data, &label, &run).map(|read| read.secret)
-                    });
+                    let run = |command: &mut std::process::Command, timeout| {
+                        this.reads.credential(command, timeout, &*this.loader.clock)
+                    };
+                    let key =
+                        crate::lua_providers::session_credential(Some(&lua), &data, &label, || {
+                            crate::credential::switch_credential(&this.config, &data, &label, &run)
+                                .map(|read| read.secret)
+                        });
                     match key {
-                        Ok((key, _)) => held.push(Label { provider: data.name.clone(), pair: CredentialPair::for_provider(&data, &label), label, lua: lua.clone(), key }),
+                        Ok((key, _)) => held.push(Label {
+                            provider: data.name.clone(),
+                            pair: CredentialPair::for_provider(&data, &label),
+                            label,
+                            lua: lua.clone(),
+                            key,
+                        }),
                         Err(_) => failures.push(failed(&data.name, &label)),
                     }
                 }
                 (held, failures)
             });
-            let (held, failed) = match outcome { Ok(outcome) => outcome, Err(_) => return };
+            let (held, failed) = match outcome {
+                Ok(outcome) => outcome,
+                Err(_) => return,
+            };
             {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 state.labels.extend(held.clone());
                 state.failed.extend(failed);
             }
-            for label in held { label.lua.refresh_quota(&label.pair, label.key.as_ref()); }
+            for label in held {
+                label.lua.refresh_quota(&label.pair, label.key.as_ref());
+            }
         }
     }
 
     #[cfg(test)]
-    fn pause_at_labels(&self, entered: std::sync::mpsc::Sender<()>, release: std::sync::mpsc::Receiver<()>) {
+    fn pause_at_labels(
+        &self,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) {
         *self.labels_pause.lock().unwrap() = Some((entered, release));
     }
 
@@ -148,11 +204,21 @@ impl Store {
     }
 
     #[cfg(test)]
-    fn note_loaded(&self, sender: std::sync::mpsc::Sender<()>) { *self.loaded_note.lock().unwrap() = Some(sender); }
+    fn note_loaded(&self, sender: std::sync::mpsc::Sender<()>) {
+        *self.loaded_note.lock().unwrap() = Some(sender);
+    }
 
     #[cfg(test)]
     fn held_instance(&self, name: &str) -> Arc<LuaProvider> {
-        self.state.lock().unwrap().labels.iter().find(|label| label.provider == name).unwrap().lua.clone()
+        self.state
+            .lock()
+            .unwrap()
+            .labels
+            .iter()
+            .find(|label| label.provider == name)
+            .unwrap()
+            .lua
+            .clone()
     }
 }
 
@@ -162,31 +228,58 @@ struct Loaded<'a>(&'a Store);
 impl Drop for Loaded<'_> {
     fn drop(&mut self) {
         let sender = self.0.loaded_note.lock().unwrap().clone();
-        if let Some(sender) = sender { let _sent = sender.send(()); }
+        if let Some(sender) = sender {
+            let _sent = sender.send(());
+        }
     }
 }
 
 fn failed(provider: &str, label: &str) -> QuotaInfo {
-    QuotaInfo { provider: provider.into(), credential: label.into(), windows: None, credit: None, unreachable: Some(True) }
+    QuotaInfo {
+        provider: provider.into(),
+        credential: label.into(),
+        windows: None,
+        credit: None,
+        unreachable: Some(True),
+    }
 }
 
 fn info(provider: &str, label: &str, entry: QuotaEntry) -> Option<QuotaInfo> {
     let (value, unreachable) = match entry {
         QuotaEntry::Reported(value) => (value, None),
-        QuotaEntry::Unreachable { last: Some((value, _)) } => (value, Some(True)),
+        QuotaEntry::Unreachable {
+            last: Some((value, _)),
+        } => (value, Some(True)),
         QuotaEntry::NoQuota | QuotaEntry::Unreachable { last: None } => return None,
     };
-    let mut info = QuotaInfo { provider: provider.into(), credential: label.into(), windows: None, credit: None, unreachable };
+    let mut info = QuotaInfo {
+        provider: provider.into(),
+        credential: label.into(),
+        windows: None,
+        credit: None,
+        unreachable,
+    };
     match value {
         Quota::Windows(windows) => {
-            if windows.is_empty() { return None; }
-            info.windows = Some(windows.into_iter().map(|window| {
-                let (percent_used, reset) = match window.used {
-                    WindowUse::Percent { used, .. } => (Some(used), None),
-                    WindowUse::Reset => (None, Some(True)),
-                };
-                QuotaWindow { name: window.name, percent_used, reset }
-            }).collect());
+            if windows.is_empty() {
+                return None;
+            }
+            info.windows = Some(
+                windows
+                    .into_iter()
+                    .map(|window| {
+                        let (percent_used, reset) = match window.used {
+                            WindowUse::Percent { used, .. } => (Some(used), None),
+                            WindowUse::Reset => (None, Some(True)),
+                        };
+                        QuotaWindow {
+                            name: window.name,
+                            percent_used,
+                            reset,
+                        }
+                    })
+                    .collect(),
+            );
         }
         Quota::Credit { remaining, limit } => info.credit = Some(QuotaCredit { remaining, limit }),
     }

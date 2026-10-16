@@ -1549,14 +1549,24 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-dead-start");
     let switching = switching(&fixture, &[]);
     let extension = switching.loader.owners.get("lp").unwrap();
-    let lua = switching.started.start(&switching.loader, &switching.config, "lp", extension).unwrap();
+    let lua = switching
+        .started
+        .start(&switching.loader, &switching.config, "lp", extension)
+        .unwrap();
     assert!(lua.registers("credential").unwrap());
     let weak = Arc::downgrade(&lua);
     drop(lua);
     assert!(weak.upgrade().is_none());
-    let lua = switching.started.start(&switching.loader, &switching.config, "lp", extension).unwrap();
+    let lua = switching
+        .started
+        .start(&switching.loader, &switching.config, "lp", extension)
+        .unwrap();
     assert!(lua.registers("credential").unwrap());
-    assert_eq!(vm_runs(&counter), 3, "startup and two separate live providers");
+    assert_eq!(
+        vm_runs(&counter),
+        3,
+        "startup and two separate live providers"
+    );
 }
 
 #[test]

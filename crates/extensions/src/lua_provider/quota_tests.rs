@@ -460,19 +460,47 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
     let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
     server.hold();
     let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
-    assert!(within({ let provider = provider.clone(); move || provider.registers("quota") }).unwrap());
-    assert_eq!(within({ let provider = provider.clone(); move || provider.quota_now(&pair(), None) }), QuotaEntry::Unreachable { last: None });
-    assert!(server.await_requests(1, WAIT), "the fetch reached the held server");
-    assert_eq!(within({ let provider = provider.clone(); move || provider.quota_now(&pair(), None) }), QuotaEntry::Unreachable { last: None });
+    assert!(
+        within({
+            let provider = provider.clone();
+            move || provider.registers("quota")
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        QuotaEntry::Unreachable { last: None }
+    );
+    assert!(
+        server.await_requests(1, WAIT),
+        "the fetch reached the held server"
+    );
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        QuotaEntry::Unreachable { last: None }
+    );
     assert_eq!(server.requests().len(), 1);
     server.release();
-    assert_eq!(read(&provider), QuotaEntry::Reported(percent("primary", 10.0, None)));
+    assert_eq!(
+        read(&provider),
+        QuotaEntry::Reported(percent("primary", 10.0, None))
+    );
 }
 
 #[test]
 fn quota_now_refetches_only_after_the_freshness_boundary() {
     let root = fakes::TempDir::new("fiber-quota-now-fresh");
-    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None)), ok(windows_body("primary", 11.0, None))]).unwrap();
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
     let clock = FakeClock::new();
     let provider = http_quota_provider(&root, &server.url(), clock.clone());
     let value = QuotaEntry::Reported(percent("primary", 10.0, None));
@@ -480,16 +508,34 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
     for advance in [FRESH_FOR - Duration::from_nanos(1), Duration::from_nanos(1)] {
         clock.advance(advance);
         assert_eq!(provider.quota_now(&pair(), None), value);
-        assert!(lock(&provider.quotas.state).get(&pair()).unwrap().flight.is_none());
+        assert!(
+            lock(&provider.quotas.state)
+                .get(&pair())
+                .unwrap()
+                .flight
+                .is_none()
+        );
     }
     clock.advance(Duration::from_nanos(1));
     server.hold();
     assert_eq!(provider.quota_now(&pair(), None), value);
-    assert!(server.await_requests(2, WAIT), "the overdue cache started a fetch");
+    assert!(
+        server.await_requests(2, WAIT),
+        "the overdue cache started a fetch"
+    );
     assert_eq!(server.requests().len(), 2);
-    assert_eq!(within({ let provider = provider.clone(); move || provider.quota_now(&pair(), None) }), value);
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        value
+    );
     server.release();
-    assert_eq!(read(&provider), QuotaEntry::Reported(percent("primary", 11.0, None)));
+    assert_eq!(
+        read(&provider),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
 }
 
 #[test]
@@ -497,17 +543,45 @@ fn quota_now_expires_an_overdue_flight_without_waiting() {
     let root = fakes::TempDir::new("fiber-quota-now-expire");
     let (provider, clock) = quota_provider(&root, "nil");
     let value = percent("weekly", 35.0, None);
-    for age in [FETCH_TIMEOUT - Duration::from_nanos(1), FETCH_TIMEOUT, FETCH_TIMEOUT + Duration::from_nanos(1)] {
+    for age in [
+        FETCH_TIMEOUT - Duration::from_nanos(1),
+        FETCH_TIMEOUT,
+        FETCH_TIMEOUT + Duration::from_nanos(1),
+    ] {
         let now = clock.now();
-        lock(&provider.quotas.state).insert(pair(), Cache {
-            fetched: Some((Some(value.clone()), now)),
-            flight: Some(Flight { id: 0, started: now - age }),
-            ..Cache::default()
-        });
-        let expected = if age < FETCH_TIMEOUT { QuotaEntry::Reported(value.clone()) } else { QuotaEntry::Unreachable { last: Some((value.clone(), Duration::ZERO)) } };
-        assert_eq!(within({ let provider = provider.clone(); move || provider.quota_now(&pair(), None) }), expected);
+        lock(&provider.quotas.state).insert(
+            pair(),
+            Cache {
+                fetched: Some((Some(value.clone()), now)),
+                flight: Some(Flight {
+                    id: 0,
+                    started: now - age,
+                }),
+                ..Cache::default()
+            },
+        );
+        let expected = if age < FETCH_TIMEOUT {
+            QuotaEntry::Reported(value.clone())
+        } else {
+            QuotaEntry::Unreachable {
+                last: Some((value.clone(), Duration::ZERO)),
+            }
+        };
+        assert_eq!(
+            within({
+                let provider = provider.clone();
+                move || provider.quota_now(&pair(), None)
+            }),
+            expected
+        );
     }
-    lock(&provider.quotas.state).insert(pair(), Cache { fetched: Some((None, clock.now())), ..Cache::default() });
+    lock(&provider.quotas.state).insert(
+        pair(),
+        Cache {
+            fetched: Some((None, clock.now())),
+            ..Cache::default()
+        },
+    );
     assert_eq!(provider.quota_now(&pair(), None), QuotaEntry::NoQuota);
 }
 

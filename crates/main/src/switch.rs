@@ -7,8 +7,8 @@
 //! started on a thread of their own while the loop waits; shutdown ends
 //! that wait (`docs/configuration.md`, "Secrets").
 
-mod read;
 mod quota;
+mod read;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -71,7 +71,10 @@ pub(crate) struct StartLock {
 
 #[cfg(test)]
 #[derive(Debug, PartialEq)]
-enum Point { P, Q }
+enum Point {
+    P,
+    Q,
+}
 
 #[cfg(test)]
 struct Ack {
@@ -83,21 +86,40 @@ struct Ack {
 impl StartLock {
     fn seeded(loaded: &[(String, Arc<LuaProvider>)]) -> Self {
         Self {
-            started: Mutex::new(loaded.iter().map(|(name, lua)| (name.clone(), Arc::downgrade(lua))).collect()),
+            started: Mutex::new(
+                loaded
+                    .iter()
+                    .map(|(name, lua)| (name.clone(), Arc::downgrade(lua)))
+                    .collect(),
+            ),
             #[cfg(test)]
             pause: Mutex::default(),
         }
     }
 
-    fn start(&self, loader: &Loader, config: &Config, name: &str, extension: &str) -> Result<Arc<LuaProvider>, extensions::Error> {
+    fn start(
+        &self,
+        loader: &Loader,
+        config: &Config,
+        name: &str,
+        extension: &str,
+    ) -> Result<Arc<LuaProvider>, extensions::Error> {
         #[cfg(test)]
         self.checkpoint(name, Point::P);
         let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
         let found = started.get(name).and_then(Weak::upgrade);
         #[cfg(test)]
         self.checkpoint(name, Point::Q);
-        if let Some(lua) = found { return Ok(lua); }
-        let lua = loader.extensions.start_provider(config, Arc::clone(&loader.clock), Arc::clone(&loader.locks), extension, name)?;
+        if let Some(lua) = found {
+            return Ok(lua);
+        }
+        let lua = loader.extensions.start_provider(
+            config,
+            Arc::clone(&loader.clock),
+            Arc::clone(&loader.locks),
+            extension,
+            name,
+        )?;
         started.insert(name.to_owned(), Arc::downgrade(&lua));
         Ok(lua)
     }
@@ -108,19 +130,33 @@ impl StartLock {
     }
 
     #[cfg(test)]
-    fn unpause(&self) { *self.pause.lock().unwrap() = None; }
+    fn unpause(&self) {
+        *self.pause.lock().unwrap() = None;
+    }
 
     #[cfg(test)]
     fn checkpoint(&self, name: &str, point: Point) {
         let armed = self.pause.lock().unwrap().clone();
         if let Some((armed, acked)) = armed {
-            if armed != name { return; }
+            if armed != name {
+                return;
+            }
             let thread = std::thread::current().name().unwrap_or("").to_owned();
             match point {
-                Point::P => { let _sent = acked.send(Ack { point, thread, release: None }); }
+                Point::P => {
+                    let _sent = acked.send(Ack {
+                        point,
+                        thread,
+                        release: None,
+                    });
+                }
                 Point::Q => {
                     let (tx, rx) = std::sync::mpsc::channel();
-                    let _sent = acked.send(Ack { point, thread, release: Some(tx) });
+                    let _sent = acked.send(Ack {
+                        point,
+                        thread,
+                        release: Some(tx),
+                    });
                     let _released = rx.recv();
                 }
             }
