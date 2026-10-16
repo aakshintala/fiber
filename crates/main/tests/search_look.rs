@@ -120,11 +120,12 @@ fn col_at_or(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
     if want.is_empty() {
         return None;
     }
-    for x in 0..160u16 {
+    let (width, _) = grid.size();
+    for x in 0..width {
         let mut ok = true;
         for (dx, want) in want.iter().enumerate() {
             let xi = x.checked_add(u16::try_from(dx).ok()?)?;
-            if xi >= 160 || grid.cell(xi, y).symbol != want.to_string() {
+            if xi >= width || grid.cell(xi, y).symbol != want.to_string() {
                 ok = false;
                 break;
             }
@@ -730,7 +731,7 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         &json!({
             "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
             "roles": {"delegate": "fiber:scripted/d.json"},
-            "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 1000}
+            "hub": {"idle_exit_ms": 1000}
         }),
     );
     fs::write(
@@ -747,12 +748,10 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
 }
 
 fn narrow_running(setup: &Setup) -> Run {
-    let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
+    let mut run = Run::spawn(setup, 80, 24, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
     run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
-    // A 60-column panel plus the rail leaves less than the conversation's
-    // 84-column minimum, so the wanted panel contributes narrow rows.
     run.wait_screen("the narrow running counts", |grid| {
         grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running")
     });
@@ -854,26 +853,39 @@ fn the_running_lists_match_the_doc() {
     }
 }
 
+fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
+    grid.rows.iter().enumerate().find_map(|(y, _)| {
+        let y = u16::try_from(y).ok()?;
+        let x = col_at_or(grid, y, description)?;
+        (x >= 100).then_some((x, y))
+    })
+}
+
 #[test]
 fn the_item_views_top_row_closes_them() {
     let (setup, _release, _guard, command) = running_setup();
-    let mut run = narrow_running(&setup);
-    for (count, heading, crumb) in [
-        (
-            "1 delegate running",
-            "Delegates · 1 running",
-            "› ◆ review the diff".to_owned(),
-        ),
-        (
-            "1 job running",
-            "Jobs · 1 running",
-            format!("› ▸ {command}"),
-        ),
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the parent reply and running panel cards", |grid| {
+        grid.contents.contains(REPLY)
+            && panel_item_at(grid, "review the diff").is_some()
+            && panel_item_at(grid, "Jobs").is_some()
+    });
+    let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
+    click(&mut run, x, y);
+    run.wait_screen("the expanded Jobs card", |grid| {
+        panel_item_at(grid, "head -n 1").is_some()
+    });
+    for (description, crumb) in [
+        ("review the diff", "› ◆ review the diff".to_owned()),
+        ("head -n 1", format!("› ▸ {command}")),
     ] {
-        let grid = open_running(&mut run, count, heading);
-        let y = row_with(&grid, heading);
-        let x = col_at(&grid, y, heading);
-        click(&mut run, x, y + 1);
+        let grid = run.wait_screen("the running panel item", |grid| {
+            panel_item_at(grid, description).is_some()
+        });
+        let (x, y) = panel_item_at(&grid, description).unwrap();
+        click(&mut run, x, y);
         let grid = run.wait_screen("the item's breadcrumb without a cross", |grid| {
             grid.rows[0].contains(&crumb) && !grid.rows[0].contains('✕')
         });
@@ -882,7 +894,7 @@ fn the_item_views_top_row_closes_them() {
         click(&mut run, 80, 0);
         run.wait_screen(
             "the conversation after clicking the item's top row",
-            |grid| grid.contents.contains(REPLY) && !grid.contents.contains(heading),
+            |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
         );
     }
 }
