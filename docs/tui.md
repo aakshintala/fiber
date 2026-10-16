@@ -554,8 +554,8 @@ a click on it returns too. The views are:
   view", dim.
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, each model's input and output prices,
-  and what a switch to it costs to rebuild the prompt cache. Choosing a model saves the global `model`, and choosing a
-  level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
+  and what a switch to it costs to rebuild the prompt cache. Choosing a model
+  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
