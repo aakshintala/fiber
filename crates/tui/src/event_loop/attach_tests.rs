@@ -1877,9 +1877,8 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
 /// Runs a history wait whose answer follows a reopening and a finite fold.
 /// The older ending case also queues a key ahead of the reopening.
 fn reopened_history(older_ending: bool) {
-    let (pool, _) = fixture_lines(367, 0);
-    assert!(pool.len() >= 367, "the prefix holds every replayed line");
     let r = 367usize;
+    let (pool, _) = fixture_lines(r, 0);
     let wire = Wire::new(174);
     let _guard = CloseOnDrop(Arc::clone(&wire));
     let (hand_tx, hand_rx) = mpsc::channel();
@@ -2019,7 +2018,7 @@ fn reopened_history(older_ending: bool) {
 }
 
 #[test]
-fn a_reopen_ends_the_history_wait_at_the_ten_mib_fixture() {
+fn a_reopen_ends_the_history_wait_at_the_opening_window() {
     reopened_history(false);
 }
 
@@ -2029,9 +2028,9 @@ fn a_stashed_session_left_and_page_up_cannot_clear_a_pending_reopen() {
 }
 
 #[test]
-fn a_history_waits_for_the_opening_pass_at_the_ten_mib_fixture() {
-    let (pool, _) = fixture_lines(367, 0);
-    assert!(pool.len() >= 367, "the prefix holds every replayed line");
+fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
+    const LARGEST_REPLAY: usize = 193 + 174;
+    let (pool, _) = fixture_lines(LARGEST_REPLAY, 0);
     for w in [64usize, 65, 66, 174] {
         let r = 193 + w;
         let wire = Wire::new(w);
