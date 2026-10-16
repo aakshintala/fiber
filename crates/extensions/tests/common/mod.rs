@@ -25,7 +25,7 @@ use contract::shapes::Failure;
 use contract::signing::{SignRequest, Signer};
 use extensions::{
     CopyHold, CredentialPair, Error, Fetch, Index, LuaExtension, LuaProvider, Origin, RepoItem,
-    Request, SessionOffer, Store, declared_items, hash, plan,
+    Request, SessionOffer, Store, declared_items, hash, observe_load, plan,
 };
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -490,20 +490,18 @@ impl<'a> Repos<'a> {
 }
 
 /// `require("go_<name>")` in `dir` signals that the callback has started:
-/// the loader opens the fifo for read, the writer here reports it and
-/// closes the fifo, and the module reads empty.
+/// the loader runs the registered observer before it opens the file, the
+/// observer reports it, and the module reads empty.
 pub(crate) fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
     let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    std::fs::File::create(&path).unwrap();
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
+    observe_load(
+        path.canonicalize().unwrap(),
+        Box::new(move || match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
+        }),
+    );
     rx
 }
 

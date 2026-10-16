@@ -435,7 +435,10 @@ bit overlaps. A test reaches the code under test
 from outside, through a test seam such as a fake writer or the injected clock. A
 `#[cfg(test)]` hook inside a production function is used only where no outside
 seam can reach the behaviour, such as a race's pause point ("Waits and
-timeouts"), and the plan that needs one says why.
+timeouts"), and the plan that needs one says why. Integration tests under
+`tests/` reach such a hook through the crate's `test-hooks` feature, which
+only the crate's own dev-dependency on itself enables, so release builds
+never compile it.
 
 cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
 in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a

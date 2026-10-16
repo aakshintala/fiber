@@ -83,6 +83,27 @@ pub(crate) fn install_prelude(
     Ok((commands, providers, hooks, problems, failures))
 }
 
+/// Observers waiting for the next load of one file, keyed by canonical
+/// path. Test-only: no public API can see the moment before the loader
+/// opens the file, so the `go_module` signal in tests needs this pause.
+/// Each registration fires once, and the loader holds no lock while it
+/// runs, so a test stays free to answer.
+#[cfg(any(test, feature = "test-hooks"))]
+type LoadObserver = (PathBuf, Box<dyn FnOnce() + Send>);
+
+#[cfg(any(test, feature = "test-hooks"))]
+static LOAD_OBSERVERS: std::sync::Mutex<Vec<LoadObserver>> = std::sync::Mutex::new(Vec::new());
+
+/// Runs `notify` once, before the next load of the file at canonical `path`
+/// opens it. Test-only.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn observe_load(path: PathBuf, notify: Box<dyn FnOnce() + Send>) {
+    LOAD_OBSERVERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((path, notify));
+}
+
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
 /// error names the file and line. The inner error is the reason it cannot be
 /// loaded, for Lua to raise at the caller's line. A file larger than the
@@ -102,6 +123,22 @@ pub(super) fn load_file(
         }
         Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
     };
+    // A test observer for this file fires here, after the directory check
+    // and before the open, holding no lock while it runs.
+    #[cfg(any(test, feature = "test-hooks"))]
+    let notify = {
+        let mut observers = LOAD_OBSERVERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observers
+            .iter()
+            .position(|(watched, _)| *watched == path)
+            .map(|found| observers.remove(found).1)
+    };
+    #[cfg(any(test, feature = "test-hooks"))]
+    if let Some(notify) = notify {
+        notify();
+    }
     let mut source = Vec::new();
     // One byte past the cap tells a file at the cap from one over it. The
     // bound is on the read itself, so a file that grows cannot pass it.
@@ -223,3 +260,7 @@ impl Deadline {
 fn timed_out() -> mlua::Error {
     mlua::Error::RuntimeError("the callback passed its timeout".to_owned())
 }
+
+#[cfg(test)]
+#[path = "setup_tests.rs"]
+mod tests;

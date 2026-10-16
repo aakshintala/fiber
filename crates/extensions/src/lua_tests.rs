@@ -807,24 +807,21 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     ));
 }
 
-/// `require("go_<name>")` is a signal, not a barrier. Opening the fifo for
-/// write returns only once the loader has opened it for read; the writer
-/// reports that and closes the fifo at once, so `require` reads an empty
-/// module and the code runs on. Nothing stays blocked in it. Each name is
-/// used once per VM, because `require` caches.
+/// `require("go_<name>")` is a signal, not a barrier. The loader runs the
+/// registered observer before it opens the file; the observer reports that
+/// and `require` reads an empty module, so the code runs on. Nothing stays
+/// blocked in it. Each name is used once per VM, because `require` caches.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
     let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    std::fs::File::create(&path).unwrap();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
+    crate::lua::observe_load(
+        path.canonicalize().unwrap(),
+        Box::new(move || match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
+        }),
+    );
     rx
 }
 
