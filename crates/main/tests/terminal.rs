@@ -1111,18 +1111,25 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
         grid.contents.contains("completed")
     });
     run.wait_screen("the spend row", |grid| grid.contents.contains("cache hits"));
-    // The card draws top-down and its bottom edge lands last: wait for
-    // the edge at the panel columns before snapshotting, never a torn
-    // frame. A conversation border also ends in `▀`, so the check pins
-    // the edge to the panel: one blank column, then the edge.
+    // The card draws top-down, its bottom edge lands last, and the `cost`
+    // row lands later still (`crates/tui/src/view/panel.rs`, `session_rows`):
+    // wait for the edge at the panel columns and the whole-word `cost` label
+    // before snapshotting, never a torn frame. A conversation border also
+    // ends in `▀`, so the check pins the edge to the panel: one blank column,
+    // then the edge.
     run.wait_screen("the card drawn whole", |grid| {
         let n = usize::from(panel);
-        grid.rows.iter().any(|row| {
-            let cells: Vec<char> = row.chars().collect();
-            cells.len() == 160
-                && cells[160 - n] == ' '
-                && cells[160 - n + 1..].iter().all(|&cell| cell == '▀')
-        })
+        let (width, _) = grid.size();
+        let Some(left) = width.checked_sub(panel) else {
+            return false;
+        };
+        support::session_cost_drawn(grid, left)
+            && grid.rows.iter().any(|row| {
+                let cells: Vec<char> = row.chars().collect();
+                cells.len() == 160
+                    && cells[160 - n] == ' '
+                    && cells[160 - n + 1..].iter().all(|&cell| cell == '▀')
+            })
     });
     // The card below is the conversation screen before quitting: the
     // primary screen after it holds the resume lines, not the card.
