@@ -130,7 +130,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   by path, never inlined as base64 in the log.
 - The loop reads `status`, `error.code`, `control` and the declared effects,
   never `content` or `details`, except that it drops `details.matches` when a
-  hook rewrote the output (Shell, "Result and output"). A tool's prose cannot steer control flow.
+  hook rewrote the output (Shell, "Result and output"). A tool's prose cannot
+  steer control flow.
 - A `failed` status is sent to the provider as that protocol's error flag on
   the tool result.
 
