@@ -1434,16 +1434,17 @@ fn big_reply(turn: usize) -> String {
     text
 }
 
-/// The 10 MiB fixture pool: turns with 4,096-byte replies, numbered
-/// from the session's last line, as serialized wire lines with their
-/// newlines, with the pool's total bytes.
-fn ten_mib_fixture() -> (Vec<Vec<u8>>, usize) {
+/// Wire lines numbered from the session's last line, as serialized lines
+/// with their newlines, with the pool's total bytes: whole turns until at
+/// least `min_lines` lines and `min_bytes` bytes are held, so asking for a
+/// prefix of the 10 MiB pool gives lines byte-identical to its start.
+fn fixture_lines(min_lines: usize, min_bytes: usize) -> (Vec<Vec<u8>>, usize) {
     let first_seq = session().len() as u64;
     let mut lines = Vec::new();
     let mut bytes = 0usize;
     let mut seq = first_seq;
     let mut turn = 0usize;
-    while bytes < TEN_MIB_LOW {
+    while bytes < min_bytes || lines.len() < min_lines {
         let prompt = json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": format!("prompt {turn}")}]}]});
         for (kind, action, payload) in [
@@ -1466,6 +1467,12 @@ fn ten_mib_fixture() -> (Vec<Vec<u8>>, usize) {
         turn += 1;
     }
     (lines, bytes)
+}
+
+/// The 10 MiB fixture pool: turns with 4,096-byte replies, as
+/// `fixture_lines` builds them, up to the attach row's 10 MiB band.
+fn ten_mib_fixture() -> (Vec<Vec<u8>>, usize) {
+    fixture_lines(0, TEN_MIB_LOW)
 }
 
 /// Serves `history` on the hub's end from the session's lines: the
@@ -1870,7 +1877,8 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
 /// Runs a history wait whose answer follows a reopening and a finite fold.
 /// The older ending case also queues a key ahead of the reopening.
 fn reopened_history(older_ending: bool) {
-    let (pool, _) = ten_mib_fixture();
+    let (pool, _) = fixture_lines(367, 0);
+    assert!(pool.len() >= 367, "the prefix holds every replayed line");
     let r = 367usize;
     let wire = Wire::new(174);
     let _guard = CloseOnDrop(Arc::clone(&wire));
@@ -2022,7 +2030,8 @@ fn a_stashed_session_left_and_page_up_cannot_clear_a_pending_reopen() {
 
 #[test]
 fn a_history_waits_for_the_opening_pass_at_the_ten_mib_fixture() {
-    let (pool, _) = ten_mib_fixture();
+    let (pool, _) = fixture_lines(367, 0);
+    assert!(pool.len() >= 367, "the prefix holds every replayed line");
     for w in [64usize, 65, 66, 174] {
         let r = 193 + w;
         let wire = Wire::new(w);
