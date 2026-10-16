@@ -34,12 +34,8 @@ fn rows(home: &Path) -> Vec<Value> {
 /// The project key of `workspace`: the name of its `projects/<key>`
 /// directory.
 fn project_key(home: &Path, workspace: &Path) -> String {
-    log::sessions_dir(home, &doors::project(workspace))
-        .parent()
-        .and_then(Path::file_name)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned()
+    let _ = home;
+    log::project_key(&doors::project(workspace))
 }
 
 /// The `session_id` on the first stdout line of a run.
