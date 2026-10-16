@@ -639,13 +639,15 @@ a click on it returns too. The views are:
   Each shows the prefix it allows, when and from which session it was added,
   and a ✕ that revokes it. Revoking deletes the line and applies to the next
   call judged. Ctrl+G opens the rules file (`docs/permissions.md`,
-  "Remembering a decision"). "Global" and "This project" are bold headings;
+  "Remembering a decision"); on a remote terminal it opens the hub's file
+  instead ("Swapped views"). "Global" and "This project" are bold headings;
   a rule's row is "allow shell:git status · added 2d ago in review #688 · "
   and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
 - **`/settings`:** the configuration keys, their effective values and the
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
-  costs. Ctrl+G opens the file. The keys are a table of aligned columns:
+  costs. Ctrl+G opens the file; on a remote terminal it opens the hub's file
+  instead ("Swapped views"). The keys are a table of aligned columns:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
@@ -666,7 +668,8 @@ a click on it returns too. The views are:
   switched off. A switch turns a skill off or on for this project or
   everywhere, writing `skills.disabled` in that layer; the change reaches the
   model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills"). A row is "review · checks a diff
+  file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
+  hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
   its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
   last row is "Enter shows the text · Ctrl+G opens its file", dim.
