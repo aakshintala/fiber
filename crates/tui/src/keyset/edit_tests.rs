@@ -492,12 +492,13 @@ fn every_capture_flow_ends_clash_free() {
     strokes.sort_by_key(Stroke::name);
     strokes.dedup();
     strokes.retain(|stroke| *stroke != super::super::ctrl_c());
+    let base = keyset(&[]);
     for binding in BINDINGS {
         if binding.id == "clear_then_quit" {
             continue;
         }
         for key in &strokes {
-            let mut keys = keyset(&[]);
+            let mut keys = base.clone();
             let mut agreed: Vec<&'static str> = Vec::new();
             for _ in 0..BINDINGS.len().saturating_add(1) {
                 match keys.set(binding.id, vec![*key], &agreed) {
