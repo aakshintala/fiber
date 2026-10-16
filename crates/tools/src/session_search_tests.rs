@@ -8,7 +8,7 @@ use contract::{ErrorCode, Seq, SessionId};
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
 
-use super::{SessionSearch, utc};
+use super::SessionSearch;
 
 /// A scan that records each query and answers with a fixed `Found`, and
 /// fires `cancels` while it runs when one is given.
@@ -380,15 +380,24 @@ fn its_result_is_bounded_like_any_other() {
 }
 
 #[test]
-fn utc_prints_seconds_since_the_epoch_as_a_utc_time() {
-    for (seconds, printed) in [
-        (0, "1970-01-01T00:00:00Z"),
-        (951_868_799, "2000-02-29T23:59:59Z"),
-        (946_684_799, "1999-12-31T23:59:59Z"),
-        (946_684_800, "2000-01-01T00:00:00Z"),
-        (1_791_367_203, "2026-10-07T10:00:03Z"),
-        (4_107_542_400, "2100-03-01T00:00:00Z"),
-    ] {
-        assert_eq!(utc(seconds), printed, "{seconds}");
-    }
+fn a_crlf_pair_in_a_snippet_prints_as_one_space() {
+    let scan = FakeScan::new(Found {
+        hits: vec![hit(
+            "s_a",
+            "a",
+            2,
+            0,
+            Label::Message,
+            "say hi\r\nthen bye",
+        )],
+        total: 1,
+        ..Found::default()
+    });
+
+    let shown = text(&run(&scan, json!({"text": "x"})));
+
+    assert!(
+        shown.ends_with("   say hi then bye\n"),
+        "{shown}"
+    );
 }
