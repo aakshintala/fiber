@@ -80,7 +80,7 @@ fn install(home: &std::path::Path, url: &str, stuck: Stuck) {
 /// Waits for the stuck call to reach the server and the caller to wait on
 /// the fake clock, then moves the clock past the callback's deadline and
 /// grace. The answer must arrive; a hang fails at the wall-clock guard.
-fn discover(stuck: Stuck, wait_until: Duration) -> Vec<(ErrorCode, Option<String>)> {
+fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<String>)>, Vec<String>) {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(200, "held")]).unwrap();
     server.hold();
@@ -104,12 +104,20 @@ fn discover(stuck: Stuck, wait_until: Duration) -> Vec<(ErrorCode, Option<String
         .unwrap();
         let mut temp = providers.clone();
         let notices = temp.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
-        tx.send(
-            notices
-                .into_iter()
-                .map(|notice| (notice.code, notice.extension))
-                .collect::<Vec<_>>(),
-        )
+        let notices = notices
+            .into_iter()
+            .map(|notice| (notice.code, notice.extension))
+            .collect::<Vec<_>>();
+        let models = temp
+            .get("acme")
+            .map(|data| {
+                data.models
+                    .iter()
+                    .map(|model| model.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        tx.send((notices, models))
     });
     assert!(
         server.await_requests(1, WAIT),
@@ -125,9 +133,11 @@ fn discover(stuck: Stuck, wait_until: Duration) -> Vec<(ErrorCode, Option<String
 
 #[test]
 fn a_models_call_that_never_returns_is_answered_with_a_timeout_notice() {
-    let notices = discover(Stuck::InModels, Duration::from_millis(3000));
+    let (notices, models) = discover(Stuck::InModels, Duration::from_millis(3000));
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].1.as_deref(), Some("acme-ext"));
+    // A `models()` that fails leaves the data file's models.
+    assert_eq!(models, vec!["m".to_owned()], "{models:?}");
 }
 
 #[test]
@@ -135,6 +145,9 @@ fn a_provider_file_that_never_finishes_loading_is_answered_with_no_models() {
     // The load deadline is 2 s, with the same grace.
     // The abandoned load leaves the registry as it was: an answer with no
     // notice, which is the bound this test pins.
-    let notices = discover(Stuck::AtLoad, Duration::from_secs(2));
+    let (notices, models) = discover(Stuck::AtLoad, Duration::from_secs(2));
     assert!(notices.is_empty(), "{notices:?}");
+    // No Lua-discovered models: `m` is the fixture's static data-file
+    // model, while the stuck file's `models()` would return `{}`.
+    assert_eq!(models, vec!["m".to_owned()], "{models:?}");
 }
