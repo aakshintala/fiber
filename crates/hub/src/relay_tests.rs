@@ -1886,7 +1886,9 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             let first: Value = serde_json::from_str(first.trim_end()).unwrap();
             assert_eq!(first["payload"]["command_id"], "c_ack");
             session_peer
-                .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_probe\"}}\n")
+                .write_all(
+                    b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_probe\"}}\n",
+                )
                 .unwrap();
             session_peer.flush().unwrap();
             let mut second = String::new();
