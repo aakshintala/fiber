@@ -838,7 +838,7 @@ mod session_layout_tests {
     #[test]
     fn the_rail_and_pointer_match_the_session_layout() {
         let (rail, conversation) = tui::session_columns(160, 48);
-        assert_eq!(RAIL as u16, rail, "the rail's columns");
+        assert_eq!(usize::from(rail), RAIL, "the rail's columns");
         assert!(
             conversation.contains(&POINTER.0),
             "the pointer column {} is inside the conversation {conversation:?}",
