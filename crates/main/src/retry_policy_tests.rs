@@ -13,6 +13,18 @@ fn retry_policy_clamps_huge_attempts() {
     assert_eq!(retry.attempts, u32::MAX);
 }
 
+#[test]
+fn retry_policy_reads_a_set_initial_delay() {
+    let retry = retry_policy(&config(vec!["retry.initial_delay_ms=250".into()]));
+    assert_eq!(retry.initial, std::time::Duration::from_millis(250));
+}
+
+#[test]
+fn retry_policy_reads_a_set_max_delay() {
+    let retry = retry_policy(&config(vec!["retry.max_delay_ms=9000".into()]));
+    assert_eq!(retry.max, std::time::Duration::from_millis(9000));
+}
+
 fn empty_servers() -> crate::mcp_servers::SessionServers {
     let root = fakes::TempDir::new("fiber-stop-and-fail");
     let workspace = root.path().join("workspace");
