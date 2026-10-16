@@ -126,7 +126,7 @@ fn ctrl_f_twice_opens_the_results() {
     assert!(!app.results_open());
     open(&mut app);
     let view = app.find_results().expect("open");
-    assert_eq!(view.header, "1 matches for “needle”");
+    assert_eq!(view.header, "1 of 1 · ⌕ needle");
     assert_eq!(view.entries.len(), 1);
     assert_eq!(view.entries[0].line, "a needle here");
     assert_eq!((view.selected, view.top), (0, 0));
@@ -153,7 +153,7 @@ fn each_entry_is_its_line_with_one_line_either_side() {
     scan(&mut app, "needle");
     open(&mut app);
     let view = app.find_results().expect("open");
-    assert_eq!(view.header, "1 matches for “needle”");
+    assert_eq!(view.header, "1 of 1 · ⌕ needle");
     // Each text is its own block, so the match sits between blank
     // separator rows: the context skips them to the nearest text.
     assert_eq!(
@@ -170,10 +170,35 @@ fn each_entry_is_its_line_with_one_line_either_side() {
 }
 
 #[test]
+fn the_entries_that_fit_are_three_rows_each() {
+    for (conversation, expected) in [(6, 0), (7, 1), (9, 1), (10, 2)] {
+        let app = turned(40, conversation + 3, &["needle"]);
+        assert_eq!(app.conversation_height(), usize::from(conversation));
+        assert_eq!(app.results_height(), expected);
+    }
+}
+
+#[test]
+fn a_click_on_the_top_row_closes_results_and_keeps_the_bar() {
+    let mut app = turned(80, 24, &["needle"]);
+    scan(&mut app, "needle");
+    open(&mut app);
+    let (_, targets) = draw(&app, 80, 24);
+    let target = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .unwrap();
+    assert_eq!(target.rect, Rect::new(0, 0, 80, 1));
+    app.on_click(target.id);
+    assert!(!app.results_open());
+    assert!(app.find_bar().is_some());
+}
+
+#[test]
 fn up_down_and_page_keys_move_the_selection() {
     let replies: Vec<String> = (0..12).map(|n| format!("match {n}")).collect();
     let refs: Vec<&str> = replies.iter().map(String::as_str).collect();
-    let mut app = turned(40, 10, &refs);
+    let mut app = turned(40, 25, &refs);
     scan(&mut app, "match");
     open(&mut app);
     // Up holds at the first entry however far it would go.
@@ -225,10 +250,10 @@ fn enter_jumps_to_the_match_and_closes_the_view() {
 
 #[test]
 fn a_click_on_an_entry_jumps() {
-    let mut app = turned(40, 10, &["needle one", "needle two", "needle three"]);
+    let mut app = turned(40, 17, &["needle one", "needle two", "needle three"]);
     scan(&mut app, "needle");
     open(&mut app);
-    let (_, targets) = draw(&app, 40, 10);
+    let (_, targets) = draw(&app, 40, 17);
     let id = targets
         .iter()
         .find(|target| target.id == TargetId::FindResult(2))
@@ -324,7 +349,7 @@ fn enter_with_no_matches_jumps_nothing() {
     assert_eq!(count(&app), "no matches");
     open(&mut app);
     let view = app.find_results().expect("open with no matches");
-    assert_eq!(view.header, "0 matches for “zzz”");
+    assert_eq!(view.header, "no matches · ⌕ zzz");
     assert!(view.entries.is_empty());
     for key in [Key::Down, Key::Up, Key::PageDown, Key::PageUp] {
         assert_eq!(app.on_key(key, now()), Effect::None);
@@ -422,7 +447,7 @@ fn the_selected_entry_stays_on_its_occurrence_when_matches_appear_before_it() {
     assert_eq!(count(&app), "3 of 4");
     let view = app.find_results().expect("open");
     assert_eq!(view.entries.len(), 4);
-    assert_eq!((view.selected, view.top), (2, 0));
+    assert_eq!((view.selected, view.top), (2, 2));
     assert_eq!(view.entries[2].line, "echo needle");
 }
 
@@ -448,7 +473,7 @@ fn an_equal_match_either_side_of_the_old_ordinal_selects_the_first() {
     assert_eq!(count(&app), "1 of 3");
     open(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(cursor(&app), (1, 0));
+    assert_eq!(cursor(&app), (1, 1));
     // The middle line stops matching while the outer lines become the
     // same occurrence: both are one ordinal away, so the first wins.
     reply(&mut app, "a_m", "zebra needle");
@@ -469,7 +494,7 @@ fn the_selected_entry_survives_new_output() {
         assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     }
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(cursor(&app), (1, 0));
+    assert_eq!(cursor(&app), (1, 1));
     // Live output rescans the pages: the equal match stays selected.
     prompt(&mut app, " ");
     reply(&mut app, "a_n", "needle three");
@@ -477,7 +502,7 @@ fn the_selected_entry_survives_new_output() {
     assert!(app.results_open());
     let view = app.find_results().expect("open");
     assert_eq!(view.entries.len(), 3);
-    assert_eq!((view.selected, view.top), (1, 0));
+    assert_eq!((view.selected, view.top), (1, 1));
     assert_eq!(view.entries[1].line, "needle two");
 }
 
