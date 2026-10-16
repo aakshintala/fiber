@@ -442,7 +442,8 @@ cut with "…". The cards draw:
 - **Delegates.** The title's figure is "N running", in `attention` while one
   runs and dim otherwise. Each delegate is "●" in `attention` while it runs or
   "✓" in `success` once done, then its description; under it, dim, its calls,
-  elapsed time and its last step, or "done".
+  elapsed time and its last step, or "done", or "failed" or "cancelled"
+  when it did not complete.
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
 - **Quota.** "extension" dim in the title. Each limit is its name dim with
   the share left right-aligned, and a bar of ▆ under it in `accent`, or in
