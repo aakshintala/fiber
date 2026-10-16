@@ -488,7 +488,7 @@ fn git_progress_re_arms_the_stall_bound() {
     let mut released = false;
     let mut value = None;
     for _ in 0..POLLS {
-        if !released && GIT_PROGRESS.load(Ordering::Relaxed) >= first + PACES + 1 {
+        if !released && GIT_PROGRESS.load(Ordering::Relaxed) > first + PACES {
             release.send(()).unwrap();
             released = true;
         }
