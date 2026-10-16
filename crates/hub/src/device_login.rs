@@ -1,7 +1,7 @@
 //! Connection-owned device login, with one answer per command and per-login waiters.
 use crate::connection::{Hub, Refused, lock};
+use crate::error::DeviceLoginError;
 use crate::feed::{answer, invalid};
-use contract::shapes::Failure;
 use contract::{CommandId, ErrorCode};
 use serde_json::{Map, Value, json};
 use std::os::unix::net::UnixStream;
@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 type AfterFinish = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
-type Outcome = Result<String, Failure>;
+type Outcome = Result<String, DeviceLoginError>;
 type Slot = Arc<Mutex<Option<Record>>>;
 type Superseded = Arc<Mutex<Option<CommandId>>>;
 enum State {
@@ -99,16 +99,11 @@ impl Login {
         #[cfg(test)]
         let after_finish = self.after_finish.clone();
         let spawned = crate::connection::spawn(hub, "hub-login", move || {
-            let outcome = login.run();
+            let outcome = login.run().map_err(DeviceLoginError::Forwarded);
             let outcome = if !answered.swap(true, Ordering::SeqCst) {
                 let error = match outcome {
                     Err(error) => error,
-                    Ok(_) => Failure {
-                        code: ErrorCode::AuthenticationFailed,
-                        message: format!("`{name}` has no device-code form."),
-                        provider: None,
-                        retry_after_ms: None,
-                    },
+                    Ok(_) => DeviceLoginError::NoDeviceCodeForm { name: name.clone() },
                 };
                 let waiter = finish(&slot, generation, &superseded, Err(error.clone()), false);
                 answer(&w, &h, &command, Err(refused(&error)));
@@ -252,10 +247,10 @@ fn answer_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, out
             .map_err(|error| refused(&error)),
     );
 }
-fn refused(error: &Failure) -> Refused {
+fn refused(error: &DeviceLoginError) -> Refused {
     Refused {
-        code: error.code.clone(),
-        message: error.message.clone(),
+        code: error.code(),
+        message: error.to_string(),
     }
 }
 fn stale() -> Refused {

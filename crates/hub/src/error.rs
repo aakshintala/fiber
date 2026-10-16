@@ -67,6 +67,50 @@ impl From<&StartError> for Failure {
     }
 }
 
+/// A device login's failure: either the provider answered without
+/// showing a device code, or the login itself failed in `main`.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum DeviceLoginError {
+    /// The provider answered without showing a device code, so there is
+    /// nothing to wait on.
+    #[error("`{name}` has no device-code form.")]
+    NoDeviceCodeForm {
+        /// The login's name, as the person typed it.
+        name: String,
+    },
+    /// The login's own failure. `DeviceLogin::run` made it in `main`, so
+    /// the hub forwards it as data: the code is the caller's.
+    #[error("{}", .0.message)]
+    Forwarded(Failure),
+}
+
+impl DeviceLoginError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::NoDeviceCodeForm { .. } => ErrorCode::AuthenticationFailed,
+            Self::Forwarded(failure) => failure.code.clone(),
+        }
+    }
+}
+
+impl From<&DeviceLoginError> for Failure {
+    /// The contract record of a failure. A forwarded failure is returned
+    /// unchanged, keeping the caller's message, provider and retry.
+    fn from(error: &DeviceLoginError) -> Failure {
+        match error {
+            DeviceLoginError::Forwarded(failure) => failure.clone(),
+            other => Failure {
+                code: other.code(),
+                message: other.to_string(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod tests;
