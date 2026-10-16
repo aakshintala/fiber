@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}, mpsc};
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
@@ -473,9 +473,14 @@ impl<'a> Repos<'a> {
 
     pub(crate) fn origin(&self) -> Origin {
         let paths = self.paths.clone();
-        Origin::new("git", move |repo| match paths.get(repo) {
-            Some(path) => format!("file://{}", path.display()),
-            None => "file:///nonexistent-repository".into(),
+        Origin::new("git", move |repo| {
+            // Every fetch resolves its URL here first: the bump proves git
+            // work started, re-arming the stall bound in `on_worker`.
+            GIT_PROGRESS.fetch_add(1, Ordering::Relaxed);
+            match paths.get(repo) {
+                Some(path) => format!("file://{}", path.display()),
+                None => "file:///nonexistent-repository".into(),
+            }
         })
     }
 }
@@ -557,21 +562,64 @@ pub(crate) fn item(setup: &Setup, clock: &Arc<FakeClock>) -> (extensions::RepoIt
 /// instead of hanging.
 const STORE_OPERATION_WITHIN: Duration = Duration::from_secs(10);
 
-/// Runs one blocking store operation on a worker and receives its result
-/// through one named deadline. Joining after the result proves the worker
-/// has returned before the test continues.
-fn on_worker<T: Send + 'static>(
+/// Git work started across the test process, bumped whenever a repository
+/// URL is resolved for a fetch. Nextest runs each test in its own process,
+/// so the count is per test: a monotonic hint of progress, guarding no
+/// data, which is why `Ordering::Relaxed` is enough everywhere it is read.
+pub(crate) static GIT_PROGRESS: AtomicU64 = AtomicU64::new(0);
+
+/// Runs one blocking store operation on a worker under a stall bound:
+/// silence (no new git work) for the whole bound fails the test instead of
+/// hanging it, while slow git work that keeps starting fetches runs as long
+/// as it progresses. Joining after the result proves the worker has
+/// returned before the test continues.
+pub(crate) fn on_worker_within<T: Send + 'static>(
+    bound: Duration,
     waited_for: &'static str,
     operation: impl FnOnce() -> T + Send + 'static,
 ) -> T {
     let (done, result) = mpsc::channel();
-    let deadline = Deadline::after(STORE_OPERATION_WITHIN);
     let worker = std::thread::spawn(move || {
         done.send(operation()).unwrap();
     });
-    let result = deadline.recv_or_fail(&result, waited_for);
-    worker.join().unwrap();
-    result
+    // A stall bound, not a total bound: each `ROUND` slice waits for the
+    // result then checks for progress, and progress pushes the failure
+    // out. Silence is counted in slices, never read off a clock, so a slow
+    // fetch that keeps starting work never trips it.
+    let mut seen = GIT_PROGRESS.load(Ordering::Relaxed);
+    let mut silent = Duration::ZERO;
+    loop {
+        match Deadline::after(ROUND).recv(&result) {
+            Ok(value) => {
+                worker.join().unwrap();
+                return value;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the sender for {waited_for} hung up before sending")
+            }
+        }
+        let progress = GIT_PROGRESS.load(Ordering::Relaxed);
+        if progress != seen {
+            seen = progress;
+            silent = Duration::ZERO;
+        } else {
+            silent += ROUND;
+            if silent >= bound {
+                panic!("waited until the deadline for {waited_for}");
+            }
+        }
+    }
+}
+
+/// Runs one blocking store operation on a worker under the operation bound:
+/// a stall fails the test instead of hanging it. Joining after the result
+/// proves the worker has returned before the test continues.
+fn on_worker<T: Send + 'static>(
+    waited_for: &'static str,
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    on_worker_within(STORE_OPERATION_WITHIN, waited_for, operation)
 }
 
 /// Store operations that can block on the filesystem, git or install steps.

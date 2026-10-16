@@ -16,7 +16,7 @@ mod common;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::{Arc, atomic::Ordering, mpsc};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc};
 use std::time::Duration;
 
 use common::{
@@ -393,13 +393,18 @@ fn a_stalled_approval_fails_within_the_stall_bound() {
     declare(&setup, &named(root, &[(helper, "1.0")]));
     // Hold the approval at its first git call: the url closure parks on a
     // gate the test owns, so no git work starts and only the stall bound
-    // can end the wait. The repository path repeats `Repos::tag`: it has
-    // no accessor, and a drift fails loudly (the fetch errors instead of
+    // can end the wait. Later calls pass through: an approval resolves one
+    // URL per fetch. The repository path repeats `Repos::tag`: it has no
+    // accessor, and a drift fails loudly (the fetch errors instead of
     // stalling, and the expected panic never arrives).
     let (release, gate) = mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let parked = Arc::new(AtomicBool::new(false));
     let root_path = setup.root();
     let origin = Origin::new("git", move |repo: &str| {
-        gate.recv().unwrap();
+        if !parked.swap(true, Ordering::SeqCst) {
+            gate.lock().unwrap().recv().unwrap();
+        }
         format!(
             "file://{}",
             root_path.join("repos").join(repo.replace('/', "-")).display()
