@@ -21,6 +21,9 @@ use r#loop::Loop;
 use crate::session_command::close;
 use crate::{ask_failed, failed, run_turn};
 
+/// Opens the recreated worktree's create line once the writer exists.
+type WorktreeOpener = Arc<dyn Fn(&contract::diag::Timing) + Send + Sync>;
+
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
 /// session's log, folds what the resume needs, and runs one turn on it. A
 /// held lock attaches instead of opening a second writer; every failure
@@ -244,7 +247,11 @@ fn resume_session(
     // A recreated worktree is the session's workspace: configuration
     // reads from there, as a new session's does. A kept worktree keeps
     // the launch directory, as today.
+    // The create line's opener is taken before the hold is rebuilt, so
+    // the later `resumed_session` opens the same slot `end` reads.
+    let mut opened: Option<WorktreeOpener> = None;
     if let Held::Made(isolation) = held {
+        opened = Some(isolation.opener());
         let path = isolation.path().to_path_buf();
         if let Err(source) = std::env::set_current_dir(&path) {
             drop(log);
@@ -280,6 +287,7 @@ fn resume_session(
         signals,
         fiber,
         Arc::clone(&reads),
+        opened,
     );
     finish(
         move || {
@@ -316,6 +324,7 @@ fn resumed_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     reads: Arc<crate::switch::Reads>,
+    opened: Option<WorktreeOpener>,
 ) -> Result<i32, Failure> {
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
@@ -390,6 +399,12 @@ fn resumed_session(
     } else {
         None
     };
+    // The recreated worktree's create line opens here, before the
+    // session file attaches: a kept present worktree has no opener, so
+    // it writes none.
+    if let (Some(timing), Some(opened)) = (&timing, &opened) {
+        opened(timing);
+    }
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was. Every configured stdio server starts too.

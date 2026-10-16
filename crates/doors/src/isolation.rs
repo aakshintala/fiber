@@ -5,10 +5,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::diag::{Op, Timing};
 use contract::shapes::Worktree;
 use contract::{ErrorCode, shapes::Failure};
 use log::diag::{Diag, Level, Process, Severity};
@@ -31,6 +33,13 @@ pub struct Isolation {
     /// so it shares the file for its life. `None` for a worktree this
     /// process just created, which no other process can share yet.
     shared: Option<Shared>,
+    /// How long the one `worktree::create` or `worktree::recreate` call
+    /// took, stamped with the isolation's own clock before and after it.
+    /// The writer opens later, so the opener derives the start from this.
+    made_in: Duration,
+    /// The session's timing once its writer opens: set at most once by
+    /// the opener, read by `end` for the removal line.
+    timing: Arc<OnceLock<Timing>>,
     /// Runs between the first scan's hold and the revalidating scan, so a
     /// test can force the interleaving a session starting in between.
     /// Test-only: always `None` outside tests.
@@ -58,15 +67,29 @@ pub fn isolate(
         .join("worktrees")
         .join(&session.0);
     let branch = format!("fiber/{}", session.0);
+    // The level is unknown while the worktree is made, so both reads
+    // are unconditional: at `info` they are the only extra cost and no
+    // line is ever written from them.
+    let start = clock.now();
     match worktree::create(launch, &path, &branch, add) {
-        Ok(created) => Ok(Isolation::new(
-            created, session, home, clock, repository, None,
-        )),
+        Ok(created) => {
+            let made_in = clock
+                .now()
+                .checked_duration_since(start)
+                .unwrap_or(Duration::ZERO);
+            Ok(Isolation::new(
+                created, session, home, clock, repository, None, made_in,
+            ))
+        }
         Err(error) => Err(failure(error.code(), sentence(&error, &path))),
     }
 }
 
 /// What a recreation found at the recorded path.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a made worktree owns its isolation; boxing would change the public shape"
+)]
 pub enum Recreated {
     /// The path was absent: the worktree was made again, at the same
     /// path and branch from the repository's current HEAD. Ends by the
@@ -159,6 +182,9 @@ fn recreate_with(
     match shared::claim(path, before_wait) {
         Ok(shared::Claim::Present(shared)) => Ok(Recreated::Present(shared)),
         Ok(shared::Claim::Create(creating)) => {
+            // Only the one `worktree::recreate` call is stamped: the
+            // lock claim above and the downgrade below stay outside.
+            let start = clock.now();
             let created = match worktree::recreate(repository, path, branch, add) {
                 Ok(created) => created,
                 Err(error) => {
@@ -168,6 +194,10 @@ fn recreate_with(
                     });
                 }
             };
+            let made_in = clock
+                .now()
+                .checked_duration_since(start)
+                .unwrap_or(Duration::ZERO);
             match downgrade(creating) {
                 Ok(shared) => Ok(Recreated::Made(Isolation::new(
                     created,
@@ -176,6 +206,7 @@ fn recreate_with(
                     clock,
                     repository.to_owned(),
                     Some(shared),
+                    made_in,
                 ))),
                 Err(failure) => Err(RecreateError {
                     failure,
@@ -186,6 +217,7 @@ fn recreate_with(
                         clock,
                         repository.to_owned(),
                         None,
+                        made_in,
                     )),
                 }),
             }
@@ -244,6 +276,7 @@ impl Isolation {
         clock: Arc<dyn Clock>,
         repository: PathBuf,
         shared: Option<Shared>,
+        made_in: Duration,
     ) -> Self {
         Self {
             created,
@@ -252,9 +285,30 @@ impl Isolation {
             clock,
             repository,
             shared,
+            made_in,
+            timing: Arc::new(OnceLock::new()),
             #[cfg(test)]
             pause: None,
         }
+    }
+
+    /// Opens the slot for the create line: the only way a caller emits
+    /// it. The call that sets the slot emits one `worktree.create` line
+    /// from the stamped duration, starting at `now` minus `made_in`; a
+    /// clock that ran backwards starts at `now`. Later calls emit
+    /// nothing. A worktree adopted as present has no `Isolation` and no
+    /// opener, so it writes none.
+    pub fn opener(&self) -> Arc<dyn Fn(&Timing) + Send + Sync> {
+        let slot = Arc::clone(&self.timing);
+        let clock = Arc::clone(&self.clock);
+        let made_in = self.made_in;
+        Arc::new(move |timing: &Timing| {
+            if slot.set(timing.clone()).is_ok() {
+                let now = clock.now();
+                let start = now.checked_sub(made_in).unwrap_or(now);
+                drop(timing(Op::WorktreeCreate, None, Some(start)));
+            }
+        })
     }
 
     /// The worktree's canonical path.
@@ -370,7 +424,17 @@ impl Isolation {
                 Ok(log::Hold::Busy) | Err(_) => return,
             }
         }
-        match worktree::remove(&self.created.path, &inspected, false) {
+        // The removal line covers the one real removal only: the guard
+        // starts immediately before it and drops right after it returns,
+        // before the lock-file unlink and while every hold is still
+        // held. With no opened timing nothing is read or called.
+        let removal = self
+            .timing
+            .get()
+            .and_then(|timing| timing(Op::WorktreeRemove, None, None));
+        let removed = worktree::remove(&self.created.path, &inspected, false);
+        drop(removal);
+        match removed {
             Ok(worktree::Removed::Whole) => {
                 // The lock file stays while its worktree stays: unlink it
                 // only after a whole removal, still holding the
@@ -426,3 +490,7 @@ fn users(home: &Path, canonical: &Path) -> Vec<log::Started> {
 #[cfg(test)]
 #[path = "isolation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "isolation/timing_tests.rs"]
+mod timing_tests;

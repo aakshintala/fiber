@@ -20,6 +20,9 @@ use crate::{
     parts_with, run_turn, session_extensions, shutdown,
 };
 
+/// Opens the worktree's create line once the diagnostic writer exists.
+type WorktreeOpener = Arc<dyn Fn(&contract::diag::Timing) + Send + Sync>;
+
 /// The internal session command: one session process bound at
 /// `run/<session_id>` (`docs/invocation.md`, "Processes"). The workspace
 /// is entered before signals are installed or any thread starts, so the
@@ -177,7 +180,8 @@ pub(crate) fn new_session(
         return report(signals, failure);
     }
     let worktree = isolation.worktree();
-    let result = run_new(
+    let opened = isolation.opener();
+    let result = run_new_with(
         id,
         overrides,
         prompt,
@@ -191,6 +195,7 @@ pub(crate) fn new_session(
         parent,
         None,
         reads,
+        Some(opened),
     );
     isolation.end();
     match result {
@@ -219,6 +224,36 @@ pub(crate) fn run_new(
     parent: Option<Parent>,
     rewound: Option<r#loop::Rewound>,
     reads: Arc<crate::switch::Reads>,
+) -> Result<i32, Failure> {
+    run_new_with(
+        id, overrides, prompt, one_turn, worktree, clock, signals, fiber, host, case_run, parent,
+        rewound, reads, None,
+    )
+}
+
+/// As [`run_new`], opening the worktree's create line once the diagnostic
+/// writer exists: `opened` is the isolation's opener, called right after
+/// the session timing is built, before the writer attaches. `None` skips
+/// it, so a run without a fresh worktree writes no create line.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "session execution carries its isolation, case and startup inputs"
+)]
+pub(crate) fn run_new_with(
+    id: SessionId,
+    overrides: Vec<String>,
+    prompt: Option<String>,
+    one_turn: bool,
+    worktree: Option<Worktree>,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    fiber: Result<PathBuf, String>,
+    host: Option<Arc<extensions::HostScript>>,
+    case_run: Option<Arc<crate::case::run::CaseRun>>,
+    parent: Option<Parent>,
+    rewound: Option<r#loop::Rewound>,
+    reads: Arc<crate::switch::Reads>,
+    opened: Option<WorktreeOpener>,
 ) -> Result<i32, Failure> {
     // Armed before the parts are read: from now a signal cancels the one
     // reads every startup credential command runs through.
@@ -335,6 +370,12 @@ pub(crate) fn run_new(
     } else {
         None
     };
+    // The create line's writer opens here, before the session file
+    // attaches: its `ts` is the writer's open time, its `ms` the stamped
+    // creation. At `info` there is no timing, so nothing opens.
+    if let (Some(timing), Some(opened)) = (&timing, &opened) {
+        opened(timing);
+    }
     // The registry is built above, before any tool runs: installing the
     // session's timing times a background start as `jobs.start`.
     if let Some(timing) = &timing {
