@@ -101,7 +101,7 @@ impl From<&DeviceLoginError> for Failure {
     fn from(error: &DeviceLoginError) -> Failure {
         match error {
             DeviceLoginError::Forwarded(failure) => failure.clone(),
-            other => Failure {
+            other @ DeviceLoginError::NoDeviceCodeForm { .. } => Failure {
                 code: other.code(),
                 message: other.to_string(),
                 retry_after_ms: None,
