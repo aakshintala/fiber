@@ -488,7 +488,9 @@ For a hub-owned file, Ctrl+G fetches its text and opens a temporary copy in
 the client's editor. On return, the hub writes it only if its version still
 matches. Otherwise the view says the file changed and nothing is written.
 The view then rereads the hub's file, showing any configuration or rules
-error just as it does after a local edit.
+error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
+`/settings` and `/skills` in the list below describe the local editor; this
+paragraph replaces them on a remote terminal.
 
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
