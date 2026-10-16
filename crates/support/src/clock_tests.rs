@@ -294,3 +294,30 @@ fn wake_on_a_parker_bumps_its_generation() {
     wake.wake();
     assert_eq!(parker.generation(), 1);
 }
+
+#[test]
+fn a_poll_bound_wakes_a_parked_thread_with_no_bump() {
+    // `None` is the fake clock's bound: block until woken. No bump lands
+    // and the clock never moves, so only the poll bound returns the
+    // parked thread.
+    let (clock, entered) = TestClock::named(None);
+    let parker = Arc::new(Parker::new());
+    let seen = parker.generation();
+    let (result_tx, result_rx) = mpsc::channel();
+    let parked = Arc::clone(&parker);
+    thread::spawn(move || {
+        parked.park_polled(&clock, None, Some(Duration::from_millis(50)), seen);
+        let _sent = result_tx.send(());
+    });
+    assert_eq!(
+        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Ok("entered")
+    );
+    // A `park` without the bound would wait here until the deadline.
+    assert!(
+        Deadline::after(Duration::from_secs(5))
+            .recv(&result_rx)
+            .is_ok(),
+        "the poll bound wakes the parked thread"
+    );
+}
