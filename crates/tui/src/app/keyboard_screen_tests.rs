@@ -120,7 +120,7 @@ fn live() -> Line {
             "name": "fix the parser",
             "workspace": "/w",
             "project": "-w",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},

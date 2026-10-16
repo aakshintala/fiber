@@ -48,7 +48,7 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
     }
     // The status row: glyph and word, harness, model, calls, elapsed time
     // and session, with the stop target while the item runs.
-    let elapsed = elapsed_ms(app, &view);
+    let elapsed = elapsed_ms(app, view.started_ts, view.completed_ts);
     let calls = view
         .calls
         .map_or("—".to_owned(), |calls| format!("{calls} calls"));
@@ -134,17 +134,15 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
 /// the frame's wall time while it runs, frozen at the completion's `ts`
 /// after. While the item runs the next whole second is asked for, so the
 /// row ticks without any other wake.
-fn elapsed_ms(app: &App, view: &crate::app::items::ItemView) -> u64 {
-    if let Some(completed) = view.completed_ts {
-        return completed.saturating_sub(view.started_ts);
+pub(crate) fn elapsed_ms(app: &App, started_ts: u64, completed_ts: Option<u64>) -> u64 {
+    if let Some(completed) = completed_ts {
+        return completed.saturating_sub(started_ts);
     }
     let Some(wall) = app.motion().wall_ms() else {
         return 0;
     };
-    let elapsed = wall.saturating_sub(view.started_ts);
-    let next = view
-        .started_ts
-        .checked_add((elapsed / 1000).saturating_add(1).saturating_mul(1000));
+    let elapsed = wall.saturating_sub(started_ts);
+    let next = started_ts.checked_add((elapsed / 1000).saturating_add(1).saturating_mul(1000));
     if let Some(next) = next {
         app.motion().ask_wall(next);
     }

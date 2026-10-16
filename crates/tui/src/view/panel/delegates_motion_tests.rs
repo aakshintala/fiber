@@ -77,7 +77,7 @@ fn one_delegate() -> (App, usize) {
         "session_status",
         json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -101,7 +101,7 @@ fn subscribe(app: &mut App, job: &str, state: serde_json::Value) {
     let session = format!("s_{job:0>16}");
     let mut payload = json!({
         "name": "delegate", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -121,6 +121,21 @@ fn subscribe(app: &mut App, job: &str, state: serde_json::Value) {
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     }));
+}
+
+#[test]
+fn progress_an_idle_delegate_asks_for_the_next_elapsed_second() {
+    let clock = FakeClock::new();
+    let mut app = attached(200, 40);
+    delegate(&mut app, "j_1", "alpha");
+    subscribe(&mut app, "j_1", json!({"state": "idle", "started": 1500}));
+    app.set_now(clock.origin(), 10_750);
+    app.motion().clear_wake();
+    assert_eq!(lines(&app, 97)[1], "  0 calls · 9s");
+    assert_eq!(
+        app.take_wake(),
+        Some(clock.origin() + std::time::Duration::from_millis(750))
+    );
 }
 
 #[test]
@@ -160,7 +175,7 @@ fn delegates_rows_collapsed_into_the_status_line_ask_nothing() {
         "session_status",
         json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -185,7 +200,7 @@ fn a_delegates_card_scrolled_out_of_the_panel_asks_nothing() {
         "session_status",
         json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -318,9 +333,9 @@ fn a_still_delegate_keeps_its_dot_while_a_working_one_spins() {
         lines(&app, 97),
         vec![
             format!("{} alpha", SPINNER[1]),
-            "  WORKING · test/model".to_owned(),
+            "  0 calls · 0s".to_owned(),
             "● beta".to_owned(),
-            "  READY · test/model".to_owned(),
+            "  0 calls · 0s".to_owned(),
         ]
     );
 }

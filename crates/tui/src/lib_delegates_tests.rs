@@ -66,7 +66,7 @@ fn live(session: &str, state: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": "fix the parser", "workspace": "/w", "project": "-w",
-            "state": state, "since": 0,
+            "state": state, "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -82,7 +82,7 @@ fn delegate_status(session: &str, state: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": "delegate one", "workspace": "/w", "project": "-w",
-            "state": state, "since": 0,
+            "state": state, "started": 1_700_000_000_000u64, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -161,9 +161,9 @@ fn a_delegate_is_subscribed_drawn_and_scrolled_in_the_loop() {
     );
     let screen = shown(&lp);
     // The running row names the description with the spinning glyph;
-    // the state word rides the dim row below with the model.
+    // the progress rides the dim row below.
     assert!(screen.contains("⠋ task j_1"), "{screen}");
-    assert!(screen.contains("WORKING · test/model"), "{screen}");
+    assert!(screen.contains("0 calls · 0s"), "{screen}");
     assert!(!screen.contains("delegate one"), "{screen}");
     let panel = lp
         .app

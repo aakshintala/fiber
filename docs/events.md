@@ -452,6 +452,9 @@ sent the latest.
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
+| `started` | integer | yes | when the session started, as `ts` |
+| `calls` | integer | yes | tool calls the session has made so far |
+| `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request that reported its input tokens, and `window`, the model's context window (integers) |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |

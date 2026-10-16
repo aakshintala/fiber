@@ -79,7 +79,7 @@ fn delegate_line(kind: &str, ts: u64, payload: Value) -> Line {
 fn live(session: &str, state: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -104,7 +104,7 @@ fn live(session: &str, state: Value) -> Line {
 fn delegate_status(state: Value) -> Line {
     let mut payload = json!({
         "name": "delegate one", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -279,7 +279,9 @@ fn running_delegate_header_with_held_status() {
     // Sixty seconds in: the status row reads whole minutes.
     start_delegate(&mut app, wall_ms(&clock).saturating_sub(61_000));
     // The delegate's own summary is held: the glyph and word name it.
-    app.on_line(delegate_status(json!({"state": "streaming"})));
+    app.on_line(delegate_status(
+        json!({"state": "streaming", "started": wall_ms(&clock)}),
+    ));
     open_item(&mut app);
     let (rows, _) = rendered(&app, 80, 24);
     insta::assert_snapshot!("running_delegate_header_with_held_status", rows.join("\n"));

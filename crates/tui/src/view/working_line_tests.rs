@@ -164,7 +164,7 @@ fn status(state: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": "work", "workspace": "/w", "project": "-w",
-            "state": state, "since": WALL,
+            "state": state, "started": WALL, "calls": 0, "since": WALL,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},

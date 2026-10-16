@@ -38,7 +38,9 @@ pub(crate) fn rows_with_done(app: &App, text: usize) -> Vec<Row> {
         .into_iter()
         .flat_map(|entry| match entry.outcome {
             None => running_rows(app, entry.started, entry.description, entry.spot),
-            Some(outcome) => finished_rows(entry.description, outcome, entry.spot),
+            Some(outcome) => {
+                finished_rows(app, entry.started, entry.description, outcome, entry.spot)
+            }
         })
         .collect();
     super::fit_rows(out, text)
@@ -90,7 +92,7 @@ fn window(app: &App) -> Vec<Entry<'_>> {
 }
 
 /// A running delegate's two rows: `●` in attention, spinning while it
-/// works, then the description; under it, dim, its state word and model.
+/// works, then the description; under it, dim, calls, elapsed and step.
 /// Either row opens the delegate: the rows are named by the job's serial,
 /// never by position.
 fn running_rows(
@@ -109,8 +111,14 @@ fn running_rows(
         None => app.motion().spinner().to_owned(),
     };
     let second = match app.delegate_row(&started.delegate_session_id) {
-        // debt: the fold carries no calls, elapsed time or last step; upgrade trigger: #2356 supplies them.
-        Some(row) => format!("  {} · {}", crate::view::rail::word(row), started.model),
+        Some(row) => match &row.status {
+            Some(status) => figures(
+                status.calls,
+                crate::view::item::elapsed_ms(app, status.started, None),
+                status.step.as_deref(),
+            ),
+            None => format!("  {} · {}", crate::view::rail::word(row), started.model),
+        },
         None => format!("  {} · {}", started.harness, started.model),
     };
     [
@@ -135,11 +143,21 @@ fn running_rows(
 /// A finished delegate's two rows from its `Outcome`: the glyph, the
 /// description, and a dim word. Attention is never used for a finished
 /// delegate, so a later change is this one place.
-fn finished_rows(description: &str, outcome: Outcome, spot: Option<Spot>) -> [Row; 2] {
+fn finished_rows(
+    app: &App,
+    started: &DelegateStarted,
+    description: &str,
+    outcome: Outcome,
+    spot: Option<Spot>,
+) -> [Row; 2] {
     let (glyph, tone, word) = match outcome {
         Outcome::Completed => ("✓", Role::Success, "done"),
         Outcome::Failed => ("✗", Role::Muted, "failed"),
         Outcome::Cancelled => ("⊘", Role::Muted, "cancelled"),
+    };
+    let second = match app.panel_state().finished_figures(&started.job_id) {
+        Some((calls, elapsed)) => figures(calls, elapsed, Some(word)),
+        None => format!("  {word}"),
     };
     [
         Row {
@@ -152,12 +170,25 @@ fn finished_rows(description: &str, outcome: Outcome, spot: Option<Spot>) -> [Ro
             edge: false,
         },
         Row {
-            line: Line::from(vec![Span::styled(format!("  {word}"), style(Role::Muted))]),
+            line: Line::from(vec![Span::styled(second, style(Role::Muted))]),
             spot,
             tint: None,
             edge: false,
         },
     ]
+}
+
+/// The same figures for a live summary and a finished delegate.
+fn figures(calls: u64, elapsed: u64, tail: Option<&str>) -> String {
+    let mut row = format!(
+        "  {} · {}",
+        crate::format::count(calls, "call", "calls"),
+        crate::format::duration(elapsed)
+    );
+    if let Some(tail) = tail {
+        row.push_str(&format!(" · {tail}"));
+    }
+    row
 }
 
 /// Asks for the next frame for a spinning delegate whose state row draws:

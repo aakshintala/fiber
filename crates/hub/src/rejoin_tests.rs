@@ -119,7 +119,7 @@ fn payload(state: &str, parent: Option<&str>) -> Value {
     });
     let mut payload = json!({
         "name": "n", "workspace": "/w", "project": "-w", "model": "p/m",
-        "state": state, "since": 7, "spend": usage,
+        "state": state, "started": 0, "calls": 0, "since": 7, "spend": usage,
         "delegates": 0, "jobs": 0, "clients": 0,
     });
     if let Some(parent) = parent {

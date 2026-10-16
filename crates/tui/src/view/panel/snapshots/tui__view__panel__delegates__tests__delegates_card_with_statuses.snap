@@ -6,7 +6,7 @@ expression: "crate::view::text(&buf)"
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates            3 running
    ● task 1
-     WORKING · test/model
+     0 calls · 0s
    ● write the docs
      claude · sonnet
    ● task 3

@@ -46,6 +46,29 @@ fn widget(extension: &str, widget: &str, lines: &[&str]) -> Line {
 }
 
 #[test]
+fn progress_finished_figures_need_a_summary_and_an_end_and_saturate() {
+    let job = contract::JobId("j_1".to_owned());
+    for (ended, elapsed) in [(1999, 0), (2000, 0), (2001, 1)] {
+        let mut app = attached();
+        assert_eq!(app.panel_state().finished_figures(&job), None);
+        app.panel_state.keep_last(job.clone(), 6, 2000);
+        assert_eq!(app.panel_state().finished_figures(&job), None);
+        app.on_line(ts_line(SESSION, "delegate_finished", ended, json!({"job_id": "j_1", "text": "done",
+            "usage": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0}, "cost": null, "subscription_cost": 0.0}})));
+        assert_eq!(app.panel_state().finished_figures(&job), Some((6, elapsed)));
+        app.on_line(ts_line(
+            SESSION,
+            "job_started",
+            3000,
+            json!({"job_id": "j_1", "description": "again", "output_path": "/tmp/out"}),
+        ));
+        assert_eq!(app.panel_state().finished_figures(&job), None);
+        app.panel_state.keep_last(job.clone(), 1, 3000);
+        assert_eq!(app.panel_state().finished_figures(&job), None);
+    }
+}
+
+#[test]
 fn the_latest_widget_lines_win_in_place() {
     let mut app = attached();
     app.on_line(widget("plan", "tasks", &["one"]));
@@ -133,7 +156,7 @@ fn status_line(workspace: &str, model: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": "work", "workspace": workspace, "project": "-w",
-            "state": "idle", "since": 0,
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -636,7 +659,7 @@ fn linked(app: &mut App) -> (String, String) {
 fn live(session: &str, state: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -895,7 +918,7 @@ fn no_query_without_home() {
             "session_status",
             json!({
                 "name": "work", "workspace": "/w", "project": "-w",
-                "state": "idle", "since": 0,
+                "state": "idle", "started": 0, "calls": 0, "since": 0,
                 "spend": {"tokens": {"input": 1, "cache_read": 0,
                     "cache_write": {}, "output": 2},
                     "cost": 0.0, "subscription_cost": 0.0},

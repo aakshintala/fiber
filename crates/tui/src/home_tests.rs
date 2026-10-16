@@ -17,7 +17,7 @@ fn payload(state: Value) -> Value {
         "name": "fix the parser",
         "workspace": "/Users/a/work/fiber",
         "project": PROJECT,
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {},
             "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
         "delegates": 0,
@@ -98,7 +98,8 @@ fn a_status_adds_a_row_and_a_second_updates_it_in_place() {
 fn a_status_that_began_before_the_held_one_changes_nothing() {
     let mut sessions = Sessions::default();
     let id = "s_aaaaaaaaaaaaaaaa";
-    let state_at = |state: &str, since: u64| json!({"state": state, "since": since});
+    let state_at =
+        |state: &str, since: u64| json!({"state": state, "started": 0, "calls": 0, "since": since});
     sessions.status(from_status(&envelope(id, state_at("idle", 9))));
     // Just below the held `since`: a late copy, ignored.
     sessions.status(from_status(&envelope(id, state_at("streaming", 8))));
@@ -115,9 +116,9 @@ fn a_status_that_began_before_the_held_one_changes_nothing() {
 fn a_status_in_the_same_millisecond_loses_to_a_held_waiting_one() {
     let mut sessions = Sessions::default();
     let id = "s_aaaaaaaaaaaaaaaa";
-    let waiting = json!({"state": "waiting", "since": 9,
+    let waiting = json!({"state": "waiting", "started": 0, "calls": 0, "since": 9,
         "waiting": {"request_id": "r_1", "kind": "approval", "summary": "x"}});
-    let tool = json!({"state": "tool", "since": 9, "tool": "bash"});
+    let tool = json!({"state": "tool", "started": 0, "calls": 0, "since": 9, "tool": "bash"});
     sessions.status(from_status(&envelope(id, tool.clone())));
     // Waiting replaces a tool that began in the same millisecond.
     sessions.status(from_status(&envelope(id, waiting.clone())));

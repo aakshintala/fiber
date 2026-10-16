@@ -67,7 +67,7 @@ fn app(share: f64) -> App {
 fn status(session: &str, fields: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/Users/you/work/fiber",
-        "project": "-w", "state": "idle", "since": WALL,
+        "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": WALL,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -418,7 +418,10 @@ fn the_on_screen_card_is_raised() {
 
 #[test]
 fn a_crashed_card_shows_a_cross_for_its_time() {
-    let mut app = two(20.0, json!({"since": WALL - 16_000}));
+    let mut app = two(
+        20.0,
+        json!({"started": 0, "calls": 0, "since": WALL - 16_000}),
+    );
     // A third live session keeps the rail drawn once `B` crashes.
     app.on_line(status(C, json!({})));
     assert!(b_row(&rail(&app), 0).ends_with("16s"));
@@ -450,7 +453,7 @@ fn three_projects(share: f64) -> App {
     app.on_line(status(
         B,
         json!({"workspace": "/Users/you/work/hub", "project": "-hub",
-            "name": "fix flaky lock test", "since": WALL - 16_000,
+            "name": "fix flaky lock test", "started": 0, "calls": 0, "since": WALL - 16_000,
             "state": "waiting", "waiting": {"request_id": "r_1",
                 "kind": "approval", "summary": "shell cargo mutants --in-place"},
             "spend": spend(1.35), "context": {"tokens": 700, "window": 1000},
@@ -458,18 +461,18 @@ fn three_projects(share: f64) -> App {
     ));
     app.on_line(status(
         A,
-        json!({"since": WALL - 9 * 60_000, "spend": spend(0.41),
+        json!({"started": 0, "calls": 0, "since": WALL - 9 * 60_000, "spend": spend(0.41),
             "git": {"branch": "main"}, "context": {"tokens": 119, "window": 1000}}),
     ));
     app.on_line(status(
         C,
         json!({"name": "write the rail", "state": "streaming",
-            "since": WALL - 2 * 3_600_000, "git": {"branch": null}}),
+            "started": 0, "calls": 0, "since": WALL - 2 * 3_600_000, "git": {"branch": null}}),
     ));
     app.on_line(status(
         D,
         json!({"workspace": "/Users/you/src/site", "project": "-site",
-            "name": "deploy", "since": WALL - 3 * 86_400_000,
+            "name": "deploy", "started": 0, "calls": 0, "since": WALL - 3 * 86_400_000,
             "spend": spend(2.0), "context": {"tokens": 900, "window": 1000}}),
     ));
     app.on_line(left(D, "crashed"));
@@ -493,7 +496,7 @@ fn rail_three_projects() {
 fn rail_waiting_card_shows_its_wait() {
     let app = two(
         20.0,
-        json!({"name": "fix flaky lock test", "since": WALL - 16_000,
+        json!({"name": "fix flaky lock test", "started": 0, "calls": 0, "since": WALL - 16_000,
             "state": "waiting", "waiting": {"request_id": "r_1",
                 "kind": "question", "summary": "which branch do I rebase onto first"},
             "spend": spend(1.35), "context": {"tokens": 120, "window": 1000}}),

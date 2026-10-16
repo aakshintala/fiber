@@ -202,7 +202,7 @@ fn waiting_row(since_ms: u64) -> crate::home::Row {
         "name": "work", "workspace": "/w", "project": "-w",
         "state": "waiting",
         "waiting": {"request_id": "r_1", "kind": "approval", "summary": "shell"},
-        "since": since_ms,
+        "started": 0, "calls": 0, "since": since_ms,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

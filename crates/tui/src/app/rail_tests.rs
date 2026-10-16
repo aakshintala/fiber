@@ -72,7 +72,7 @@ fn linked(app: &mut App) -> (String, String) {
 fn live(session: &str, fields: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "state": "idle", "since": 0,
+        "state": "idle", "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -671,7 +671,7 @@ fn a_card_taller_than_the_rail_shows_its_bottom() {
 
 /// A waiting `session_status` field set: request `request` since `since`.
 fn waiting(request: &str, since: u64) -> Value {
-    json!({"state": "waiting", "since": since, "waiting": {"request_id": request,
+    json!({"state": "waiting", "started": 0, "calls": 0, "since": since, "waiting": {"request_id": request,
         "kind": "approval", "summary": "shell ls"}})
 }
 

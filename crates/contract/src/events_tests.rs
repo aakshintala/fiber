@@ -330,56 +330,56 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1, "git": {"branch": "main"},
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "git": {"branch": "main"},
             "context": {"tokens": 3, "window": 4}, "spend": usage,
             "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "streaming", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "tool", "tool": "shell", "since": 1, "spend": usage,
+            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "spend": usage,
             "delegates": 1, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "retrying", "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
+            "state": "retrying", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 1, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "approval", "summary": "run npm"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "question", "summary": "which file?"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "waiting",
             "waiting": {"request_id": "r", "kind": "offer", "summary": "3 items from the repository"},
-            "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "context_added",
@@ -872,6 +872,30 @@ fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
             payload
         };
         assert_eq!(written, expected, "{kind}");
+    }
+}
+
+#[test]
+fn a_session_status_round_trips_with_and_without_step() {
+    let (_, base) = samples()
+        .into_iter()
+        .find(|(kind, _)| *kind == "session_status")
+        .unwrap();
+    for step in [Some("shell ls"), None] {
+        let mut payload = base.clone();
+        payload["started"] = json!(123);
+        payload["calls"] = json!(2);
+        if let Some(step) = step {
+            payload["step"] = json!(step);
+        }
+        let Some(Event::SessionStatus(status)) = read("session_status", payload.clone()).unwrap()
+        else {
+            panic!("not a session_status");
+        };
+        assert_eq!(status.started, 123);
+        assert_eq!(status.calls, 2);
+        assert_eq!(status.step.as_deref(), step);
+        assert_eq!(serde_json::to_value(status).unwrap(), payload);
     }
 }
 
