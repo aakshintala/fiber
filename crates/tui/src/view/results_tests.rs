@@ -48,6 +48,47 @@ fn small_results_areas_draw_only_complete_entries() {
 }
 
 #[test]
+fn the_label_needs_a_cell_between_it_and_the_path() {
+    for path in ["src/a.rs".to_owned(), "\u{644}\u{627}".repeat(4)] {
+        for (width, label) in [(14, false), (15, true), (16, true)] {
+            let entry = Snippet {
+                path: path.clone(),
+                turn: Some(0),
+                ..Snippet::default()
+            };
+            let area = Rect::new(0, 0, width, 1);
+            let mut buf = Buffer::empty(area);
+            super::path_row(&entry, area, &mut buf);
+            let text = crate::view::text(&buf);
+            assert!(text.starts_with(&path));
+            assert_eq!(
+                text.trim_end().ends_with("turn 1"),
+                label,
+                "{path:?} at {width}"
+            );
+            for x in 0..8 {
+                assert!(buf[(x, 0)].modifier.contains(Modifier::BOLD));
+            }
+            if label {
+                for x in width - 6..width {
+                    assert!(buf[(x, 0)].modifier.contains(Modifier::DIM));
+                    assert!(!buf[(x, 0)].modifier.contains(Modifier::BOLD));
+                }
+                assert_eq!(buf[(8, 0)].symbol(), " ");
+            }
+        }
+        let entry = Snippet {
+            path: path.clone(),
+            ..Snippet::default()
+        };
+        let area = Rect::new(0, 0, 16, 1);
+        let mut buf = Buffer::empty(area);
+        super::path_row(&entry, area, &mut buf);
+        assert_eq!(crate::view::text(&buf).trim_end(), path);
+    }
+}
+
+#[test]
 fn the_label_needs_one_cell_before_it() {
     for (width, turn, label) in [
         (6, Some(0), false),

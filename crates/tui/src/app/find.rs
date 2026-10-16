@@ -366,10 +366,11 @@ impl App {
         rows: &[crate::turn::Row],
         texts: &[crate::rows::RowText],
         turns: &[(usize, std::ops::Range<usize>)],
+        paths: &crate::window::CallPaths,
     ) {
         crate::work::add(|work| work.search_pages += 1);
         let query = self.find.query().to_owned();
-        let found = scan::scratch(self.screen.pages(), at, rows, texts, turns, &query);
+        let found = scan::scratch(self.screen.pages(), at, rows, texts, turns, paths, &query);
         let kept = self.find.record(at, revision, found);
         let (top, _) = self.scroll();
         self.find.consider(at, &kept, top);
@@ -537,8 +538,10 @@ impl App {
                             // The page folds whole, so a chunk never scans
                             // without the lines that open its turns.
                             match self.screen.pages().fold_text_turns(fetch.page, &fetch.held) {
-                                Some((rows, texts, turns)) => {
-                                    self.scan_scratch(fetch.page, revision, &rows, &texts, &turns);
+                                Some((rows, texts, turns, paths)) => {
+                                    self.scan_scratch(
+                                        fetch.page, revision, &rows, &texts, &turns, &paths,
+                                    );
                                 }
                                 None => {
                                     self.find.record(fetch.page, revision, Vec::new());
