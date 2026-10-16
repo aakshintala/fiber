@@ -195,8 +195,9 @@ fn held_spec(setup: &Setup, name: &str) -> (super::ServerSpec, std::sync::mpsc::
 /// A start where one server never answers `initialize` still declares
 /// the other one: the silent server fails with its deadline once the
 /// test advances the fake clock to it, while the answering server waits
-/// off the clock for the release. A second start the test never
-/// releases fails on its wall guard, which names the servers in it.
+/// off the clock for the release. A second start whose refused server
+/// reports at once but whose held server never does fails on its wall
+/// guard, which names only the server still outstanding.
 #[test]
 fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     let silent = Setup::new();
@@ -255,32 +256,21 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
     );
     started.servers.stop();
     watchdog.stand_down(WITHIN);
-    // Neither held server spawns, so the wall guard below is the only
-    // bound: five seconds covers two thread spawns, and its message
-    // holds the servers in the start.
+    // The refused server reports at once, so only the held server is
+    // still outstanding when the wall guard below fires: the message
+    // names it and not the server that already reported.
     let held = Setup::new();
-    let (first, _first_release) = held_spec(&held, "quiet");
-    let (second, _second_release) = held_spec(&held, "two");
-    let workspace = held.workspace();
-    let artifacts = held.artifacts();
-    let cache = held.cache();
-    let clock = held.clock();
+    let (quiet, _quiet_release) = held_spec(&held, "quiet");
+    let mut refused = held.spec("two");
+    {
+        let __declared = declared_only("two");
+        refused.stdio_mut().command = __declared.0;
+        refused.stdio_mut().args = __declared.1;
+    }
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    refused.stdio_mut().run = Some(run_program(&held, &gate));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        fakes::within(
-            "the start of [quiet, two]",
-            Duration::from_secs(5),
-            move || {
-                start(
-                    vec![first, second],
-                    &workspace,
-                    &artifacts,
-                    FakeImages::ok(),
-                    &cache,
-                    &clock,
-                    "0.0.0",
-                )
-            },
-        )
+        held.start(vec![quiet, refused])
     }));
     let message = match outcome {
         Ok(_) => panic!("a held start ends only on its guard"),
@@ -290,8 +280,12 @@ fn a_silent_server_fails_its_deadline_while_the_other_declares() {
             .unwrap_or_else(|| "a non-string panic".to_owned()),
     };
     assert!(
-        message.contains("the start of [quiet, two]"),
-        "the guard names the servers in the start: {message}"
+        message.contains("waiting on [quiet]"),
+        "the guard names the outstanding server: {message}"
+    );
+    assert!(
+        !message.contains("two"),
+        "the guard leaves out the server that reported: {message}"
     );
 }
 

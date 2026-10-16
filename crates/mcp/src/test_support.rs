@@ -1,7 +1,7 @@
 //! One harness for the crate's tests: the fixture directory, the fake
 //! clock, and every wait with its named deadline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -208,20 +208,48 @@ impl Setup {
         let cache = self.cache();
         let clock = self.clock();
         let images: std::sync::Arc<dyn contract::images::Images> = images;
-        // The start answers only after every server reports, so when
-        // the guard fires none did: the wait names every server in the
-        // start, and a repeat names the server whose child stalled.
-        let waiting = specs
-            .iter()
-            .map(|spec| spec.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let what = format!("the start of [{waiting}]");
-        fakes::within(&what, WITHIN, move || {
-            crate::start::start(
-                specs, &workspace, &artifacts, images, &cache, &clock, "0.0.0",
-            )
-        })
+        // Every session server leaves `outstanding` when its start
+        // reports, so when the guard below fires the set holds exactly
+        // the servers that had not reported. `fakes::within` fixes its
+        // message upfront, so the start runs on its own thread and the
+        // expiry reads the set: a repeat names the server whose child
+        // stalled.
+        let outstanding: std::sync::Arc<std::sync::Mutex<BTreeSet<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+        let watching = std::sync::Arc::clone(&outstanding);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("mcp-start".to_owned())
+            .spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::start::start_observed_tracked(
+                        specs,
+                        &workspace,
+                        &artifacts,
+                        images,
+                        &cache,
+                        &clock,
+                        "0.0.0",
+                        None,
+                        Some(watching),
+                    )
+                }));
+                done.send(outcome).unwrap_or(());
+            })
+            .expect("a thread for the start");
+        match Deadline::after(WITHIN).recv(&finished) {
+            Ok(outcome) => outcome.unwrap_or_else(|payload| std::panic::resume_unwind(payload)),
+            Err(_) => {
+                let waiting = outstanding
+                    .lock()
+                    .expect("the outstanding set")
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                panic!("waited {WITHIN:?} for the start, waiting on [{waiting}]");
+            }
+        }
     }
 
     /// Starts the fixture directly, expecting success, with a deadline naming the wait.
