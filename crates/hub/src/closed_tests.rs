@@ -792,9 +792,9 @@ fn a_close_while_the_relay_is_blocked_in_read_wakes_it() {
         .push((SID.to_owned(), subscribe("c_sub", "full")));
     let thread = spawn(&rig, SID, reader);
     // One forwarded line proves the thread read once and is back at its
-    // next read; the session peer stays open across `close_all`, so the
-    // shutdown alone must wake that read, with the dropped peer as the
-    // backup wake.
+    // next read. The session peer stays open until `close_all` returns, so
+    // the shutdown is the first wake for that read; dropping the peer right
+    // after it is the second wake the ticket requires.
     let first = durable(1, "idle");
     session_peer.write_all(first.as_bytes()).unwrap();
     session_peer.flush().unwrap();
