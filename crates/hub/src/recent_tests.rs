@@ -271,10 +271,7 @@ fn count_at_the_page_boundary_returns_its_own_value() {
     }
     assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE);
     temp.append(&temp.row(RECENT_PAGE as u64, "p", Left::Exited, None));
-    assert_eq!(
-        count(&temp.dir, None, &BTreeSet::new()),
-        RECENT_PAGE + 1
-    );
+    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE + 1);
 }
 
 #[test]

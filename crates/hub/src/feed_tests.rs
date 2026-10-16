@@ -749,9 +749,7 @@ fn recent_answers_a_page_without_running_sessions() {
             .map(|row| row["session_id"].as_str().unwrap().to_owned())
             .collect()
     };
-    let total = |page: Option<Value>| -> u64 {
-        page.unwrap()["total"].as_u64().unwrap()
-    };
+    let total = |page: Option<Value>| -> u64 { page.unwrap()["total"].as_u64().unwrap() };
     assert_eq!(ids(feed.recent(&Map::new()).unwrap()), [id(2), id(1)]);
     assert_eq!(total(feed.recent(&Map::new()).unwrap()), 2);
     assert_eq!(

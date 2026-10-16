@@ -369,7 +369,9 @@ impl Feed {
         match recent::page(&self.home, before, project, &running) {
             Ok(rows) => {
                 let total = recent::count(&self.home, project, &running);
-                Ok(Some(serde_json::json!({ "sessions": rows, "total": total })))
+                Ok(Some(
+                    serde_json::json!({ "sessions": rows, "total": total }),
+                ))
             }
             Err(PageError::UnknownBefore) => Err(Refused {
                 code: ErrorCode::InvalidArguments,
