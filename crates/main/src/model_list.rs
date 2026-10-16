@@ -102,14 +102,15 @@ fn ages(home: &Path, providers: &Providers, config: &Config, now: SystemTime) ->
         .collect()
 }
 
-/// A model's rebuild price from its provider data: the `cache_write`
+/// A model's input, output and rebuild prices from its provider data:
+/// the rebuild uses the `cache_write`
 /// price, or `input` when it names none, with each tier's own the same
 /// way (a zero tier `cache_write` names no price, so `input` stands in).
 /// `None` when the model names no cost. Prices are integer micro-dollars
 /// per million tokens.
 fn price(cost: Option<&config::Cost>) -> Option<tui::Price> {
     let cost = cost?;
-    let mut tiers: Vec<(u64, u64)> = cost
+    let mut tiers: Vec<tui::PriceTier> = cost
         .tiers
         .iter()
         .map(|tier| {
@@ -118,12 +119,19 @@ fn price(cost: Option<&config::Cost>) -> Option<tui::Price> {
             } else {
                 tier.input
             };
-            (tier.input_tokens_above, micros(dollars))
+            tui::PriceTier {
+                input_tokens_above: tier.input_tokens_above,
+                micros_per_mtok: micros(dollars),
+                input: micros(tier.input),
+                output: micros(tier.output),
+            }
         })
         .collect();
-    tiers.sort();
+    tiers.sort_by_key(|tier| tier.input_tokens_above);
     Some(tui::Price {
         micros_per_mtok: micros(cost.cache_write.unwrap_or(cost.input)),
+        input: micros(cost.input),
+        output: micros(cost.output),
         tiers,
     })
 }

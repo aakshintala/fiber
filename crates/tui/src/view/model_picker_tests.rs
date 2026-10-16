@@ -48,6 +48,8 @@ fn catalogue() -> Catalogue {
                 name: None,
                 price: Some(Price {
                     micros_per_mtok: 3_750_000,
+                    input: 3_000_000,
+                    output: 15_000_000,
                     tiers: Vec::new(),
                 }),
             },
@@ -84,7 +86,14 @@ fn catalogue() -> Catalogue {
                 name: None,
                 price: Some(Price {
                     micros_per_mtok: 2_000_000,
-                    tiers: vec![(100_000, 3_000_000)],
+                    input: 2_000_000,
+                    output: 8_000_000,
+                    tiers: vec![crate::catalogue::PriceTier {
+                        input_tokens_above: 100_000,
+                        micros_per_mtok: 3_000_000,
+                        input: 3_000_000,
+                        output: 12_000_000,
+                    }],
                 }),
             },
         ],

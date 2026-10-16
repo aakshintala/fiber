@@ -1565,7 +1565,14 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
     assert_eq!(rebuild_cost(1500, None), "~2k tokens");
     let price = crate::catalogue::Price {
         micros_per_mtok: 2_000_000,
-        tiers: vec![(100_000, 3_000_000)],
+        input: 2_000_000,
+        output: 8_000_000,
+        tiers: vec![crate::catalogue::PriceTier {
+            input_tokens_above: 100_000,
+            micros_per_mtok: 3_000_000,
+            input: 3_000_000,
+            output: 12_000_000,
+        }],
     };
     // At and below the tier's edge the base price holds; above it the
     // tier's does. 80k tokens at $3.75 is $0.30.
@@ -1574,6 +1581,8 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
             80_000,
             Some(&crate::catalogue::Price {
                 micros_per_mtok: 3_750_000,
+                input: 3_000_000,
+                output: 15_000_000,
                 tiers: Vec::new(),
             })
         ),

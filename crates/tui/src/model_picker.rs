@@ -1017,11 +1017,8 @@ pub(crate) fn rebuild_cost(tokens: u64, price: Option<&Price>) -> String {
         return size;
     };
     let micros = price
-        .tiers
-        .iter()
-        .rev()
-        .find(|(above, _)| *above < tokens)
-        .map(|(_, micros)| *micros)
+        .tier_at(tokens)
+        .map(|tier| tier.micros_per_mtok)
         .unwrap_or(price.micros_per_mtok);
     let dollars = tokens as f64 * micros as f64 / 1_000_000_000_000.0;
     format!("{size} · {}", crate::format::money(dollars))
