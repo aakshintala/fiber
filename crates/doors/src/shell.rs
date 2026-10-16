@@ -1,14 +1,17 @@
-//! A driver `shell` with `send` false (`docs/architecture.md`, "One inbox").
-//! The connection's reader checks it and registers its cancel, then runs it
+//! A driver `shell` (`docs/architecture.md`, "One inbox"). The
+//! connection's reader checks it and registers its cancel, then runs it
 //! on a thread of its own and reads on, so a `cancel` on the same connection
-//! reaches it. The loop never sees it.
+//! reaches it. With `send` false the thread answers the command itself;
+//! with `send` true it sends the shaped result to the loop's inbox, and
+//! the loop writes it as `shell_command` (`docs/invocation.md`, "Shell").
+//! The loop never runs it.
 
 use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::commands::Shell;
 use contract::emit::Emit;
-use contract::events::{CommandResult, Event};
-use contract::inbox::{Ack, Rejection};
+use contract::events::{CommandResult, Event, ShellCommand};
+use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::ContentPart;
 use contract::tool::{Bound, Cancel, Output, Tool};
 use log::{cut_joined, cut_notice};
@@ -19,12 +22,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use crate::mint;
 use crate::session::Gate;
 
-const SEND: &str = "`send` is not built in this Fiber yet.";
 pub(crate) const COULD_NOT_START: &str = "The command could not start.";
 
 /// Why a `shell` does not start, answered on the reader.
 pub(crate) enum Refused {
     Unknown,
+    // No reader check rejects this way since `send` true was built;
+    // the variant stays so the reader's answer shape does not change.
+    #[allow(dead_code, reason = "no reader check rejects since `send` true was built")]
     Rejected { code: ErrorCode, message: String },
 }
 
@@ -33,6 +38,8 @@ pub(crate) struct Running {
     tool: Arc<dyn Tool>,
     cancel: Arc<ShellCancel>,
     arguments: Map<String, Value>,
+    command: String,
+    send: bool,
 }
 
 /// The cancel signal one driver shell sees.
@@ -82,12 +89,6 @@ pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Result<Running, Refuse
     let Some(tool) = gate.driver_shell() else {
         return Err(Refused::Unknown);
     };
-    if command.send {
-        return Err(Refused::Rejected {
-            code: ErrorCode::InvalidArguments,
-            message: SEND.to_owned(),
-        });
-    }
     let cancel = Arc::new(ShellCancel::new());
     gate.shells.track(Arc::clone(&cancel));
     let mut arguments = Map::new();
@@ -96,18 +97,44 @@ pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Result<Running, Refuse
         tool,
         cancel,
         arguments,
+        command: command.command.clone(),
+        send: command.send,
     })
 }
 
 impl Running {
     /// Runs the tool, answers through `ack`, then unregisters the cancel:
-    /// once [`Gate`] no longer lists the shell, its answer is queued. The
-    /// registry lock is not held across [`Tool::run`].
+    /// once [`Gate`] no longer lists the shell, its answer is queued. With
+    /// `send` true the shaped result goes to the loop's inbox instead of
+    /// the ack, and the loop answers it when it writes `shell_command`. A
+    /// result that never ran, or whose output never saved, answers the ack
+    /// directly either way. The registry lock is not held across
+    /// [`Tool::run`].
     pub(crate) fn finish(self, gate: &Gate, ack: Ack) {
         let output = self
             .tool
             .run(&self.arguments, self.cancel.as_ref(), &Silent);
-        (ack.0)(answered(gate, output, self.tool.bound()));
+        let answered = answered(gate, output, self.tool.bound());
+        if self.send {
+            match answered {
+                Ok(Some(CommandResult::Shell {
+                    output,
+                    artifact,
+                    process,
+                })) => {
+                    let line = ShellCommand {
+                        command: self.command,
+                        output,
+                        artifact,
+                        process,
+                    };
+                    gate.deliver(Delivery::Shell(line, ack));
+                }
+                answered => (ack.0)(answered),
+            }
+        } else {
+            (ack.0)(answered);
+        }
         // A panic aborts the process, so nothing later cancels this shell.
         gate.shells.untrack(&self.cancel);
     }
