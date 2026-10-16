@@ -316,7 +316,6 @@ impl App {
         Some(HomeScreen {
             header,
             list,
-            empty: home.sessions.all().is_empty(),
             version: home.launch.version.clone(),
             // A remote client has no launch directory; the picker it would
             // always show is a later ticket's.

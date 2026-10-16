@@ -363,13 +363,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                 wait,
             } => {
                 row.spot = Some(Spot::Entry(*key));
-                // Keep the compatibility rows' cross bit aligned with
-                // the richer list model that this renderer draws.
-                row.stop = *stop
-                    && screen
-                        .rows
-                        .iter()
-                        .any(|(row_key, _, has_cross)| row_key == key && *has_cross);
+                row.stop = *stop;
                 let number = number.map(|n| format!("⌥{n} ")).unwrap_or_default();
                 row.left = vec![
                     Span::styled(number, dim),
@@ -467,7 +461,7 @@ fn draw_list(
             at.saturating_add(height.min(capacity))
                 .saturating_sub(capacity)
         });
-    if screen.empty {
+    if screen.rows.is_empty() {
         let y = placed
             .list_top
             .saturating_add(super::to_u16(capacity.saturating_sub(2) / 2));
