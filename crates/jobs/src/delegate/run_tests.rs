@@ -56,6 +56,10 @@ struct Script {
     /// The boundary each call passed.
     afters: Mutex<Vec<Option<u64>>>,
     replies: Mutex<VecDeque<WatchReply>>,
+    /// Sent once after each `Closed` or `Exited` call delivers its lines:
+    /// `on_line` already returned, so the runner folded the envelope.
+    folded_tx: mpsc::Sender<()>,
+    folded_rx: Mutex<mpsc::Receiver<()>>,
 }
 
 enum WatchReply {
@@ -69,12 +73,15 @@ enum WatchReply {
 
 impl Script {
     fn scripted(clock: &Arc<FakeClock>, replies: Vec<WatchReply>) -> Arc<Self> {
+        let (folded_tx, folded_rx) = mpsc::channel();
         Arc::new(Self {
             clock: Arc::clone(clock),
             calls: Mutex::new(Vec::new()),
             called: Condvar::new(),
             afters: Mutex::new(Vec::new()),
             replies: Mutex::new(replies.into()),
+            folded_tx,
+            folded_rx: Mutex::new(folded_rx),
         })
     }
 
@@ -101,6 +108,7 @@ impl Script {
                 for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
                 }
+                let _sent = self.folded_tx.send(());
                 Ok(Watched::Closed)
             }
             Some(WatchReply::Exited(lines)) => {
@@ -113,6 +121,7 @@ impl Script {
                         break;
                     }
                 }
+                let _sent = self.folded_tx.send(());
                 Ok(Watched::Exited)
             }
             Some(WatchReply::Block(gate)) => {
@@ -507,6 +516,19 @@ fn wait_calls(rig: &Rig, n: usize) {
         rig.script.await_calls(n, DEADLINE),
         "the watch was not called {n} times"
     );
+}
+
+/// Waits until the scripted watch folded `n` deliveries: each `Closed`
+/// or `Exited` call sends after `on_line` returned, so the fold already
+/// ran. One wall-clock deadline covers all receives, so a missing fold
+/// fails the test instead of hanging it.
+#[track_caller]
+fn wait_folded(rig: &Rig, n: usize) {
+    let deadline = Deadline::after(DEADLINE);
+    let folded = rig.script.folded_rx.lock().unwrap();
+    for _ in 0..n {
+        deadline.recv_or_fail(&folded, "the watch to fold its lines");
+    }
 }
 
 /// Wakes the runner through one refused-watch backoff: the runner parks
@@ -1153,6 +1175,9 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         wait_calls(&rig, held + 2);
     }
     // The eighth call succeeds; the child binds and its lines flow.
+    // The call returns before the watch folds the envelope: releasing
+    // here lets the reap win, so wait for the fold first.
+    wait_folded(&rig, 1);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -1207,6 +1232,9 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         rig.clock.advance(Duration::from_millis(gap));
         wait_calls(&rig, calls);
     }
+    // The third call returns before the watch folds the envelope:
+    // releasing here lets the reap win, so wait for all three folds.
+    wait_folded(&rig, 3);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -1230,6 +1258,9 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     let done = rig.start(&shell, BOUND, 1024);
     wait_calls(&rig, 1);
+    // The call returns before the watch folds the envelope: releasing
+    // here lets the reap win, so wait for the fold first.
+    wait_folded(&rig, 1);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -1493,6 +1524,9 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
         panic!("exactly at the cap is not past it");
     }
     std::fs::write(&rig.events, "01234567890").unwrap();
+    // Both `Closed` calls fold before the release: the reap must not
+    // beat the fold.
+    wait_folded(&rig, 2);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Failed);
