@@ -3,7 +3,7 @@
 
 use super::{
     Choice, Fresh, Mode, ModelPicker, PickerCtx, PickerView, RowAt, age, command_args, preselect,
-    rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
+    price_text, rebuild_cost, saves, scoped_save, shown_in, start_args, visible,
 };
 use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Key;
@@ -1340,6 +1340,10 @@ fn the_view_marks_chips_saved_levels_and_the_current_model() {
     assert!(m2.current);
     // The current model shows "—", whatever its price.
     assert_eq!(m2.cost.as_deref(), Some("—"));
+    assert_eq!(
+        m2.price,
+        price_text(picker.catalogue.models[1].price.as_ref(), Some(84_000))
+    );
     // `acme/m1` configures nothing but declares `high` (index 1).
     let m1 = &laid.sections[0].models[0];
     assert_eq!(m1.saved, None);
@@ -1356,6 +1360,33 @@ fn the_view_marks_chips_saved_levels_and_the_current_model() {
             .flat_map(|section| section.models.iter())
             .all(|model| model.cost.is_none())
     );
+}
+
+#[test]
+fn the_view_keeps_prices_on_the_current_model_and_without_usage() {
+    let mut models = catalogue();
+    models[1].price = Some(crate::catalogue::Price {
+        micros_per_mtok: 3_750_000,
+        input: 3_000_000,
+        output: 15_000_000,
+        tiers: vec![],
+    });
+    let mut picker = open_over(models);
+    picker.open(Mode::Choose, Some(("acme/m2", Some("high"))));
+    let current = picker.view(&ctx(Some(84_000), 0, Some("acme/m2"))).unwrap();
+    assert_eq!(
+        current.sections[0].models[1].price.as_deref(),
+        Some("$3.00 in · $15.00 out /M")
+    );
+    let plain = view_of(&picker);
+    for (row, entry) in plain
+        .sections
+        .iter()
+        .flat_map(|section| &section.models)
+        .zip(&picker.catalogue.models)
+    {
+        assert_eq!(row.price, price_text(entry.price.as_ref(), None));
+    }
 }
 
 #[test]
@@ -1565,7 +1596,14 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
     assert_eq!(rebuild_cost(1500, None), "~2k tokens");
     let price = crate::catalogue::Price {
         micros_per_mtok: 2_000_000,
-        tiers: vec![(100_000, 3_000_000)],
+        input: 2_000_000,
+        output: 8_000_000,
+        tiers: vec![crate::catalogue::PriceTier {
+            input_tokens_above: 100_000,
+            micros_per_mtok: 3_000_000,
+            input: 3_000_000,
+            output: 12_000_000,
+        }],
     };
     // At and below the tier's edge the base price holds; above it the
     // tier's does. 80k tokens at $3.75 is $0.30.
@@ -1574,6 +1612,8 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
             80_000,
             Some(&crate::catalogue::Price {
                 micros_per_mtok: 3_750_000,
+                input: 3_000_000,
+                output: 15_000_000,
                 tiers: Vec::new(),
             })
         ),
@@ -1582,6 +1622,106 @@ fn rebuild_cost_rounds_sizes_and_picks_tiers() {
     assert!(rebuild_cost(99_999, Some(&price)).ends_with("· $0.20"));
     assert!(rebuild_cost(100_000, Some(&price)).ends_with("· $0.20"));
     assert!(rebuild_cost(100_001, Some(&price)).ends_with("· $0.30"));
+}
+
+#[test]
+fn a_tier_in_force_shortens_the_switch_size() {
+    let price = crate::catalogue::Price {
+        micros_per_mtok: 2_000_000,
+        input: 2_000_000,
+        output: 8_000_000,
+        tiers: vec![crate::catalogue::PriceTier {
+            input_tokens_above: 100_000,
+            micros_per_mtok: 3_000_000,
+            input: 3_000_000,
+            output: 12_000_000,
+        }],
+    };
+    assert_eq!(rebuild_cost(99_999, Some(&price)), "~100k tokens · $0.20");
+    assert_eq!(rebuild_cost(100_000, Some(&price)), "~100k tokens · $0.20");
+    assert_eq!(rebuild_cost(100_001, Some(&price)), "~100k · $0.30");
+}
+
+#[test]
+fn price_text_reads_rates_free_none_and_the_tier() {
+    use crate::catalogue::{Price, PriceTier};
+    assert_eq!(price_text(None, Some(84_000)), None);
+    let mut price = Price {
+        micros_per_mtok: 0,
+        input: 0,
+        output: 0,
+        tiers: vec![],
+    };
+    for usage in [None, Some(84_000)] {
+        assert_eq!(price_text(Some(&price), usage).as_deref(), Some("free"));
+    }
+    price.output = 1_000_000;
+    assert_eq!(
+        price_text(Some(&price), None).as_deref(),
+        Some("$0.00 in · $1.00 out /M")
+    );
+    price.input = 1_000_000;
+    price.output = 0;
+    assert_eq!(
+        price_text(Some(&price), None).as_deref(),
+        Some("$1.00 in · $0.00 out /M")
+    );
+    price.input = 2_000_000;
+    price.output = 8_000_000;
+    price.tiers.push(PriceTier {
+        input_tokens_above: 100_000,
+        micros_per_mtok: 3_000_000,
+        input: 3_000_000,
+        output: 12_000_000,
+    });
+    for usage in [None, Some(99_999), Some(100_000)] {
+        assert_eq!(
+            price_text(Some(&price), usage).as_deref(),
+            Some("$2.00 in · $8.00 out /M")
+        );
+    }
+    assert_eq!(
+        price_text(Some(&price), Some(100_001)).as_deref(),
+        Some("$3.00 in · $12.00 out /M · tier 100k+")
+    );
+    price.input = 4_000;
+    price.output = 15_000_000;
+    assert_eq!(
+        price_text(Some(&price), None).as_deref(),
+        Some("$0.00 in · $15.00 out /M")
+    );
+    price.tiers[0].input = 0;
+    price.tiers[0].output = 0;
+    assert_eq!(
+        price_text(Some(&price), Some(100_001)).as_deref(),
+        Some("free")
+    );
+    price.tiers[0].input = 1;
+    assert_eq!(
+        price_text(Some(&price), Some(100_001)).as_deref(),
+        Some("$0.00 in · $0.00 out /M · tier 100k+")
+    );
+    price.tiers[0].input = 0;
+    price.tiers[0].output = 1;
+    assert_eq!(
+        price_text(Some(&price), Some(100_001)).as_deref(),
+        Some("$0.00 in · $0.00 out /M · tier 100k+")
+    );
+    price.tiers[0].input = 3_000_000;
+    price.tiers[0].output = 12_000_000;
+    for (threshold, mark) in [
+        (500, "500+"),
+        (999, "999+"),
+        (1000, "1k+"),
+        (1001, "1k+"),
+        (128_500, "128k+"),
+    ] {
+        price.tiers[0].input_tokens_above = threshold;
+        assert_eq!(
+            price_text(Some(&price), Some(threshold + 1)),
+            Some(format!("$3.00 in · $12.00 out /M · tier {mark}"))
+        );
+    }
 }
 
 #[test]

@@ -21,6 +21,8 @@ use crate::theme::Role;
 /// The picker wraps at this content width before shrinking to what the
 /// wrapped rows need (`docs/tui.md`, "Look", "Overlays").
 const PREFER: u16 = 96;
+/// Below this inner width, names and switch costs take priority over prices.
+const PRICE_MIN_INNER: u16 = 60;
 /// The overlay chrome around the picker body: two edges, two pad rows,
 /// and the footer's gap and row. The picker draws no title: the view's
 /// top row holds it.
@@ -168,10 +170,11 @@ fn id_spans(id: &str, hits: &[bool]) -> Vec<Span<'static>> {
 /// One choosing model's first row: the gutter, the id in `accent`,
 /// each role dim in brackets, "● current" bold in `accent` on the
 /// session's model, "· scoped" dim while every model shows, and the
-/// rebuild cost dim at the right end. The name and roles cells take
+/// input and output prices dim, and the labelled switch cost dim at the
+/// right end. The name and roles cells take
 /// clicks; the row takes clicks anywhere, selecting it. The focused row
 /// sits on the bar.
-fn model_first_row(model: &ModelRow, focused: bool) -> Row {
+fn model_first_row(model: &ModelRow, focused: bool, priced: bool) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut spans = vec![gutter(focused)];
     spans.extend(id_spans(&model.id, &model.hits));
@@ -199,12 +202,22 @@ fn model_first_row(model: &ModelRow, focused: bool) -> Row {
     if model.scoped {
         spans.push(Span::styled(" · scoped".to_owned(), dim));
     }
+    if priced && let Some(price) = &model.price {
+        spans.push(Span::styled(format!(" {price}"), dim));
+    }
     Row {
         spans,
         right: model
             .cost
             .clone()
-            .map(|cost| vec![Span::styled(cost, dim)])
+            .map(|cost| {
+                let text = if model.current {
+                    cost
+                } else {
+                    format!("switch {cost}")
+                };
+                vec![Span::styled(text, dim)]
+            })
             .unwrap_or_default(),
         targets,
         barred: focused,
@@ -291,12 +304,12 @@ fn session_row(model: &ModelRow) -> Row {
 
 /// One checklist row: the gutter, the mark, a space, the id in `accent`
 /// with each query hit bold and underlined, each role dim in brackets,
-/// "● current" bold in `accent` on the on-screen model, and the rebuild
-/// cost dim at the right end. The mark reads dim exactly when unmarked
+/// "● current" bold in `accent` on the on-screen model, prices dim, and the
+/// labelled switch cost dim at the right end. The mark reads dim exactly when unmarked
 /// and takes no bold of its own: the bar bolds the focused row. The mark
 /// and id cells take clicks as Enter does; the roles cell and the row
 /// take clicks anywhere, selecting it. The focused row sits on the bar.
-fn scope_row(model: &ModelRow, focused: bool) -> Row {
+fn scope_row(model: &ModelRow, focused: bool, priced: bool) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let marked = model.mark.unwrap_or(false);
     let mut spans = vec![gutter(focused)];
@@ -331,12 +344,22 @@ fn scope_row(model: &ModelRow, focused: bool) -> Row {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    if priced && let Some(price) = &model.price {
+        spans.push(Span::styled(format!(" {price}"), dim));
+    }
     Row {
         spans,
         right: model
             .cost
             .clone()
-            .map(|cost| vec![Span::styled(cost, dim)])
+            .map(|cost| {
+                let text = if model.current {
+                    cost
+                } else {
+                    format!("switch {cost}")
+                };
+                vec![Span::styled(text, dim)]
+            })
             .unwrap_or_default(),
         targets,
         barred: focused,
@@ -459,6 +482,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// sections, and the status lines. Exactly one row is barred while a
 /// model shows; none with only a message.
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
+    let priced = overlay::inner(overlay::width(PREFER, PREFER, width)) >= PRICE_MIN_INNER;
     // The filter row is first in every mode.
     let mut rows = vec![filter_row(view)];
     let flats = flats(view);
@@ -511,10 +535,10 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         }
         let focused = Some(flat.row.at) == view.focused;
         if flat.row.mark.is_some() {
-            sections.push(scope_row(flat.row, focused));
+            sections.push(scope_row(flat.row, focused, priced));
             sections.push(scope_second_row(flat.row));
         } else {
-            sections.push(model_first_row(flat.row, focused));
+            sections.push(model_first_row(flat.row, focused, priced));
             sections.push(model_second_row(flat.row, focused));
             if flat.row.session_only {
                 sections.push(session_row(flat.row));

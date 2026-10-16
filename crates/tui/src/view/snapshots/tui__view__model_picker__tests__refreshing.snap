@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 271
+assertion_line: 436
 expression: "screen(&app, 160, 48)"
 ---
  Models  /model                                                                                                                                      Esc returns
@@ -9,7 +9,7 @@ expression: "screen(&app, 160, 48)"
                                    Type to search █
                                    4 models                                                                     ⟳ refresh all
                                    acme ⟳ refreshing ●
-                                   › m1 [deep] [review]
+                                   › m1 [deep] [review] $3.00 in · $15.00 out /M
                                          thinking low [high]
                                      m2
                                          fixed thinking
@@ -17,7 +17,7 @@ expression: "screen(&app, 160, 48)"
                                    zeta ⟳ refreshing ●
                                      z1
                                          thinking [low]
-                                     z2 [chat]
+                                     z2 [chat] $2.00 in · $8.00 out /M
                                          thinking low [high]
                                    refreshing…
 

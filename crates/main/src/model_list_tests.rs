@@ -384,6 +384,8 @@ fn price_maps_cache_write_and_falls_back_to_input() {
         entry.price,
         Some(tui::Price {
             micros_per_mtok: 3_000_000,
+            input: 3_000_000,
+            output: 15_000_000,
             tiers: Vec::new(),
         })
     );
@@ -415,6 +417,8 @@ fn price_maps_cache_write_over_input() {
         entry.price,
         Some(tui::Price {
             micros_per_mtok: 750_000,
+            input: 3_000_000,
+            output: 15_000_000,
             tiers: Vec::new(),
         })
     );
@@ -459,11 +463,56 @@ fn price_is_none_without_a_cost_and_tiers_sort_ascending() {
                 "acme/m1",
                 Some(tui::Price {
                     micros_per_mtok: 2_000_000,
-                    tiers: vec![(100_000, 3_000_000), (200_000, 1_500_000)],
+                    input: 2_000_000,
+                    output: 10_000_000,
+                    tiers: vec![
+                        tui::PriceTier {
+                            input_tokens_above: 100_000,
+                            micros_per_mtok: 3_000_000,
+                            input: 3_000_000,
+                            output: 15_000_000
+                        },
+                        tui::PriceTier {
+                            input_tokens_above: 200_000,
+                            micros_per_mtok: 1_500_000,
+                            input: 4_000_000,
+                            output: 20_000_000
+                        }
+                    ],
                 })
             ),
             ("zeta/z1", None),
         ]
+    );
+}
+
+#[test]
+fn a_zero_cost_is_a_free_price_not_none() {
+    let setup = Setup::new("fiber-model-list-price-free");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"cost": {"input": 0.0, "output": 0.0}}),
+    );
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+    )
+    .unwrap();
+    assert_eq!(
+        catalogue.models[0].price,
+        Some(tui::Price {
+            micros_per_mtok: 0,
+            input: 0,
+            output: 0,
+            tiers: vec![],
+        })
     );
 }
 

@@ -147,6 +147,8 @@ pub(crate) struct ModelRow {
     pub(crate) current: bool,
     /// Whether the scope keeps it, while the toggle shows every model.
     pub(crate) scoped: bool,
+    /// Its input and output prices at the session's size.
+    pub(crate) price: Option<String>,
     /// Its rebuild cost, or "—" on the current model.
     pub(crate) cost: Option<String>,
     pub(crate) levels: Vec<String>,
@@ -862,6 +864,7 @@ impl ModelPicker {
                     roles: entry.roles.clone(),
                     current,
                     scoped: open.show_all && self.scoped.contains(&entry.reference),
+                    price: price_text(entry.price.as_ref(), ctx.usage),
                     cost: ctx.usage.map(|tokens| {
                         if current {
                             "—".to_owned()
@@ -1004,6 +1007,34 @@ impl ModelPicker {
     }
 }
 
+/// The in-force per-million input and output prices, or base prices before
+/// the first call. Free prices carry no tier mark; missing costs stay absent.
+pub(crate) fn price_text(price: Option<&Price>, tokens: Option<u64>) -> Option<String> {
+    let price = price?;
+    let tier = tokens.and_then(|tokens| price.tier_at(tokens));
+    let (input, output) = tier
+        .map(|tier| (tier.input, tier.output))
+        .unwrap_or((price.input, price.output));
+    if input == 0 && output == 0 {
+        return Some("free".to_owned());
+    }
+    let mut text = format!(
+        "${:.2} in · ${:.2} out /M",
+        input as f64 / 1_000_000.0,
+        output as f64 / 1_000_000.0,
+    );
+    if let Some(tier) = tier {
+        let above = tier.input_tokens_above;
+        let threshold = if above >= 1000 {
+            format!("{}k", above / 1000)
+        } else {
+            above.to_string()
+        };
+        text.push_str(&format!(" · tier {threshold}+"));
+    }
+    Some(text)
+}
+
 /// A switch's rebuild size at `tokens` with `price`, and the rebuild's
 /// price when the model names one. The tier is the highest whose
 /// `input_tokens_above` is below the token count, else the base price.
@@ -1016,12 +1047,14 @@ pub(crate) fn rebuild_cost(tokens: u64, price: Option<&Price>) -> String {
     let Some(price) = price else {
         return size;
     };
-    let micros = price
-        .tiers
-        .iter()
-        .rev()
-        .find(|(above, _)| *above < tokens)
-        .map(|(_, micros)| *micros)
+    let tier = price.tier_at(tokens);
+    let size = if tier.is_some() {
+        size.trim_end_matches(" tokens")
+    } else {
+        &size
+    };
+    let micros = tier
+        .map(|tier| tier.micros_per_mtok)
         .unwrap_or(price.micros_per_mtok);
     let dollars = tokens as f64 * micros as f64 / 1_000_000_000_000.0;
     format!("{size} · {}", crate::format::money(dollars))

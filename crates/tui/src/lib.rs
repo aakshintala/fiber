@@ -95,7 +95,7 @@ use crate::link::Line;
 
 pub use attention::Attention;
 
-pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, ReadModels, Refresh};
+pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
 pub use configure::{
     BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginShow, LoginTarget,
     ReviewerModels, Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown,
