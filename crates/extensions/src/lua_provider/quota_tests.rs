@@ -505,7 +505,10 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
     let provider = http_quota_provider(&root, &server.url(), clock.clone());
     let value = QuotaEntry::Reported(percent("primary", 10.0, None));
     assert_eq!(read(&provider), value);
-    for advance in [FRESH_FOR - Duration::from_nanos(1), Duration::from_nanos(1)] {
+    for advance in [
+        FRESH_FOR.checked_sub(Duration::from_nanos(1)).unwrap(),
+        Duration::from_nanos(1),
+    ] {
         clock.advance(advance);
         assert_eq!(provider.quota_now(&pair(), None), value);
         assert!(
@@ -544,7 +547,7 @@ fn quota_now_expires_an_overdue_flight_without_waiting() {
     let (provider, clock) = quota_provider(&root, "nil");
     let value = percent("weekly", 35.0, None);
     for age in [
-        FETCH_TIMEOUT - Duration::from_nanos(1),
+        FETCH_TIMEOUT.checked_sub(Duration::from_nanos(1)).unwrap(),
         FETCH_TIMEOUT,
         FETCH_TIMEOUT + Duration::from_nanos(1),
     ] {
@@ -555,7 +558,7 @@ fn quota_now_expires_an_overdue_flight_without_waiting() {
                 fetched: Some((Some(value.clone()), now)),
                 flight: Some(Flight {
                     id: 0,
-                    started: now - age,
+                    started: now.checked_sub(age).unwrap(),
                 }),
                 ..Cache::default()
             },
