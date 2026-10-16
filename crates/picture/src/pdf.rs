@@ -31,9 +31,9 @@ const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
 /// cannot decode, so `run` walks the references reachable from the trailer
 /// and refuses the file when a reached reference is missing. An over-limit
 /// cross-reference stream already fails the load itself.
-fn load_options() -> lopdf::LoadOptions {
+fn load_options(limit: usize) -> lopdf::LoadOptions {
     lopdf::LoadOptions {
-        max_decompressed_size: Some(MAX_DECOMPRESSED_BYTES),
+        max_decompressed_size: Some(limit),
         ..Default::default()
     }
 }
@@ -76,6 +76,17 @@ pub(crate) fn run(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> i32 {
+    run_within(args, stdout, stderr, MAX_DECOMPRESSED_BYTES)
+}
+
+/// `run` with the object-stream limit as a parameter, so tests can run a
+/// small limit while production passes [`MAX_DECOMPRESSED_BYTES`].
+fn run_within(
+    args: &[std::ffi::OsString],
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    limit: usize,
+) -> i32 {
     let [_, input, directory, stem, what] = args else {
         writeln!(
             stderr,
@@ -114,7 +125,7 @@ pub(crate) fn run(
             return REFUSED;
         }
     };
-    let mut document = match lopdf::Document::load_mem_with_options(&bytes, load_options()) {
+    let mut document = match lopdf::Document::load_mem_with_options(&bytes, load_options(limit)) {
         Ok(document) => document,
         Err(error) => {
             writeln!(stderr, "{error}").unwrap_or(());
