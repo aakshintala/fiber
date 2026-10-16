@@ -173,10 +173,10 @@ fn select_candidates(
     // Every recorded identity by its session's project key.
     let mut identities: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for started in started {
-        let Some(key) = session_key(&started) else {
+        let Some(key) = session_key(started) else {
             continue;
         };
-        let Some(identity) = identity_of(&started) else {
+        let Some(identity) = identity_of(started) else {
             continue;
         };
         identities.entry(key).or_default().push(identity);
