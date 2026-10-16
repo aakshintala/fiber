@@ -105,9 +105,9 @@ pub(crate) fn launch(
             .get("tui.logo_glyph", None)
             .and_then(|(value, _)| value.as_str().map(str::to_owned))
             .unwrap_or_else(|| "⌇".to_owned()),
-        rail_share: share(config, "tui.rail.width", 15.0),
+        rail_share: share(config, "tui.rail.width", tui::DEFAULT_RAIL_SHARE),
         rail_hidden: !on(config, "tui.rail.shown"),
-        panel_share: share(config, "tui.panel.width", 21.0),
+        panel_share: share(config, "tui.panel.width", tui::DEFAULT_PANEL_SHARE),
         // `tui.panel.cards`, defaulting to the built-in list.
         panel_cards: config
             .get("tui.panel.cards", None)
