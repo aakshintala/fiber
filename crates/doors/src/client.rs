@@ -24,11 +24,6 @@ use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode};
 
-#[cfg(test)]
-use contract::SessionId;
-#[cfg(test)]
-use log::Injector;
-
 use crate::session::{self, Gate};
 
 pub(crate) const MALFORMED: &str =
@@ -163,13 +158,6 @@ pub(crate) fn serve_connection(
         outbox.cancel_settles();
         outbox.stop(&conn.gate.session_id);
     }
-}
-
-/// Tells `injector`'s writer to exit. The line is kept when the queue is
-/// full, so a disconnect still reaches a writer that has fallen behind.
-#[cfg(test)]
-pub(crate) fn stop_writer(injector: &Injector, session: &SessionId) {
-    injector.push_kept(control_line(session, STOP, 0));
 }
 
 /// A carriage return and a line feed both end a command line.

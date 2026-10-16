@@ -637,7 +637,7 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
     for _ in 0..1_200 {
         log.append(&notice(), None, None).unwrap();
     }
-    crate::client::stop_writer(&injector, &id);
+    injector.push_kept(crate::client::control_line(&id, crate::client::STOP, 0));
     let (mut peer, stream) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(DEADLINE)).unwrap();
     thread::spawn(move || {

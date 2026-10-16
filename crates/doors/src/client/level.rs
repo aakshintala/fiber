@@ -85,7 +85,7 @@ impl Outbox {
     }
 
     /// Pushes the writer's STOP line into the current queue
-    /// (`super::stop_writer`).
+    /// (`Outbox::stop`).
     pub(crate) fn stop(&self, session: &SessionId) {
         self.push_kept(control_line(session, super::STOP, 0));
     }
