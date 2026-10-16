@@ -831,11 +831,11 @@ fn shared_copies_are_judged_by_every_owner_outside_a_repository() {
     assert!(plan.rows.is_empty());
     // After it changes too, neither tree matches: removed.
     write_hook(&repo_b, "changed\n");
-    let plan = plan(&home, &workspace, clock.as_ref());
-    assert_eq!(removable(&plan).len(), 1);
-    assert_eq!(removable(&plan)[0].0, hash.as_str());
+    let plan2 = plan(&home, &workspace, clock.as_ref());
+    assert_eq!(removable(&plan2).len(), 1);
+    assert_eq!(removable(&plan2)[0].0, hash.as_str());
     let mut noop = |_: &str| {};
-    let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
+    let removed = remove_planned(&home, &plan2, clock.as_ref(), &mut noop);
     assert_eq!(removed.total, 1);
     assert!(copy_dir(&home, &hash).symlink_metadata().is_err());
 }
