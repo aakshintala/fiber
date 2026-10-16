@@ -813,9 +813,43 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
 pub(crate) struct FakeMachine {
     pub(crate) calls: Mutex<Vec<Value>>,
     pub(crate) answers: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
+    pub(crate) search_gate: Mutex<Option<Arc<SearchGate>>>,
 }
 
+pub(crate) struct SearchGate {
+    pub(crate) started: std::sync::mpsc::Sender<String>,
+    pub(crate) release: Mutex<std::sync::mpsc::Receiver<()>>,
+    pub(crate) ignore_cancel: bool,
+    pub(crate) cancelled: std::sync::atomic::AtomicBool,
+}
+struct FakeSearch(Option<Arc<SearchGate>>);
+impl crate::FileSearch for FakeSearch {
+    fn search(
+        &mut self,
+        text: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Result<Vec<String>, String>> {
+        if let Some(gate) = &self.0 {
+            drop(gate.started.send(text.to_owned()));
+            lock(&gate.release).recv().unwrap_or(());
+            gate.cancelled
+                .store(cancelled(), std::sync::atomic::Ordering::SeqCst);
+            if gate.ignore_cancel {
+                return Some(Ok(vec![text.to_owned()]));
+            }
+        }
+        if cancelled() {
+            None
+        } else {
+            Some(Ok(vec![text.to_owned()]))
+        }
+    }
+}
 impl crate::Machine for FakeMachine {
+    fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn crate::FileSearch> {
+        lock(&self.calls).push(serde_json::json!({"search":[workspace, home]}));
+        Box::new(FakeSearch(lock(&self.search_gate).clone()))
+    }
     fn configure(
         &self,
         operation: &str,

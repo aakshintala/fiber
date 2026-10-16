@@ -11,6 +11,8 @@ use crate::feed::invalid;
 
 /// Configuration on the machine running the hub, not the terminal.
 pub trait Machine: Send + Sync {
+    /// Creates a retained workspace search, resolving `~/` against `home`.
+    fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn FileSearch>;
     /// Runs one configuration operation with `operation` removed from `args`.
     fn configure(
         &self,
@@ -28,6 +30,16 @@ pub trait Machine: Send + Sync {
         text: &str,
         version: &str,
     ) -> Result<(), Failure>;
+}
+
+/// A connection's search core; only its search worker calls it.
+pub trait FileSearch: Send {
+    /// Returns rows or an error row, or no result once cancelled.
+    fn search(
+        &mut self,
+        text: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Result<Vec<String>, String>>;
 }
 
 pub(crate) fn on_configure(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {

@@ -28,6 +28,7 @@ mod error;
 #[cfg(test)]
 pub(crate) mod fake;
 mod feed;
+mod file_search;
 mod first;
 mod idle;
 mod listen;
@@ -68,7 +69,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::Machine;
+pub use crate::machine::{FileSearch, Machine};
 pub use crate::recent::{Left, RecentRow, append};
 
 /// What the hub reads from the configuration when it starts.

@@ -525,13 +525,21 @@ fn serve_from(
     hub.pairing.announce_owed(&hub, &who);
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
-    let mut fed = None;
+    let mut remote = Remote::default();
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &feed_closer, &relays, &mut fed, &who);
+                on_command(
+                    &buf,
+                    &hub,
+                    &writer,
+                    &feed_closer,
+                    &relays,
+                    &who,
+                    &mut remote,
+                );
             }
         }
     }
@@ -548,6 +556,8 @@ fn serve_from(
     // half-closed already disconnected the socket, and shutting down a
     // disconnected read half fails without unblocking anything.
     read.get_ref().shutdown(Shutdown::Write).unwrap_or(());
+    let fed = remote.fed.take();
+    drop(remote);
     if let Some(fed) = fed {
         hub.feed.unsubscribe(fed);
     }
@@ -580,14 +590,20 @@ fn disconnect(hub: &Hub, n: u64) {
     hub.release(n);
 }
 
+#[derive(Default)]
+struct Remote {
+    search: crate::file_search::Search,
+    fed: Option<u64>,
+}
+
 fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     closer: &crate::feed::Closer,
     relays: &Arc<Mutex<Relays>>,
-    fed: &mut Option<u64>,
     who: &crate::pairing::Who,
+    remote: &mut Remote,
 ) {
     if who.revoked() {
         return;
@@ -610,6 +626,9 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
+        "search_files" if hub.machine.is_some() => {
+            remote.search.submit(&line.id, &line.args, hub, writer)
+        }
         "configure" if hub.machine.is_some() => answer(
             writer,
             hub,
@@ -658,7 +677,7 @@ fn on_command(
             &line.id,
             crate::prompt_history::answer(&hub.home, &line.args).map(Some),
         ),
-        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, fed),
+        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, &mut remote.fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         "sessions" => {
