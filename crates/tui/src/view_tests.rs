@@ -1859,7 +1859,7 @@ fn the_target_under_the_pointer_gets_the_hover_background_only() {
             };
             let mut expected = before.clone();
             if y == 8 && x < 40 {
-                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+                expected.bg = Role::Hover.color();
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
@@ -1869,6 +1869,34 @@ fn the_target_under_the_pointer_gets_the_hover_background_only() {
         let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
         assert_eq!(off, plain, "{pointer:?}");
     }
+}
+
+#[test]
+fn hover_lifts_a_tinted_cell_and_keeps_hover_where_there_is_no_tint() {
+    use ratatui::style::Color;
+    let area = Rect::new(0, 0, 5, 1);
+    let mut buf = Buffer::empty(area);
+    buf[(0, 0)].set_bg(Role::Surface.color());
+    buf[(1, 0)].set_bg(Color::Rgb(0x10, 0x10, 0x17));
+    buf[(2, 0)].set_bg(Color::Reset);
+    buf[(3, 0)].set_bg(Role::Background.color());
+    buf[(4, 0)].set_bg(Role::Text.color());
+    super::lift_hover(&mut buf, area);
+    // A target on a tint draws it 0x14 lighter on each channel.
+    assert_eq!(buf[(0, 0)].bg, Color::Indexed(89), "the surface tint lifts");
+    assert_eq!(buf[(1, 0)].bg, Role::Hover.color(), "a literal tint lifts");
+    // A target with no tint under it draws the hover colour.
+    assert_eq!(buf[(2, 0)].bg, Role::Hover.color(), "no tint takes hover");
+    assert_eq!(
+        buf[(3, 0)].bg,
+        Role::Hover.color(),
+        "the background tint takes hover"
+    );
+    assert_eq!(
+        buf[(4, 0)].bg,
+        Role::Hover.color(),
+        "a foreground role takes hover"
+    );
 }
 
 /// The conversation-line targets drawn, as what each opens and its cells.
@@ -2130,7 +2158,7 @@ fn hovering_a_token_tints_every_cell_of_its_label_only() {
             };
             let mut expected = before.clone();
             if rects.iter().any(|rect| rect.contains(Position::new(x, y))) {
-                expected.bg = super::HOVER_TINT.bg.unwrap_or_default();
+                expected.bg = crate::theme::hover_bg(before.bg);
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
@@ -2670,9 +2698,9 @@ fn a_view_target_under_the_pointer_gets_the_hover_tint_alone() {
     let mut app = home_app();
     app.open_config_view(crate::app::ConfigView::Settings);
     let (hovered, _) = pointed(&mut app, WIDTH, HEIGHT, Some((WIDTH - 1, 0)));
-    // The whole top row is the one close target, so the hover tints
+    // The whole top row is the one close target, so the hover lifts
     // the whole row and no row under it (`docs/tui.md`, "Swapped views").
-    let tint = super::HOVER_TINT.bg;
+    let tint = Some(crate::theme::hover_bg(Role::Surface.color()));
     for x in 0..WIDTH {
         assert_eq!(
             hovered.cell((x, 0)).map(|cell| cell.bg),

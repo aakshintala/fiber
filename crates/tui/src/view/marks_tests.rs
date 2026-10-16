@@ -266,13 +266,13 @@ fn no_color_keeps_selection_and_matches_distinct() {
 }
 
 /// The screen with the pointer over the link, then a rule, then a mask:
-/// `#` where the hover tint is, `.` elsewhere.
+/// `#` where the lifted link tint is, `.` elsewhere.
 fn hover_shown(app: &App, width: u16, height: u16, at: (u16, u16)) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     super::super::render(app, area, &mut buf, Some(at));
     let mut mask = String::new();
-    let tint = super::super::HOVER_TINT.bg.unwrap_or_default();
+    let tint = crate::theme::hover_bg(Role::Turn.color());
     for y in 0..height {
         for x in 0..width {
             let lit = buf.cell((x, y)).is_some_and(|cell| cell.bg == tint);
@@ -328,7 +328,7 @@ fn a_bare_url_draws_in_accent_and_hover_keeps_it() {
     let cell = hovered[at].clone();
     assert_eq!(
         cell.bg,
-        super::super::HOVER_TINT.bg.unwrap_or_default(),
+        crate::theme::hover_bg(Role::Turn.color()),
         "the hovered link's tint"
     );
     assert_eq!(cell.fg, Role::Accent.color(), "the hovered link's colour");

@@ -340,6 +340,53 @@ fn paint_at_256_writes_palette_entries() {
 }
 
 #[test]
+fn paint_lifts_a_tint_marker() {
+    // Dark `surface` lifted 0x14 per channel (`docs/tui.md`, palette,
+    // `hover`).
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x2e, 0x2e, 0x36));
+}
+
+#[test]
+fn paint_lifts_the_light_surface() {
+    // Light `surface` (#eaeef2) averages above 0x80, so the lift moves
+    // 0x14 per channel away from the page: darker (`docs/tui.md`,
+    // palette, `hover`).
+    let look = look(ThemeSetting::Light, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0xd6, 0xda, 0xde));
+}
+
+#[test]
+fn lifted_light_surface_at_256_takes_the_grey_ramp() {
+    // At 256 colours the lifted light surface takes the surface's grey
+    // ramp entry: the lift, the role's ramp and the white-page rule,
+    // end to end.
+    let look = look(ThemeSetting::Light, &[("TERM", "xterm-256color")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Surface.lifted()))]);
+    look.paint(&mut buf);
+    let Color::Indexed(index) = buf[(0, 0)].bg else {
+        panic!("lifted surface at 256: {:?}", buf[(0, 0)].bg);
+    };
+    assert!(GREY.contains(&index), "grey ramp: {index}");
+    assert_eq!(index, 253, "the lifted surface's entry");
+}
+
+#[test]
+fn lift_at_the_threshold_goes_darker() {
+    // An input exactly at the threshold: dark `scroll` (#808080)
+    // averages 0x80, so the lift moves darker, not lighter
+    // (`docs/tui.md`, palette, `hover`).
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[("a", Style::new().bg(Role::Scroll.lifted()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x6c, 0x6c, 0x6c));
+}
+
+#[test]
 fn literal_rgb_resolves_by_depth() {
     let fg = Style::new()
         .fg(Color::Rgb(0, 0, 0))

@@ -57,8 +57,19 @@ pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 /// The notice overlay's tint.
 const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
 
-/// The background of the click target under the pointer.
-pub(crate) const HOVER_TINT: Style = Style::new().bg(Role::Hover.color());
+/// Paints `rect` as the click target under the pointer: each cell takes
+/// its own background 0x14 lighter on each channel where it sits on a
+/// tint, and the hover tint where it has none (`docs/tui.md`, palette,
+/// `hover`).
+pub(crate) fn lift_hover(buf: &mut Buffer, rect: Rect) {
+    let area = buf.area.intersection(rect);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let bg = buf[(x, y)].bg;
+            buf[(x, y)].set_bg(crate::theme::hover_bg(bg));
+        }
+    }
+}
 
 /// The focused click target's style in navigate mode: reversed, so it
 /// shows on every theme and with no colour.
@@ -90,7 +101,7 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 /// shown.
 ///
 /// Returns the click targets drawn, in draw order. Last, the target under
-/// `pointer`, if any, gets [`HOVER_TINT`] as its background.
+/// `pointer`, if any, gets [`lift_hover`] as its background.
 pub(crate) fn render(
     app: &App,
     area: Rect,
@@ -127,7 +138,7 @@ pub(crate) fn render(
         }
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
-                buf.set_style(target.rect, HOVER_TINT);
+                lift_hover(buf, target.rect);
             }
         }
         if let Some(id) = app.focused() {
@@ -276,7 +287,7 @@ pub(crate) fn render(
     }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, HOVER_TINT);
+            lift_hover(buf, target.rect);
         }
     }
     if let Some(id) = app.focused()

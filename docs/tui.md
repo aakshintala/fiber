@@ -285,7 +285,7 @@ rail sets it once. Home is the rail at full width ("Home").
 
 **← reaches the rail.** In an empty input box, ← moves focus into the rail,
 on the card of the session on screen; with text in the box, ← moves the
-cursor. The focused card is lifted: its tint 0x14 lighter, as hover draws it
+cursor. The focused card is lifted: its tint lifted, as hover draws it
 ("Mouse and hover"). The input box's stripe and text dim while the rail has
 focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · → or
 Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
@@ -1875,7 +1875,7 @@ The roles, in order, with each built-in theme's values:
 | `handoff` | the handoff band | `#1f1a2e` | `#efe9f9` |
 | `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` | `#eaeef2` |
 | `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` | `#ffd7d9` |
-| `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint 0x14 lighter on each channel | `#1e1e26` | `#e3e7ec` |
+| `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint lifted: 0x14 on each channel away from the page, lighter on a dark tint and darker on a light one (a tint whose channels average below 0x80 is dark) | `#1e1e26` | `#e3e7ec` |
 | `selection` | selected text | `#264f78` | `#b6d7ff` |
 | `match` | a search match, its text white | `#5a4a1a` | `#fff1a8` |
 | `match_current` | the current search match, its text black | `#ff9f43` | `#ffd67e` |

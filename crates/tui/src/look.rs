@@ -17,6 +17,30 @@ pub(crate) const BAR_TEXT: Color = Color::Rgb(0, 0, 0);
 /// (`docs/tui.md`, "Bindings").
 pub(crate) const TAB_BAR: Color = Color::Rgb(255, 255, 255);
 
+/// How much a hovered or focused tint moves per channel, away from the
+/// page (`docs/tui.md`, palette, `hover`).
+const LIFT: u8 = 0x14;
+
+/// One tint lifted 0x14 per channel away from the page: lighter when its
+/// channels average below 0x80, darker otherwise, saturating
+/// (`docs/tui.md`, palette, `hover`).
+fn lift_rgb((red, green, blue): Rgb) -> Rgb {
+    let average = (u16::from(red) + u16::from(green) + u16::from(blue)) / 3;
+    if average < 0x80 {
+        (
+            red.saturating_add(LIFT),
+            green.saturating_add(LIFT),
+            blue.saturating_add(LIFT),
+        )
+    } else {
+        (
+            red.saturating_sub(LIFT),
+            green.saturating_sub(LIFT),
+            blue.saturating_sub(LIFT),
+        )
+    }
+}
+
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
 pub enum ThemeSetting {
@@ -145,6 +169,9 @@ pub(crate) struct Look {
     depth: Depth,
     /// Each role's paint, by index.
     colours: [Paint; ROLES],
+    /// Each role's hover-lift paint, by index: the tint 0x14 lighter on
+    /// each channel (`docs/tui.md`, palette, `hover`).
+    lifted: [Paint; ROLES],
     /// Whether the theme follows the terminal's appearance.
     follow: bool,
     /// The terminal's appearance, as it last reported it.
@@ -199,6 +226,7 @@ impl Look {
                 Appearance::Light => Theme::LIGHT,
             };
             self.colours = Self::colours(&theme, self.depth);
+            self.lifted = Self::lifted_colours(&theme, self.depth);
         }
         changed
     }
@@ -214,12 +242,61 @@ impl Look {
         Look {
             depth,
             colours: Self::colours(theme, depth),
+            lifted: Self::lifted_colours(theme, depth),
             follow,
             appearance,
         }
     }
 
-    /// Each role's paint in `theme` at `depth`. A role the terminal
+    /// Each role's paint in `theme` at `depth`.
+    fn colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
+        Self::paints(theme, depth, false)
+    }
+
+    /// Each role's hover-lift paint in `theme` at `depth`: the shade 0x14
+    /// per channel away from the page before the depth step, so a neutral
+    /// tint keeps the grey ramp at 256 colours; a role the theme leaves
+    /// to the terminal takes the hover paint instead (`docs/tui.md`,
+    /// palette, `hover`).
+    fn lifted_colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
+        Self::paints(theme, depth, true)
+    }
+
+    /// Each role's paint, lifting the shade 0x14 per channel away from
+    /// the page first when `lift`. A lifted role the theme leaves to the
+    /// terminal takes the hover paint.
+    fn paints(theme: &Theme, depth: Depth, lift: bool) -> [Paint; ROLES] {
+        let white_page = theme.shade(Role::Background) == Shade::Rgb((0xff, 0xff, 0xff));
+        let hover = Self::paint_role(
+            theme,
+            depth,
+            white_page,
+            Role::Hover,
+            theme.shade(Role::Hover),
+        );
+        Role::ALL.map(|role| {
+            let shade = theme.shade(role);
+            if lift {
+                match shade {
+                    Shade::Rgb(rgb) => {
+                        return Self::paint_role(
+                            theme,
+                            depth,
+                            white_page,
+                            role,
+                            Shade::Rgb(lift_rgb(rgb)),
+                        );
+                    }
+                    Shade::Terminal | Shade::Dim => {
+                        return hover;
+                    }
+                }
+            }
+            Self::paint_role(theme, depth, white_page, role, shade)
+        })
+    }
+
+    /// One role's paint from its shade. A role the terminal
     /// draws itself stays the default at every depth, and a `Dim` shade
     /// resolves through the theme's text shade and draws dim at every
     /// depth, `NO_COLOR` included (`docs/tui.md`, "Themes"). On an
@@ -227,51 +304,53 @@ impl Look {
     /// which the grey ramp lacks, and any other tint that would resolve
     /// to 231 takes the ramp's lightest, 255, so every tint stays
     /// visible on the page (`docs/tui.md`, "Themes").
-    fn colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
-        let white_page = theme.shade(Role::Background) == Shade::Rgb((0xff, 0xff, 0xff));
-        Role::ALL.map(|role| {
-            let shade = theme.shade(role);
-            match shade {
-                Shade::Terminal => Paint {
-                    colour: Color::Reset,
-                    dim: false,
-                },
-                // `muted` is the text colour drawn dim: it follows the
-                // theme's text shade, so on a white page it never
-                // resolves to a white terminal foreground it would
-                // vanish on (`docs/tui.md`, "Themes").
-                Shade::Dim => Paint {
-                    colour: match theme.shade(Role::Text) {
-                        Shade::Terminal | Shade::Dim => Color::Reset,
-                        Shade::Rgb(rgb) => match depth {
-                            Depth::NoColour => Color::Reset,
-                            Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
-                            Depth::Ansi256 => Color::Indexed(ansi256(rgb, 16..=255)),
-                        },
-                    },
-                    dim: true,
-                },
-                Shade::Rgb(rgb) => Paint {
-                    colour: match depth {
+    fn paint_role(
+        theme: &Theme,
+        depth: Depth,
+        white_page: bool,
+        role: Role,
+        shade: Shade,
+    ) -> Paint {
+        match shade {
+            Shade::Terminal => Paint {
+                colour: Color::Reset,
+                dim: false,
+            },
+            // `muted` is the text colour drawn dim: it follows the
+            // theme's text shade, so on a white page it never
+            // resolves to a white terminal foreground it would
+            // vanish on (`docs/tui.md`, "Themes").
+            Shade::Dim => Paint {
+                colour: match theme.shade(Role::Text) {
+                    Shade::Terminal | Shade::Dim => Color::Reset,
+                    Shade::Rgb(rgb) => match depth {
                         Depth::NoColour => Color::Reset,
                         Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
-                        Depth::Ansi256 => {
-                            if white_page && role == Role::Background {
-                                Color::Indexed(231)
+                        Depth::Ansi256 => Color::Indexed(ansi256(rgb, 16..=255)),
+                    },
+                },
+                dim: true,
+            },
+            Shade::Rgb(rgb) => Paint {
+                colour: match depth {
+                    Depth::NoColour => Color::Reset,
+                    Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
+                    Depth::Ansi256 => {
+                        if white_page && role == Role::Background {
+                            Color::Indexed(231)
+                        } else {
+                            let index = ansi256(rgb, among(role));
+                            if white_page && role.tint() && index == 231 {
+                                Color::Indexed(255)
                             } else {
-                                let index = ansi256(rgb, among(role));
-                                if white_page && role.tint() && index == 231 {
-                                    Color::Indexed(255)
-                                } else {
-                                    Color::Indexed(index)
-                                }
+                                Color::Indexed(index)
                             }
                         }
-                    },
-                    dim: false,
+                    }
                 },
-            }
-        })
+                dim: false,
+            },
+        }
     }
 
     /// The colour `role` resolves to.
@@ -313,10 +392,10 @@ impl Look {
         }
     }
 
-    /// `colour` with a role marker resolved, and a literal `Rgb`
-    /// resolved by depth: unchanged in truecolour, the nearest text
-    /// entry at 256 colours, and the default with no colour (docs/tui.md,
-    /// "Look").
+    /// `colour` with a lifted marker or a role marker resolved, and a
+    /// literal `Rgb` resolved by depth: unchanged in truecolour, the
+    /// nearest text entry at 256 colours, and the default with no colour
+    /// (docs/tui.md, "Look").
     fn resolved(&self, colour: Color) -> Color {
         if let Color::Rgb(red, green, blue) = colour {
             return match self.depth {
@@ -324,6 +403,15 @@ impl Look {
                 Depth::Ansi256 => Color::Indexed(ansi256((red, green, blue), among(Role::Text))),
                 Depth::NoColour => Color::Reset,
             };
+        }
+        if let Color::Indexed(index) = colour
+            && let Some(role) = Role::from_lifted(index)
+        {
+            return self
+                .lifted
+                .get(usize::from(role as u8))
+                .map(|paint| paint.colour)
+                .unwrap_or(Color::Reset);
         }
         role_of(colour).map_or(colour, |role| self.colour(role))
     }
