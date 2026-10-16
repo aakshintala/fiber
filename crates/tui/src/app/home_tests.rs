@@ -90,9 +90,12 @@ fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
     let heads: Vec<_> = screen
         .list
         .iter()
-        .filter_map(|line| match line {
-            crate::home::ListLine::Head { name, .. } => Some(name.as_str()),
-            _ => None,
+        .filter_map(|line| {
+            if let crate::home::ListLine::Head { name, .. } = line {
+                Some(name.as_str())
+            } else {
+                None
+            }
         })
         .collect();
     assert_eq!(heads, ["a", "b"]);

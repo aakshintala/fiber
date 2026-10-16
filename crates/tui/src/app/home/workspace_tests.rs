@@ -359,12 +359,12 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
         linked(&mut app);
         assert!(recents(&app).is_empty());
         let mut row = live("s_aaaaaaaaaaaaaaaa", "same path", "/sentinel/launch-dir");
-        if let Line::Session(envelope) = &mut row {
-            if git {
-                envelope
-                    .payload
-                    .insert("git".to_owned(), json!({"branch":"main"}));
-            }
+        if let Line::Session(envelope) = &mut row
+            && git
+        {
+            envelope
+                .payload
+                .insert("git".to_owned(), json!({"branch":"main"}));
         }
         app.on_line(row);
         assert_eq!(recents(&app), ["/sentinel/launch-dir"]);
