@@ -159,6 +159,8 @@ fn each_entry_is_its_line_with_one_line_either_side() {
     assert_eq!(
         view.entries,
         vec![Snippet {
+            path: String::new(),
+            turn: Some(0),
             before: "before".to_owned(),
             line: "needle".to_owned(),
             at: 0..6,

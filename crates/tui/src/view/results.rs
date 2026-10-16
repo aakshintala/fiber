@@ -81,6 +81,7 @@ fn entry_row(entry: &Snippet, width: u16) -> (String, Range<u16>) {
         line,
         at,
         after,
+        ..
     } = entry;
     let mut text = String::new();
     if !before.is_empty() {

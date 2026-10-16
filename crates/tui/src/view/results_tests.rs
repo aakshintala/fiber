@@ -89,6 +89,8 @@ fn results_with_the_selected_entry_scrolled() {
 #[test]
 fn a_long_row_windows_around_its_match() {
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: "before".to_owned(),
         line: format!("a needle {}", "x".repeat(400)),
         at: 2..8,
@@ -110,6 +112,8 @@ fn a_match_exactly_the_views_width_fills_it() {
     // The hit alone is exactly `target`: the window is the hit, which
     // tells `>` from `>=` in the clip guard.
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: format!("needle{}", "x".repeat(400)),
         at: 0..6,
@@ -125,6 +129,8 @@ fn a_wide_char_with_room_to_spare_is_kept() {
     // `\u{3042}` is two cells: with 8 cells for it and `needle` the
     // window keeps it, which tells `<=` from `<` in the growth guard.
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "\u{3042}needle".to_owned(),
         at: 1..7,
@@ -139,6 +145,8 @@ fn a_wide_char_with_room_to_spare_is_kept() {
 #[test]
 fn a_match_wider_than_the_view_clips_at_its_edge() {
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "needle".to_owned(),
         at: 0..6,
@@ -152,6 +160,8 @@ fn a_match_wider_than_the_view_clips_at_its_edge() {
 #[test]
 fn a_row_for_no_cells_is_empty() {
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: "before".to_owned(),
         line: "needle".to_owned(),
         at: 0..6,
@@ -165,6 +175,8 @@ fn a_wide_char_straddling_the_window_edge_is_dropped() {
     // `\u{3042}` is two cells: ending the window mid-char drops it,
     // so the row never runs past the view.
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "\u{3042}needle".to_owned(),
         at: 1..7,
@@ -178,6 +190,8 @@ fn a_wide_char_straddling_the_window_edge_is_dropped() {
 #[test]
 fn an_entry_at_a_page_edge_shows_only_what_the_scan_kept() {
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "needle".to_owned(),
         at: 0..6,
@@ -331,6 +345,8 @@ fn among(piece: &str, after: bool) -> Snippet {
     let start = context.chars().count();
     let tail = if after { context.as_str() } else { "" };
     Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: format!("{context}needle{tail}"),
         at: start..start + 6,
@@ -364,6 +380,8 @@ fn every_kind_of_context_keeps_the_match_drawn_and_marked() {
 fn a_match_opening_the_row_is_drawn_at_its_start() {
     for width in WIDTHS {
         let entry = Snippet {
+            path: String::new(),
+            turn: None,
             before: String::new(),
             line: format!("needle{}", PIECES[4].repeat(100)),
             at: 0..6,
@@ -380,6 +398,8 @@ fn a_match_opening_the_row_is_drawn_at_its_start() {
 fn a_match_ending_the_row_is_drawn_at_its_end() {
     for width in WIDTHS {
         let entry = Snippet {
+            path: String::new(),
+            turn: None,
             before: PIECES[4].repeat(100),
             line: "needle".to_owned(),
             at: 0..6,
@@ -397,6 +417,8 @@ fn a_match_wider_than_the_view_is_drawn_clipped() {
     let letters = "abcdefghij".repeat(10);
     for width in WIDTHS {
         let entry = Snippet {
+            path: String::new(),
+            turn: None,
             before: PIECES[4].repeat(100),
             line: letters.clone(),
             at: 0..100,
@@ -408,6 +430,8 @@ fn a_match_wider_than_the_view_is_drawn_clipped() {
     }
     // A wide match clips at its last whole grapheme.
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "\u{3042}".repeat(50),
         at: 0..50,
@@ -420,6 +444,8 @@ fn a_match_wider_than_the_view_is_drawn_clipped() {
 #[test]
 fn a_row_exactly_the_views_width_is_drawn_whole() {
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: "ab".to_owned(),
         line: "needle".to_owned(),
         at: 0..6,
@@ -441,6 +467,8 @@ fn an_empty_match_anchors_the_window_at_its_bytes() {
     // The window grows from the grapheme starting at the empty match,
     // `7`, one cell each side in turn: never from the one before it.
     let entry = Snippet {
+        path: String::new(),
+        turn: None,
         before: String::new(),
         line: "0123456789".repeat(40),
         at: 7..7,
