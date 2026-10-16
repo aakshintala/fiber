@@ -451,11 +451,12 @@ fn draw_list(
 ) {
     let capacity = usize::from(placed.list_end.saturating_sub(placed.list_top));
     let rows = list_rows(screen);
-    let focused = match app.focused() {
-        Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => Some(Spot::Entry(key)),
-        Some(TargetId::Home(Spot::More(key))) => Some(Spot::More(key)),
-        _ => None,
-    };
+    let focused = app.focused().and_then(|target| {
+        let TargetId::Home(spot) = target else {
+            return None;
+        };
+        spot.list_stop()
+    });
     let start = focused
         .and_then(|spot| rows.iter().position(|r| r.spot == Some(spot)))
         .map_or(0, |at| {

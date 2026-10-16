@@ -674,17 +674,12 @@ impl App {
         }
         // j follows the drawn list order; when it reaches the last drawn
         // stop it advances into the next logical row, or pages recents.
-        let Some(TargetId::Home(
-            spot @ (Spot::Entry(key) | Spot::Stop(key) | Spot::More(key)),
-        )) = self.focus
+        let Some(TargetId::Home(spot @ (Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)))) =
+            self.focus
         else {
             return None;
         };
-        let current = if matches!(spot, Spot::More(_)) {
-            Spot::More(key)
-        } else {
-            Spot::Entry(key)
-        };
+        let current = spot.list_stop()?;
         if matches!(spot, Spot::Entry(key) if self.stops.iter().any(|target| target.id == TargetId::Home(Spot::Stop(key))))
             || self.list_stops().last().copied() != Some(current)
         {

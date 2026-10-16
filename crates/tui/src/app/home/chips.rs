@@ -98,22 +98,10 @@ impl App {
             let TargetId::Home(spot) = id else {
                 continue;
             };
-            let spot = match spot {
-                Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
-                Spot::More(key) => Some(Spot::More(key)),
-                Spot::Start(_)
-                | Spot::Workspace
-                | Spot::Worktree
-                | Spot::Model
-                | Spot::Thinking
-                | Spot::Pick(_)
-                | Spot::Quit(_)
-                | Spot::Keep
-                | Spot::Question => None,
+            let Some(spot) = spot.list_stop() else {
+                continue;
             };
-            if let Some(spot) = spot
-                && stops.last() != Some(&spot)
-            {
+            if stops.last() != Some(&spot) {
                 stops.push(spot);
             }
         }
@@ -272,19 +260,7 @@ impl App {
         let TargetId::Home(spot) = focus else {
             return None;
         };
-        let current = match spot {
-            Spot::Entry(key) | Spot::Stop(key) => Spot::Entry(key),
-            Spot::More(key) => Spot::More(key),
-            Spot::Start(_)
-            | Spot::Workspace
-            | Spot::Worktree
-            | Spot::Model
-            | Spot::Thinking
-            | Spot::Pick(_)
-            | Spot::Keep
-            | Spot::Question
-            | Spot::Quit(_) => return None,
-        };
+        let current = spot.list_stop()?;
         if !drawn.contains(&current) {
             return Some(Effect::None);
         }

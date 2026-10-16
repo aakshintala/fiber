@@ -52,6 +52,24 @@ pub(crate) enum Spot {
 }
 
 impl Spot {
+    /// Whether the spot is a list stop: an entry and its cross normalize
+    /// to the entry, and `More` stays its own stop.
+    pub(crate) fn list_stop(self) -> Option<Spot> {
+        match self {
+            Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
+            Spot::More(key) => Some(Spot::More(key)),
+            Spot::Start(_)
+            | Spot::Workspace
+            | Spot::Worktree
+            | Spot::Model
+            | Spot::Thinking
+            | Spot::Pick(_)
+            | Spot::Quit(_)
+            | Spot::Keep
+            | Spot::Question => None,
+        }
+    }
+
     /// Whether the spot is a chip of the chip row: the workspace chip,
     /// the new worktree switch, the model chip or the thinking chip.
     pub(crate) fn is_chip(self) -> bool {
