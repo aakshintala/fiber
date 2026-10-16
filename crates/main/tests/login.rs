@@ -30,7 +30,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use support::write_record;
 
-use fakes::Watchdog;
+use fakes::{ProviderServer, Response, Watchdog};
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
@@ -1618,30 +1618,10 @@ fn a_reviewer_write_failure_names_the_key_and_keeps_the_credential() {
 fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing() {
     // A provider whose `models()` pings a held loopback server: the
     // request proves discovery is in flight before any reviewer prompt.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
     let setup = Setup::new_with_fl_root();
-    let deadline = setup.deadline;
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") {
-            if stream.read(&mut byte).unwrap() == 0 {
-                break;
-            }
-            head.push(byte[0]);
-        }
-        entered_tx.send(()).unwrap();
-        // A disconnect releases the hold, so a failed test cannot wedge
-        // the child in its callback: the reply still releases it.
-        deadline.recv(&release_rx).unwrap_or(());
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
-            .unwrap_or(());
-    });
+    let held = ProviderServer::start([Response::status(200, "{}")]).unwrap();
+    held.hold();
+    let url = format!("{}/ping", held.url());
     let dir = setup.home().join("extensions").join("held");
     fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
@@ -1664,7 +1644,7 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
         dir.join("providers/held.lua"),
         format!(
             "fiber.provider(\"held\", {{models = {{timeout = 30000, run = function()\n\
-              host.http({{url = \"http://127.0.0.1:{port}/ping\"}})\n\
+              host.http({{url = \"{url}\"}})\n\
               return {{{{id = \"live-m\", protocol = \"openai-responses\", \
               base_url = \"http://127.0.0.1:9/v1\", context_window = 1000}}}}\n\
               end}}}})\n"
@@ -1676,17 +1656,17 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/held/default");
-    setup
-        .deadline
-        .recv(&entered_rx)
-        .expect("discovery requested while the reviewer prompt was still down");
+    assert!(
+        held.await_requests(1, setup.deadline.left()),
+        "discovery requested while the reviewer prompt was still down"
+    );
     assert!(
         !run.screen.seen.contains("Reviewer"),
         "no prompt before discovery ends: {:?}",
         run.screen.seen
     );
     assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
-    release_tx.send(()).unwrap();
+    held.release();
     run.screen.wait_for("no reviewer was set");
     let status = run.finish();
     let shown = &run.screen.seen;
@@ -1707,5 +1687,4 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
             .is_some_and(|provider| provider.contains_key("reviewer_model")),
         "no reviewer was written"
     );
-    server.join().unwrap();
 }
