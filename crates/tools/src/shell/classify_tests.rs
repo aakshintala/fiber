@@ -6,6 +6,20 @@ use contract::tool::Effects;
 use super::super::read_only::COMMANDS;
 use super::{Lexer, Part, Word, classify};
 
+#[test]
+fn one_grep_accepts_only_one_plain_builtin_command() {
+    for command in ["grep x a.txt", "grep -n x a.txt 2>/dev/null", "grep x a.txt 2>&1",
+        "'grep' x a.txt", "\"grep\" x a.txt", "grep"] {
+        assert!(super::one_grep(command), "{command}");
+    }
+    for command in ["", "cat a | grep x", "grep x a; ls", "grep x a && ls", "grep x a || ls",
+        "command grep x a", "/usr/bin/grep x a", "rg x", "FOO=1 grep x a", "env grep x a",
+        "grep x a > out", "grep $(echo x) a", "grep x *.rs", "\\grep x a", "echo grep x a",
+        "grep x a\ngrep x b", "grep x a &", "grep x a;", "grep x a | grep x a | grep x a"] {
+        assert!(!super::one_grep(command), "{command}");
+    }
+}
+
 fn plain(text: &str) -> Word {
     Word {
         raw: text.to_owned(),

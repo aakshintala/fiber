@@ -125,6 +125,7 @@ pub(crate) fn execute(
     policy: MovePolicy,
     jobs: Option<&dyn Jobs>,
     spill: Option<SpillConfig>,
+    matches: Option<&Path>,
 ) -> Result<Ran, std::io::Error> {
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
@@ -154,6 +155,9 @@ pub(crate) fn execute(
         Box::new(read)
     };
     scrub_env(&mut cmd);
+    if let Some(path) = matches {
+        cmd.env(crate::search::matches::MATCHES_ENV, path);
+    }
     support::group::detach(&mut cmd, tty);
     let (child, listing) = support::group::spawn(&mut cmd).map_err(|source| match source {
         support::group::Error::Spawn(error) => error,

@@ -354,6 +354,12 @@ struct Part {
     words: Vec<Word>,
 }
 
+pub(super) fn one_grep(command: &str) -> bool {
+    let Some(parts) = Lexer::new(command).run() else { return false; };
+    let [part] = parts.as_slice() else { return false; };
+    part.words.first().is_some_and(|word| word.cooked == "grep")
+}
+
 struct Lexer<'a> {
     chars: std::iter::Peekable<std::str::Chars<'a>>,
     parts: Vec<Part>,

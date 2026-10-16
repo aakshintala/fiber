@@ -35,6 +35,81 @@ fn text(output: &contract::tool::Output) -> String {
     }
 }
 
+fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::tool::Output {
+    let (send, recv) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = send.send(shell.run(&arguments, &CancelToken::new(), &Recorder::default()));
+    });
+    fakes::Deadline::after(Duration::from_secs(10)).recv_or_fail(&recv, "shell match details")
+}
+
+#[test]
+fn shell_attaches_only_strict_foreground_grep_match_records_and_cleans_up() {
+    let dir = fakes::TempDir::new("fiber-shell-match-details");
+    std::fs::write(dir.path().join("a.txt"), "needle\n").unwrap();
+    let fiber = fakes::script(dir.path(), "search-matches", r#"
+printf '%s' "$FIBER_GREP_MATCHES" > called
+printf '%s\n' '{"path":"a.txt","line":1,"text":"needle","spans":[[0,6]],"context":false}' '{"path":"a.txt","line":2,"text":"context","spans":[],"context":true}' > "$FIBER_GREP_MATCHES"
+printf 'needle\n'
+"#);
+    for (command, attaches) in [("grep needle a.txt",true), ("'grep' needle a.txt",true),
+        ("grep needle a.txt 2>/dev/null",true), ("grep needle a.txt 2>&1",true),
+        ("cat a.txt | grep needle",false), ("grep needle a.txt; true",false),
+        ("grep needle a.txt > out",false), ("command grep needle a.txt",false)] {
+        let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber.clone());
+        let output = run_details_call(shell, args(command));
+        assert!(output.error.is_none(), "{command}: {:?}", output.error);
+        let details = output.details.unwrap();
+        assert_eq!(details["command"], command);
+        assert_eq!(details["exit_code"], 0);
+        let expected = attaches.then(|| json!([{"path":"a.txt", "lines":[
+            {"line":1,"text":"needle","spans":[[0,6]]},
+            {"line":2,"text":"context","spans":[]}
+        ]}]));
+        assert_eq!(details.get("matches"), expected.as_ref(), "{command}");
+        if let Ok(called) = std::fs::read_to_string(dir.path().join("called")) {
+            let path = Path::new(&called).parent().unwrap();
+            assert!(!path.exists());
+            assert!(!path.with_extension("gone").exists());
+            std::fs::remove_file(dir.path().join("called")).unwrap();
+        }
+    }
+}
+
+#[test]
+fn shell_ignores_missing_or_malformed_side_files_and_search_off_carries_no_variable() {
+    let dir = fakes::TempDir::new("fiber-shell-match-missing");
+    for (name, body) in [("missing", "printf needle"),
+        ("malformed", "printf 'not json\\n' > \"$FIBER_GREP_MATCHES\"; printf needle")] {
+        let fiber = fakes::script(dir.path(), name, body);
+        let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber);
+        let output = run_details_call(shell, args("grep needle a.txt"));
+        assert_eq!(output.details, Some(json!({"command":"grep needle a.txt", "exit_code":0})));
+        assert!(text(&output).contains("needle"));
+    }
+    let output = run_details_call(Shell::new(dir.path().to_path_buf(), FakeClock::new()),
+        args("printf '%s' \"${FIBER_GREP_MATCHES-unset}\""));
+    assert_eq!(text(&output), "unset\nExit code 0.\n");
+}
+
+#[test]
+fn background_search_has_no_match_side_channel() {
+    let dir = fakes::TempDir::new("fiber-shell-background-matches");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let fiber = fakes::script(dir.path(), "background-search", "printf '%s' \"${FIBER_GREP_MATCHES-unset}\"");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_search(fiber).with_jobs(jobs.clone());
+    let mut arguments = args("grep needle a.txt");
+    arguments.insert("run_in_background".into(), json!(true));
+    let output = run_details_call(shell, arguments);
+    let ended = jobs.ended(Duration::from_secs(10)).expect("background grep ended");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(output.details, Some(json!({"command":"grep needle a.txt"})));
+    let [JobRecord::Started(started)] = output.jobs.as_slice() else { panic!("one job"); };
+    assert!(text(&output).contains("Started in the background."));
+    let file = dir.path().join(&started.output_path);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "unset");
+}
+
 fn effects(shell: &Shell, command: &str) -> contract::tool::Effects {
     shell.effects(&args(command)).unwrap()
 }
@@ -421,8 +496,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         &Recorder::default(),
         super::command::MovePolicy::Stay,
         None,
-        None,
-    );
+        None, None);
     assert!(err.is_err());
 }
 

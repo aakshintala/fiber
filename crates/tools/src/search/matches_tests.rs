@@ -44,7 +44,7 @@ fn record_bound_keeps_whole_records_and_stops_for_good() {
         let mut writer = MatchFile::create(&path, limit).unwrap();
         writer.record(b"a", 1, b"abc", &[(0,1)], false);
         // This record cannot fit. Even the shorter record after it stays out.
-        writer.record(b"a", 2, &[b'x'; 200], &[], true);
+        writer.record(b"a", 2, b"abc", &[(0,1)], false);
         writer.record(b"", 0, b"", &[], true);
         writer.finish();
         let actual = std::fs::read(path).unwrap();

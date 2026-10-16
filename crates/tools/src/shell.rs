@@ -41,6 +41,7 @@ mod tty;
 mod read_only;
 
 mod classify;
+mod matches;
 
 mod sed;
 
@@ -293,7 +294,13 @@ impl Tool for Shell {
         } else {
             None
         };
-        match command::execute(
+        let matches = if self.search.is_some() && parsed.mode == Mode::Foreground {
+            matches::MatchDir::create()
+        } else {
+            None
+        };
+        let side = matches.as_ref().map(matches::MatchDir::file);
+        let mut output = match command::execute(
             program,
             &command,
             &parsed.workdir,
@@ -304,6 +311,7 @@ impl Tool for Shell {
             policy,
             self.jobs.as_deref(),
             spill,
+            side.as_deref(),
         ) {
             Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit, &parsed.command),
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
@@ -325,7 +333,15 @@ impl Tool for Shell {
                 }
             },
             Err(err) => from_spawn(Err(err), limit, &parsed.command),
+        };
+        if output.process.is_some() && classify::one_grep(&parsed.command)
+            && let Some(side) = side
+            && let Some(matches) = matches::read(&side, crate::search::matches::LIMIT)
+            && let Some(Value::Object(details)) = output.details.as_mut()
+        {
+            details.insert("matches".into(), matches);
         }
+        output
     }
 
     fn bound(&self) -> Bound {

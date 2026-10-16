@@ -311,8 +311,7 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
             &Recorder::default(),
             MovePolicy::Stay,
             None,
-            None,
-        )
+            None, None)
         .unwrap();
         let super::Ran::Finished(finished) = ran else {
             panic!("a command that may not move moved");
@@ -959,8 +958,7 @@ impl Job {
             &Recorder::default(),
             MovePolicy::Background,
             None,
-            None,
-        )
+            None, None)
         .unwrap();
         let super::Ran::Moved(mut moved) = ran else {
             panic!("the command did not move");
@@ -1170,8 +1168,7 @@ fn a_foreground_command_past_a_mebibyte_spills() {
                 &Recorder::default(),
                 MovePolicy::Foreground,
                 None,
-                Some(spill_config(&artifacts)),
-            )
+                Some(spill_config(&artifacts)), None)
             .unwrap()
         },
     );
@@ -1219,8 +1216,7 @@ fn a_command_moved_at_once_never_spills() {
                 &Recorder::default(),
                 MovePolicy::Background,
                 None,
-                Some(spill_config(&artifacts)),
-            )
+                Some(spill_config(&artifacts)), None)
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
                 panic!("a background command did not move");
@@ -1277,8 +1273,7 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
                 &Recorder::default(),
                 MovePolicy::Background,
                 None,
-                Some(spill_config(&artifacts)),
-            )
+                Some(spill_config(&artifacts)), None)
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
                 panic!("a background command did not move");
@@ -1339,8 +1334,7 @@ fn a_resumed_command_arms_the_spill() {
                 &Recorder::default(),
                 MovePolicy::Background,
                 None,
-                Some(spill_config(&artifacts)),
-            )
+                Some(spill_config(&artifacts)), None)
             .unwrap();
             let super::Ran::Moved(moved) = ran else {
                 panic!("a background command did not move");
