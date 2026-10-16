@@ -124,10 +124,10 @@ pub(crate) fn hub_answers(home: &Path, clock: &dyn Clock, within: Duration) -> b
 /// sync failed.
 type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), Failure>;
 
-/// Installs `service` listening on `port` as well as its socket, and loads
-/// it. `hub_answers` says whether a hub already answers on `run/hub`.
-/// `write` writes the unit file: a failed write restores like a failed
-/// manager call.
+/// Runs a manager command to completion.
+type ManagerRun = dyn Fn(&str, &[String]) -> io::Result<Ran>;
+
+/// install's inputs, bundled so the signature stays small.
 pub(crate) struct InstallRow<'a> {
     pub(crate) home: &'a Path,
     pub(crate) port: Option<u16>,
@@ -137,9 +137,13 @@ pub(crate) struct InstallRow<'a> {
     pub(crate) write: &'a UnitWrite,
 }
 
+/// Installs `service` listening on `port` as well as its socket, and loads
+/// it. `hub_answers` says whether a hub already answers on `run/hub`.
+/// `write` writes the unit file: a failed write restores like a failed
+/// manager call.
 pub(crate) fn install(
     service: &Service,
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
+    run: &ManagerRun,
     row: InstallRow<'_>,
 ) -> Result<(), Failure> {
     config::replace_global(row.home, "hub.port", row.port.map(Value::from))
@@ -187,7 +191,7 @@ pub(crate) fn install(
 /// the service was loaded, and whether the file changed.
 fn load(
     service: &Service,
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
+    run: &ManagerRun,
     clock: &dyn Clock,
     loaded: bool,
     changed: bool,
@@ -235,7 +239,7 @@ fn load(
 fn await_gone(
     service: &Service,
     uid: u32,
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
+    run: &ManagerRun,
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
     let deadline = clock.now() + BOOTOUT_DEADLINE;
@@ -259,7 +263,7 @@ fn await_gone(
 /// Unloads `service` and deletes its unit file. Running sessions carry on.
 pub(crate) fn uninstall(
     service: &Service,
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
+    run: &ManagerRun,
     out: &mut dyn Write,
 ) -> Result<(), Failure> {
     let removed = match service.manager {
@@ -298,10 +302,7 @@ pub(crate) fn uninstall(
 
 /// Restarts the installed service; `Ok(false)` with no call when its unit
 /// file is absent.
-pub(crate) fn restart(
-    service: &Service,
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
-) -> Result<bool, Failure> {
+pub(crate) fn restart(service: &Service, run: &ManagerRun) -> Result<bool, Failure> {
     if read_unit(&service.unit)?.is_none() {
         return Ok(false);
     }
@@ -342,11 +343,7 @@ fn user(args: &[&str]) -> Vec<String> {
 
 /// Runs a manager command; a missing program names what the installed hub
 /// needs.
-fn call(
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
-    program: &str,
-    args: &[String],
-) -> Result<Ran, Failure> {
+fn call(run: &ManagerRun, program: &str, args: &[String]) -> Result<Ran, Failure> {
     run(program, args).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             let needs = if program == "launchctl" {
@@ -366,11 +363,7 @@ fn call(
 
 /// [`call`], failing when the command fails, naming it, its exit code and
 /// the first line of its stderr.
-fn must(
-    run: &dyn Fn(&str, &[String]) -> io::Result<Ran>,
-    program: &str,
-    args: &[String],
-) -> Result<(), Failure> {
+fn must(run: &ManagerRun, program: &str, args: &[String]) -> Result<(), Failure> {
     let ran = call(run, program, args)?;
     if ran.success {
         return Ok(());

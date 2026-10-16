@@ -132,13 +132,10 @@ pub(super) fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    match (
-                        wait_deadline(policy, progress.timeout_at, progress.move_at),
-                        held_until,
-                    ) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (one, other) => one.or(other),
-                    },
+                    wait_deadline(policy, progress.timeout_at, progress.move_at)
+                        .into_iter()
+                        .chain(held_until)
+                        .min(),
                     view.reaped,
                     true,
                     view.seq,
@@ -163,10 +160,7 @@ pub(super) fn pump(
                         clock,
                         &progress.shared,
                         cancel,
-                        match (Some(kill_at), held_until) {
-                            (Some(a), Some(b)) => Some(a.min(b)),
-                            (one, other) => one.or(other),
-                        },
+                        Some(kill_at).into_iter().chain(held_until).min(),
                         true,
                         false,
                         view.seq,
@@ -211,10 +205,7 @@ pub(super) fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    match (Some(until), held_until) {
-                        (Some(a), Some(b)) => Some(a.min(b)),
-                        (one, other) => one.or(other),
-                    },
+                    Some(until).into_iter().chain(held_until).min(),
                     !progress.seen_empty,
                     false,
                     view.seq,
