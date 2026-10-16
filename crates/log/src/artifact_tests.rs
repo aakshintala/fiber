@@ -281,6 +281,17 @@ fn an_unreadable_file_is_unreadable() {
 }
 
 #[test]
+fn a_name_too_long_to_stat_is_unreadable() {
+    let temp = Temp::new();
+    let path = format!("artifacts/{}", "x".repeat(300));
+    assert!(check_artifact_path(&path).is_ok());
+    assert!(
+        matches!(open_artifact(&temp.dir, &path), Err(Refusal::Unreadable(_))),
+        "{path:?}"
+    );
+}
+
+#[test]
 fn each_refusal_maps_to_its_stable_code() {
     use std::io::Error;
     let unreadable = || Refusal::Unreadable(Error::other("denied"));
