@@ -280,22 +280,28 @@ pub struct Removal {
     /// The extensions that go: the one asked for, then each dependency
     /// nothing left needs.
     pub names: Vec<String>,
-    /// Their data directories and settings files that exist.
+    /// Their data directories and settings files that exist, for the
+    /// prompt: every path it deletes is named before anything goes.
     pub data: Vec<PathBuf>,
+    home: PathBuf,
+    data_dirs: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
     _lock: Lock,
 }
 
 impl Removal {
     /// Deletes the extensions, their data directories and their settings.
+    /// The settings go through `config`, which owns their deletion; a
+    /// settings path that is a directory fails naming it, instead of
+    /// being removed as one.
     pub fn commit(self) -> Result<(), Error> {
-        for path in &self.data {
+        for path in &self.data_dirs {
             present(path)?;
         }
         for dir in &self.dirs {
             remove(dir)?;
         }
-        for path in &self.data {
+        for path in &self.data_dirs {
             // `present` already ran. A path that vanished since then is
             // already gone; any other failure names the path.
             let gone = if path.is_dir() {
@@ -308,6 +314,9 @@ impl Removal {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(io(path)(e)),
             }
+        }
+        for name in &self.names {
+            config::remove_extension_settings(&self.home, name)?;
         }
         Ok(())
     }
@@ -371,6 +380,7 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     let layers = layers(home)?;
     let mut dirs = Vec::new();
     let mut data = Vec::new();
+    let mut data_dirs = Vec::new();
     // The damaged directory is named by its directory, without reading
     // its record; every orphan cascades from its healthy name.
     let mut orphan_names = names.iter();
@@ -378,15 +388,19 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
         orphan_names.next();
         dirs.push(home.join("extensions").join(&dir));
         data.extend(existing_data(&layers, &dir)?);
+        data_dirs.extend(existing_data_dirs(&layers, &dir)?);
     }
     for name in orphan_names {
         let dir = slug(name)?;
         dirs.push(home.join("extensions").join(&dir));
         data.extend(existing_data(&layers, &dir)?);
+        data_dirs.extend(existing_data_dirs(&layers, &dir)?);
     }
     Ok(Removal {
         names,
         data,
+        home: home.to_path_buf(),
+        data_dirs,
         dirs,
         _lock: lock,
     })
@@ -418,7 +432,8 @@ fn layers(home: &Path) -> Result<Vec<PathBuf>, Error> {
 }
 
 /// The data directories and settings files that exist for the extension
-/// directory `dir`.
+/// directory `dir`. The settings paths are listed for the prompt only:
+/// `commit` deletes them through `config`.
 fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
     let mut data = Vec::new();
     for layer in layers {
@@ -432,6 +447,19 @@ fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
         }
     }
     Ok(data)
+}
+
+/// The data directories that exist for the extension directory `dir`:
+/// the half of [`existing_data`] `commit` deletes itself.
+fn existing_data_dirs(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
+    let mut dirs = Vec::new();
+    for layer in layers {
+        let path = layer.join("data").join(dir);
+        if present(&path)? {
+            dirs.push(path);
+        }
+    }
+    Ok(dirs)
 }
 
 #[cfg(test)]

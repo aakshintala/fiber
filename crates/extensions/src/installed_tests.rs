@@ -264,3 +264,134 @@ fn a_floor_does_not_keep_an_orphaned_dependency_installed() {
         "the floor goes with its directory"
     );
 }
+
+/// An installed extension with settings files: `extensions/<dir>/` holding
+/// a healthy record, and `config/<dir>.json` in the global and each
+/// project layer.
+fn installed_with_settings(home: &std::path::Path, name: &str, dir: &str, projects: &[&str]) {
+    installed_dir(
+        home,
+        dir,
+        name,
+        "{}",
+        &format!(
+            r#"{{"name":"{name}","version":"v1.0.0","requested":true,"source":{{"commit":"abc"}}}}"#
+        ),
+    );
+    for layer in std::iter::once(home.to_path_buf()).chain(
+        projects
+            .iter()
+            .map(|project| home.join("projects").join(project)),
+    ) {
+        let file = layer.join("config").join(format!("{dir}.json"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap_or_else(|e| panic!("mkdir: {e}"));
+        fs::write(&file, "{}").unwrap_or_else(|e| panic!("write: {e}"));
+    }
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn removal_deletes_the_settings_files_in_every_layer() {
+    let home = fakes::TempDir::new("fiber-remove-settings");
+    let name = "example.com/acme/x";
+    let dir = "example.com-acme-x";
+    installed_with_settings(home.path(), name, dir, &["p1", "p2"]);
+    for layer in ["", "projects/p1", "projects/p2"] {
+        let file = home.path().join(layer).join("config/other.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{}").unwrap();
+    }
+    let clock = fakes::clock::FakeClock::new();
+    let removal = super::removal(home.path(), name, &*clock).unwrap();
+    assert_eq!(removal.names, [name]);
+    removal.commit().unwrap();
+    for layer in ["", "projects/p1", "projects/p2"] {
+        assert!(
+            !home.path().join(layer).join(format!("config/{dir}.json")).exists(),
+            "{layer}: the settings file is gone"
+        );
+        assert!(
+            home.path().join(layer).join("config/other.json").exists(),
+            "{layer}: another extension's settings stay"
+        );
+    }
+    assert!(
+        !home.path().join("extensions").join(dir).exists(),
+        "the extension directory is gone"
+    );
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn removal_deletes_a_damaged_extensions_settings() {
+    let home = fakes::TempDir::new("fiber-remove-damaged-settings");
+    let name = "example.com/acme/x";
+    let dir = "example.com-acme-x";
+    // No record, so the directory reads as damaged under its manifest
+    // name, which slugs to the directory.
+    let path = home.path().join("extensions").join(dir);
+    fs::create_dir_all(&path).unwrap();
+    fs::write(
+        path.join("extension.json"),
+        format!(
+            r#"{{"name":"{name}","version":"v1.0.0","fiber":"0.1.0","api":1}}"#
+        ),
+    )
+    .unwrap();
+    for layer in [home.path().to_path_buf(), home.path().join("projects/p1")] {
+        let file = layer.join("config").join(format!("{dir}.json"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "{}").unwrap();
+    }
+    let clock = fakes::clock::FakeClock::new();
+    let removal = super::removal(home.path(), name, &*clock).unwrap();
+    assert_eq!(removal.names, [name]);
+    removal.commit().unwrap();
+    assert!(!home.path().join(format!("config/{dir}.json")).exists());
+    assert!(!home.path().join(format!("projects/p1/config/{dir}.json")).exists());
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn removal_still_lists_the_settings_files() {
+    let home = fakes::TempDir::new("fiber-remove-lists-settings");
+    let name = "example.com/acme/x";
+    let dir = "example.com-acme-x";
+    installed_with_settings(home.path(), name, dir, &["p1"]);
+    let data_dir = home.path().join("data").join(dir);
+    fs::create_dir_all(&data_dir).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let removal = super::removal(home.path(), name, &*clock).unwrap();
+    // The prompt names every file it deletes: the data directory and
+    // each layer's settings file.
+    assert_eq!(
+        removal.data,
+        vec![
+            data_dir,
+            home.path().join(format!("config/{dir}.json")),
+            home.path().join(format!("projects/p1/config/{dir}.json")),
+        ]
+    );
+}
+
+#[test]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+fn a_settings_failure_names_the_file() {
+    let home = fakes::TempDir::new("fiber-remove-settings-failure");
+    let name = "example.com/acme/x";
+    let dir = "example.com-acme-x";
+    installed_with_settings(home.path(), name, dir, &[]);
+    // A settings path that is a directory is damage `config` names,
+    // not a directory `commit` removes.
+    let settings = home.path().join(format!("config/{dir}.json"));
+    fs::remove_file(&settings).unwrap();
+    fs::create_dir_all(settings.join("sub")).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let removal = super::removal(home.path(), name, &*clock).unwrap();
+    let err = removal.commit().unwrap_err();
+    assert!(
+        matches!(err, crate::Error::Config(_)),
+        "the settings failure is a config error: {err}"
+    );
+    assert!(err.to_string().contains(&settings.display().to_string()), "{err}");
+}
