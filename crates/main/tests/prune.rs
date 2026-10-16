@@ -643,7 +643,12 @@ fn approval(setup: &Setup, prefix: &str) -> String {
         .into_iter()
         .filter(|name| name.starts_with(prefix))
         .collect();
-    assert_eq!(hits.len(), 1, "{prefix} in {:?}", names(&project(setup).join("approvals")));
+    assert_eq!(
+        hits.len(),
+        1,
+        "{prefix} in {:?}",
+        names(&project(setup).join("approvals"))
+    );
     hits.into_iter().next().unwrap()
 }
 
@@ -663,7 +668,11 @@ fn approved_repo(setup: &Setup) -> (String, String, String) {
     repo(setup);
     declare_hook(&setup.workspace(), "main\n");
     git(setup.deadline, &setup.workspace(), &["add", "."]);
-    git(setup.deadline, &setup.workspace(), &["commit", "--quiet", "-m", "hook"]);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["commit", "--quiet", "-m", "hook"],
+    );
     linked(setup, "a", "wa", "a\n");
     linked(setup, "b", "wb", "b\n");
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
@@ -675,7 +684,9 @@ fn approved_repo(setup: &Setup) -> (String, String, String) {
 
 /// The `pinned  ` lines of prune's stdout.
 fn pinned_lines(out: &str) -> Vec<&str> {
-    out.lines().filter(|line| line.starts_with("pinned  ")).collect()
+    out.lines()
+        .filter(|line| line.starts_with("pinned  "))
+        .collect()
 }
 
 #[test]
@@ -687,7 +698,11 @@ fn prune_removes_pinned_copies_no_worktree_matches() {
     git(
         setup.deadline,
         &setup.workspace(),
-        &["worktree", "remove", setup.root.path().join("wb").to_str().unwrap()],
+        &[
+            "worktree",
+            "remove",
+            setup.root.path().join("wb").to_str().unwrap(),
+        ],
     );
     let dry = prune(&setup, &["--dry-run"]);
     assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr));
@@ -698,26 +713,51 @@ fn prune_removes_pinned_copies_no_worktree_matches() {
     let (hash, size) = (fields[1], fields[2]);
     assert_eq!(hash, hash_b);
     assert!(out.contains(&format!("would free {size}")), "{out}");
-    assert!(setup.home().join("pinned").join(&hash_b).is_dir(), "dry-run deletes nothing");
+    assert!(
+        setup.home().join("pinned").join(&hash_b).is_dir(),
+        "dry-run deletes nothing"
+    );
     let yes = prune(&setup, &["--yes"]);
     assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr));
     let out = text(&yes.stdout);
     assert_eq!(pinned_lines(&out).len(), 1, "{out}");
     assert!(out.contains(&format!("pinned  {hash_b}  {size}")), "{out}");
     assert!(out.contains(&format!("freed {size}")), "{out}");
-    assert!(!setup.home().join("pinned").join(&hash_b).exists(), "the copy is gone");
-    assert!(!setup.home().join("pinned").join(format!("{hash_b}.ready")).exists());
+    assert!(
+        !setup.home().join("pinned").join(&hash_b).exists(),
+        "the copy is gone"
+    );
+    assert!(
+        !setup
+            .home()
+            .join("pinned")
+            .join(format!("{hash_b}.ready"))
+            .exists()
+    );
     // The other copies stay with their bytes, and every approval stays.
     let hash_a = copies(&setup)
         .into_iter()
         .find(|name| {
-            fs::read_to_string(setup.home().join("pinned").join(name).join("scripts/fmt.sh"))
-                .unwrap()
+            fs::read_to_string(
+                setup
+                    .home()
+                    .join("pinned")
+                    .join(name)
+                    .join("scripts/fmt.sh"),
+            )
+            .unwrap()
                 == "a\n"
         })
         .unwrap();
     assert_eq!(
-        fs::read_to_string(setup.home().join("pinned").join(&hash_a).join("scripts/fmt.sh")).unwrap(),
+        fs::read_to_string(
+            setup
+                .home()
+                .join("pinned")
+                .join(&hash_a)
+                .join("scripts/fmt.sh")
+        )
+        .unwrap(),
         "a\n"
     );
     assert!(setup.home().join("pinned").join(&hash_main).is_dir());
@@ -738,7 +778,11 @@ fn prune_keeps_a_held_pinned_copy() {
     git(
         setup.deadline,
         &setup.workspace(),
-        &["worktree", "remove", setup.root.path().join("wa").to_str().unwrap()],
+        &[
+            "worktree",
+            "remove",
+            setup.root.path().join("wa").to_str().unwrap(),
+        ],
     );
     let held = prune(&setup, &["--yes"]);
     assert_eq!(held.status.code(), Some(0), "{}", text(&held.stderr));
@@ -749,11 +793,17 @@ fn prune_keeps_a_held_pinned_copy() {
         "{out}"
     );
     assert!(out.contains("freed 0 B"), "{out}");
-    assert!(setup.home().join("pinned").join(&hash_a).is_dir(), "the copy stays");
+    assert!(
+        setup.home().join("pinned").join(&hash_a).is_dir(),
+        "the copy stays"
+    );
     drop(hold);
     let yes = prune(&setup, &["--yes"]);
     assert_eq!(yes.status.code(), Some(0), "{}", text(&yes.stderr));
     let out = text(&yes.stdout);
     assert_eq!(pinned_lines(&out).len(), 1, "{out}");
-    assert!(!setup.home().join("pinned").join(&hash_a).exists(), "removed");
+    assert!(
+        !setup.home().join("pinned").join(&hash_a).exists(),
+        "removed"
+    );
 }
