@@ -372,16 +372,14 @@ type ListFiles = Box<dyn FnOnce() -> Result<Vec<String>, String> + Send>;
 
 /// A lazy workspace listing, retained across queries until its owner drops it.
 pub struct Listing {
-    pending: Option<ListFiles>,
-    listed: Option<Result<Vec<String>, String>>,
+    paths: std::sync::LazyLock<Result<Vec<String>, String>, ListFiles>,
 }
 
 impl Listing {
     /// Defers `listing` until the first workspace query; path queries never run it.
     pub fn new(listing: impl FnOnce() -> Result<Vec<String>, String> + Send + 'static) -> Self {
         Self {
-            pending: Some(Box::new(listing)),
-            listed: None,
+            paths: std::sync::LazyLock::new(Box::new(listing)),
         }
     }
 }
@@ -398,15 +396,10 @@ pub fn search(
         return None;
     }
     match split(typed) {
-        Query::Workspace(seek) => {
-            if let Some(list) = listing.pending.take() {
-                listing.listed = Some(list());
-            }
-            match listing.listed.as_ref()? {
-                Ok(paths) => rank(paths, seek, cancelled).map(Ok),
-                Err(error) => Some(Err(error.clone())),
-            }
-        }
+        Query::Workspace(seek) => match &*listing.paths {
+            Ok(paths) => rank(paths, seek, cancelled).map(Ok),
+            Err(error) => Some(Err(error.clone())),
+        },
         Query::Path { base_text, query } => match resolve(base_text, roots) {
             Err(reason) => Some(Err(reason)),
             Ok(base) => find(&base, base_text, query, &Limits::SEARCH, cancelled),
