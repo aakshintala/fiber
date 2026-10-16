@@ -891,10 +891,14 @@ fn the_totals_row_opens_every_changed_file_in_ranked_order() {
     assert!(shown.contains("Changed files"), "{shown}");
     let frame = app.session_view_screen(0).expect("changed-files frame");
     assert_eq!(frame.rows.len(), 7);
-    let paths: Vec<String> = frame.rows.iter().map(|row| row[0].0.clone()).collect();
+    let paths: Vec<String> = frame
+        .rows
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.0.as_str()).collect())
+        .collect();
     let expected: Vec<String> = ranked(app.panel_state().changes())
         .into_iter()
-        .map(|(path, added, removed)| format!("{path}  +{added} −{removed}"))
+        .map(|(path, added, removed)| format!("{path} · +{added} −{removed}"))
         .collect();
     assert_eq!(paths, expected);
 }
