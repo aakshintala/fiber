@@ -12,6 +12,7 @@
 #[cfg(test)]
 extern crate self as doors;
 
+mod artifact;
 mod attach;
 mod client;
 mod close;

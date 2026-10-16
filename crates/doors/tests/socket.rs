@@ -281,6 +281,30 @@ fn a_command_without_a_trailing_newline_is_answered() {
 fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    let home = opened.home.clone();
+    let mut big = String::new();
+    for i in 0..200 {
+        big.push_str(&format!("line {i:03} with some text\n"));
+    }
+    opened
+        .log
+        .write_artifact("a_200.txt", big.as_bytes())
+        .unwrap();
+    let mut cut = vec![b'a'; 65535];
+    cut.extend_from_slice("é tail\n".as_bytes());
+    opened.log.write_artifact("a_cut.txt", &cut).unwrap();
+    opened
+        .log
+        .write_artifact("a_uni.txt", "héllo\n".as_bytes())
+        .unwrap();
+    fs::create_dir_all(dir.join("artifacts").join("sub")).unwrap();
+    fs::write(home.join("outside.txt"), b"no session keeps this").unwrap();
+    std::os::unix::fs::symlink(
+        home.join("outside.txt"),
+        dir.join("artifacts").join("evil.png"),
+    )
+    .unwrap();
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
@@ -315,18 +339,111 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 ),
             );
 
-            send(
-                &client,
-                r#"{"id":"c_page","command":"artifact_page","args":{"path":"artifacts/a_3.txt"}}"#,
-            );
+            // `artifact_page` answers a 200-line file in four pages: the
+            // texts concatenate to the file, each page carries its size.
+            let mut offset = 0u64;
+            let mut text = String::new();
+            let mut pages = 0;
+            loop {
+                let id = format!("c_big{pages}");
+                send(
+                    &client,
+                    &format!(
+                        r#"{{"id":"{id}","command":"artifact_page","args":{{"path":"artifacts/a_200.txt","offset":{offset}}}}}"#
+                    ),
+                );
+                let page = response(&client, &id);
+                assert_eq!(kind(&page), "command_accepted", "{page}");
+                assert_eq!(
+                    page["payload"]["result"]["size"].as_u64().unwrap(),
+                    u64::try_from(big.len()).unwrap()
+                );
+                text.push_str(page["payload"]["result"]["text"].as_str().unwrap());
+                pages += 1;
+                match page["payload"]["result"].get("next") {
+                    Some(next) => offset = next.as_u64().unwrap(),
+                    None => break,
+                }
+                assert!(pages < 10, "paged past the end of the file");
+            }
+            assert_eq!(pages, 4);
+            assert_eq!(text, big);
+
+            // A character cut by the byte cap ends the first page at its
+            // lead byte; the second page starts with the character.
+            send(&client, r#"{"id":"c_cut0","command":"artifact_page","args":{"path":"artifacts/a_cut.txt","offset":0}}"#);
+            let cut0 = response(&client, "c_cut0");
+            assert_eq!(kind(&cut0), "command_accepted", "{cut0}");
+            assert_eq!(cut0["payload"]["result"]["next"].as_u64().unwrap(), 65535);
             assert_eq!(
-                rejection(&response(&client, "c_page")),
-                ("unknown_command", "`artifact_page` is not built in this Fiber yet.")
+                cut0["payload"]["result"]["text"].as_str().unwrap().len(),
+                65535
             );
+            send(&client, r#"{"id":"c_cut1","command":"artifact_page","args":{"path":"artifacts/a_cut.txt","offset":65535}}"#);
+            let cut1 = response(&client, "c_cut1");
+            assert_eq!(kind(&cut1), "command_accepted", "{cut1}");
+            assert!(
+                cut1["payload"]["result"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with('é'),
+            );
+
+            // Outside `artifacts/` is `invalid_arguments`, by exact code
+            // and message, whether lexically or through a link.
+            for (id, path) in [
+                ("c_out0", "artifacts/../events.jsonl"),
+                ("c_out1", "events.jsonl"),
+                ("c_out2", "/etc/passwd"),
+                ("c_evil", "artifacts/evil.png"),
+            ] {
+                let message = format!(
+                    "`{path}` is not a file under the session's `artifacts/`."
+                );
+                send(
+                    &client,
+                    &format!(
+                        r#"{{"id":"{id}","command":"artifact_page","args":{{"path":"{path}"}}}}"#
+                    ),
+                );
+                assert_eq!(
+                    rejection(&response(&client, id)),
+                    ("invalid_arguments", message.as_str()),
+                    "{path}"
+                );
+            }
+            send(&client, r#"{"id":"c_missing","command":"artifact_page","args":{"path":"artifacts/missing.txt"}}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_missing")),
+                ("not_found", "No file `artifacts/missing.txt` in this session.")
+            );
+            send(&client, r#"{"id":"c_dir","command":"artifact_page","args":{"path":"artifacts/sub"}}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_dir")),
+                ("invalid_arguments", "`artifacts/sub` is not a regular file.")
+            );
+            send(&client, r#"{"id":"c_past","command":"artifact_page","args":{"path":"artifacts/a_uni.txt","offset":8}}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_past")),
+                ("invalid_arguments", "`offset` is past the end of the file.")
+            );
+            send(&client, r#"{"id":"c_inside","command":"artifact_page","args":{"path":"artifacts/a_uni.txt","offset":2}}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_inside")),
+                ("invalid_arguments", "`offset` is inside a character.")
+            );
+            // An offset at the end is an accepted empty page.
+            send(&client, r#"{"id":"c_end","command":"artifact_page","args":{"path":"artifacts/a_uni.txt","offset":7}}"#);
+            let end = response(&client, "c_end");
+            assert_eq!(kind(&end), "command_accepted", "{end}");
+            assert_eq!(end["payload"]["result"]["text"], "");
+            assert!(end["payload"]["result"].get("next").is_none());
+            assert_eq!(end["payload"]["result"]["size"].as_u64().unwrap(), 7);
+            // A missing `path` never reaches the command.
             send(&client, r#"{"id":"c_page_bad","command":"artifact_page"}"#);
             assert_eq!(
                 rejection(&response(&client, "c_page_bad")),
-                ("unknown_command", "`artifact_page` is not built in this Fiber yet.")
+                ("invalid_arguments", UNFIT)
             );
 
             send(&client, r#"{"id":"c_name","command":"name"}"#);

@@ -407,6 +407,26 @@ fn a_link_above_or_at_artifacts_is_invalid_arguments() {
 }
 
 #[test]
+fn a_linked_session_dir_without_artifacts_is_not_found() {
+    let temp = Temp::new();
+    let dir = temp.session_without_artifacts("-p", 1);
+    let target = temp.held.path().join("session-out");
+    fs::rename(&dir, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &dir).unwrap();
+    // A missing `artifacts/` orders before the session directory's own
+    // placement guard: the link above is not what refuses this.
+    let refused = refused(
+        &temp.dir,
+        json!({"session": id(1), "path": "artifacts/a.png"}),
+    );
+    assert_eq!(refused.code, ErrorCode::NotFound);
+    assert_eq!(
+        refused.message,
+        format!("No file `artifacts/a.png` in session `{}`.", id(1)),
+    );
+}
+
+#[test]
 fn a_self_looped_artifacts_is_io_failed() {
     let temp = Temp::new();
     let dir = temp.session("-p", 1);

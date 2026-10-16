@@ -228,6 +228,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "commands"
             | "skills"
             | "history"
+            | "artifact_page"
             | "model"
             | "credential"
             | "name"
@@ -351,7 +352,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
         Command::Reload => unknown(conn, id, name),
-        Command::ArtifactPage(_) => unknown(conn, id, name),
+        Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
 }
 

@@ -3,10 +3,9 @@
 //! type, so a client renders it over the connection it already
 //! authenticated. Nothing outside `artifacts/` is answered.
 
-use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::path::{Component, Path};
+use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -26,7 +25,10 @@ const LIMIT: u64 = 10 * 1024 * 1024;
 /// in standard base64 under `data`, and its media type under `mime_type`.
 pub(crate) fn read_file(home: &Path, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
     let (session, path) = parse(args).ok_or_else(invalid)?;
-    if !fits(path) {
+    // The lexical rule runs before the session is looked up, so an
+    // unknown session with a path outside still answers
+    // `invalid_arguments`.
+    if log::check_artifact_path(path).is_err() {
         return Err(outside(path));
     }
     let file = resolve(home, &session, path)?;
@@ -54,109 +56,53 @@ fn parse(args: &Map<String, Value>) -> Option<(SessionId, &str)> {
     Some((SessionId(session.to_owned()), path))
 }
 
-/// Whether the client's `path` keeps the lexical rule: no NUL byte, the
-/// first component is `artifacts`, at least one component follows it, and
-/// counting `Normal` as one level down and `ParentDir` as one up from
-/// `artifacts/`, the count never goes below zero. It only validates: the
-/// original string is what [`resolve`] resolves, so a remote client that
-/// cannot plant links learns nothing about paths outside `artifacts/` from
-/// which error it gets.
-fn fits(path: &str) -> bool {
-    if path.contains('\0') {
-        return false;
-    }
-    let mut components = Path::new(path).components();
-    let Some(Component::Normal(first)) = components.next() else {
-        return false;
-    };
-    if first != OsStr::new("artifacts") {
-        return false;
-    }
-    let mut depth = 0u32;
-    let mut rest = false;
-    for component in components {
-        match component {
-            Component::Normal(_) => {
-                depth += 1;
-                rest = true;
-            }
-            Component::CurDir => {
-                rest = true;
-            }
-            Component::ParentDir => {
-                if depth == 0 {
-                    return false;
-                }
-                depth -= 1;
-                rest = true;
-            }
-            Component::RootDir | Component::Prefix(_) => return false,
-        }
-    }
-    rest
-}
-
 /// The session's log, its real `artifacts/`, then the client's original
 /// `path` resolved from the session directory, checked inside and a
-/// regular file, and opened. `path` also appears in messages.
+/// regular file, and opened. `path` also appears in messages. The
+/// artifact check itself lives in [`log`], which this calls; what stays
+/// here is the session lookup and the lookup's own guard, that the
+/// session directory sits at its own place under the canonical Fiber
+/// home, which runs after `log` reports a missing or unreadable
+/// `artifacts/` so those keep today's codes.
 fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused> {
     let dir = find_log(home, session).and_then(|log| log.parent().map(Path::to_path_buf));
     let Some(dir) = dir else {
         return Err(crate::resume::not_found(session));
     };
     let home_real = fs::canonicalize(home).map_err(|error| unreadable(path, &error))?;
-    let root = dir.join("artifacts");
-    let root_real = match fs::canonicalize(&root) {
-        Ok(root) => root,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(missing(session, path));
+    let opened = log::open_artifact(&dir, path);
+    // A missing or unreadable `artifacts/` orders before the session
+    // directory's own placement guard, as today's staging does: a linked
+    // session directory without `artifacts/` is `not_found`.
+    match &opened {
+        Err(log::Refusal::NoArtifacts) => return Err(missing(session, path)),
+        Err(log::Refusal::RootUnreadable(error)) => {
+            return Err(unreadable(path, error));
         }
-        Err(error) => return Err(unreadable(path, &error)),
-    };
-    // Only a real directory at its own place: a link at any level above
-    // the file, or `artifacts` itself a link or a file, is refused like a
-    // path outside. Both sides start from the canonical Fiber home, so a
-    // home reached through a link still matches.
-    let placed = root
-        .strip_prefix(home)
-        .ok()
-        .is_some_and(|relative| root_real == home_real.join(relative))
-        && root_real.is_dir();
+        Ok(_) | Err(_) => {}
+    }
+    // The session lookup's own guard: the session directory itself must
+    // sit at its own place under the canonical Fiber home, so a link at
+    // or above it is refused like a path outside. Both sides start from
+    // the canonical Fiber home, so a home reached through a link still
+    // matches. An open file is dropped with the refusal.
+    let placed = dir.strip_prefix(home).ok().is_some_and(|relative| {
+        fs::canonicalize(&dir).is_ok_and(|real| real == home_real.join(relative))
+    });
     if !placed {
         return Err(outside(path));
     }
-    let meta = match fs::metadata(dir.join(path)) {
-        // The client's path is stated before it is resolved: stating it
-        // answers `not_found` for a missing file and for a file named as
-        // a directory (`a.png/`, which `canonicalize` resolves to the
-        // file on macOS while stating or opening it fails
-        // `NotADirectory` there as on Linux), on every platform
-        // (`docs/invocation.md`, "A session's files"). A later
-        // `canonicalize` or `open` of the same path can only fail on a
-        // rename in between, so every error from either is `io_failed`.
-        Ok(meta) => meta,
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                || error.kind() == io::ErrorKind::NotADirectory =>
-        {
-            return Err(missing(session, path));
-        }
-        Err(error) => return Err(unreadable(path, &error)),
-    };
-    let file_real = fs::canonicalize(dir.join(path)).map_err(|error| unreadable(path, &error))?;
-    // Resolving, checking and opening are separate steps, so a process on
-    // the person's own account that renames files inside the session
-    // between them can have a file outside `artifacts/` answered, or hold
-    // this connection's thread on a FIFO swapped in after the type check.
-    // Only that account can write there, and it already has a shell
-    // (`docs/invocation.md`, "Remote clients"), so this is accepted.
-    if !file_real.starts_with(&root_real) {
-        return Err(outside(path));
+    match opened {
+        Ok(file) => Ok(file),
+        Err(log::Refusal::Outside) => Err(outside(path)),
+        Err(log::Refusal::NotRegular) => Err(not_regular(path)),
+        Err(log::Refusal::Missing) => Err(missing(session, path)),
+        Err(log::Refusal::Unreadable(error)) => Err(unreadable(path, &error)),
+        // Ordered before the placement guard above, so repeated here to
+        // keep the match exhaustive with no wildcard arm.
+        Err(log::Refusal::NoArtifacts) => Err(missing(session, path)),
+        Err(log::Refusal::RootUnreadable(error)) => Err(unreadable(path, &error)),
     }
-    if !meta.is_file() {
-        return Err(not_regular(path));
-    }
-    File::open(&file_real).map_err(|error| unreadable(path, &error))
 }
 
 /// At most `LIMIT` bytes of the opened file, or `too_large`. The file's
