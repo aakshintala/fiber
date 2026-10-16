@@ -299,6 +299,11 @@ impl App {
         self.items.jobs.get(job).map(|record| record.serial)
     }
 
+    /// The job's `job_started` timestamp, if folded.
+    pub(crate) fn started_of_job(&self, job: &JobId) -> Option<u64> {
+        self.items.jobs.get(job).map(|record| record.started_ts)
+    }
+
     /// Opens `job`'s view: a running fiber delegate swaps a fresh screen
     /// in and subscribes at `full`; any other item opens without a swap.
     /// Opening closes the other views and search first, so drawing,

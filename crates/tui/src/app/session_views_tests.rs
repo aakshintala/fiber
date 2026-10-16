@@ -1200,7 +1200,8 @@ fn down_then_enter_opens_the_second_item_and_closes_the_list() {
     open_delegates(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(selected(&app), 2);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app), 3);
     // The link is down, so opening sends nothing; the view still swaps
     // in and the list closes.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
@@ -1237,10 +1238,10 @@ fn clicking_a_row_tail_only_selects_the_row() {
     start_delegate(&mut app, "j_1", "s_dddddddddddddddd");
     start_delegate(&mut app, "j_2", "s_eeeeeeeeeeeeeeee");
     open_delegates(&mut app);
-    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(3))), Effect::None);
+    assert_eq!(app.on_click(TargetId::View(ViewSpot::Row(4))), Effect::None);
     assert!(!app.item_open());
     assert!(app.session_view_open());
-    assert_eq!(selected(&app), 3);
+    assert_eq!(selected(&app), 4);
 }
 
 #[test]
