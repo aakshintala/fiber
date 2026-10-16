@@ -54,10 +54,6 @@ pub(crate) const APPROVAL_TINT: Style = Style::new().bg(Role::Approval.color());
 /// The approval panel's tint when the reviewer escalated.
 pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 
-/// The notice overlay's tint, until the overlay frame replaces it.
-#[allow(dead_code, reason = "removed in the last commit of #1792")]
-const NOTICE_TINT: Style = Style::new().bg(Role::Surface.color());
-
 /// Paints `rect` as the click target under the pointer: each cell takes
 /// its own background 0x14 lighter on each channel where it sits on a
 /// tint, and the hover tint where it has none (`docs/tui.md`, palette,
