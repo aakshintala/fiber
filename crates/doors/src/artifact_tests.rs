@@ -177,7 +177,14 @@ fn sixty_four_lines_of_1024_bytes_are_one_page() {
     let (_temp, path) = staged(&bytes);
     let found = page_at_path(&path, 0).unwrap();
     assert_eq!(found.next, None);
-    assert_eq!(found.text.as_bytes(), bytes.as_slice());
+    assert_eq!(found.text.len(), bytes.as_slice().len(), "page byte length");
+    let first_diff = found
+        .text
+        .as_bytes()
+        .iter()
+        .zip(bytes.as_slice().iter())
+        .position(|(a, b)| a != b);
+    assert_eq!(first_diff, None, "page first differing offset");
 }
 
 #[test]
@@ -186,7 +193,18 @@ fn sixty_four_lines_of_1025_bytes_take_sixty_three() {
     let (_temp, path) = staged(&bytes);
     let found = page_at_path(&path, 0).unwrap();
     assert_eq!(found.next, Some(63 * 1025));
-    assert_eq!(found.text.as_bytes(), bytes.get(..63 * 1025).unwrap());
+    assert_eq!(
+        found.text.len(),
+        bytes.get(..63 * 1025).unwrap().len(),
+        "page byte length"
+    );
+    let first_diff = found
+        .text
+        .as_bytes()
+        .iter()
+        .zip(bytes.get(..63 * 1025).unwrap().iter())
+        .position(|(a, b)| a != b);
+    assert_eq!(first_diff, None, "page first differing offset");
     // The rest starts the next page whole.
     let rest = page_at_path(&path, 63 * 1025).unwrap();
     assert_eq!(rest.next, None);
@@ -240,7 +258,18 @@ fn a_character_cut_by_the_cap_ends_the_page_at_its_lead() {
             let edge = first.next.unwrap();
             assert!(edge <= 65536, "{tail:?} at {at}");
             let edge_usize = usize::try_from(edge).unwrap();
-            assert_eq!(first.text.as_bytes(), bytes.get(..edge_usize).unwrap());
+            assert_eq!(
+                first.text.len(),
+                bytes.get(..edge_usize).unwrap().len(),
+                "page byte length"
+            );
+            let first_diff = first
+                .text
+                .as_bytes()
+                .iter()
+                .zip(bytes.get(..edge_usize).unwrap().iter())
+                .position(|(a, b)| a != b);
+            assert_eq!(first_diff, None, "page first differing offset");
             let mut offset = edge;
             let mut rest = Vec::new();
             loop {
@@ -254,33 +283,6 @@ fn a_character_cut_by_the_cap_ends_the_page_at_its_lead() {
             assert_eq!(rest.as_slice(), bytes.get(edge_usize..).unwrap());
         }
     }
-}
-
-#[test]
-fn a_four_byte_character_straddling_the_cap_pages_whole() {
-    // The character begins 2 bytes before the cap: the page ends at its
-    // lead, and the page after it begins with the character whole.
-    let mut bytes = vec![b'a'; 65534];
-    bytes.extend_from_slice("\u{1f600}\n".as_bytes());
-    let (_temp, path) = staged(&bytes);
-    let first = page_at_path(&path, 0).unwrap();
-    assert_eq!(first.next, Some(65534));
-    let second = page_at_path(&path, 65534).unwrap();
-    assert_eq!(second.text, "\u{1f600}\n");
-    assert_eq!(second.next, None);
-}
-
-#[test]
-fn a_valid_character_cut_midway_by_the_cap() {
-    // 65535 `a` then `€` (3 bytes) then more text: the cap lands inside
-    // the character, so the page ends at its lead byte.
-    let mut bytes = vec![b'a'; 65535];
-    bytes.extend_from_slice("\u{20ac} tail\n".as_bytes());
-    let (_temp, path) = staged(&bytes);
-    let first = page_at_path(&path, 0).unwrap();
-    assert_eq!(first.next, Some(65535));
-    let second = page_at_path(&path, 65535).unwrap();
-    assert!(second.text.starts_with("\u{20ac}"));
 }
 
 #[test]

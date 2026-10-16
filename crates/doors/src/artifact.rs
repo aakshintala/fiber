@@ -253,11 +253,11 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ArtifactPageArgs) {
     };
     let dir = log.dir().to_path_buf();
     drop(log);
-    let path = args.path.clone();
-    let file = match log::open_artifact(&dir, &path) {
+    let path = args.path.as_str();
+    let file = match log::open_artifact(&dir, path) {
         Ok(file) => file,
         Err(refusal) => {
-            let (code, message) = refused(&path, &refusal);
+            let (code, message) = refused(path, &refusal);
             reject(conn, Some(id), code, &message);
             return;
         }
