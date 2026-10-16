@@ -630,6 +630,11 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::Keep => {
+                self.close_delete_prompt();
+                Effect::None
+            }
+            Spot::Question => Effect::None,
             Spot::Quit(_) => Effect::None,
         }
     }
@@ -762,6 +767,8 @@ impl App {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::Keep
+            | Spot::Question
             | Spot::Quit(_) => None,
         }
     }

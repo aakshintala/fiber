@@ -246,6 +246,8 @@ impl App {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::Keep
+            | Spot::Question
             | Spot::Quit(_) => return None,
         };
         if down {

@@ -12,8 +12,9 @@ use serde_json::Value;
 /// toggle heading the list, the workspace chip opening the workspace
 /// picker, the new worktree switch, the model chip opening the model
 /// picker, the thinking chip opening it at the model's thinking chips,
-/// one picker row by its index in the list fixed at open, and one
-/// quit choice while the quit question is open.
+/// one picker row by its index in the list fixed at open, one
+/// quit choice while the quit question is open, the delete question's
+/// ✕, and the delete frame itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
     /// A session row: clicking it, or Enter on it while focused, opens
@@ -41,6 +42,12 @@ pub(crate) enum Spot {
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
     Quit(QuitChoice),
+    /// The delete question's ✕: clicking it does what Esc does, keeping
+    /// the session.
+    Keep,
+    /// The delete frame itself: a click on it does nothing, so no click
+    /// passes through to the rows under it.
+    Question,
 }
 
 impl Spot {
@@ -49,7 +56,13 @@ impl Spot {
     pub(crate) fn is_chip(self) -> bool {
         match self {
             Spot::Workspace | Spot::Worktree | Spot::Model | Spot::Thinking => true,
-            Spot::Entry(_) | Spot::Stop(_) | Spot::Toggle | Spot::Pick(_) | Spot::Quit(_) => false,
+            Spot::Entry(_)
+            | Spot::Stop(_)
+            | Spot::Toggle
+            | Spot::Pick(_)
+            | Spot::Keep
+            | Spot::Question
+            | Spot::Quit(_) => false,
         }
     }
 }

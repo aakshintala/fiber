@@ -287,7 +287,7 @@ fn draw_delete_question(
     };
     let framed = super::overlay::Overlay {
         title: Some(("Delete session".to_owned(), Some(Span::raw("✕")))),
-        close: None,
+        close: Some(TargetId::Home(Spot::Keep)),
         body: rows
             .into_iter()
             .skip(scroll.min(max))
@@ -296,7 +296,20 @@ fn draw_delete_question(
         footer: Some(legend),
         prefer: 71,
     };
-    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    let before = targets.len();
+    let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    // One slab-wide target over every frame row, under the frame's own
+    // targets: the ✕ keeps its click, and every other frame cell
+    // swallows its click instead of reaching the rows under it.
+    if !slab.is_empty() {
+        targets.insert(
+            before.min(targets.len()),
+            Target {
+                id: TargetId::Home(Spot::Question),
+                rect: slab,
+            },
+        );
+    }
 }
 
 /// Draws home's `screen` into `area` of `buf`: the one-row logo, the box
@@ -647,7 +660,9 @@ pub(super) fn render(
     if app.quit_open() {
         super::quit::draw(app, area, buf, &mut targets);
     }
-    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
+    if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row))
+        && !matches!(id, TargetId::Home(Spot::Question))
+    {
         for target in targets.iter().filter(|target| target.id == id) {
             lift_hover(buf, target.rect);
         }

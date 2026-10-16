@@ -2736,6 +2736,223 @@ fn esc_sends_nothing() {
     );
 }
 
+/// Draws `app` at 80x24, returning its text and targets.
+fn drawn_frame(app: &App) -> (String, Vec<crate::mouse::Target>) {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    (crate::view::text(&buf), targets)
+}
+
+#[test]
+fn clicking_the_drawn_cross_keeps_the_session() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    // The draw holds exactly one ✕ target, ending the title row.
+    let (text, targets) = drawn_frame(&app);
+    let title = text
+        .lines()
+        .position(|row| row.contains("Delete session"))
+        .unwrap_or_else(|| panic!("a title row"));
+    let keep: Vec<_> = targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Keep))
+        .collect();
+    assert_eq!(keep.len(), 1, "one ✕ target");
+    assert_eq!(keep[0].rect.y, title as u16);
+    assert_eq!((keep[0].rect.width, keep[0].rect.height), (1, 1));
+    let row = text
+        .lines()
+        .nth(title)
+        .unwrap_or_else(|| panic!("a title row"));
+    let before: String = row.chars().take(keep[0].rect.x as usize).collect();
+    assert!(
+        before.contains("Delete session"),
+        "the ✕ ends the title: {row}"
+    );
+    assert_eq!(
+        row.chars().nth(keep[0].rect.x as usize),
+        Some('✕'),
+        "the target is the ✕: {row}"
+    );
+    // Clicking it closes the question without sending a command.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Keep)),
+        Effect::None
+    );
+    assert!(question(&app).is_empty(), "the question closes");
+    assert_eq!(
+        app.home_screen()
+            .map(|screen| screen.rows.len())
+            .unwrap_or_default(),
+        1,
+        "the session row remains"
+    );
+}
+
+#[test]
+fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
+    let mut app = home();
+    exited_row(&mut app, "s_0123456789abcdef", "fix the parser");
+    click_stop(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    assert!(
+        app.on_line(hub_refused(
+            &delete,
+            "session_has_dependents",
+            "Session `s_0123456789abcdef` has sessions that continue it: \
+            `s_1111111111111111`, `s_2222222222222222`. `--cascade` deletes them too."
+        ))
+        .is_empty()
+    );
+    let (_, targets) = drawn_frame(&app);
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Keep))
+            .count(),
+        1,
+        "one ✕ target"
+    );
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Keep)),
+        Effect::None
+    );
+    assert!(question(&app).is_empty(), "the question closes");
+    assert_eq!(
+        app.home_screen()
+            .map(|screen| screen.rows.len())
+            .unwrap_or_default(),
+        1,
+        "the session row remains"
+    );
+}
+
+#[test]
+fn a_stale_keep_click_changes_nothing() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    assert!(question(&app).is_empty(), "no question is open");
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Keep)),
+        Effect::None
+    );
+    assert!(question(&app).is_empty(), "no question opens");
+}
+
+#[test]
+fn a_keep_click_leaves_the_quit_question_open() {
+    let mut app = home();
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "busy work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    app.quit();
+    assert!(app.quit_open(), "the quit question is open");
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Keep)),
+        Effect::None
+    );
+    assert!(app.quit_open(), "the quit question stays open");
+}
+
+#[test]
+fn clicks_on_the_delete_frame_do_nothing() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let asked = question(&app);
+    assert!(!asked.is_empty(), "the question is open");
+    let (text, targets) = drawn_frame(&app);
+    // One slab-wide target over every frame row, under the ✕.
+    let slabs: Vec<_> = targets
+        .iter()
+        .filter(|target| target.id == crate::mouse::TargetId::Home(Spot::Question))
+        .collect();
+    assert_eq!(slabs.len(), 1, "one slab target");
+    let slab = slabs[0].rect;
+    let rows: Vec<&str> = text.lines().collect();
+    let title = rows
+        .iter()
+        .position(|row| row.contains("Delete session"))
+        .unwrap_or_else(|| panic!("a title row")) as u16;
+    let body = rows
+        .iter()
+        .position(|row| row.contains("Delete old work"))
+        .unwrap_or_else(|| panic!("a body row")) as u16;
+    let footer = rows
+        .iter()
+        .position(|row| row.contains("Enter delete · Esc keep"))
+        .unwrap_or_else(|| panic!("a footer row")) as u16;
+    // The title row away from the ✕, both edge rows, a pad row, a
+    // body row and the footer row all hit the slab, and clicking
+    // opens nothing and replaces no question.
+    for (col, row) in [
+        (slab.x.saturating_add(2), title),
+        (slab.x.saturating_add(5), slab.y),
+        (slab.x.saturating_add(5), slab.y.saturating_add(1)),
+        (slab.x.saturating_add(5), body),
+        (slab.x.saturating_add(5), footer),
+        (slab.x.saturating_add(5), slab.bottom().saturating_sub(1)),
+    ] {
+        assert_eq!(
+            crate::mouse::hit(&targets, col, row),
+            Some(crate::mouse::TargetId::Home(Spot::Question)),
+            "a frame cell at {col},{row} hits the slab"
+        );
+        assert_eq!(
+            app.on_click(crate::mouse::TargetId::Home(Spot::Question)),
+            Effect::None
+        );
+    }
+    assert_eq!(question(&app), asked, "the question stays");
+    assert!(app.session().is_none(), "no session opens");
+}
+
+#[test]
+fn hovering_the_delete_slab_tints_nothing() {
+    let mut app = home();
+    exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
+    click_stop(&mut app);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut plain = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut plain, None);
+    let slab = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Question))
+        .unwrap_or_else(|| panic!("a slab target"))
+        .rect;
+    let keep = targets
+        .iter()
+        .find(|target| target.id == crate::mouse::TargetId::Home(Spot::Keep))
+        .unwrap_or_else(|| panic!("a ✕ target"))
+        .rect;
+    // A body cell under the pointer draws as without one.
+    let mut hovered = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(
+        &app,
+        area,
+        &mut hovered,
+        Some((slab.x.saturating_add(5), slab.y.saturating_add(4))),
+    );
+    assert_eq!(hovered, plain, "no lift on the slab");
+    // The ✕ still lifts, so the comparison above is sensitive.
+    let mut crossed = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut crossed, Some((keep.x, keep.y)));
+    assert_ne!(crossed, plain, "the ✕ lifts");
+}
+
 #[test]
 fn other_keys_do_nothing_in_the_question() {
     let mut app = home();
