@@ -898,17 +898,21 @@ fn signal_lock_attempt() {
     }
 }
 
+/// A pause armed for one home: the gate is the home, and the channels
+/// carry the parked signal and the release.
+#[cfg(test)]
+type ArmedPause = (
+    PathBuf,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
 /// Approvals parked between pinning and recording, keyed by home: only the
 /// store whose test armed one pauses, so concurrent approvals in other
 /// tests never park on it.
 #[cfg(test)]
-static RECORD_PAUSES: std::sync::Mutex<
-    Vec<(
-        PathBuf,
-        std::sync::mpsc::Sender<()>,
-        std::sync::mpsc::Receiver<()>,
-    )>,
-> = std::sync::Mutex::new(Vec::new());
+static RECORD_PAUSES: std::sync::Mutex<Vec<ArmedPause>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Arms the pause between pinning and recording in `approve` for `home`:
 /// while the file `home/approve-pause` exists, the approving thread signals

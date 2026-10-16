@@ -748,9 +748,7 @@ fn a_prune_between_pinning_and_recording_keeps_the_copy() {
                     .join(digest);
                 let mut check = || {
                     if record.symlink_metadata().is_ok() {
-                        Err::<(), String>(
-                            "its approvals changed since it was listed".to_owned(),
-                        )
+                        Err::<(), String>("its approvals changed since it was listed".to_owned())
                     } else {
                         Ok(())
                     }
