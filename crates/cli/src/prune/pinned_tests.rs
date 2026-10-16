@@ -827,8 +827,8 @@ fn shared_copies_are_judged_by_every_owner_outside_a_repository() {
     );
     let workspace = setup.workspace();
     // The other project's tree still matches: kept, not listed.
-    let plan = plan(&home, &workspace, clock.as_ref());
-    assert!(plan.rows.is_empty());
+    let plan1 = plan(&home, &workspace, clock.as_ref());
+    assert!(plan1.rows.is_empty());
     // After it changes too, neither tree matches: removed.
     write_hook(&repo_b, "changed\n");
     let plan2 = plan(&home, &workspace, clock.as_ref());
