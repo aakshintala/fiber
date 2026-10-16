@@ -43,17 +43,11 @@ pub(crate) fn launch(
         .unwrap_or_else(|_| workspace.clone());
     let git = canonical.as_path() != identity;
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
-    let hover = config
-        .get("tui.hover", None)
-        .and_then(|(value, _)| value.as_bool())
-        .unwrap_or(true);
+    let hover = config.flag("tui.hover", None).unwrap_or_default();
     // `tui.reduced_motion`, defaulting to off (`docs/configuration.md`).
     // Unlike the `on` helper's keys, an absent key means stillness is
     // not asked for.
-    let reduced_motion = config
-        .get("tui.reduced_motion", None)
-        .and_then(|(value, _)| value.as_bool())
-        .unwrap_or(false);
+    let reduced_motion = config.flag("tui.reduced_motion", None).unwrap_or_default();
     // `model` and `thinking`, unset for the chips' defaults
     // (`docs/configuration.md`). The run's flags name the chip's model:
     // the layer's last `model=`, so a later `-c model=` wins over
@@ -70,23 +64,11 @@ pub(crate) fn launch(
             (key == "model").then(|| override_value(value))
         })
         .next()
-        .or_else(|| {
-            config
-                .get("model", None)
-                .and_then(|(value, _)| value.as_str().map(str::to_owned))
-        });
-    let thinking = config
-        .get("thinking", None)
-        .and_then(|(value, _)| value.as_str().map(str::to_owned));
+        .or_else(|| config.text("model", None));
+    let thinking = config.text("thinking", None);
     // `scoped_models`, empty for every installed model
     // (`docs/configuration.md`, "Keys").
-    let scoped_models = config
-        .get("scoped_models", None)
-        .and_then(|(value, _)| value.as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|name| name.as_str().map(str::to_owned))
-        .collect();
+    let scoped_models = config.list("scoped_models", None);
     tui::Launch {
         workspace,
         project,
@@ -102,8 +84,7 @@ pub(crate) fn launch(
         scoped_models,
         // `tui.logo_glyph`, defaulting to ⌇ (`docs/configuration.md`).
         logo_glyph: config
-            .get("tui.logo_glyph", None)
-            .and_then(|(value, _)| value.as_str().map(str::to_owned))
+            .text("tui.logo_glyph", None)
             .unwrap_or_else(|| "⌇".to_owned()),
         rail_share: share(config, "tui.rail.width", tui::DEFAULT_RAIL_SHARE),
         rail_hidden: !on(config, "tui.rail.shown"),
