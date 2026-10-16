@@ -77,7 +77,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "delete",
         help: "the delete question",
-        check: "the question should name `docs: rail spec` and its spend, and what `--cascade` would add, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.",
+        check: "the question should name `docs: rail spec` and its id and say it cannot be undone, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.",
         build: || Look {
             kind: Kind::Delete,
             narrow: false,
@@ -668,26 +668,20 @@ fn quit_body(inner: usize) -> Vec<super::Row> {
 }
 
 /// Home's delete question for an exited session: it names the session and
-/// any session `--cascade` would add.
+/// its id.
 fn delete_body(inner: usize) -> Vec<super::Row> {
     let mut out = wrap_rows(
-        vec![sp("Delete \"docs: rail spec\" ($1.10)?", Style::new())],
+        vec![sp(
+            "Delete docs: rail spec (s_0123456789abcdef)?",
+            Style::new(),
+        )],
         inner,
         vec![],
         vec![],
     );
     out.push(row(vec![]));
     out.extend(wrap_rows(
-        vec![sp(
-            "It deletes the session through the hub, after asking.",
-            Style::new(),
-        )],
-        inner,
-        vec![],
-        vec![],
-    ));
-    out.extend(wrap_rows(
-        vec![sp("--cascade would add no other session.", dim())],
+        vec![sp("It cannot be undone.", Style::new())],
         inner,
         vec![],
         vec![],
@@ -830,7 +824,7 @@ fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, su
         Kind::Delete => (
             "Delete session",
             delete_body(inner),
-            panel::footer_legend(&[("Enter", "deletes"), ("Esc", "keeps it")]),
+            panel::footer_legend(&[("Enter", "delete"), ("Esc", "keep")]),
         ),
         Kind::History => (
             "Prompt history",
@@ -1555,12 +1549,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_names_the_session_and_its_cascade() {
+    fn delete_names_the_session_and_its_id() {
         let t = text(&parse("delete").unwrap(), 160, 48);
         assert!(t.contains("docs: rail spec"));
-        assert!(t.contains("$1.10"));
-        assert!(t.contains("--cascade"));
-        assert!(t.contains("Enter deletes · Esc keeps it"));
+        assert!(t.contains("s_0123456789abcdef"));
+        assert!(t.contains("It cannot be undone."));
+        assert!(t.contains("Enter delete · Esc keep"));
+        assert!(!t.contains("$1.10"));
+        assert!(!t.contains("--cascade"));
     }
 
     #[test]

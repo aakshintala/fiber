@@ -7,7 +7,7 @@ One run per case: `--overlay CASE`.
 - keymap-search: `session` typed after the muted search line narrows the rows to the five bindings naming a session, across groups; the first `›` on the accent bar; no arrow; same columns and legend.
 - keymap-narrow: the same panel at 100 columns, rows wrapped, opened scrolled, with an `↑ N more · ↓ M more` indicator on its last line; the three columns keep their starts.
 - quit: the question should read `2 sessions working` muted under a bold accent `Quit`; `Enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.
-- delete: the question should name `docs: rail spec` and its spend, and what `--cascade` would add, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.
+- delete: the question should name `docs: rail spec` and its id and say it cannot be undone, under a bold accent title; padding all round; the foot a bold-key legend naming no body pair.
 - history: the typed `back` should read bold after `›`, every hit in the three matches marked, the first row `›` on a full-width accent bar; centred with padding; the foot a bold-key legend naming no body pair.
 - history-one: one matching prompt: the typed `back` bold after `›`, `1 match · newest first`, that match `›` on a full-width accent bar; the same panel and footer.
 - history-none: a typed query matching nothing: the query row, then dim `no matching prompts` in place of the count row, nothing barred; the same panel and footer.
