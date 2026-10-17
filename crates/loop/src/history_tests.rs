@@ -913,10 +913,10 @@ fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
     for hosts in [&child.known_hosts, &fork.known_hosts] {
         assert!(hosts.all_known(&[
             "https://person.test/".into(),
-            "https://instructions.test/".into(),
             "https://surfaced.test/".into(),
             "https://allowed.test/".into()
         ]));
+        assert!(!hosts.all_known(&["https://instructions.test/".into()]));
         assert!(!hosts.all_known(&["https://after.test/".into()]));
         assert!(!hosts.all_known(&["https://page-only.test/".into()]));
     }
@@ -934,6 +934,49 @@ fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
             .known_hosts
             .all_known(&["https://after.test/".into()])
     );
+}
+
+#[test]
+fn known_hosts_resume_and_fork_keep_changes_without_surfaced_hosts() {
+    use contract::events::{FileChange, InstructionFile, InstructionReason, InstructionSent};
+
+    let (_home, sessions) = sessions("known-hosts-changes");
+    let instruction = Event::InstructionFile(InstructionFile {
+        path: "AGENTS.md".into(),
+        reason: InstructionReason::Changed,
+        extension: None,
+        content: Some("https://instructions.test/".into()),
+        sent: InstructionSent::Full,
+    });
+    let mut changed = crate::completion::completed(String::new(), None);
+    changed.changes = Some(vec![FileChange {
+        path: "AGENTS.md".into(),
+        added: 1,
+        removed: 0,
+    }]);
+    let parent = [
+        started("/w", None),
+        instruction.clone(),
+        Event::ToolCallCompleted(changed),
+        instruction,
+    ];
+    let lines: Vec<_> = parent
+        .iter()
+        .enumerate()
+        .map(|(seq, event)| envelope(A, u64::try_from(seq).unwrap(), None, None, event))
+        .collect();
+    assert!(!lines[2].payload.contains_key("hosts_surfaced"));
+    assert!(lines[2].payload.contains_key("changes"));
+    write_log(&sessions, A, &lines);
+
+    let before = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert!(before.known_hosts.all_known(&["https://instructions.test/".into()]));
+    let after = forked(&sessions.join(A), Seq(2)).unwrap();
+    assert!(!after.known_hosts.all_known(&["https://instructions.test/".into()]));
+    let resumed = resumed(&sessions.join(A)).unwrap();
+    let fork = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert!(!resumed.known_hosts.all_known(&["https://instructions.test/".into()]));
+    assert_eq!(resumed.known_hosts, fork.known_hosts);
 }
 
 #[test]
