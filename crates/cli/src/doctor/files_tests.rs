@@ -261,11 +261,13 @@ fn newest_error_holds_the_open_time_length_past_ten_mib() {
 #[test]
 fn newest_error_stops_when_the_file_shrinks_under_the_scan() {
     let setup = Setup::new();
-    setup.write(
-        "logs/shrink.log",
-        error(1_699_000_000_000, "gone", "truncated").as_bytes(),
-    );
-    let (arrived, release, _pause) = seam::arm_before_chunk("shrink.log", 0);
+    // A long line: truncating to 10 bytes leaves a short first read.
+    let old = error(1_699_000_000_000, "old", &"o".repeat(200));
+    setup.write("logs/shrink.log", old.as_bytes());
+    let (arrived_first, release_first, _pause_first) = seam::arm_before_chunk("shrink.log", 0);
+    // Armed but never fired: a short read ends the file, so no second
+    // chunk follows.
+    let (arrived_second, release_second, _pause_second) = seam::arm_before_chunk("shrink.log", 10);
     drop(seam::take_chunks_for("shrink.log"));
     let logs = setup.logs();
     let (done_tx, done_rx) = mpsc::channel();
@@ -274,18 +276,22 @@ fn newest_error_stops_when_the_file_shrinks_under_the_scan() {
         let worker_logs = logs.clone();
         move || drop(done_tx.send(newest_error(&worker_logs)))
     });
-    deadline.recv(&arrived).unwrap();
-    // Truncated to nothing while the scan waits: the short read ends the
-    // file, so the scan returns promptly with no error from it.
-    fs::write(logs.join("shrink.log"), b"").unwrap();
-    drop(release);
+    deadline.recv(&arrived_first).unwrap();
+    // Truncated to a fragment while the scan waits: the first read is
+    // short, which ends the file for the scan.
+    fs::write(logs.join("shrink.log"), &old.as_bytes()[..10]).unwrap();
+    drop(release_first);
+    // No second chunk follows a short read: a two-second absence proves
+    // the scan stopped instead of reading on.
+    let stopped = fakes::Deadline::after(Duration::from_secs(2))
+        .recv(&arrived_second)
+        .is_err();
+    drop(release_second);
     let found = deadline.recv(&done_rx).unwrap();
     worker.join().unwrap();
+    assert!(stopped, "a short read ends the file");
     assert_eq!(found, None);
-    assert!(
-        seam::take_chunks_for("shrink.log").is_empty(),
-        "a short read is never recorded"
-    );
+    assert_eq!(seam::take_chunks_for("shrink.log"), [(0, 10)]);
 }
 
 #[test]
