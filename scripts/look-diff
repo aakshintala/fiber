@@ -58,7 +58,10 @@ else
   ansi_abs=
 fi
 : >"$log"
-rm -f "$grid" "$verdict_file"
+rm -f "$verdict_file"
+if [ -z "${LOOK_DIFF_DUMP-}" ]; then
+  rm -f "$grid"
+fi
 if [ -n "${LOOK_DIFF_DUMP-}" ]; then
   dump_abs=$(abspath "$LOOK_DIFF_DUMP")
 else

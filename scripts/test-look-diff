@@ -92,3 +92,15 @@ python3 -c "print('a' * 160)" >"$tmp/edge160.txt"
 run "$tmp/dump160" look-edge-cols "$tmp/edge160.txt"
 [ "$rc" -eq 0 ] || fail "160 cols exited $rc, want 0: $out"
 [ "$out" = "look: match look-edge-cols" ] || fail "160 cols verdict: $out"
+
+# A replay whose dump lives at the script's own grid path must survive
+# the run: the script removes only files it creates in replay mode.
+mkdir -p "$PWD/target/look-diff"
+printf 'hi' >"$PWD/target/look-diff/look-replay.grid"
+printf 'hi\n' >"$tmp/replay.txt"
+printf '\x1b[31mh\x1b[0mi' >"$tmp/replay.ansi"
+run "$PWD/target/look-diff/look-replay.grid" look-replay "$tmp/replay.txt" "$tmp/replay.ansi"
+[ "$rc" -eq 1 ] || fail "replay exited $rc, want 1: $out"
+[ "$out" = "look: differs look-replay rows=1 cells=1 diff=$PWD/target/look-diff/look-replay.diff" ] || fail "replay verdict: $out"
+[ -f "$PWD/target/look-diff/look-replay.grid" ] || fail "replay deleted its dump"
+[ "$(cat "$PWD/target/look-diff/look-replay.grid")" = "hi" ] || fail "replay changed its dump"
