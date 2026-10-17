@@ -8,10 +8,10 @@ use std::path::Path;
 
 use config::{
     Config, ConfigError, Origin, Presence, ProviderData, ScriptRead, Sources, mcp_servers,
-    read_script,
+    read_script, read_secret,
 };
 use contract::ErrorCode;
-use extensions::{Model, Providers};
+use extensions::{Model, Providers, is_enabled};
 
 use super::files::clean;
 use crate::project_of;
@@ -39,14 +39,8 @@ pub(crate) struct Startup {
     pub lines: Vec<String>,
     /// The first blocker, if any.
     pub blocker: Option<Blocker>,
-    /// The loaded configuration, absent when it does not load. Task 6
-    /// reads it for the secrets section.
-    #[allow(dead_code, reason = "the secrets section reads this in Task 6")]
-    pub config: Option<Config>,
-    /// The installed providers, absent when they do not load. Task 6
-    /// reads them for the secrets section.
-    #[allow(dead_code, reason = "the secrets section reads this in Task 6")]
-    pub providers: Option<Providers>,
+    /// The secrets lines, printed after the hub lines.
+    pub secrets: Vec<String>,
     /// The configuration and extension notices for stderr.
     pub notices: Vec<contract::events::Notice>,
 }
@@ -73,8 +67,7 @@ pub(crate) fn startup(
                     line,
                     key: false,
                 }),
-                config: None,
-                providers: None,
+                secrets: Vec::new(),
                 notices: Vec::new(),
             };
         }
@@ -95,8 +88,7 @@ pub(crate) fn startup(
                     line,
                     key: false,
                 }),
-                config: None,
-                providers: None,
+                secrets: Vec::new(),
                 notices: Vec::new(),
             };
         }
@@ -109,8 +101,7 @@ pub(crate) fn startup(
             return Startup {
                 lines: vec![blocker.line.clone()],
                 blocker: Some(blocker),
-                config: None,
-                providers: None,
+                secrets: Vec::new(),
                 notices,
             };
         }
@@ -125,8 +116,7 @@ pub(crate) fn startup(
             return Startup {
                 lines: vec![blocker.line.clone()],
                 blocker: Some(blocker),
-                config: None,
-                providers: None,
+                secrets: Vec::new(),
                 notices,
             };
         }
@@ -138,8 +128,7 @@ pub(crate) fn startup(
             return Startup {
                 lines: vec![blocker.line.clone()],
                 blocker: Some(blocker),
-                config: None,
-                providers: None,
+                secrets: Vec::new(),
                 notices,
             };
         }
@@ -162,11 +151,11 @@ pub(crate) fn startup(
     checked.providers();
     checked.permissions();
     checked.mcp();
+    let secrets = secrets(home, &config, &inventory);
     Startup {
         lines: checked.lines,
         blocker: checked.blocker,
-        config: Some(config),
-        providers: Some(inventory),
+        secrets,
         notices,
     }
 }
@@ -491,6 +480,41 @@ impl Checked<'_> {
             self.lines.push(line);
         }
     }
+}
+
+/// Each secret an enabled extension declares that is not stored, with
+/// the login that stores it. A missing secret is information, never a
+/// blocker, and neither line changes the exit code. A name that is also
+/// an installed provider's is skipped, as `fiber login` skips it.
+fn secrets(home: &Path, config: &Config, inventory: &Providers) -> Vec<String> {
+    let declared: Vec<(String, String)> = inventory
+        .declared_secrets()
+        .map(|(extension, name)| (extension.to_owned(), name.to_owned()))
+        .collect();
+    let mut lines = Vec::new();
+    for (extension, name) in &declared {
+        if !is_enabled(config, extension) {
+            continue;
+        }
+        if inventory.get(name).is_some() {
+            continue;
+        }
+        let shown = (clean(extension), clean(name));
+        match read_secret(home, name) {
+            Ok(Some(_)) => {}
+            Ok(None) => lines.push(format!(
+                "secret {} (from {}) is not stored: run `fiber login {}`",
+                shown.1, shown.0, shown.1
+            )),
+            Err(error) => lines.push(format!(
+                "secret {} (from {}) cannot be read: {}",
+                shown.1,
+                shown.0,
+                clean(&error.to_string())
+            )),
+        }
+    }
+    lines
 }
 
 /// The missing-key line: the plain default wording, or the `--as` one.

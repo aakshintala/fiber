@@ -846,7 +846,6 @@ fn a_missing_scripted_file_blocks_as_io() {
     let setup = Setup::new();
     setup.write_config(&json!({"model": "scripted/missing.lua"}));
     let checked = setup.check(&[], &env_of(&[]));
-    assert!(checked.providers.is_some());
     let blocker = checked.blocker.unwrap();
     assert_eq!(blocker.code, ErrorCode::IoFailed);
     assert!(blocker.line.starts_with("The script `"), "{}", blocker.line);

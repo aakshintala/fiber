@@ -608,3 +608,76 @@ fn a_regular_file_at_run_hub_is_unknown_not_a_hang() {
     assert!(reason.starts_with("the hub: "), "{reason}");
     assert_eq!(clock.now(), origin);
 }
+
+impl Setup {
+    /// Hand-places the extension `name` declaring these secrets and no
+    /// providers: the record marks it installed.
+    fn place_secrets(&self, name: &str, secrets: &[&str]) {
+        let dir = self.home().join("extensions").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("extension.json"),
+            json!({"name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+                   "secrets": secrets})
+            .to_string(),
+        )
+        .unwrap();
+        fakes::write_record(&dir);
+    }
+
+    /// Writes the per-project configuration for this workspace's project.
+    fn write_project(&self, value: &Value) {
+        let (_, project) = crate::project_of(&self.home(), &self.workspace()).unwrap();
+        let dir = self.home().join("projects").join(project.as_str());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.json"), value.to_string()).unwrap();
+    }
+}
+
+#[test]
+fn extension_secrets_list_the_missing_ones_in_order() {
+    let setup = Setup::new();
+    setup.place_ready_provider();
+    setup.place_secrets("acme", &["acme.api_key", "acme.region", "fake"]);
+    setup.place_secrets("off", &["off.key"]);
+    setup.place_secrets("scoped", &["scoped.key"]);
+    setup.write_config(&json!({
+        "model": "fake/m",
+        "extensions": {"off": {"enabled": false}, "scoped": {"enabled": false}},
+    }));
+    setup.write_project(&json!({"extensions": {"scoped": {"enabled": true}}}));
+    config::store_secret(&setup.home(), "acme.region", &Secret::new("region".into())).unwrap();
+    let (ready, out, _) = setup.report(&env_of(&[("FIBER_TEST_FAKE_KEY", "k")]));
+    assert!(ready, "{out}");
+    let api = out
+        .find("secret acme.api_key (from acme) is not stored: run `fiber login acme.api_key`")
+        .unwrap();
+    let scoped = out
+        .find("secret scoped.key (from scoped) is not stored: run `fiber login scoped.key`")
+        .unwrap();
+    assert!(api < scoped, "declared_secrets order: {out}");
+    // The stored region, the provider-named secret and the disabled
+    // extension's secret print nothing.
+    for silent in ["secret acme.region", "secret fake", "secret off.key"] {
+        assert!(!out.contains(silent), "{silent} is silent: {out}");
+    }
+}
+
+#[test]
+fn a_symlinked_secret_prints_the_cannot_be_read_line() {
+    let setup = Setup::new();
+    setup.place_ready_provider();
+    setup.place_secrets("acme", &["acme.api_key"]);
+    setup.write_config(&json!({"model": "fake/m"}));
+    let credentials = setup.home().join("credentials");
+    fs::create_dir_all(&credentials).unwrap();
+    let target = credentials.join("target");
+    fs::write(&target, "linked").unwrap();
+    std::os::unix::fs::symlink(&target, credentials.join("acme.api_key")).unwrap();
+    let (ready, out, _) = setup.report(&env_of(&[("FIBER_TEST_FAKE_KEY", "k")]));
+    assert!(ready, "{out}");
+    assert!(
+        out.contains("secret acme.api_key (from acme) cannot be read:"),
+        "{out}"
+    );
+}

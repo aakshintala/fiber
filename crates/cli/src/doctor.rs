@@ -75,6 +75,9 @@ fn run(inputs: &Inputs<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<
         report(line)?;
     }
     hub(inputs, &mut report)?;
+    for line in &checked.secrets {
+        report(line)?;
+    }
     logs(inputs, &mut report);
     Ok(checked.blocker.is_none())
 }
