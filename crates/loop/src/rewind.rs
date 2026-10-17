@@ -146,10 +146,10 @@ pub(crate) fn note_input(rewind: &Rewind) -> Input {
 /// Builds the note for the point `point` in the log in `dir`: the files
 /// the session's tools wrote after the point and the shell calls after it
 /// that may have changed files, from the effects on each
-/// `tool_call_started` after the point (`docs/events.md`, "Rewind"). The
-/// text comes only from logged fields, so it is the same bytes whenever it
-/// is rendered.
-pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
+/// The files written and shell calls after the point: the paths, then the
+/// calls, each in first-seen order. The text comes only from logged
+/// fields, so it is the same bytes whenever it is rendered.
+fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> {
     let lines = log::read(dir)?;
     let mut requested: HashMap<ActionId, ToolCallRequested> = HashMap::new();
     for line in &lines {
@@ -210,11 +210,38 @@ pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
             calls.push(ran);
         }
     }
-    Ok(note(&paths, &calls))
+    Ok((paths, calls))
 }
 
-/// The note text over `paths` written and `calls` run after the point.
-fn note(paths: &[String], calls: &[String]) -> String {
+/// `tool_call_started` after the point (`docs/events.md`, "Rewind"). The
+/// text comes only from logged fields, so it is the same bytes whenever it
+/// is rendered.
+pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
+    let (paths, calls) = changes(dir, point)?;
+    Ok(note(&paths, &calls, &[]))
+}
+
+/// The note with the jobs the rewind stopped, read from the rewound
+/// session's own log (`docs/events.md`, "Rewind"): `old` is that log's
+/// directory, `dir` the point's. With no stopped job the output equals
+/// `rewind_note` byte for byte.
+pub fn rewind_note_with_jobs(old: &Path, dir: &Path, point: Seq) -> Result<String, Error> {
+    let stopped = stop::stopped_jobs(old)?;
+    let (paths, calls) = changes(dir, point)?;
+    let jobs = stopped
+        .iter()
+        .map(|job| match &job.description {
+            Some(description) => format!("- {}: {description}", job.job_id.0),
+            None => format!("- {}", job.job_id.0),
+        })
+        .collect::<Vec<_>>();
+    Ok(note(&paths, &calls, &jobs))
+}
+
+/// The note text over `paths` written, `calls` run after the point, and
+/// `jobs` stopped by the rewind: the jobs section follows the changes,
+/// joined with a blank line, only when at least one job was stopped.
+fn note(paths: &[String], calls: &[String], jobs: &[String]) -> String {
     let changes = match (paths.is_empty(), calls.is_empty()) {
         (true, true) => message("rewind-unchanged").to_owned(),
         _ => {
@@ -233,7 +260,15 @@ fn note(paths: &[String], calls: &[String]) -> String {
             parts.join("\n\n")
         }
     };
-    fill(message("rewind-note"), &[("changes", &changes)])
+    let noted = fill(message("rewind-note"), &[("changes", &changes)]);
+    if jobs.is_empty() {
+        noted
+    } else {
+        format!(
+            "{noted}\n\n{}",
+            fill(message("rewind-jobs"), &[("jobs", &jobs.join("\n"))])
+        )
+    }
 }
 
 #[cfg(test)]

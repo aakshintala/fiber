@@ -3,15 +3,100 @@
 //! is stopped, its end written before `rewound`, and the new session starts
 //! with no jobs.
 
+use std::collections::HashMap;
+use std::path::Path;
 use std::sync::mpsc::RecvTimeoutError;
 
+use contract::events::{Event, JobCompleted, Outcome};
 use contract::inbox::Delivery;
+use contract::{ErrorCode, JobId};
 
 use crate::{Error, Loop};
+
+#[cfg(test)]
+#[path = "stop_tests.rs"]
+mod tests;
 
 /// How long a rewind waits for running jobs to end: the shutdown's
 /// per-process bound.
 pub(crate) const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// One job the note lists as stopped (`docs/events.md`, "Rewind"): its
+/// id, and its `job_started` description when the old log holds one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoppedJob {
+    pub(crate) job_id: JobId,
+    pub(crate) description: Option<String>,
+}
+
+/// Whether `kind` is a job-record line: the four kinds the stop wait writes
+/// between `write_last_settled` and `rewound`, so nothing else in the run
+/// is the stop's.
+fn is_job_record(kind: &str) -> bool {
+    matches!(
+        kind,
+        "job_started" | "delegate_started" | "delegate_finished" | "job_completed"
+    )
+}
+
+/// Whether `completed` lists its job as stopped: `cancelled`, or `failed`
+/// with `error.code` `indeterminate`. A natural end is another status, and
+/// an `orphaned` completion another code, so neither lists it.
+fn is_stopped(completed: &JobCompleted) -> bool {
+    matches!(completed.status, Outcome::Cancelled)
+        || matches!(completed.status, Outcome::Failed)
+            && completed
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == ErrorCode::Indeterminate)
+}
+
+/// The jobs a rewind stopped, read from the old session's own log: the
+/// run of job-record lines directly before the last line, when that line
+/// is `rewound`, in log order. A log not ending in `rewound` yields
+/// nothing, as does a run with no listed end.
+///
+/// Sound because `stop_jobs_for_rewind` is the only writer between
+/// `write_last_settled` and `rewound`, and it writes only job-record
+/// lines there.
+pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
+    let lines = log::read(old)?;
+    let Some(last) = lines.last() else {
+        return Ok(Vec::new());
+    };
+    if last.kind != "rewound" {
+        return Ok(Vec::new());
+    }
+    let mut run = Vec::new();
+    for line in lines.iter().rev().skip(1) {
+        if !is_job_record(&line.kind) {
+            break;
+        }
+        run.push(line);
+    }
+    run.reverse();
+    let mut descriptions = HashMap::new();
+    for line in &run {
+        if let Some(Event::JobStarted(started)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+        {
+            descriptions.insert(started.job_id.clone(), started.description.clone());
+        }
+    }
+    let mut stopped = Vec::new();
+    for line in &run {
+        if let Some(Event::JobCompleted(completed)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+            && is_stopped(&completed)
+        {
+            stopped.push(StoppedJob {
+                job_id: completed.job_id.clone(),
+                description: descriptions.get(&completed.job_id).cloned(),
+            });
+        }
+    }
+    Ok(stopped)
+}
 
 impl Loop {
     /// Stops every running job and writes each end that arrives, before the

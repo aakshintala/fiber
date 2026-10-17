@@ -22,8 +22,8 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use contract::commands::RewindArgs;
 use contract::events::{
-    CommandResult, JobCompleted, Outcome, Parent, SessionStarted, TurnOutcome, Variables,
-    VariablesSource,
+    CommandResult, Event, JobCompleted, JobStarted, Outcome, Parent, SessionStarted, TurnOutcome,
+    Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Claim, Delivery, JobNotice, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
@@ -34,7 +34,7 @@ use contract::{ErrorCode, JobId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
-use r#loop::{Loop, Model, Permissions, PromptInputs};
+use r#loop::{Loop, Model, Permissions, PromptInputs, rewind_note_with_jobs};
 use serde_json::json;
 
 use support::{DEADLINE, MODEL, Session, TestTool, calls_reply, delivery, message, paris};
@@ -854,4 +854,68 @@ fn a_closed_inbox_ends_the_wait_with_the_job_still_running() {
         lines.iter().all(|line| line.kind != "job_completed"),
         "no end is invented for the job that never ended"
     );
+}
+
+#[test]
+fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    // The old log holds the jobs' starts: the note joins the stops to
+    // them for their descriptions. They are history the idle loop has
+    // already written past, so they are appended to the file directly.
+    for (id, description) in [("j_1", "npm run dev"), ("j_2", "lint")] {
+        let event = Event::JobStarted(JobStarted {
+            job_id: JobId(id.into()),
+            tool: None,
+            extension: None,
+            description: description.into(),
+            output_path: "/tmp/out".into(),
+        });
+        let line = contract::Envelope {
+            kind: event.kind().into(),
+            session_id: SessionId(A_ID.into()),
+            ts: 1_759_150_000_000,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: event.payload().unwrap(),
+        };
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("events.jsonl"))
+            .unwrap();
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+    let (jobs, stops) = FakeJobs::new(&["j_1", "j_2"]);
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    let (rw, answered) = support::rewind(args(None, None, false));
+    let inbox = session.inbox.clone();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    inbox.send(rw).unwrap();
+    for _ in 0..2 {
+        Deadline::after(DEADLINE)
+            .recv(&stops)
+            .expect("the job is stopped");
+    }
+    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    jobs.end(&inbox, "j_2", Outcome::Cancelled, None);
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    accepted(answer_of(answered));
+    let note = rewind_note_with_jobs(&dir, &dir, Seq(0)).unwrap();
+    assert!(note.contains("- j_1: npm run dev"), "{note}");
+    assert!(note.contains("- j_2: lint"), "{note}");
 }
