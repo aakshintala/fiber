@@ -424,12 +424,8 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
 /// An executable that prints a `fiber_exited` line whose message is
 /// `marker`, so a start through it is told apart from any other binary.
 fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let path = root.path().join("fiber-stub");
     let line = exited_line("io_failed", marker).replace('\'', "'\\''");
-    std::fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    fakes::script(root.path(), "fiber-stub", &format!("printf '%s\\n' '{line}'\n"))
 }
 
 /// The failure a started session reports once it has exited.
