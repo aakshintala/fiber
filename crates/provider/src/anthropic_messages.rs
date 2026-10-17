@@ -374,7 +374,13 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             mark(&mut out[message].1[block], &request.cache_lifetime);
         }
     }
-    if let Some(last) = out.last_mut().and_then(|(_, blocks)| blocks.last_mut()) {
+    // A request that ends in an assistant message resends a paused reply:
+    // no cache marker on it, so its raw blocks go back unchanged (and a
+    // `thinking` last block may not carry one).
+    let trailing_assistant = out.last().is_some_and(|(role, _)| *role == "assistant");
+    if !trailing_assistant
+        && let Some(last) = out.last_mut().and_then(|(_, blocks)| blocks.last_mut())
+    {
         mark(last, &request.cache_lifetime);
     }
 

@@ -254,7 +254,10 @@ fn a_tool_call_step_yields_calls_with_stable_ids() {
                 call.arguments.clone(),
                 call.provider_id.clone().unwrap().0,
             ),
-            other @ (ReplyAction::Text(_) | ReplyAction::Reasoning(_) | ReplyAction::Hosted(_)) => {
+            other @ (ReplyAction::Text(_)
+            | ReplyAction::Reasoning(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. }) => {
                 panic!("not a tool call: {other:?}")
             }
         })
@@ -301,6 +304,7 @@ fn reasoning_comes_before_text_and_tool_calls() {
             ReplyAction::Text(_) => "text",
             ReplyAction::ToolCall(_) => "tool_call",
             ReplyAction::Hosted(_) => "hosted",
+            ReplyAction::HostedResult { .. } => "hosted_result",
         })
         .collect();
     assert_eq!(kinds, ["reasoning", "text", "tool_call"]);

@@ -100,7 +100,7 @@ model call fails", says. The paused reply's text and actions are kept.
 
 A turn continues a paused reply at most 5 times in a row. The number is picked,
 not measured. If the reply is still paused after that, the turn fails with
-`unknown_stop_reason`, and the message carries `pause_turn`.
+`paused_too_long`, and the message carries `pause_turn`.
 
 ## A reply cut off by the output limit
 
