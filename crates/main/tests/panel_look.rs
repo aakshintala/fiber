@@ -197,7 +197,9 @@ fn panel_setup() -> (Setup, ProviderServer, Release) {
 }
 
 /// Starts the scripted turn and waits for the panel's whole state: both
-/// running counts, the changed files and the 268k context.
+/// running counts, the changed files and the Session card's own context-bar
+/// row. The wait looks for the bar row itself because the turn footer also
+/// reads "268.0k tokens" and lands earlier.
 fn wait_panel_state(run: &mut Run) -> Grid {
     run.ready();
     run.write(b"go\r");
@@ -205,7 +207,10 @@ fn wait_panel_state(run: &mut Run) -> Grid {
         grid.contents.contains("review the diff")
             && grid.contents.matches("1 running").count() >= 2
             && grid.contents.contains("Changed files")
-            && grid.contents.contains("268.0k")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("268.0k") && row.contains(&"▆".repeat(17)))
     })
 }
 
