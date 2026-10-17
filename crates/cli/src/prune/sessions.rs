@@ -93,6 +93,7 @@ struct Candidate {
 /// and no session is listed.
 pub(crate) fn select(
     home: &Path,
+    all: &[log::Started],
     workspace: &Path,
     older_than: Option<Duration>,
     cascade: bool,
@@ -104,10 +105,9 @@ pub(crate) fn select(
             deletes: Vec::new(),
         };
     };
-    let all = log::started_sessions(home);
     let mut by_id: HashMap<String, (PathBuf, Option<String>)> = HashMap::new();
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for started in &all {
+    for started in all {
         by_id.entry(started.id.0.clone()).or_insert((
             started.dir.clone(),
             started.forked_from.as_ref().map(|id| id.0.clone()),
@@ -151,7 +151,7 @@ pub(crate) fn select(
             true
         }
     };
-    for started in &all {
+    for started in all {
         if !in_scope(&started.id.0, &started.dir, &started.workspace) {
             continue;
         }

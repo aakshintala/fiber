@@ -281,13 +281,19 @@ fn removable(plan: &Plan) -> Vec<(&str, u64)> {
         .collect()
 }
 
+/// Scans `home` and selects the pinned plan for `workspace`: every call
+/// stays one line at its site.
+fn plan(home: &Path, workspace: &Path, clock: &dyn contract::clock::Clock) -> Plan {
+    select(home, &log::started_sessions(home), workspace, clock)
+}
+
 #[test]
 fn an_unmatched_copy_is_listed_and_removed() {
     let (setup, branches) = three_branches("pinned-unmatched", RemoveB::Git);
     let home = setup.home();
     let bytes = log::session_bytes(&copy_dir(&home, &branches.b));
     assert!(bytes > 0);
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan), vec![(branches.b.as_str(), bytes)]);
     assert_eq!(plan.rows.len(), 1);
     assert_eq!(
@@ -346,7 +352,7 @@ fn prune_lists_frees_and_dry_runs_an_unmatched_copy() {
 fn a_copy_a_worktree_still_matches_is_kept() {
     let (setup, branches) = three_branches("pinned-matched", RemoveB::Keep);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert!(plan.rows.is_empty());
     for hash in [&branches.main, &branches.a, &branches.b] {
         assert!(copy_dir(&home, hash).is_dir());
@@ -361,7 +367,7 @@ fn a_copy_a_worktree_still_matches_is_kept() {
 fn a_worktree_missing_from_the_filesystem_frees_its_copy() {
     let (setup, branches) = three_branches("pinned-rmrf", RemoveB::RmRf);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     assert!(matches!(plan.rows[0], PinnedRow::Removable { .. }));
     let mut noop = |_: &str| {};
@@ -387,7 +393,7 @@ fn a_locked_worktree_missing_from_the_filesystem_is_uncertain() {
         .expect("the locked worktree is listed")
         .path
         .clone();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     assert_eq!(
         pinned_line(&plan.rows[0]),
@@ -411,7 +417,7 @@ fn an_unreadable_tree_config_keeps_every_candidate() {
     let error = extensions::declared_items(&branches.wt_a, branches.clock.as_ref())
         .unwrap_err()
         .to_string();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(plan.rows.len(), 3);
     for hash in [&branches.main, &branches.a, &branches.b] {
         let expected = format!(
@@ -449,16 +455,16 @@ fn a_bare_entry_is_skipped_and_does_not_block_pruning() {
     let hash = approve(&home, &key, &wt, clock.as_ref());
     // The worktree matches: nothing is listed, and the bare entry does
     // not block the match.
-    let plan = select(&home, &wt, clock.as_ref());
-    assert!(plan.rows.is_empty());
+    let plan1 = plan(&home, &wt, clock.as_ref());
+    assert!(plan1.rows.is_empty());
     git(
         &bare,
         &["worktree", "remove", "--force", wt.to_str().unwrap()],
     );
     // Only the bare entry is left: the copy is removable.
-    let plan = select(&home, &bare, clock.as_ref());
-    assert_eq!(removable(&plan).len(), 1);
-    assert_eq!(removable(&plan)[0].0, hash.as_str());
+    let plan2 = plan(&home, &bare, clock.as_ref());
+    assert_eq!(removable(&plan2).len(), 1);
+    assert_eq!(removable(&plan2)[0].0, hash.as_str());
 }
 
 #[test]
@@ -470,6 +476,7 @@ fn a_failed_worktree_list_keeps_every_candidate() {
     };
     let plan = select_with(
         &home,
+        &log::started_sessions(&home),
         &branches.repo,
         branches.clock.as_ref(),
         &|_| None,
@@ -525,6 +532,7 @@ fn an_unreadable_listed_worktree_keeps_every_candidate() {
     };
     let plan = select_with(
         &home,
+        &log::started_sessions(&home),
         &branches.repo,
         branches.clock.as_ref(),
         &|_| None,
@@ -560,7 +568,7 @@ fn an_unreadable_recorded_identity_keeps_its_copy() {
         identity.to_str().unwrap(),
         None,
     );
-    let plan = select(&home, &repo, clock.as_ref());
+    let plan = plan(&home, &repo, clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     assert_eq!(
         pinned_line(&plan.rows[0]),
@@ -595,7 +603,7 @@ fn a_held_copy_is_listed_as_skipped_and_frees_nothing() {
     );
     let held = store.ensure_copy(&item_b, &hash_b).unwrap();
     git(&repo, &["worktree", "remove", wt_b.to_str().unwrap()]);
-    let plan = select(&home, &repo, clock.as_ref());
+    let plan = plan(&home, &repo, clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     assert_eq!(
         pinned_line(&plan.rows[0]),
@@ -614,7 +622,7 @@ fn a_held_copy_is_listed_as_skipped_and_frees_nothing() {
 fn a_hold_taken_after_listing_fails_the_removal() {
     let (setup, branches) = three_branches("pinned-hold-race", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     // A shared hold on the marker, as a running session keeps: taken
     // after the listing, refused at removal.
@@ -648,7 +656,7 @@ fn a_hold_taken_after_listing_fails_the_removal() {
 fn revalidation_refuses_changed_owners() {
     let (setup, branches) = three_branches("pinned-reval-owners", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     // A second repository with the same hook content, approved by a
     // second project after the listing.
@@ -678,7 +686,7 @@ fn revalidation_refuses_changed_owners() {
 fn revalidation_refuses_a_new_machine_wide_record() {
     let (setup, branches) = three_branches("pinned-reval-machine", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     // A per-machine record for the planned hash appears after the
     // listing: the copy is kept, even though its project owners did not
@@ -705,7 +713,7 @@ fn revalidation_refuses_a_new_machine_wide_record() {
 fn revalidation_refuses_a_newly_matching_tree() {
     let (setup, branches) = three_branches("pinned-reval-match", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     // After the listing a worktree is checked out on the planned version
     // again: the branch stayed when its worktree was removed.
@@ -734,7 +742,7 @@ fn revalidation_refuses_a_newly_matching_tree() {
 fn revalidation_refuses_an_unreadable_tree() {
     let (setup, branches) = three_branches("pinned-reval-unreadable", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     let mut before_remove = |_: &str| {
         fs::write(branches.wt_a.join(".fiber/config.json"), "{invalid").unwrap();
@@ -782,7 +790,7 @@ fn a_copy_another_project_also_approved_is_out_of_scope_inside_a_repository() {
     .never(&item_b, &hash_b)
     .unwrap();
     git(&repo, &["worktree", "remove", wt_b.to_str().unwrap()]);
-    let plan = select(&home, &repo, clock.as_ref());
+    let plan = plan(&home, &repo, clock.as_ref());
     assert!(plan.rows.is_empty());
     let mut noop = |_: &str| {};
     let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
@@ -819,15 +827,15 @@ fn shared_copies_are_judged_by_every_owner_outside_a_repository() {
     );
     let workspace = setup.workspace();
     // The other project's tree still matches: kept, not listed.
-    let plan = select(&home, &workspace, clock.as_ref());
-    assert!(plan.rows.is_empty());
+    let plan1 = plan(&home, &workspace, clock.as_ref());
+    assert!(plan1.rows.is_empty());
     // After it changes too, neither tree matches: removed.
     write_hook(&repo_b, "changed\n");
-    let plan = select(&home, &workspace, clock.as_ref());
-    assert_eq!(removable(&plan).len(), 1);
-    assert_eq!(removable(&plan)[0].0, hash.as_str());
+    let plan2 = plan(&home, &workspace, clock.as_ref());
+    assert_eq!(removable(&plan2).len(), 1);
+    assert_eq!(removable(&plan2)[0].0, hash.as_str());
     let mut noop = |_: &str| {};
-    let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
+    let removed = remove_planned(&home, &plan2, clock.as_ref(), &mut noop);
     assert_eq!(removed.total, 1);
     assert!(copy_dir(&home, &hash).symlink_metadata().is_err());
 }
@@ -864,7 +872,7 @@ fn two_identities_under_one_slug_keep_a_copy_matched_by_either() {
         second.to_str().unwrap(),
         None,
     );
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &kept).is_dir());
 }
@@ -888,7 +896,7 @@ fn two_identities_under_one_slug_remove_a_copy_matched_by_neither() {
         None,
     );
     write_hook(&second, "changed\n");
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     assert_eq!(removable(&plan)[0].0, kept.as_str());
     let mut noop = |_: &str| {};
@@ -916,7 +924,7 @@ fn two_identities_under_one_slug_survive_a_deleted_identity() {
         None,
     );
     fs::remove_dir_all(&first).unwrap();
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &kept).is_dir());
 }
@@ -958,7 +966,7 @@ fn recorded_repository_decides_a_shared_slug() {
     // One recorded repository is gone, but the other still has a tree
     // matching the copy: kept, not listed.
     fs::remove_dir_all(&first).unwrap();
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &kept).is_dir());
 }
@@ -969,7 +977,7 @@ fn recorded_slug_removes_a_copy_matched_by_neither() {
     let home = setup.home();
     write_hook(&first, "changed\n");
     write_hook(&second, "changed\n");
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     assert_eq!(removable(&plan)[0].0, kept.as_str());
     let mut noop = |_: &str| {};
@@ -995,7 +1003,7 @@ fn recorded_slug_falls_back_to_the_workspace() {
         second.to_str().unwrap(),
         None,
     );
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &kept).is_dir());
 }
@@ -1017,7 +1025,7 @@ fn a_never_record_with_a_leftover_copy_is_removed() {
     // A never replaces the approval but leaves the copy behind.
     store.never(&item, &hash).unwrap();
     write_hook(&repo, "changed\n");
-    let plan = select(&home, &repo, clock.as_ref());
+    let plan = plan(&home, &repo, clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     let mut noop = |_: &str| {};
     let removed = remove_planned(&home, &plan, clock.as_ref(), &mut noop);
@@ -1059,7 +1067,7 @@ fn a_server_copy_is_not_listed_inside_a_repository() {
     let repo = setup.repo("repo", "main\n");
     let clock = FakeClock::new();
     let hash = approve_server(&home, &repo, clock.as_ref());
-    let plan = select(&home, &repo, clock.as_ref());
+    let plan = plan(&home, &repo, clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &hash).is_dir());
 }
@@ -1079,7 +1087,7 @@ fn a_server_copy_is_not_listed_outside_a_repository() {
         repo.to_str().unwrap(),
         None,
     );
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &hash).is_dir());
 }
@@ -1092,7 +1100,7 @@ fn a_copy_with_no_record_is_not_listed() {
     let orphan: String = "f".repeat(64);
     fs::create_dir_all(copy_dir(&home, &orphan)).unwrap();
     fs::write(marker(&home, &orphan), "").unwrap();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &orphan).is_dir());
 }
@@ -1103,7 +1111,7 @@ fn unreadable_ownership_judges_no_copy() {
     let home = setup.home();
     let approvals = home.join("projects").join(&branches.key).join("approvals");
     let _guard = RestoreMode::set(&approvals, 0o000);
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     let expected = extensions::Store::kept_copies(&home)
         .unwrap_err()
@@ -1130,7 +1138,7 @@ fn a_short_approval_name_is_ignored() {
         "{}",
     )
     .unwrap();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     assert_eq!(removable(&plan)[0].0, branches.b.as_str());
 }
@@ -1149,7 +1157,14 @@ fn a_redirecting_environment_skips_the_pinned_step() {
         let list = |_: &Path| -> Result<Vec<worktree::Listed>, worktree::Error> {
             panic!("git must not run")
         };
-        let plan = select_with(&home, &branches.repo, branches.clock.as_ref(), &env, &list);
+        let plan = select_with(
+            &home,
+            &log::started_sessions(&home),
+            &branches.repo,
+            branches.clock.as_ref(),
+            &env,
+            &list,
+        );
         assert_eq!(plan.rows.len(), 1);
         assert_eq!(
             pinned_line(&plan.rows[0]),
@@ -1178,7 +1193,7 @@ fn a_project_whose_directory_is_gone_cannot_be_found() {
         None,
     );
     fs::remove_dir_all(&plain).unwrap();
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert_eq!(plan.rows.len(), 1);
     assert_eq!(
         pinned_line(&plan.rows[0]),
@@ -1208,7 +1223,7 @@ fn a_plain_directory_is_a_project_outside_a_repository() {
         plain.to_str().unwrap(),
         None,
     );
-    let plan = select(&home, &setup.workspace(), clock.as_ref());
+    let plan = plan(&home, &setup.workspace(), clock.as_ref());
     assert!(plan.rows.is_empty());
     assert!(copy_dir(&home, &hash).is_dir());
 }
@@ -1264,7 +1279,7 @@ fn a_worktree_removed_this_run_still_counts() {
 fn dry_run_keeps_no_lock() {
     let (setup, branches) = three_branches("pinned-dry-lock", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     // The listing probed holds and released them at once.
     let lock = fs::File::options()
@@ -1359,7 +1374,7 @@ fn no_candidates_frees_nothing() {
 fn selection_saves_the_index() {
     let (setup, branches) = three_branches("pinned-index", RemoveB::Git);
     let home = setup.home();
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     let index = fs::read_to_string(home.join("pinned.json")).unwrap();
     assert!(index.contains("fmt.sh"), "{index}");
@@ -1372,7 +1387,7 @@ fn a_read_only_home_still_lists() {
     assert!(!home.join("pinned.json").exists());
     let _guard = RestoreMode::set(&home, 0o555);
     // The index save fails, and the run still succeeds.
-    let plan = select(&home, &branches.repo, branches.clock.as_ref());
+    let plan = plan(&home, &branches.repo, branches.clock.as_ref());
     assert_eq!(removable(&plan).len(), 1);
     assert!(!home.join("pinned.json").exists());
 }

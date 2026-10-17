@@ -100,9 +100,15 @@ const REDIRECTING_ENV: [&str; 4] = [
 /// repository the repository's project, outside one every project. A copy
 /// another project also approved is kept and not listed, as is a copy
 /// with a per-machine record or none at all.
-pub(super) fn select(home: &Path, workspace: &Path, clock: &dyn Clock) -> Plan {
+pub(super) fn select(
+    home: &Path,
+    started: &[log::Started],
+    workspace: &Path,
+    clock: &dyn Clock,
+) -> Plan {
     select_with(
         home,
+        started,
         workspace,
         clock,
         &|name| std::env::var_os(name),
@@ -114,6 +120,7 @@ pub(super) fn select(home: &Path, workspace: &Path, clock: &dyn Clock) -> Plan {
 /// tests need neither the process environment nor `git`.
 fn select_with(
     home: &Path,
+    started: &[log::Started],
     workspace: &Path,
     clock: &dyn Clock,
     env: &dyn Fn(&str) -> Option<OsString>,
@@ -141,13 +148,14 @@ fn select_with(
         }
     };
     let scope = scope_keys(home, workspace);
-    select_candidates(home, workspace, clock, list, &scope, &kept)
+    select_candidates(home, started, workspace, clock, list, &scope, &kept)
 }
 
 /// Lists the candidates among `kept`: a copy with at least one owner, no
 /// per-machine record, and every owner in scope.
 fn select_candidates(
     home: &Path,
+    started: &[log::Started],
     workspace: &Path,
     clock: &dyn Clock,
     list: &dyn Fn(&Path) -> Result<Vec<worktree::Listed>, worktree::Error>,
@@ -164,11 +172,11 @@ fn select_candidates(
         .collect();
     // Every recorded identity by its session's project key.
     let mut identities: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    for started in log::started_sessions(home) {
-        let Some(key) = session_key(&started) else {
+    for started in started {
+        let Some(key) = session_key(started) else {
             continue;
         };
-        let Some(identity) = identity_of(&started) else {
+        let Some(identity) = identity_of(started) else {
             continue;
         };
         identities.entry(key).or_default().push(identity);
