@@ -51,7 +51,7 @@ pub(crate) struct Lock {
 /// then fails with [`Error::Busy`]. A commit that stopped halfway is
 /// finished before the lock is returned.
 pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     fs::create_dir_all(&root).map_err(io(&root))?;
     let path = root.join(".lock");
     let file = File::options()
@@ -126,7 +126,7 @@ pub struct Listing {
 /// error naming the file. A commit that stopped halfway is finished
 /// first, under the same lock every other operation takes.
 pub fn list(home: &Path, clock: &dyn Clock) -> Result<Listing, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Listing::default());
     }
@@ -168,7 +168,7 @@ pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
 /// halfway. `found` is in directory file-name order, as `Providers::load`
 /// iterates, so collision notices keep their order.
 pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Entries::default()),
@@ -224,7 +224,7 @@ pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
 /// The installed extensions with their manifests, under the same lock every
 /// other operation takes. A commit that stopped halfway is finished first.
 pub(crate) fn locked_entries(home: &Path, clock: &dyn Clock) -> Result<Entries, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Entries::default());
     }
@@ -255,7 +255,7 @@ pub fn is_enabled(config: &config::Config, name: &str) -> bool {
 /// manifest, Lua or repository code is loaded. The name is the record's,
 /// as installed.
 pub fn package_names(home: &Path) -> Vec<(String, PathBuf)> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     let Ok(entries) = fs::read_dir(&root) else {
         return Vec::new();
     };
@@ -358,7 +358,7 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             // Removal deletes `extensions/<slug>/`. A record that names
             // the extension from a directory left under another layout
             // does not make that directory exist.
-            let path = home.join("extensions").join(slug(&name)?);
+            let path = config::extensions_dir(home).join(slug(&name)?);
             match left.iter().position(|i| i.name == name) {
                 Some(i) if present(&path)? => Some(i),
                 _ => {
@@ -387,7 +387,7 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     let mut orphan_names = names.iter();
     if let Some(dir) = damaged_dir {
         orphan_names.next();
-        dirs.push(home.join("extensions").join(&dir));
+        dirs.push(config::extensions_dir(home).join(&dir));
         let (gone, found) = existing_data(&layers, &dir)?;
         data.extend(gone.iter().cloned());
         data.extend(found.iter().cloned());
@@ -395,7 +395,7 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     }
     for name in orphan_names {
         let dir = slug(name)?;
-        dirs.push(home.join("extensions").join(&dir));
+        dirs.push(config::extensions_dir(home).join(&dir));
         let (gone, found) = existing_data(&layers, &dir)?;
         data.extend(gone.iter().cloned());
         data.extend(found.iter().cloned());
@@ -444,7 +444,7 @@ fn existing_data(layers: &[PathBuf], dir: &str) -> Result<(Vec<PathBuf>, Vec<Pat
     let mut gone = Vec::new();
     let mut found = Vec::new();
     for layer in layers {
-        let data_dir = layer.join("data").join(dir);
+        let data_dir = config::extension_data_dir(layer, dir);
         if present(&data_dir)? {
             gone.push(data_dir);
         }

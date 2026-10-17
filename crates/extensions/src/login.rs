@@ -28,9 +28,7 @@ pub fn login_provider(
         .ok_or_else(|| Error::ProviderMissing {
             provider: name.to_owned(),
         })?;
-    let dir = home
-        .join("extensions")
-        .join(config::dir_name(extension_name));
+    let dir = config::extensions_dir(home).join(config::dir_name(extension_name));
     let manifest = config::read_manifest(&dir)?;
     let mut extension = LuaExtension::new(extension_name, dir, home, clock)
         .with_browser(browser)

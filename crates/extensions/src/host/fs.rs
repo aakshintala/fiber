@@ -51,11 +51,11 @@ pub(crate) fn install(
     let slug = config::dir_name(extension);
     let project = session
         .as_ref()
-        .map(|session| session.config.extensions().project().as_str().to_owned());
-    let (machine_dir, project_dir) = match project.as_deref() {
+        .map(|session| session.config.extensions().project());
+    let (machine_dir, project_dir) = match project {
         Some(key) => (
-            Some(home.join("data").join(&slug)),
-            Some(home.join("projects").join(key).join("data").join(&slug)),
+            Some(config::extension_data_dir(&home, &slug)),
+            Some(config::project_data_dir(&home, key, &slug)),
         ),
         None => (None, None),
     };

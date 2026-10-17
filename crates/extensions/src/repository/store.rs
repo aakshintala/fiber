@@ -562,7 +562,7 @@ impl Store {
     fn complete(&self, item: &RepoItem, copy: &Path) -> Result<PathBuf, Error> {
         let home = copy.join(".fiber-depends");
         check_dirs(&item.name, &self.home, &home, false)?;
-        check_dirs(&item.name, &self.home, &home.join("extensions"), false)?;
+        check_dirs(&item.name, &self.home, &config::extensions_dir(&home), false)?;
         Ok(home.join(".complete"))
     }
 
@@ -592,7 +592,7 @@ impl Store {
         check_dirs(&item.name, &self.home, &home, true)?;
         fs::create_dir_all(&home).map_err(io_error(&home))?;
         check_dirs(&item.name, &self.home, &home, false)?;
-        check_dirs(&item.name, &self.home, &home.join("extensions"), true)?;
+        check_dirs(&item.name, &self.home, &config::extensions_dir(&home), true)?;
         let planned = plan_depends(
             &home,
             manifest,
