@@ -51,11 +51,14 @@ fn printing(lines: &[String]) -> Child {
 }
 
 #[track_caller]
-fn drained(child: Child) -> Arc<Mutex<State>> {
-    let state = Arc::new(Mutex::new(State {
-        exited: false,
-        failure: None,
-    }));
+fn drained(child: Child) -> Arc<(Mutex<State>, Condvar)> {
+    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+        }),
+        Condvar::new(),
+    ));
     let child = Arc::new(Mutex::new(child));
     // `drain` blocks reading stdout to EOF and reaping the child: a wait,
     // so the test receives it with a wall-clock deadline.
@@ -66,7 +69,7 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
             let child = Arc::clone(&child);
             let state = Arc::clone(&state);
             move || {
-                drain(&child, &state, &Condvar::new());
+                drain(&child, &state);
                 done_tx.send(()).unwrap_or(());
             }
         })
@@ -77,8 +80,8 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
     state
 }
 
-fn failure_of(state: &Arc<Mutex<State>>) -> Option<Failure> {
-    lock(state).failure.clone()
+fn failure_of(state: &Arc<(Mutex<State>, Condvar)>) -> Option<Failure> {
+    lock(&state.0).failure.clone()
 }
 
 #[test]
@@ -246,11 +249,13 @@ fn configure_reads_a_global_debug_level() {
 fn exited_is_none_while_the_session_runs() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
-        state: Arc::new(Mutex::new(State {
-            exited: false,
-            failure: None,
-        })),
-        exit: Arc::new(Condvar::new()),
+        state: Arc::new((
+            Mutex::new(State {
+                exited: false,
+                failure: None,
+            }),
+            Condvar::new(),
+        )),
     };
     assert!(spawned.exited().is_none());
 }
@@ -259,11 +264,10 @@ fn exited_is_none_while_the_session_runs() {
 fn exited_reports_the_drained_failure() {
     let child = printing(&[exited_line("no_model", "No model is configured.")]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
-        exit: Arc::new(Condvar::new()),
     };
     let failure = spawned.exited().expect("the drained failure");
     assert_eq!(failure.code, ErrorCode::NoModel);
@@ -277,7 +281,6 @@ fn exited_without_a_verdict_is_io_failed() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
-        exit: Arc::new(Condvar::new()),
     };
     let failure = spawned.exited().expect("the fallback failure");
     assert_eq!(failure.code, ErrorCode::IoFailed);
@@ -292,7 +295,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
         "noise".to_owned(),
     ]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
     assert_eq!(failure.message, "The request was bad.");
@@ -302,7 +305,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
 fn drain_marks_exited_once_stdout_closes() {
     let child = printing(&[]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     assert!(failure_of(&state).is_none());
 }
 
@@ -464,25 +467,25 @@ fn wait_exited_blocks_until_the_child_exits() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let state = Arc::new(Mutex::new(State {
-        exited: false,
-        failure: None,
-    }));
-    let exit = Arc::new(Condvar::new());
+    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+        }),
+        Condvar::new(),
+    ));
     let child = Arc::new(Mutex::new(child));
     thread::Builder::new()
         .name("hub-test-drain".to_owned())
         .spawn({
             let child = Arc::clone(&child);
             let state = Arc::clone(&state);
-            let exit = Arc::clone(&exit);
-            move || drain(&child, &state, &exit)
+            move || drain(&child, &state)
         })
         .unwrap();
     let spawned = Spawned {
         id: SessionId("s_wait".to_owned()),
         state,
-        exit,
     };
     let (started_tx, started_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -496,6 +499,14 @@ fn wait_exited_blocks_until_the_child_exits() {
     Deadline::after(DRAIN_DEADLINE)
         .recv(&started_rx)
         .expect("the waiter reports before it waits");
+    // The child still holds stdin, so the waiter must still be blocked:
+    // a `wait_exited` that answers without waiting has sent by now.
+    assert!(
+        Deadline::after(Duration::from_millis(500))
+            .recv(&done_rx)
+            .is_err(),
+        "wait_exited answered while stdin was held"
+    );
     std::io::Write::write_all(&mut stdin, b"go\n").unwrap();
     drop(stdin);
     let failure = Deadline::after(DRAIN_DEADLINE)

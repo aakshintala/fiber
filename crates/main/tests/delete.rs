@@ -104,7 +104,7 @@ fn text(bytes: &[u8]) -> String {
 
 /// Accepts one connection, blocking: `None` is the stand-in ending,
 /// `stop` set before a client connected.
-fn accept_within(listener: &UnixListener, stop: &AtomicBool) -> Option<UnixStream> {
+fn accept_unless_stopped(listener: &UnixListener, stop: &AtomicBool) -> Option<UnixStream> {
     match listener.accept() {
         Ok((stream, _)) if !stop.load(Ordering::SeqCst) => Some(stream),
         _ => None,
@@ -159,13 +159,13 @@ fn a_delete_that_meets_an_exiting_hub_waits_and_starts_a_new_one() {
         };
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap_or(());
         ready_tx.send(()).unwrap_or(());
-        let Some(first) = accept_within(&listener, &thread_stop) else {
+        let Some(first) = accept_unless_stopped(&listener, &thread_stop) else {
             drop(locked);
             fs::remove_file(&socket).unwrap_or(());
             return;
         };
         drop(first);
-        let Some(held) = accept_within(&listener, &thread_stop) else {
+        let Some(held) = accept_unless_stopped(&listener, &thread_stop) else {
             drop(locked);
             fs::remove_file(&socket).unwrap_or(());
             return;
