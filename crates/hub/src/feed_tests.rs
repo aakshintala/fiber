@@ -764,6 +764,10 @@ fn recent_answers_a_page_without_running_sessions() {
         ids(feed.recent(&args(json!({"before": id(2)}))).unwrap()),
         [id(1)]
     );
+    assert_eq!(
+        total(feed.recent(&args(json!({"before": id(2)}))).unwrap()),
+        2
+    );
     for n in 4..=54 {
         temp.session(n, "p", "fiber_exited");
         temp.append(&row(n, "p", "exited", None));
@@ -771,6 +775,12 @@ fn recent_answers_a_page_without_running_sessions() {
     let page = feed.recent(&Map::new()).unwrap().unwrap();
     assert_eq!(page["sessions"].as_array().unwrap().len(), 50);
     assert_eq!(page["total"].as_u64().unwrap(), 53);
+    let after = feed
+        .recent(&args(json!({"before": id(54)})))
+        .unwrap()
+        .unwrap();
+    assert_eq!(after["sessions"].as_array().unwrap().len(), 50);
+    assert_eq!(after["total"].as_u64().unwrap(), 53);
     stop_within(&feed);
 }
 

@@ -366,13 +366,10 @@ impl Feed {
             .filter(|(_, entry)| matches!(entry, Entry::Running(_)))
             .map(|(id, _)| id.clone())
             .collect();
-        match recent::page(&self.home, before, project, &running) {
-            Ok(rows) => {
-                let total = recent::count(&self.home, project, &running);
-                Ok(Some(
-                    serde_json::json!({ "sessions": rows, "total": total }),
-                ))
-            }
+        match recent::page_with_total(&self.home, before, project, &running) {
+            Ok((rows, total)) => Ok(Some(
+                serde_json::json!({ "sessions": rows, "total": total }),
+            )),
             Err(PageError::UnknownBefore) => Err(Refused {
                 code: ErrorCode::InvalidArguments,
                 message: "`before` names no session in the list.".to_owned(),

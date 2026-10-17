@@ -264,7 +264,7 @@ fn count_skips_running_delegate_and_missing_directory_rows() {
 }
 
 #[test]
-fn count_at_the_page_boundary_returns_its_own_value() {
+fn count_is_not_capped_at_the_page_size() {
     let temp = Temp::new();
     for n in 0..RECENT_PAGE as u64 {
         temp.append(&temp.row(n, "p", Left::Exited, None));
@@ -272,6 +272,17 @@ fn count_at_the_page_boundary_returns_its_own_value() {
     assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE);
     temp.append(&temp.row(RECENT_PAGE as u64, "p", Left::Exited, None));
     assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE + 1);
+}
+
+#[test]
+fn total_counts_every_row_whatever_before_holds() {
+    let temp = Temp::new();
+    for n in 0..3 {
+        temp.append(&temp.row(n, "p", Left::Exited, None));
+    }
+    let (rows, total) = page_with_total(&temp.dir, Some(&id(2)), None, &BTreeSet::new()).unwrap();
+    assert_eq!(ids(&rows), [id(1), id(0)]);
+    assert_eq!(total, 3);
 }
 
 #[test]

@@ -143,6 +143,19 @@ pub(crate) fn page(
     project: Option<&str>,
     running: &BTreeSet<String>,
 ) -> Result<Vec<RecentRow>, PageError> {
+    page_with_total(home, before, project, running).map(|(rows, _)| rows)
+}
+
+/// One page of exited sessions and the query's total, from one read of
+/// `recent.jsonl`: a row written mid-answer cannot make them disagree.
+/// The page starts after `before`'s row; the total counts every row the
+/// pages walk, whatever `before` and the page hold.
+pub(crate) fn page_with_total(
+    home: &Path,
+    before: Option<&str>,
+    project: Option<&str>,
+    running: &BTreeSet<String>,
+) -> Result<(Vec<RecentRow>, usize), PageError> {
     let listed = listed(home, project);
     let start = match before {
         None => 0,
@@ -154,21 +167,28 @@ pub(crate) fn page(
                 + 1
         }
     };
-    Ok(listed
+    let total = total_of(&listed, running);
+    let rows = listed
         .into_iter()
         .skip(start)
         .filter(|row| !running.contains(&row.session_id.0))
         .take(RECENT_PAGE)
-        .collect())
+        .collect();
+    Ok((rows, total))
+}
+
+/// How many of `listed` no running session holds.
+fn total_of(listed: &[RecentRow], running: &BTreeSet<String>) -> usize {
+    listed
+        .iter()
+        .filter(|row| !running.contains(&row.session_id.0))
+        .count()
 }
 
 /// How many exited sessions a query matches: the same rows `page`
 /// pages through, with no page limit.
 pub(crate) fn count(home: &Path, project: Option<&str>, running: &BTreeSet<String>) -> usize {
-    listed(home, project)
-        .into_iter()
-        .filter(|row| !running.contains(&row.session_id.0))
-        .count()
+    total_of(&listed(home, project), running)
 }
 
 /// The rows the hub seeds its feed from at start: of the newest
