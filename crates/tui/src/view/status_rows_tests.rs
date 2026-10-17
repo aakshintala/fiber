@@ -60,9 +60,11 @@ fn quota_segments_use_short_names_colours_and_no_click_targets() {
 /// The launch description with `cards`, `/w`, outside git.
 fn launch(cards: &[&str]) -> Launch {
     Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

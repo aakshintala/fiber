@@ -17,9 +17,11 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 fn app(width: u16, height: u16, on_home: bool) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -303,9 +305,11 @@ fn the_rail_and_panel_regions_take_the_panel_tint() {
     use ratatui::style::Color;
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

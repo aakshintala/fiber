@@ -32,8 +32,11 @@ fn stroke(name: &str) -> Stroke {
 fn home(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.set_size(width, height);

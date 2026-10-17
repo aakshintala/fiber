@@ -129,6 +129,12 @@ pub enum ConfigError {
         /// The name.
         name: String,
     },
+    /// A theme name that fails the shared name rule.
+    #[error("not a theme name")]
+    BadThemeName,
+    /// A theme file that could not be read; the text is the io error's.
+    #[error("{0}")]
+    ThemeRead(String),
 }
 
 impl ConfigError {
@@ -142,9 +148,11 @@ impl ConfigError {
             | Self::DuplicateExtension { .. } => ErrorCode::ConfigInvalid,
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::CredentialFailed { .. } => ErrorCode::CredentialFailed,
-            Self::Io { .. } | Self::Unsynced { .. } => ErrorCode::IoFailed,
+            Self::Io { .. } | Self::Unsynced { .. } | Self::ThemeRead(..) => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } | Self::Refused { .. } => ErrorCode::Usage,
-            Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,
+            Self::ProjectKey { .. } | Self::SecretName { .. } | Self::BadThemeName => {
+                ErrorCode::InvalidArguments
+            }
         }
     }
 }

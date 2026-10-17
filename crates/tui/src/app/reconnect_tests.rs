@@ -23,8 +23,11 @@ const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         model: Some("test/model".to_owned()),
         version: "0.0.1".to_owned(),
         logo_glyph: "⌇".to_owned(),

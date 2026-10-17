@@ -105,7 +105,7 @@ fn write_report(
     reported: &str,
 ) -> Result<PathBuf, String> {
     let home = config::fiber_home(fiber_home, home).map_err(|e| e.to_string())?;
-    let crashes = home.join("crashes");
+    let crashes = config::crashes_dir(&home);
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)

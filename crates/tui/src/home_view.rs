@@ -691,16 +691,6 @@ pub(super) fn render(
     }
     // The chip row: the workspace, the model, the thinking level, and
     // what Enter does. The workspace chip opens the picker.
-    let texts: Vec<&str> = screen.chips.iter().map(|(_, text)| text.as_str()).collect();
-    put(
-        buf,
-        area,
-        text_x,
-        placed.chip,
-        &texts.join("  "),
-        placed.inner,
-        BOX_TINT,
-    );
     let mut chip_x = text_x;
     // A chip past the box's right edge draws nothing and takes no
     // target; a chip cut part-way keeps its visible cells. Without
@@ -708,12 +698,35 @@ pub(super) fn render(
     let box_end = text_x
         .saturating_add(placed.inner)
         .min(area.x.saturating_add(area.width));
-    for (at, (spot, text)) in screen.chips.iter().enumerate() {
+    for (at, chip) in screen.chips.iter().enumerate() {
+        let text = &chip.text;
         if at != 0 {
+            put(
+                buf,
+                area,
+                chip_x,
+                placed.chip,
+                "  ",
+                box_end.saturating_sub(chip_x),
+                BOX_TINT,
+            );
             chip_x = chip_x.saturating_add(2);
         }
+        put(
+            buf,
+            area,
+            chip_x,
+            placed.chip,
+            text,
+            box_end.saturating_sub(chip_x),
+            if chip.dim {
+                BOX_TINT.add_modifier(Modifier::DIM)
+            } else {
+                BOX_TINT
+            },
+        );
         let wide = super::to_u16(width(text));
-        if let Some(spot) = spot {
+        if let Some(spot) = &chip.spot {
             let end = chip_x.saturating_add(wide).min(box_end);
             if end > chip_x {
                 targets.push(Target {
@@ -739,7 +752,8 @@ pub(super) fn render(
                     typed,
                     &picker.recents,
                     picker.focus,
-                    area,
+                    picker.escapes,
+                    (area, placed.box_top),
                     buf,
                     &mut targets,
                 );
@@ -760,7 +774,15 @@ pub(super) fn render(
                 let (off, take) = completions::window(selected.saturating_sub(start), len, room);
                 let at = start.saturating_add(off);
                 if let Some(window) = items.get(at..at.saturating_add(take)) {
-                    draw_picker(window, at, selected, area, buf, &mut targets);
+                    draw_picker(
+                        window,
+                        at,
+                        selected,
+                        picker.escapes,
+                        area,
+                        buf,
+                        &mut targets,
+                    );
                 }
             }
         }
@@ -874,7 +896,7 @@ enum TypedRow {
     Blank,
     /// The dim "── recents ──" header.
     Header,
-    /// The recent at its index into the recents fixed at open.
+    /// The recent at its index into the current recents.
     Recent(usize),
 }
 
@@ -961,20 +983,28 @@ fn typed_body(
 }
 
 /// The workspace picker's footer: what the mouse does.
-fn picker_footer() -> super::overlay::Row {
-    super::overlay::legend(&[("↑↓", "move"), ("Enter", "open"), ("Esc", "closes")])
+fn picker_footer(escapes: bool) -> super::overlay::Row {
+    let mut legend = vec![("↑↓", "move"), ("Enter", "open")];
+    if escapes {
+        legend.push(("Esc", "closes"));
+    }
+    super::overlay::legend(&legend)
 }
 
 /// Draws the typed workspace picker over `area`: the typed row with
 /// its cursor, the completions with the focused one on the bar, the
 /// blank row, the dim header and the dim recents, with a focused
 /// recent barred. Only the recent rows take clicks, by their index
-/// into the recents fixed at open.
+/// into the current recents. It centres over `area` while that keeps
+/// it clear of the input box's top row `box_top`; otherwise, when it
+/// fits above the box, its bottom edge sits on the row above the box.
+/// A screen too short for that keeps it centred, over the box.
 fn draw_typed_picker(
     typed: &TypedScreen,
     recents: &[String],
     focus: Option<usize>,
-    area: Rect,
+    escapes: bool,
+    (area, box_top): (Rect, u16),
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) {
@@ -986,13 +1016,30 @@ fn draw_typed_picker(
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
     let info = Style::new().fg(Role::Info.color());
+    // The chrome is two edges, two pad rows, the title and its gap, and
+    // the footer's gap and row.
+    const CHROME: u16 = 8;
     let body_rows = typed_body(
         typed.completions.len(),
         recents.len(),
         focus,
         typed.missing,
-        usize::from(area.height.saturating_sub(8)),
+        usize::from(area.height.saturating_sub(CHROME)),
     );
+    let tall = super::to_u16(body_rows.len()).saturating_add(CHROME);
+    let centred_bottom = area
+        .y
+        .saturating_add(area.height.saturating_sub(tall) / 2)
+        .saturating_add(tall);
+    // Above the box: the centred place when it is clear of the box,
+    // else the bottom edge on the row above it.
+    let place = if tall <= box_top.saturating_sub(area.y) {
+        super::overlay::Place::Across {
+            bottom: centred_bottom.min(box_top),
+        }
+    } else {
+        super::overlay::Place::Centre
+    };
     let overall = |row: &TypedRow| match row {
         TypedRow::Completion(at) => Some(*at),
         TypedRow::Recent(at) => Some(typed.completions.len().saturating_add(*at)),
@@ -1073,10 +1120,10 @@ fn draw_typed_picker(
         title: Some(("Workspaces".to_owned(), None)),
         close: None,
         body,
-        footer: Some(picker_footer()),
+        footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    super::overlay::draw(buf, area, &framed, place, targets);
 }
 
 /// Draws the workspace picker over `area`: `window` with the selection
@@ -1086,6 +1133,7 @@ fn draw_picker(
     window: &[String],
     start: usize,
     selected: usize,
+    escapes: bool,
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
@@ -1120,7 +1168,7 @@ fn draw_picker(
         title: Some(("Workspaces".to_owned(), None)),
         close: None,
         body,
-        footer: Some(picker_footer()),
+        footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
     super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
