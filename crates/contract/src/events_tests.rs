@@ -278,12 +278,12 @@ fn samples() -> Vec<(&'static str, Value)> {
             "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "login_shell"},
             "parent": {"session_id": "s", "delegate_id": "j"},
             "forked_from": {"session_id": "s", "seq": 3},
-            "rewind": {"summary": "s", "note": "n", "jobs": ["j"]},
+            "rewind": {"summary": "s", "note": "n"},
             "worktree": {"path": "/w", "branch": "fiber/s", "repository": "/r/.git"}}),
         ),
         (
             "rewound",
-            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "jobs": []}),
+            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1"}),
         ),
         (
             "turn_started",
@@ -1692,4 +1692,25 @@ fn a_waiting_offer_reads_as_its_kind() {
     };
     assert_eq!(waiting.kind, WaitingKind::Offer);
     assert_eq!(waiting.summary, "3 items from the repository");
+}
+
+#[test]
+fn an_old_rewound_line_with_jobs_still_reads() {
+    let Some(Event::Rewound(rewound)) = read(
+        "rewound",
+        json!({"new_session_id": "s2", "seq": 4, "jobs": []}),
+    )
+    .unwrap() else {
+        panic!("not a rewound");
+    };
+    assert_eq!(rewound.new_session_id, SessionId("s2".into()));
+    let Some(Event::SessionStarted(_)) = read(
+        "session_started",
+        json!({"workspace": "/w",
+        "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "login_shell"},
+        "rewind": {"note": "n", "jobs": ["j"]}}),
+    )
+    .unwrap() else {
+        panic!("not a session_started");
+    };
 }

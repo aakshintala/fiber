@@ -440,8 +440,9 @@ fn name_job(input: &mut Vec<InputItem>, id: &JobId) {
     }
 }
 
-/// The jobs a log started with no `job_completed` and no `rewound` naming
-/// them, folded one line at a time.
+/// The jobs a log started with no `job_completed`, folded one line at a
+/// time. A `rewound` settles no job: every job a rewind stops has its own
+/// `job_completed` before it.
 #[derive(Default)]
 pub(crate) struct Orphans {
     started: Vec<JobId>,
@@ -457,8 +458,6 @@ impl Orphans {
             self.settled.remove(&job.job_id);
         } else if let Event::JobCompleted(job) = event {
             self.settled.insert(job.job_id.clone());
-        } else if let Event::Rewound(rewound) = event {
-            self.settled.extend(rewound.jobs.iter().cloned());
         }
     }
 
