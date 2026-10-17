@@ -152,3 +152,44 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
         )
     );
 }
+
+#[test]
+fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
+    let setup = Setup::new_with_fc_root();
+    fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
+    fs::write(
+        setup.root.path().join("w/.fiber/config.json"),
+        r#"{"roles": {"fast": {"model": "fake/m", "credential": "work"}}}"#,
+    )
+    .unwrap();
+    let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
+    assert_eq!(get.code, Some(0), "{get:?}");
+    // The role's model still applies, from the repository layer.
+    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
+    assert!(get.stdout.contains(".fiber/config.json"), "{get:?}");
+    // The ignored credential raises one notice naming the key and the file.
+    let file = fs::canonicalize(setup.root.path().join("w/.fiber/config.json")).unwrap();
+    assert_eq!(
+        get.stderr,
+        format!(
+            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.\n",
+            file.display()
+        ),
+        "{get:?}"
+    );
+}
+
+#[test]
+fn a_repository_role_without_a_credential_raises_no_notice() {
+    let setup = Setup::new_with_fc_root();
+    fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
+    fs::write(
+        setup.root.path().join("w/.fiber/config.json"),
+        r#"{"roles": {"fast": {"model": "fake/m"}}}"#,
+    )
+    .unwrap();
+    let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
+    assert_eq!(get.code, Some(0), "{get:?}");
+    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
+    assert_eq!(get.stderr, "", "{get:?}");
+}
