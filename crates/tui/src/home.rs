@@ -304,7 +304,7 @@ pub(crate) enum ListLine {
 pub(crate) struct PickerScreen {
     /// Esc may close the picker because a workspace is already in use.
     pub(crate) escapes: bool,
-    /// The recent workspaces, refreshed on a remote home while no path is typed.
+    /// The recent workspaces, refreshed until a key touches the picker.
     pub(crate) recents: Vec<String>,
     /// The focused row's index over the completions then the recents
     /// while typing, over the recents alone otherwise; `None` with

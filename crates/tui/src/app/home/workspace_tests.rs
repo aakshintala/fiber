@@ -105,9 +105,12 @@ fn live(session: &str, name: &str, workspace: &str) -> Line {
 }
 
 /// Links the app: the feed and recent ids, both waiting for their
-/// answers.
+/// answers. A remote picker's home listing goes out beside them.
 fn linked(app: &mut App) -> (String, String) {
-    let lines = commands(app.on_line(hello()));
+    let lines: Vec<Value> = commands(app.on_line(hello()))
+        .into_iter()
+        .filter(|line| line["command"] != "directories")
+        .collect();
     assert_eq!(lines.len(), 2);
     (
         lines[0]["id"]
@@ -178,10 +181,20 @@ fn type_path(app: &mut App, text: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Opens the picker on a linked app.
+/// Opens the picker on a linked app, cleared for a path typed from
+/// scratch.
 fn open(app: &mut App) {
     linked(app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(app);
+}
+
+/// Clicks the workspace chip, then clears the typed row it opens on with
+/// Backspace, leaving the recents alone for a path typed from scratch.
+fn clear_open(app: &mut App) {
+    app.home_click(Spot::Workspace);
+    while typed_text(app).is_some() {
+        key(app, Key::Backspace);
+    }
 }
 
 /// The picker's recents.
@@ -283,6 +296,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "chosen", "/remote/w"));
     assert_eq!(recents(&app), ["/remote/w"]);
+    key(&mut app, Key::Down);
     key(&mut app, Key::Enter);
     assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
     assert_eq!(chips(&app)[0], "[w]");
@@ -313,19 +327,14 @@ fn remote_picker_refills_feed_then_recent_distinct_absolute_rows() {
         ]}),
     ));
     assert_eq!(recents(&app), ["/a", "/b", "/c"]);
+    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    // A key ends the refill: the recents stay as they were.
+    key(&mut app, Key::Down);
     key(&mut app, Key::Down);
     assert_eq!(focused(&app).as_deref(), Some("/b"));
     app.on_line(live("s_0000000000000000", "changed", "/z"));
+    assert_eq!(recents(&app), ["/a", "/b", "/c"]);
     assert_eq!(focused(&app).as_deref(), Some("/b"));
-    app.on_line(live("s_0000000000000001", "changed", "/y"));
-    // The recent row still keeps /b listed.
-    assert_eq!(focused(&app).as_deref(), Some("/b"));
-    for _ in 0..recents(&app).len() {
-        key(&mut app, Key::Up);
-    }
-    assert_eq!(focused(&app).as_deref(), Some("/z"));
-    app.on_line(live("s_0000000000000000", "changed", "/x"));
-    assert_eq!(focused(&app).as_deref(), Some("/x"));
 }
 
 #[test]
@@ -334,6 +343,10 @@ fn remote_refill_focuses_first_when_the_selected_workspace_leaves() {
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "first", "/a"));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "second", "/b"));
+    // Backspace past `~/` leaves the recents alone, refilling again.
+    key(&mut app, Key::Backspace);
+    key(&mut app, Key::Backspace);
+    assert_eq!(typed_text(&app), None);
     key(&mut app, Key::Down);
     assert_eq!(focused(&app).as_deref(), Some("/b"));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "moved", "/c"));
@@ -358,7 +371,9 @@ fn remote_picker_cap_and_typing_refill_boundary() {
     type_path(&mut app, "x");
     app.on_line(live("s_1111111111111111", "row", "/b"));
     assert_eq!(recents(&app), ["/a"]);
-    key(&mut app, Key::Backspace);
+    for _ in "~/x".chars() {
+        key(&mut app, Key::Backspace);
+    }
     assert_eq!(recents(&app), ["/a", "/b"]);
     assert_eq!(typed_text(&app), None);
 }
@@ -379,6 +394,7 @@ fn remote_sentinel_is_only_a_hub_row_and_uses_hub_git() {
         }
         app.on_line(row);
         assert_eq!(recents(&app), ["/sentinel/launch-dir"]);
+        key(&mut app, Key::Down);
         key(&mut app, Key::Enter);
         assert_eq!(app.home_workspace(), PathBuf::from("/sentinel/launch-dir"));
         assert_eq!(
@@ -397,7 +413,7 @@ fn recents_alone_exclude_empty_and_relative_workspaces() {
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "empty", ""));
     app.on_line(live("s_cccccccccccccccc", "relative", "rel"));
     app.on_line(live("s_dddddddddddddddd", "away", "/other"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert_eq!(recents(&app), vec!["/w".to_owned(), "/other".to_owned()]);
 }
 
@@ -416,7 +432,7 @@ fn a_click_on_a_recent_while_typing_chooses_it() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     type_path(&mut app, "/x");
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
     assert!(!picker_open(&app));
@@ -831,7 +847,7 @@ fn a_late_listing_keeps_its_focused_recent() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     let sent = type_path(&mut app, "/a");
     assert_eq!(sent.len(), 1);
     assert_eq!(key(&mut app, Key::Down), Effect::None);
@@ -855,7 +871,7 @@ fn a_late_listing_focuses_its_first_completion_without_a_recent() {
 #[test]
 fn the_picker_queues_while_down_and_asks_at_hello() {
     let mut app = home();
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert_eq!(type_path(&mut app, "/"), Vec::new());
     let lines = commands(app.on_line(hello()));
     let sent = sent_directories(&lines.iter().map(ToString::to_string).collect::<Vec<_>>());
@@ -900,7 +916,7 @@ fn a_disconnect_asks_in_flight_directories_once_more() {
 #[test]
 fn a_disconnect_requeues_two_directories_in_send_order() {
     let mut app = home();
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert!(type_path(&mut app, "/").is_empty());
     assert!(type_path(&mut app, "a/").is_empty());
     app.disconnected();
@@ -915,7 +931,7 @@ fn a_disconnect_requeues_two_directories_in_send_order() {
 #[test]
 fn backspace_to_recents_while_down_sends_nothing_at_hello() {
     let mut app = home();
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert!(type_path(&mut app, "/a").is_empty());
     assert_eq!(key(&mut app, Key::Backspace), Effect::None);
     assert_eq!(key(&mut app, Key::Backspace), Effect::None);
@@ -988,7 +1004,7 @@ fn enter_on_a_focused_recent_is_inert_while_down() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "away", "/other"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     type_path(&mut app, "/a");
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(focused(&app), Some("/w".to_owned()));
@@ -1004,7 +1020,7 @@ fn enter_on_a_focused_recent_is_inert_while_down() {
 #[test]
 fn enter_with_the_recents_alone_chooses_while_down() {
     let mut app = home();
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(key(&mut app, Key::Enter), Effect::None);
     assert!(!picker_open(&app));
@@ -1017,7 +1033,7 @@ fn a_new_opening_starts_empty_and_asks_again() {
     let sent = type_path(&mut app, "/");
     answer(&mut app, &sent[0].0, &["a1"], "/");
     assert_eq!(key(&mut app, Key::Esc), Effect::None);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert_eq!(typed_text(&app), None);
     let sent = type_path(&mut app, "/");
     assert_eq!(
@@ -1032,7 +1048,7 @@ fn backspace_past_the_text_returns_the_selection_to_the_first_recent() {
     linked(&mut app);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/w"));
     app.on_line(live("s_bbbbbbbbbbbbbbbb", "away", "/other"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    clear_open(&mut app);
     assert_eq!(key(&mut app, Key::Down), Effect::None);
     assert_eq!(focused(&app), Some("/other".to_owned()));
     key(&mut app, Key::Char('x'));
@@ -1075,4 +1091,122 @@ fn local_picker_does_not_refill_when_rows_arrive() {
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "new", "/arrived"));
     assert_eq!(app.home.as_ref().unwrap().sessions.all().len(), 1);
     assert_eq!(recents(&app), before);
+}
+
+/// Links a remote app, returning the id of its one home listing.
+fn remote_linked() -> (App, String) {
+    let mut app = remote();
+    let sent = sent_directories(&app.on_line(hello()));
+    assert_eq!(
+        sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        vec!["~/"]
+    );
+    let id = sent[0].0.clone();
+    (app, id)
+}
+
+#[test]
+fn remote_with_no_recents_opens_on_the_home_row_and_waits_for_it() {
+    let unlinked = remote();
+    assert_eq!(typed_text(&unlinked), Some("~/".to_owned()));
+    assert!(completions(&unlinked).is_empty());
+    let (mut app, id) = remote_linked();
+    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    assert!(completions(&app).is_empty());
+    assert_eq!(focused(&app), None);
+    // Enter before the answer does nothing.
+    assert_eq!(key(&mut app, Key::Enter), Effect::None);
+    assert!(picker_open(&app));
+    assert_eq!(chips(&app)[0], "[no workspace]");
+    answer(&mut app, &id, &["notes", "work", ".cache"], "/home/me");
+    assert_eq!(
+        completions(&app),
+        vec!["notes".to_owned(), "work".to_owned()]
+    );
+    assert_eq!(focused(&app), Some("notes".to_owned()));
+    assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
+    key(&mut app, Key::Down);
+    assert_eq!(key(&mut app, Key::Enter), Effect::None);
+    assert!(!picker_open(&app));
+    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work"));
+}
+
+#[test]
+fn remote_home_row_tab_descends_into_the_focused_completion() {
+    let (mut app, id) = remote_linked();
+    answer(&mut app, &id, &["work"], "/home/me");
+    let sent = directories_of(&key(&mut app, Key::Tab));
+    assert_eq!(typed_text(&app), Some("~/work/".to_owned()));
+    assert_eq!(
+        sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        vec!["~/work/"]
+    );
+    answer(&mut app, &sent[0].0, &["fiber"], "/home/me/work");
+    assert_eq!(completions(&app), vec!["fiber".to_owned()]);
+    assert_eq!(key(&mut app, Key::Enter), Effect::None);
+    assert_eq!(app.home_workspace(), PathBuf::from("/home/me/work/fiber"));
+}
+
+#[test]
+fn a_failed_home_listing_keeps_the_row_with_no_completions() {
+    let (mut app, id) = remote_linked();
+    app.on_line(refused(&id, "no home"));
+    assert!(app.notice().is_none());
+    assert!(picker_open(&app));
+    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    assert!(completions(&app).is_empty());
+    assert_eq!(focused(&app), None);
+}
+
+#[test]
+fn arriving_recents_list_below_the_untouched_home_row() {
+    let (mut app, id) = remote_linked();
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/remote/w"));
+    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    assert_eq!(recents(&app), ["/remote/w"]);
+    // Enter waits for the home listing even with a recent below.
+    assert_eq!(focused(&app), None);
+    assert_eq!(key(&mut app, Key::Enter), Effect::None);
+    assert!(picker_open(&app));
+    answer(&mut app, &id, &["work"], "/home/me");
+    assert_eq!(focused(&app).as_deref(), Some("work"));
+    // Down walks past the completions into the recents.
+    key(&mut app, Key::Down);
+    assert_eq!(focused(&app).as_deref(), Some("/remote/w"));
+    key(&mut app, Key::Enter);
+    assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
+}
+
+#[test]
+fn a_key_on_the_home_row_keeps_it_when_recents_arrive() {
+    let (mut app, _) = remote_linked();
+    type_path(&mut app, "w");
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/remote/w"));
+    assert_eq!(typed_text(&app), Some("~/w".to_owned()));
+    assert!(recents(&app).is_empty());
+}
+
+#[test]
+fn a_remote_reopening_lists_home_again_with_its_recents_below() {
+    let (mut app, _) = remote_linked();
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/remote/w"));
+    key(&mut app, Key::Down);
+    key(&mut app, Key::Enter);
+    assert!(!picker_open(&app));
+    let sent = directories_of(&app.home_click(Spot::Workspace));
+    assert_eq!(
+        sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
+        vec!["~/"]
+    );
+    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    assert_eq!(recents(&app), ["/remote/w"]);
+    assert!(app.home_screen().unwrap().picker.unwrap().escapes);
+}
+
+#[test]
+fn the_local_picker_opens_on_its_recents_alone() {
+    let mut app = home();
+    open(&mut app);
+    assert_eq!(typed_text(&app), None);
+    assert_eq!(recents(&app), ["/w"]);
 }

@@ -119,7 +119,7 @@ impl App {
         if let Some(home) = self.home.as_ref() {
             self.set_project(home.launch_project().to_owned());
         }
-        if self.remote_hub().is_some() {
+        if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
             self.open_picker();
         }
         if rail_hidden {

@@ -37,12 +37,15 @@ pub(super) struct Chooser {
 /// alone.
 #[derive(Debug)]
 pub(super) struct Picker {
-    /// The recent workspaces, refreshed on a remote home while no path is typed.
+    /// The recent workspaces, refreshed until a key touches the picker.
     recents: Vec<String>,
     /// The selected recent while the recents show alone.
     selected: usize,
     /// The typed path's state, kept for the opening.
     typed: Typed,
+    /// No key has touched the picker since it opened: the recents
+    /// below the typed row refill.
+    untouched: bool,
 }
 
 impl Picker {
@@ -53,7 +56,7 @@ impl Picker {
         !self.typed.text().is_empty()
     }
 
-    /// The recent workspaces, refreshed on a remote home while no path is typed.
+    /// The recent workspaces, refreshed until a key touches the picker.
     #[cfg(test)]
     pub(super) fn recents(&self) -> &[String] {
         &self.recents
@@ -84,17 +87,31 @@ impl Chooser {
 }
 
 impl Home {
-    /// There is no implicit launch workspace on a listed hub.
+    /// No workspace is chosen: none was picked and there is no launch
+    /// directory.
     pub(in crate::app) fn no_workspace(&self) -> bool {
-        matches!(self.launch.location, crate::LaunchLocation::Remote { .. })
-            && self.chooser.chosen.is_none()
+        self.chooser.chosen.is_none() && self.launch_dir().is_none()
     }
 
+    /// The launch directory, when there is one.
+    fn launch_dir(&self) -> Option<String> {
+        let workspace = self.launch.location.workspace();
+        (!workspace.as_os_str().is_empty()).then(|| workspace.display().to_string())
+    }
+
+    /// The directory the picker's typed row starts at: the chip's
+    /// workspace with a trailing `/`, else `~/` with no workspace chosen.
+    fn picker_root(&self) -> String {
+        match self.chooser.chosen.clone().or_else(|| self.launch_dir()) {
+            Some(workspace) => format!("{}/", workspace.trim_end_matches('/')),
+            None => "~/".to_owned(),
+        }
+    }
+
+    /// The launch directory, when there is one, then distinct absolute
+    /// row workspaces, at most ten.
     fn picker_recents(&self) -> Vec<String> {
-        let mut list = match &self.launch.location {
-            crate::LaunchLocation::Local { workspace, .. } => vec![workspace.display().to_string()],
-            crate::LaunchLocation::Remote { .. } => Vec::new(),
-        };
+        let mut list: Vec<String> = self.launch_dir().into_iter().collect();
         for row in self.sessions.all() {
             if list.len() == PICKER_CAP {
                 break;
@@ -109,15 +126,13 @@ impl Home {
         list
     }
 
-    /// A remote picker follows arriving rows until a path is typed.
+    /// The picker follows arriving rows until a key touches it, and
+    /// again once Backspace leaves the recents alone.
     pub(super) fn refill_picker(&mut self) {
-        if let crate::LaunchLocation::Local { .. } = self.launch.location {
-            return;
-        }
         let Some(picker) = self.chooser.picker.as_ref() else {
             return;
         };
-        if picker.typing() {
+        if picker.typing() && !picker.untouched {
             return;
         }
         let focused = picker.recents.get(picker.selected).cloned();
@@ -250,20 +265,29 @@ impl App {
         Some(Effect::None)
     }
 
-    /// Opens the workspace picker: the local launch directory, then distinct
-    /// absolute feed and recent workspaces, at most ten. A listed hub has
-    /// no launch directory and refills its rows while nothing is typed.
+    /// Opens the workspace picker browsing: the typed row at the
+    /// picker's root, asking the hub for its listing, with the recents
+    /// below.
     pub(super) fn open_picker(&mut self) -> Effect {
         let Some(home) = self.home.as_mut() else {
             return Effect::None;
         };
-        let list = home.picker_recents();
+        let root = home.picker_root();
+        let mut typed = Typed::new();
+        // Each `/` typed queues its directory: only the root's own
+        // listing is asked, so the parents' asks are dropped unsent.
+        let (parents, last) = root.split_at(root.len().saturating_sub(1));
+        parents.chars().for_each(|c| typed.push(c));
+        typed.due(String::new);
+        typed.forget();
+        last.chars().for_each(|c| typed.push(c));
         home.chooser.picker = Some(Picker {
-            recents: list,
+            recents: home.picker_recents(),
             selected: 0,
-            typed: Typed::new(),
+            typed,
+            untouched: true,
         });
-        Effect::None
+        self.picker_send()
     }
 
     /// Folds a hub answer for a `directories` line the open picker
@@ -329,6 +353,7 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
+            picker.untouched = false;
             if picker.typing() {
                 let recents = picker.recents.len();
                 picker.typed.move_focus(down, recents);
@@ -351,6 +376,7 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
+            picker.untouched = false;
             picker.typed.push(c);
         }
     }
@@ -362,9 +388,11 @@ impl App {
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
             && picker.typing()
-            && !picker.typed.pop()
         {
-            picker.selected = 0;
+            picker.untouched = false;
+            if !picker.typed.pop() {
+                picker.selected = 0;
+            }
         }
     }
 
@@ -375,6 +403,7 @@ impl App {
             && let Some(picker) = home.chooser.picker.as_mut()
             && picker.typing()
         {
+            picker.untouched = false;
             picker.typed.tab();
         }
     }
