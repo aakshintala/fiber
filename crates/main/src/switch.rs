@@ -7,7 +7,7 @@
 //! started on a thread of their own while the loop waits; shutdown ends
 //! that wait (`docs/configuration.md`, "Secrets").
 
-mod quota;
+pub(crate) mod quota;
 mod read;
 
 use std::collections::BTreeMap;

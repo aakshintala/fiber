@@ -1601,7 +1601,7 @@ fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_nei
     let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(
         text,
-        "Roles:\ndeep: fiber:pb/m\nReferences:\nfiber:pa/m\nfiber:pb/m"
+        "Roles:\ndeep: fiber:pb/m\nReferences:\nfiber:pa/m\nfiber:pb/m\nQuota: loading"
     );
     let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let tools = first["tools"].as_array().unwrap();
@@ -1612,6 +1612,55 @@ fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_nei
     let encoded = serde_json::to_string(&first["tools"]).unwrap();
     assert!(!encoded.contains("deep"), "{encoded}");
     assert!(!encoded.contains("pb/m"), "{encoded}");
+}
+
+/// The first `delegate_models` call answers `Quota: loading`: `pa` holds
+/// two credential labels (its environment key and a configured `work`
+/// label), and the loader has not checked either provider yet. A built
+/// `fiber` holds no loader pause, so no signal proves the loader ended:
+/// the loaded entries are pinned in the quota unit tests instead.
+#[test]
+fn the_first_delegate_models_call_reads_quota_loading_with_two_credential_labels() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"},
+            "providers": {"pa": {"credentials": {"work": {"command": ["sh", "-c", "echo key"]}}}}}),
+    );
+
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "list the models"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
+    let completed = completed_for(&lines, "delegate_models");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.ends_with("\nQuota: loading"),
+        "the first call answers loading: {text:?}"
+    );
 }
 
 /// A role run's parent durable kinds, in order, pinned from a real run:

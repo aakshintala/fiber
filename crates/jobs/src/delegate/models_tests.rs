@@ -17,6 +17,7 @@ use super::DelegateModels;
 fn tool() -> DelegateModels {
     DelegateModels {
         catalogue: Arc::from("Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m"),
+        quota: Arc::new(|| String::from("Quota: none")),
     }
 }
 
@@ -65,6 +66,55 @@ fn delegate_models_returns_the_catalogue_text() {
     };
     assert_eq!(
         text,
-        "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m"
+        "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m\nQuota: none"
     );
+}
+
+#[test]
+fn delegate_models_appends_the_quota_text() {
+    let loading = DelegateModels {
+        catalogue: Arc::from("Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m"),
+        quota: Arc::new(|| String::from("Quota: loading")),
+    };
+    let output = loading.run(
+        &serde_json::Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    assert_eq!(
+        text,
+        "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m\nQuota: loading"
+    );
+}
+
+#[test]
+fn the_quota_is_read_on_every_call() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let tool = DelegateModels {
+        catalogue: Arc::from("Roles: none\nReferences: none"),
+        quota: Arc::new(move || {
+            let call = counted.fetch_add(1, Ordering::SeqCst);
+            format!("Quota: {call}")
+        }),
+    };
+    let run = || {
+        let output = tool.run(
+            &serde_json::Map::new(),
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        );
+        let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+            panic!("one text part: {:?}", output.content);
+        };
+        text.clone()
+    };
+    assert_eq!(run(), "Roles: none\nReferences: none\nQuota: 0");
+    assert_eq!(run(), "Roles: none\nReferences: none\nQuota: 1");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

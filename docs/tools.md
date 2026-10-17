@@ -1334,6 +1334,12 @@ Each entry is one of:
 - `no quota reported`, for a provider or harness without `quota()`
 - `unreachable`, when the fetch failed or timed out, with the last value and
   its age if there is one
+- `no value yet`, for a label whose first fetch is still in flight, with no
+  last value
+
+Until the loader has checked every provider for `quota()`, the quota
+section is the one line `Quota: loading`. Once it has, a session with no
+credentialed label reads `Quota: none`.
 
 A window whose reset time has passed shows as reset. Quota never appears in a
 tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").

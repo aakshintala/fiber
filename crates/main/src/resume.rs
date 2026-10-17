@@ -430,6 +430,7 @@ fn resumed_session(
             "the session directory has no parent",
         ));
     };
+    let (quota, model_quota) = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -439,7 +440,8 @@ fn resumed_session(
         Arc::clone(&jobs),
         Arc::clone(&clock),
         resolve,
-    );
+    )
+    .with_quota(model_quota);
     crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
@@ -523,7 +525,7 @@ fn resumed_session(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
-    session.quota(switching.quota_reader());
+    session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,

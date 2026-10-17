@@ -9,10 +9,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use contract::SessionId;
-use contract::clock::Clock;
+use contract::clock::{Clock, utc_time};
 use contract::events::VariablesSource;
+use extensions::{Quota, QuotaEntry, Window, WindowUse};
+
+use crate::switch::quota::{ModelQuotaRead, QuotaView};
 
 static DEPTH: OnceLock<u32> = OnceLock::new();
 
@@ -57,6 +61,8 @@ pub(crate) struct Delegates {
     steer: jobs::Steer,
     /// Reads the child's log boundary for a resume.
     last_seq: jobs::LastSeq,
+    /// Renders the quota section of `delegate_models` on every call.
+    quota: Option<ModelQuotaRead>,
 }
 
 impl Delegates {
@@ -93,6 +99,16 @@ impl Delegates {
             watch,
             steer,
             last_seq,
+            quota: None,
+        }
+    }
+
+    /// Wires the model-facing quota reader: `models()` renders its snapshot
+    /// on every call. Without it the quota section reads `Quota: none`.
+    pub(crate) fn with_quota(self, quota: ModelQuotaRead) -> Self {
+        Self {
+            quota: Some(quota),
+            ..self
         }
     }
 
@@ -139,10 +155,15 @@ impl Delegates {
     }
 
     /// The `delegate_models` tool this session declares: the catalogue
-    /// built with the session's resolver.
+    /// built with the session's resolver, with the quota section appended.
     pub(crate) fn models(&self) -> jobs::DelegateModels {
+        let quota = self.quota.clone();
         jobs::DelegateModels {
             catalogue: Arc::clone(&self.resolve.catalogue),
+            quota: Arc::new(move || match quota {
+                Some(ref reader) => quota_text(&reader()),
+                None => String::from("Quota: none"),
+            }),
         }
     }
 }
@@ -234,6 +255,112 @@ fn credential_for(
         Ok(Some(label))
     } else {
         Err(crate::credential::no_label(&resolved.provider.name, &label, &labels).message)
+    }
+}
+
+/// The quota section `delegate_models` appends to the catalogue: one line
+/// per provider credential label, sorted by provider then credential
+/// (`docs/tools.md`, "What the model sees"). A loading view renders the
+/// single `Quota: loading` line before any per-label entry; a loaded view
+/// with no credentialed label renders `Quota: none`.
+fn quota_text(view: &QuotaView) -> String {
+    let labels = match view {
+        QuotaView::Loading => return String::from("Quota: loading"),
+        QuotaView::Loaded(labels) if labels.is_empty() => return String::from("Quota: none"),
+        QuotaView::Loaded(labels) => labels,
+    };
+    let mut rows = labels.clone();
+    rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
+    let mut text = String::from("Quota:");
+    for row in &rows {
+        text.push_str(&format!(
+            "\n{}/{}: {}",
+            row.provider,
+            row.credential,
+            quota_entry(&row.entry, row.pending)
+        ));
+    }
+    text
+}
+
+/// What the model sees for one credential label: its value, `no quota
+/// reported` for a provider without `quota()`, `unreachable` with the
+/// last value and its age where there is one, or `no value yet` while
+/// its first fetch is still in flight.
+fn quota_entry(entry: &QuotaEntry, pending: bool) -> String {
+    match entry {
+        QuotaEntry::Reported(quota) => quota_value(quota),
+        QuotaEntry::NoQuota => String::from("no quota reported"),
+        QuotaEntry::Unreachable {
+            last: Some((quota, age)),
+        } => format!(
+            "unreachable (last: {}, {} ago)",
+            quota_value(quota),
+            quota_age(*age)
+        ),
+        QuotaEntry::Unreachable { last: None } if pending => String::from("no value yet"),
+        QuotaEntry::Unreachable { last: None } => String::from("unreachable"),
+    }
+}
+
+/// A fetched quota value: its windows joined with `, `, or its credit
+/// remaining with the limit where the vendor reports one. An empty window
+/// list reads as a provider with nothing to report.
+fn quota_value(quota: &Quota) -> String {
+    match quota {
+        Quota::Windows(windows) if windows.is_empty() => String::from("no quota reported"),
+        Quota::Windows(windows) => windows
+            .iter()
+            .map(quota_window)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Quota::Credit { remaining, limit } => match limit {
+            Some(limit) => format!("credit {remaining} remaining of {limit}"),
+            None => format!("credit {remaining} remaining"),
+        },
+    }
+}
+
+/// One usage window: its name and percent used with the reset time where
+/// the provider reports one, or as reset once the reset time has passed.
+fn quota_window(window: &Window) -> String {
+    match &window.used {
+        WindowUse::Percent { used, resets_at } => {
+            let percent = used.round();
+            match resets_at {
+                Some(at) => format!(
+                    "{} {percent}% used (resets {})",
+                    window.name,
+                    reset_time(*at)
+                ),
+                None => format!("{} {percent}% used", window.name),
+            }
+        }
+        WindowUse::Reset => format!("{} reset", window.name),
+    }
+}
+
+/// A reset time in UTC: reset times are built from the epoch plus a
+/// duration when quota is parsed, so a failure reads as the epoch.
+fn reset_time(at: std::time::SystemTime) -> String {
+    utc_time(
+        at.duration_since(UNIX_EPOCH)
+            .map(|past| past.as_secs())
+            .unwrap_or(0),
+    )
+}
+
+/// An unreachable age in the largest whole unit that fits.
+fn quota_age(age: std::time::Duration) -> String {
+    let secs = age.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
     }
 }
 
