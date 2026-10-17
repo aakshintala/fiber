@@ -577,6 +577,43 @@ fn pad_respects_the_row_start_and_width_boundaries() {
 }
 
 #[test]
+fn pad_keeps_an_exact_fit_and_splits_one_cell_more_by_grapheme_width() {
+    use ratatui::text::Span;
+
+    let mut rows = Rows::default();
+    rows.push((
+        Line::from(vec![Span::raw("界"), Span::raw("e\u{301}")]),
+        None,
+    ));
+    rows.push((
+        Line::from(vec![Span::raw("界"), Span::raw("e\u{301}x")]),
+        None,
+    ));
+    rows.pad(0, 1, 3);
+    let (lines, texts) = rows.into_parts();
+    // The fitting row keeps its spans; splitting it would merge them.
+    assert_eq!(
+        lines,
+        vec![
+            (
+                Line::from(vec![Span::raw(" "), Span::raw("界"), Span::raw("e\u{301}")]),
+                None,
+            ),
+            (
+                Line::from(vec![Span::raw(" "), Span::raw("界e\u{301}")]),
+                None
+            ),
+            (Line::from(vec![Span::raw(" "), Span::raw("x")]), None),
+        ]
+    );
+    assert_eq!(
+        texts.iter().map(|text| text.skip).collect::<Vec<_>>(),
+        [1, 1, 1]
+    );
+    assert_eq!(texts[2].join, Join::Wrap);
+}
+
+#[test]
 fn pad_keeps_an_exact_fit_line_intact() {
     let empty = ratatui::text::Span::styled(
         "",

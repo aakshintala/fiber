@@ -151,12 +151,15 @@ impl Rows {
             let Some(((line, target), text)) = self.take_row(at) else {
                 break;
             };
-            let cells = cells_of(&line);
-            let off = offsets(&cells);
-            let total = off.last().copied().unwrap_or(0);
+            let total = line
+                .spans
+                .iter()
+                .flat_map(|span| span.styled_graphemes(Style::default()))
+                .fold(0usize, |total, grapheme| {
+                    total.saturating_add(crate::format::width(grapheme.symbol))
+                });
             let room = usize::from(inner);
-            let plans = plan(&cells, room);
-            if plans.is_empty() || total <= room {
+            if total <= room || room == 0 {
                 let mut row = (line, target);
                 let mut row_text = text;
                 prefix_row(&mut row.0, &mut row_text, pad);
@@ -167,6 +170,9 @@ impl Rows {
                 at = at.saturating_add(1);
                 continue;
             }
+            let cells = cells_of(&line);
+            let off = offsets(&cells);
+            let plans = plan(&cells, room);
             debug_assert!(!plans.is_empty());
             let mut pieces = Vec::with_capacity(plans.len());
             for (index, planned) in plans.iter().enumerate() {
