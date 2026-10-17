@@ -9,6 +9,13 @@
 //! arrive within one deadline on the injected clock, fixed when the socket
 //! accepts, so a hub that accepts and never speaks, or trickles its line,
 //! cannot hang the client; the returned stream has no read timeout.
+//!
+//! Every wait parks on the injected clock through [`Clock::wait_until`],
+//! so tests step fake time through each wait, while the socket itself
+//! never blocks: connects run non-blocking and reads poll for readiness,
+//! so one real bound never stalls another clock. [`probe_until`] shares
+//! the engine without ever starting a hub, reporting absence, failure,
+//! and post-accept results separately for `fiber doctor`.
 
 mod address;
 mod listed;
@@ -16,18 +23,28 @@ pub use address::{Address, NAME_RULE, check_name};
 pub use listed::{Target, connect_target, connect_unpaired, load_target, target};
 
 use std::io::{self, Read};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::{HubLine, SCHEMA_VERSION};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::{Errno, FdFlags, fcntl_setfd};
+use rustix::net::{self, SocketAddrUnix, sockopt};
 
 /// How long `connect` retries the hub's socket on the injected clock.
 pub const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How often `connect` retries on the injected clock.
 const CONNECT_POLL: Duration = Duration::from_millis(10);
+
+/// The longest one real poll waits: fake waits slice here, then re-check
+/// the fake deadline, so every wait stays interruptible by the injected
+/// clock while a real hub still wakes the poll early.
+const FAKE_WAIT_CAP: Duration = Duration::from_millis(10);
 
 /// Which hub the client talks to, with its opening line.
 ///
@@ -46,11 +63,14 @@ pub fn connect(
 ) -> io::Result<Hub> {
     connect_with(
         home,
-        start,
+        Some(start),
         clock,
         Due::Within(CONNECT_DEADLINE),
         &mut || {},
+        &mut || {},
+        &mut || {},
     )
+    .map_err(io_from_poll)
 }
 
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
@@ -68,7 +88,16 @@ pub fn connect_until(
     before_read: &mut dyn FnMut(),
 ) -> io::Result<Hub> {
     let total = deadline.saturating_duration_since(clock.now());
-    connect_with(home, start, clock, Due::At { deadline, total }, before_read)
+    connect_with(
+        home,
+        Some(start),
+        clock,
+        Due::At { deadline, total },
+        before_read,
+        &mut || {},
+        &mut || {},
+    )
+    .map_err(io_from_poll)
 }
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
 /// accepting, on `clock`. Between races the client pauses one poll, and
@@ -81,7 +110,35 @@ pub fn connect_within(
     clock: &dyn Clock,
     hello_within: Duration,
 ) -> io::Result<Hub> {
-    connect_with(home, start, clock, Due::Within(hello_within), &mut || {})
+    connect_with(
+        home,
+        Some(start),
+        clock,
+        Due::Within(hello_within),
+        &mut || {},
+        &mut || {},
+        &mut || {},
+    )
+    .map_err(io_from_poll)
+}
+
+/// Folds a [`Poll`] into the connectors' error: post-accept and pre-accept
+/// failures surface as their error, while a race past the bound is the
+/// idle exit, which cannot reach here.
+fn io_from_poll(poll: Poll) -> io::Error {
+    match poll {
+        Poll::Race => unreachable_race(),
+        Poll::Failed(error) | Poll::Accepted(error) | Poll::Absent(error) => error,
+    }
+}
+
+/// The idle exit as an error: EOF or a reset before `hub_hello`, past the
+/// race bound. The race loop exhausts into this; it never escapes it.
+fn unreachable_race() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "the hub closed the connection before `hub_hello`",
+    )
 }
 
 /// Carries which deadline an attempt and its handshake read use:
@@ -157,29 +214,46 @@ impl Due {
     }
 }
 
-/// The skeleton [`connect_until`] and [`connect_within`] share: each
-/// [`attempt`] runs until it speaks `hub_hello`, and the idle-exit race
-/// pauses one [`CONNECT_POLL`] and retries the whole connect with a fresh
-/// `started`, while the retry would start before the race bound. `start`
-/// runs at most once per attempt. Past the bound the result is
-/// `UnexpectedEof` with no further sleep.
+/// The skeleton [`connect_until`] and [`connect_within`] share, and
+/// [`probe_with`] uses: each [`attempt`] runs until it speaks `hub_hello`,
+/// and the idle-exit race pauses one [`CONNECT_POLL`] and retries the
+/// whole connect with a fresh `started`, while the retry would start
+/// before the race bound. `start` runs at most once per attempt; `None`
+/// never starts and reports an absent socket as [`Poll::Absent`]. Past the
+/// bound the result is `UnexpectedEof` with no further sleep.
+/// `accepted` runs when a connect succeeds, before any hello deadline
+/// check; `before_wait` runs after each wait's deadline check, just
+/// before [`Clock::wait_until`].
 fn connect_with(
     home: &Path,
-    start: &mut dyn FnMut() -> io::Result<()>,
+    mut start: Option<&mut dyn FnMut() -> io::Result<()>>,
     clock: &dyn Clock,
     due: Due,
     before_read: &mut dyn FnMut(),
-) -> io::Result<Hub> {
+    accepted: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Result<Hub, Poll> {
     let first_start = clock.now();
     let bound = due.race_bound(first_start);
     let overflowed = due.overflowed(first_start);
     let socket = home.join("run").join("hub");
     let mut started = false;
     loop {
-        match attempt(home, &mut started, start, clock, &due, before_read) {
+        match attempt(
+            home,
+            &mut started,
+            start
+                .as_mut()
+                .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
+            clock,
+            &due,
+            before_read,
+            accepted,
+            before_wait,
+        ) {
             Ok(hub) => return Ok(hub),
             Err(Poll::Race) => {}
-            Err(Poll::Failed(error)) => return Err(error),
+            Err(other) => return Err(other),
         }
         // EOF or a reset before `hub_hello` is the idle-exit race: the
         // hub exited before the handshake, so the connect retries past
@@ -192,19 +266,16 @@ fn connect_with(
         clock.sleep(CONNECT_POLL);
     }
     if overflowed {
-        return Err(io::Error::new(
+        return Err(Poll::Accepted(io::Error::new(
             io::ErrorKind::TimedOut,
             format!(
                 "the hub at {} accepted but did not say hub_hello in {} s",
                 socket.display(),
                 CONNECT_DEADLINE.as_secs_f64()
             ),
-        ));
+        )));
     }
-    Err(io::Error::new(
-        io::ErrorKind::UnexpectedEof,
-        "the hub closed the connection before `hub_hello`",
-    ))
+    Err(Poll::Failed(unreachable_race()))
 }
 
 /// Whether a connect error means no hub runs, so the client starts one
@@ -286,24 +357,93 @@ fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
     }
 }
 
+/// What one connection attempt means: the fd, its hello, and its stream.
+/// A [`Poll::Race`] keeps the race loop running; anything else hands the
+/// outcome back, with post-accept failures as [`Poll::Accepted`] and an
+/// absent socket as [`Poll::Absent`].
 enum Poll {
     /// EOF or a reset before `hub_hello`: the whole connect retries while
     /// the retry would start before the race bound.
     Race,
     /// No retry: the error.
     Failed(io::Error),
+    /// The socket accepted, then the handshake failed: no retry, and the
+    /// error.
+    Accepted(io::Error),
+    /// No hub runs and none may start: no retry, and the error.
+    Absent(io::Error),
+}
+
+/// What one bounded probe finds: no socket, a pre-connect failure, or a
+/// connection with its handshake result. Post-accept failures ride
+/// `Connected`'s error, so `fiber doctor` prints a running hub with a
+/// broken handshake instead of an unknown one.
+pub enum Probe {
+    /// No hub runs: nothing listened and none may start.
+    Absent,
+    /// The connect failed before any accept.
+    Failed(io::Error),
+    /// The socket accepted: the stream with its `hub_hello`, or the
+    /// handshake's error.
+    Connected(Result<Hub, io::Error>),
+}
+
+/// [`probe_with`] with no hooks: the one absolute `deadline` bounds every
+/// attempt and the handshake, and no hub ever starts.
+pub fn probe_until(home: &Path, clock: &dyn Clock, deadline: Instant) -> Probe {
+    probe_with(home, clock, deadline, &mut || {}, &mut || {})
+}
+
+/// Probes the hub's socket in `home` without ever starting one, through
+/// the shared race loop: one absolute `deadline` bounds every attempt and
+/// the handshake. `accepted` runs when a connect succeeds, before any
+/// hello deadline check; `before_wait` runs after each wait's deadline
+/// check, just before [`Clock::wait_until`].
+pub fn probe_with(
+    home: &Path,
+    clock: &dyn Clock,
+    deadline: Instant,
+    accepted: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Probe {
+    let total = deadline.saturating_duration_since(clock.now());
+    match connect_with(
+        home,
+        None,
+        clock,
+        Due::At { deadline, total },
+        &mut || {},
+        accepted,
+        before_wait,
+    ) {
+        Ok(hub) => Probe::Connected(Ok(hub)),
+        Err(Poll::Race) => Probe::Failed(unreachable_race()),
+        Err(Poll::Failed(error)) => Probe::Failed(error),
+        Err(Poll::Accepted(error)) => Probe::Connected(Err(error)),
+        Err(Poll::Absent(_)) => Probe::Absent,
+    }
 }
 
 /// Polls the hub's socket until it accepts and speaks `hub_hello`. The
 /// bind wait ends at `due`'s deadline: the shared one for `At`, one
-/// [`CONNECT_DEADLINE`] from this attempt's start for `Within`.
+/// [`CONNECT_DEADLINE`] from this attempt's start for `Within`. The
+/// socket never blocks: an in-flight connect waits for readiness, a full
+/// backlog retries on a fresh socket, and absence starts one through
+/// `start` or reports [`Poll::Absent`]. `accepted` runs when a connect
+/// succeeds, before any hello deadline check.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one bundled attempt keeps the race loop flat: target, starter, clock, bound and three hooks"
+)]
 fn attempt(
     home: &Path,
     started: &mut bool,
-    start: &mut dyn FnMut() -> io::Result<()>,
+    mut start: Option<&mut dyn FnMut() -> io::Result<()>>,
     clock: &dyn Clock,
     due: &Due,
     before_read: &mut dyn FnMut(),
+    accepted: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
 ) -> Result<Hub, Poll> {
     let socket = home.join("run").join("hub");
     let bind = due.bind_deadline(clock.now());
@@ -311,49 +451,270 @@ fn attempt(
         Due::At { total, .. } => *total,
         Due::Within(_) => CONNECT_DEADLINE,
     };
+    let bind_timed_out = || {
+        Poll::Failed(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "the hub did not bind {} in {} s",
+                socket.display(),
+                bind_named.as_secs_f64()
+            ),
+        ))
+    };
     loop {
-        match UnixStream::connect(&socket) {
-            Ok(stream) => {
-                let hello = due.hello_deadline(clock.now(), bind);
-                return read_hello(stream, &socket, hello, due.named(), clock, before_read);
+        let fd = nonblocking_socket().map_err(Poll::Failed)?;
+        let addr = SocketAddrUnix::new(&socket)
+            .map_err(io::Error::from)
+            .map_err(Poll::Failed)?;
+        match net::connect(&fd, &addr) {
+            Ok(()) => {
+                return finish_connect(
+                    fd,
+                    &socket,
+                    clock,
+                    due,
+                    bind,
+                    before_read,
+                    accepted,
+                    before_wait,
+                );
             }
-            Err(error) if is_absent(error.kind()) => {
-                if !*started {
-                    start().map_err(Poll::Failed)?;
-                    *started = true;
+            Err(errno) if is_in_progress(&errno) => {
+                if !wait_ready(fd.as_fd(), PollFlags::OUT, clock, bind, before_wait) {
+                    return Err(bind_timed_out());
                 }
-                if clock.now() >= bind {
-                    return Err(Poll::Failed(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!(
-                            "the hub did not bind {} in {} s",
-                            socket.display(),
-                            bind_named.as_secs_f64()
-                        ),
-                    )));
+                match sockopt::socket_error(&fd) {
+                    Ok(Ok(())) => {
+                        return finish_connect(
+                            fd,
+                            &socket,
+                            clock,
+                            due,
+                            bind,
+                            before_read,
+                            accepted,
+                            before_wait,
+                        );
+                    }
+                    Ok(Err(errno)) => {
+                        let error = io::Error::from(errno);
+                        if is_absent(error.kind()) {
+                            wait_for_start(
+                                start
+                                    .as_mut()
+                                    .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
+                                started,
+                                clock,
+                                bind,
+                                &bind_timed_out,
+                                error,
+                            )?;
+                        } else if is_busy(&errno) {
+                            if clock.now() >= bind {
+                                return Err(bind_timed_out());
+                            }
+                            before_wait();
+                            clock.wait_until(Some(bind), &mut |bound| {
+                                poll_once(fd.as_fd(), PollFlags::OUT, bound);
+                            });
+                        } else {
+                            return Err(Poll::Failed(error));
+                        }
+                    }
+                    Err(errno) => return Err(Poll::Failed(io::Error::from(errno))),
                 }
-                clock.sleep(CONNECT_POLL);
             }
-            Err(error) => return Err(Poll::Failed(error)),
+            Err(errno) => {
+                let error = io::Error::from(errno);
+                if is_absent(error.kind()) {
+                    wait_for_start(
+                        start
+                            .as_mut()
+                            .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
+                        started,
+                        clock,
+                        bind,
+                        &bind_timed_out,
+                        error,
+                    )?;
+                } else if is_busy(&errno) {
+                    // A full backlog on Linux: the connect itself retries
+                    // within the bind deadline, never starting a hub.
+                    if clock.now() >= bind {
+                        return Err(bind_timed_out());
+                    }
+                    before_wait();
+                    clock.wait_until(Some(bind), &mut |bound| {
+                        poll_once(fd.as_fd(), PollFlags::OUT, bound);
+                    });
+                } else {
+                    return Err(Poll::Failed(error));
+                }
+            }
         }
     }
 }
 
-/// Reads the first line byte by byte, without buffered over-read, and
-/// requires `hub_hello` on this build's `schema_version`. The line is due
-/// by `deadline` on `clock`, fixed when the socket accepted, or with no
-/// timeout when the accept plus the hello wait overflowed: before each
-/// read the stream's read timeout is set to the time left, and with none
-/// left the read fails `TimedOut`. `named` names the deadline in the
-/// timeout message. `before_read` runs after the time-left check, just
-/// before each read. The timeout is cleared once the line is read.
-fn read_hello(
+/// Runs `start` once and pauses one [`CONNECT_POLL`] of the bind wait
+/// when `error` says no hub runs: `Ok(())` retries the connect. With no
+/// starter the absence reports [`Poll::Absent`] at once, never waiting.
+fn wait_for_start(
+    start: Option<&mut dyn FnMut() -> io::Result<()>>,
+    started: &mut bool,
+    clock: &dyn Clock,
+    bind: Instant,
+    bind_timed_out: &dyn Fn() -> Poll,
+    error: io::Error,
+) -> Result<(), Poll> {
+    let Some(start) = start else {
+        return Err(Poll::Absent(error));
+    };
+    if !*started {
+        start().map_err(Poll::Failed)?;
+        *started = true;
+    }
+    if clock.now() >= bind {
+        return Err(bind_timed_out());
+    }
+    clock.sleep(CONNECT_POLL);
+    Ok(())
+}
+
+/// A non-blocking, close-on-exec stream socket: Apple has no
+/// `SOCK_NONBLOCK`, so blocking is cleared after opening.
+fn nonblocking_socket() -> io::Result<OwnedFd> {
+    let fd = net::socket(net::AddressFamily::UNIX, net::SocketType::STREAM, None)?;
+    fcntl_setfl(&fd, fcntl_getfl(&fd)? | OFlags::NONBLOCK)?;
+    fcntl_setfd(&fd, FdFlags::CLOEXEC)?;
+    Ok(fd)
+}
+
+/// Waits for `events` on `fd` until `deadline`, parking through
+/// [`Clock::wait_until`] after each deadline check: `true` when the poll
+/// saw readiness, `false` past the deadline. `before_wait` runs after
+/// each check, just before the park.
+fn wait_ready(
+    fd: BorrowedFd,
+    events: PollFlags,
+    clock: &dyn Clock,
+    deadline: Instant,
+    before_wait: &mut dyn FnMut(),
+) -> bool {
+    loop {
+        if clock.now() >= deadline {
+            return false;
+        }
+        before_wait();
+        let mut ready = false;
+        clock.wait_until(Some(deadline), &mut |bound| {
+            ready = poll_once(fd, events, bound);
+        });
+        if ready {
+            return true;
+        }
+    }
+}
+
+/// One readiness check: polls `fd` for `events` within the shorter of the
+/// clock's bound and [`FAKE_WAIT_CAP`], so a fake clock's wait stays
+/// interruptible while a real hub still wakes the poll early.
+fn poll_once(fd: BorrowedFd, events: PollFlags, bound: Option<Duration>) -> bool {
+    let mut fds = [PollFd::new(&fd, events | PollFlags::HUP | PollFlags::ERR)];
+    wait_poll(&mut fds, bound);
+    fds.first()
+        .map(PollFd::revents)
+        .is_some_and(|events| !events.is_empty())
+}
+
+/// Polls `fds` for at most one [`FAKE_WAIT_CAP`] slice of `bound`: the
+/// count is discarded, since readiness, not how many fds woke, decides.
+fn wait_poll(fds: &mut [PollFd<'_>], bound: Option<Duration>) {
+    let slice = bound
+        .map(|bound| bound.min(FAKE_WAIT_CAP))
+        .unwrap_or(FAKE_WAIT_CAP);
+    let spec = Timespec {
+        tv_sec: slice.as_secs().min(i64::MAX as u64).cast_signed(),
+        tv_nsec: slice.subsec_nanos() as _,
+    };
+    // The park itself is the wait: a signal delivery or a woken fd both
+    // end it, so the count is discarded.
+    #[allow(
+        clippy::let_underscore_must_use,
+        reason = "a woken fd and an expired wait both end the park: the count is unused"
+    )]
+    let _ = poll(fds, Some(&spec));
+}
+
+/// `true` when `error` is `EINPROGRESS`: a non-blocking connect still
+/// in flight.
+fn is_in_progress(error: &Errno) -> bool {
+    *error == Errno::INPROGRESS
+}
+
+/// `true` when `error` is `EAGAIN`: a connect refused by a full backlog,
+/// which retries within the bind deadline without starting a hub.
+fn is_busy(error: &Errno) -> bool {
+    *error == Errno::AGAIN
+}
+
+/// The connected `fd`'s hello: records the acceptance, reads one
+/// `hub_hello` line by [`due`]'s deadline, then hands back a blocking
+/// stream with no read timeout. A hello failure is [`Poll::Accepted`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one bundled handshake keeps the accept path flat: socket, clock, bound and three hooks"
+)]
+fn finish_connect(
+    fd: OwnedFd,
+    socket: &Path,
+    clock: &dyn Clock,
+    due: &Due,
+    bind: Instant,
+    before_read: &mut dyn FnMut(),
+    accepted: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Result<Hub, Poll> {
+    accepted();
+    let hello = due.hello_deadline(clock.now(), bind);
+    let stream = UnixStream::from(fd);
+    match poll_hello(
+        stream,
+        socket,
+        hello,
+        due.named(),
+        clock,
+        before_read,
+        before_wait,
+    ) {
+        Ok((stream, line)) => {
+            stream.set_nonblocking(false).map_err(Poll::Accepted)?;
+            ignore_closed_peer(stream.set_read_timeout(None)).map_err(Poll::Accepted)?;
+            Ok((stream, line))
+        }
+        Err(Poll::Race) => Err(Poll::Race),
+        Err(Poll::Failed(error)) | Err(Poll::Accepted(error)) => Err(Poll::Accepted(error)),
+        Err(Poll::Absent(error)) => Err(Poll::Accepted(error)),
+    }
+}
+
+/// Reads the first line byte by byte, without buffered over-read. The
+/// stream never blocks: each `WouldBlock` waits for readability through
+/// [`wait_ready`], then the deadline is re-checked, so a trickling hub
+/// cannot renew it. The line is due by `deadline`, fixed when the socket
+/// accepted; `named` names it in the timeout message. `before_read` runs
+/// after each deadline check, just before the read.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one bundled handshake keeps the read path flat: socket, deadline, clock and two hooks"
+)]
+fn poll_hello(
     mut stream: UnixStream,
     socket: &Path,
     deadline: Option<Instant>,
     named: Duration,
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
 ) -> Result<Hub, Poll> {
     let timed_out = || {
         Poll::Failed(io::Error::new(
@@ -368,35 +729,65 @@ fn read_hello(
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let left = match deadline {
-            Some(deadline) => Some(
-                deadline
-                    .checked_duration_since(clock.now())
-                    .filter(has_time_left)
-                    .ok_or_else(timed_out)?,
-            ),
-            None => None,
-        };
-        set_read_timeout(&stream, left).map_err(Poll::Failed)?;
+        if let Some(deadline) = deadline
+            && !deadline
+                .checked_duration_since(clock.now())
+                .is_some_and(|left| has_time_left(&left))
+        {
+            return Err(timed_out());
+        }
         before_read();
-        match classify_hello_read(stream.read(&mut byte)) {
-            HelloRead::Race => return Err(Poll::Race),
-            HelloRead::TimedOut => return Err(timed_out()),
-            HelloRead::Failed(error) => return Err(Poll::Failed(error)),
-            HelloRead::Byte => {
+        match stream.read(&mut byte) {
+            Ok(0) => return Err(Poll::Race),
+            Ok(_) => {
                 if byte[0] == b'\n' {
                     break;
                 }
                 buf.push(byte[0]);
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                // Not yet, not too late: readability waits, then the
+                // deadline is re-checked above.
+                let expired = match deadline {
+                    Some(deadline) => {
+                        !wait_ready(stream.as_fd(), PollFlags::IN, clock, deadline, before_wait)
+                    }
+                    None => {
+                        clock.wait_until(None, &mut |bound| {
+                            poll_once(stream.as_fd(), PollFlags::IN, bound);
+                        });
+                        false
+                    }
+                };
+                if expired {
+                    return Err(timed_out());
+                }
+            }
+            Err(error) => {
+                return Err(match classify_hello_read(Err(error)) {
+                    HelloRead::Race => Poll::Race,
+                    HelloRead::TimedOut => timed_out(),
+                    HelloRead::Failed(error) => Poll::Failed(error),
+                    // `classify_hello_read` never reports a byte for an
+                    // error: not `hub_hello` first.
+                    HelloRead::Byte => Poll::Failed(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the hub did not speak `hub_hello` first",
+                    )),
+                });
+            }
         }
     }
-    set_read_timeout(&stream, None).map_err(Poll::Failed)?;
-    // A carriage return ends the line too.
+    check_line(&mut buf).map(|hello| (stream, hello))
+}
+
+/// Requires the handshake line's `hub_hello` on this build's
+/// `schema_version`: a carriage return ends the line too.
+fn check_line(buf: &mut Vec<u8>) -> Result<HubLine, Poll> {
     while strips_cr(buf.last()) {
         buf.pop();
     }
-    let hello: HubLine = serde_json::from_slice(&buf).map_err(|_| {
+    let hello: HubLine = serde_json::from_slice(buf).map_err(|_| {
         Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",
@@ -418,6 +809,35 @@ fn read_hello(
             ),
         )));
     }
+    Ok(hello)
+}
+
+/// Reads the first line byte by byte, without buffered over-read, and
+/// requires `hub_hello` on this build's `schema_version`. The line is due
+/// by `deadline` on `clock`, fixed when the socket accepted, or with no
+/// timeout when the accept plus the hello wait overflowed. `before_read`
+/// runs after each deadline check, just before the read. The stream comes
+/// back blocking with no read timeout once the line is read.
+fn read_hello(
+    stream: UnixStream,
+    socket: &Path,
+    deadline: Option<Instant>,
+    named: Duration,
+    clock: &dyn Clock,
+    before_read: &mut dyn FnMut(),
+) -> Result<Hub, Poll> {
+    stream.set_nonblocking(true).map_err(Poll::Failed)?;
+    let (stream, hello) = poll_hello(
+        stream,
+        socket,
+        deadline,
+        named,
+        clock,
+        before_read,
+        &mut || {},
+    )?;
+    stream.set_nonblocking(false).map_err(Poll::Failed)?;
+    ignore_closed_peer(stream.set_read_timeout(None)).map_err(Poll::Failed)?;
     Ok((stream, hello))
 }
 

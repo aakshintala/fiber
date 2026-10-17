@@ -119,6 +119,12 @@ impl Setup {
     /// Runs the report with this environment and no hub, and returns
     /// readiness with the whole stdout and stderr.
     fn report(&self, env: &HashMap<String, String>) -> (bool, String, String) {
+        self.report_with(env, Hub::NotRunning)
+    }
+
+    /// Runs the report with this environment and hub state, and returns
+    /// readiness with the whole stdout and stderr.
+    fn report_with(&self, env: &HashMap<String, String>, hub: Hub) -> (bool, String, String) {
         let clock = fakes::clock::FakeClock::new();
         let mut out = Vec::new();
         let mut err = Vec::new();
@@ -130,7 +136,7 @@ impl Setup {
                 now: clock.wall(),
                 env: &|name| env.get(name).cloned(),
                 has_userinfo: &|url| url.contains('@'),
-                hub: &|_, _| Hub::NotRunning,
+                hub: &|_, _| hub.clone(),
                 clock: &*clock,
             },
             &mut out,
@@ -489,4 +495,116 @@ fn doctor_exits_2_for_a_relative_home() {
         &[],
     );
     assert_eq!(status.code(), Some(2), "{status:?}");
+}
+
+/// The hub lines for a running hub, by environment: the tests inject the
+/// exchange's state, so no socket runs.
+fn running(environment: Result<contract::events::Variables, String>) -> Hub {
+    Hub::Running { environment }
+}
+
+fn login_shell() -> contract::events::Variables {
+    contract::events::Variables {
+        path: "/hub/bin:/usr/bin".to_owned(),
+        names: vec!["EDITOR".to_owned(), "FIBER_HOME".to_owned()],
+        source: contract::events::VariablesSource::LoginShell,
+    }
+}
+
+#[test]
+fn a_running_hub_names_the_login_shell_and_its_variables() {
+    let setup = ready_home();
+    let (_, out, _) = setup.report_with(
+        &env_of(&[("FIBER_TEST_FAKE_KEY", "k")]),
+        running(Ok(login_shell())),
+    );
+    assert!(
+        out.contains(
+            "hub: running\nhub environment: login shell\nhub PATH: /hub/bin:/usr/bin\nhub variables: EDITOR, FIBER_HOME\n"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_inherited_hub_environment_says_the_capture_failed() {
+    let setup = ready_home();
+    let variables = contract::events::Variables {
+        source: contract::events::VariablesSource::Inherited,
+        ..login_shell()
+    };
+    let (_, out, _) = setup.report_with(
+        &env_of(&[("FIBER_TEST_FAKE_KEY", "k")]),
+        running(Ok(variables)),
+    );
+    assert!(
+        out.contains(
+            "hub: running\nhub environment: inherited, because the login-shell capture failed\nhub PATH: /hub/bin:/usr/bin\nhub variables: EDITOR, FIBER_HOME\n"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_unknown_hub_environment_names_its_reason() {
+    let setup = ready_home();
+    let (_, out, _) = setup.report_with(
+        &env_of(&[("FIBER_TEST_FAKE_KEY", "k")]),
+        running(Err(
+            "the hub closed the connection before answering status".to_owned()
+        )),
+    );
+    assert!(
+        out.contains(
+            "hub: running\nhub environment: unknown (the hub closed the connection before answering status)\n"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_unknown_hub_names_its_reason() {
+    let setup = ready_home();
+    let (_, out, _) = setup.report_with(
+        &env_of(&[("FIBER_TEST_FAKE_KEY", "k")]),
+        Hub::Unknown("the hub: connection refused".to_owned()),
+    );
+    assert!(
+        out.contains("hub: unknown (the hub: connection refused)\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn escapes_in_hub_variables_print_on_one_line() {
+    let setup = ready_home();
+    let variables = contract::events::Variables {
+        path: "/hu\nb/bin".to_owned(),
+        names: vec!["ED\x1bITOR".to_owned()],
+        ..login_shell()
+    };
+    let (_, out, _) = setup.report_with(
+        &env_of(&[("FIBER_TEST_FAKE_KEY", "k")]),
+        running(Ok(variables)),
+    );
+    assert!(
+        out.contains("hub PATH: /hu b/bin\nhub variables: ED ITOR\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_regular_file_at_run_hub_is_unknown_not_a_hang() {
+    let setup = Setup::new();
+    let run = setup.home().join("run");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(run.join("hub"), b"not a socket").unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    // A connect that fails fast moves no clock: the probe returns.
+    let Hub::Unknown(reason) = super::probe(&setup.home(), &*clock) else {
+        panic!("a regular file at run/hub is unknown");
+    };
+    assert!(reason.starts_with("the hub: "), "{reason}");
+    assert_eq!(clock.now(), origin);
 }

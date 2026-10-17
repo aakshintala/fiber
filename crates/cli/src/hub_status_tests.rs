@@ -20,14 +20,15 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 use contract::shapes::Failure;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    AnswerRead, STATUS_WITHIN, Status, classify_answer, ignore_closed_peer, installed,
-    is_answer_timeout, is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
+    Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, ignore_closed_peer, installed,
+    is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
 };
 use crate::hub_unit::{Manager, name};
 
@@ -170,97 +171,124 @@ fn a_hub_counting_no_clients_reports_none() {
 fn a_silent_hub_fails_at_the_deadline() {
     let (_dir, home) = home();
     let (_got, _hub) = fake_hub(&home, |stream| hold(&stream));
-    let error = probed(&home, Duration::from_millis(10)).unwrap_err();
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (read, result, id) = probe_signalled(&home, &clock);
+    // The held answer parks at the one deadline; one parked advance to
+    // exactly that instant expires it.
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&read).unwrap();
+    let due = origin + ANSWER;
+    clock.advance_when_parked(Some(due), Some(id), ANSWER, &Deadline::after(DEADLINE));
+    let error = Deadline::after(DEADLINE)
+        .recv(&result)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
-    assert!(
-        error.message.contains("did not answer status"),
-        "{}",
-        error.message
-    );
+    assert_eq!(error.message, "the hub did not answer status in 5 s");
+    assert_eq!(clock.now(), due);
 }
 
 #[test]
 fn an_eof_retry_does_not_extend_the_total_deadline() {
     let (_dir, home) = home();
     let listener = UnixListener::bind(home.join("run/hub")).unwrap();
-    let clock = FakeClock::new();
-    let (checked_read, checked) = mpsc::channel::<()>();
-    let (resume, wait_resume) = mpsc::channel::<()>();
-    let (second_accepted, second) = mpsc::channel::<()>();
-    let (go, wait_go) = mpsc::channel::<()>();
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (wrote_tx, wrote_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (second_tx, second_rx) = mpsc::channel::<()>();
     // First connection trickles one byte, then closes once the test lets
     // it: the EOF retry. The second connection stays silent.
     thread::spawn(move || {
         let (mut first, _) = listener.accept().unwrap();
         first.write_all(b"{").unwrap();
-        wait_go.recv().unwrap();
+        wrote_tx.send(()).unwrap_or(());
+        go_rx.recv().unwrap_or(());
         drop(first);
         let (silent, _) = listener.accept().unwrap();
-        second_accepted.send(()).unwrap();
+        second_tx.send(()).unwrap_or(());
         hold(&silent);
     });
-    let (done, result) = mpsc::channel();
-    let probed_home = home.clone();
-    let probed_clock = Arc::clone(&clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    let (id_tx, id_rx) = mpsc::channel();
+    let worker_home = home.clone();
+    let worker_clock = Arc::clone(&clock);
     thread::spawn(move || {
-        let mut reads = 0;
-        let mut before_read = || {
-            reads += 1;
-            if reads == 2 {
-                checked_read.send(()).unwrap_or(());
-                wait_resume.recv().unwrap();
-            }
-        };
-        done.send(probe_with(
-            &probed_home,
-            &*probed_clock,
-            ANSWER,
-            false,
-            &mut before_read,
-            &mut || {},
-        ))
-        .unwrap_or(());
+        id_tx.send(thread::current().id()).unwrap_or(());
+        done_tx
+            .send(probe_with(
+                &worker_home,
+                &*worker_clock,
+                ANSWER,
+                false,
+                &mut || {},
+                &mut || {},
+            ))
+            .unwrap_or(());
     });
-    // The handshake reader has checked the deadline after consuming the
-    // first byte and is paused before its next read. Advance time, close
-    // that peer, then let the reader observe EOF and retry with 100 ms left.
-    Deadline::after(DEADLINE).recv(&checked).unwrap();
-    clock.advance(ANSWER.checked_sub(Duration::from_millis(100)).unwrap());
-    go.send(()).unwrap();
-    resume.send(()).unwrap();
-    Deadline::after(DEADLINE).recv(&second).unwrap();
-    // The retry's silent peer gets the remaining 100 ms, not a fresh
-    // 5 s: the whole probe fails at the one deadline, well within a wall
-    // bound far below a fresh handshake.
-    let error = Deadline::after(Duration::from_secs(2))
-        .recv(&result)
-        .expect("the probe fails at its total deadline, not a fresh one")
+    let id = Deadline::after(DEADLINE)
+        .recv(&id_rx)
+        .expect("the probe worker reports its thread");
+    // Past the race and onto the silent retry: its wait parks at the one
+    // shared deadline, which one parked advance reaches exactly.
+    Deadline::after(DEADLINE).recv(&wrote_rx).unwrap();
+    go_tx.send(()).unwrap();
+    Deadline::after(DEADLINE).recv(&second_rx).unwrap();
+    let due = origin + ANSWER;
+    // The race pause moved the clock once; the advance lands exactly on
+    // the shared deadline, never past it.
+    let left = due.saturating_duration_since(clock.now());
+    clock.advance_when_parked(Some(due), Some(id), left, &Deadline::after(DEADLINE));
+    // The retry's silent peer gets the shared deadline, not a fresh 5 s:
+    // the whole probe fails naming the hello wait, at the one instant.
+    let error = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .unwrap()
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        error.message.contains("did not say hub_hello in 5 s"),
+        "the retry names the shared hello wait: {}",
+        error.message
+    );
+    assert_eq!(clock.now(), due);
 }
 
-/// Runs `probe_with` on a thread, sending a signal before each read.
+/// Runs `probe_with` on a worker thread, handing back its read signals,
+/// its answer, and its thread id, so the test steps the fake clock
+/// through `advance_when_parked` naming that thread and its expected park
+/// instant.
 fn probe_signalled(
     home: &Path,
     clock: &Arc<FakeClock>,
-) -> (Receiver<()>, Receiver<Result<Status, Failure>>) {
+) -> (
+    Receiver<()>,
+    Receiver<Result<Status, Failure>>,
+    thread::ThreadId,
+) {
     let (reads, read) = mpsc::channel();
+    let (ids, id) = mpsc::channel();
     let (done, result) = mpsc::channel();
     let home = home.to_path_buf();
     let clock = Arc::clone(clock);
     thread::spawn(move || {
+        ids.send(thread::current().id()).unwrap_or(());
         let mut before_read = || reads.send(()).unwrap_or(());
         done.send(probe_with(
             &home,
             &*clock,
             ANSWER,
             false,
-            &mut || {},
             &mut before_read,
+            &mut || {},
         ))
         .unwrap_or(());
     });
-    (read, result)
+    let id = Deadline::after(DEADLINE)
+        .recv(&id)
+        .expect("the probe worker reports its thread");
+    (read, result, id)
 }
 
 /// A hub that writes `first`, waits for the test's go, then writes
@@ -280,23 +308,28 @@ fn two_part_hub(home: &Path, first: String, second: String) -> Sender<()> {
 fn unrelated_lines_past_the_deadline_end_the_probe() {
     let (_dir, home) = home();
     let other = accepted("c_other", "9.9.9", 1);
-    let go = two_part_hub(&home, other.clone(), other);
-    let clock = FakeClock::new();
-    let (read, result) = probe_signalled(&home, &clock);
-    // The second read is due once the first unrelated line was read.
+    let (_got, _hub) = fake_hub(&home, move |mut stream| {
+        stream.write_all(other.as_bytes()).unwrap();
+        stream.write_all(other.as_bytes()).unwrap();
+        hold(&stream);
+    });
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (read, result, id) = probe_signalled(&home, &clock);
+    // The worker reads past both unrelated lines, then parks with no
+    // answer: one parked advance to exactly the deadline ends the probe.
     let wait = Deadline::after(DEADLINE);
     wait.recv(&read).unwrap();
-    wait.recv(&read).unwrap();
-    // Exactly at the deadline no time is left.
-    clock.advance(ANSWER);
-    go.send(()).unwrap();
+    let due = origin + ANSWER;
+    let left = due.saturating_duration_since(clock.now());
+    clock.advance_when_parked(Some(due), Some(id), left, &Deadline::after(DEADLINE));
     let error = Deadline::after(DEADLINE)
         .recv(&result)
         .unwrap()
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "the hub did not answer status in 5 s");
-    assert!(read.try_recv().is_err(), "no third read");
+    assert_eq!(clock.now(), due);
 }
 
 #[test]
@@ -306,7 +339,7 @@ fn an_answer_in_two_writes_inside_the_deadline_is_read() {
     let (first, second) = answer.split_at(answer.len() / 2);
     let go = two_part_hub(&home, first.to_owned(), second.to_owned());
     let clock = FakeClock::new();
-    let (read, result) = probe_signalled(&home, &clock);
+    let (read, result, _) = probe_signalled(&home, &clock);
     let wait = Deadline::after(DEADLINE);
     wait.recv(&read).unwrap();
     wait.recv(&read).unwrap();
@@ -528,51 +561,6 @@ fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
 }
 
 #[test]
-fn only_a_timeout_is_a_late_answer() {
-    assert!(is_answer_timeout(std::io::ErrorKind::WouldBlock));
-    assert!(is_answer_timeout(std::io::ErrorKind::TimedOut));
-    for kind in [
-        std::io::ErrorKind::NotFound,
-        std::io::ErrorKind::ConnectionRefused,
-        std::io::ErrorKind::NotADirectory,
-        std::io::ErrorKind::InvalidInput,
-        std::io::ErrorKind::ConnectionReset,
-        std::io::ErrorKind::UnexpectedEof,
-    ] {
-        assert!(!is_answer_timeout(kind), "{kind:?}");
-    }
-}
-
-#[test]
-fn a_status_answer_read_is_classified() {
-    use std::io::ErrorKind;
-    fn error(kind: ErrorKind) -> std::io::Error {
-        std::io::Error::new(kind, "injected for the test")
-    }
-    assert!(matches!(classify_answer(Ok(0)), AnswerRead::Closed));
-    assert!(matches!(classify_answer(Ok(1)), AnswerRead::Bytes(1)));
-    assert!(matches!(
-        classify_answer(Err(error(ErrorKind::WouldBlock))),
-        AnswerRead::Late
-    ));
-    assert!(matches!(
-        classify_answer(Err(error(ErrorKind::TimedOut))),
-        AnswerRead::Late
-    ));
-    for kind in [
-        ErrorKind::NotFound,
-        ErrorKind::ConnectionReset,
-        ErrorKind::InvalidInput,
-        ErrorKind::UnexpectedEof,
-    ] {
-        assert!(
-            matches!(classify_answer(Err(error(kind))), AnswerRead::Lost(_)),
-            "{kind:?}"
-        );
-    }
-}
-
-#[test]
 fn only_the_closed_peer_refusal_is_ignored() {
     use std::io::ErrorKind;
     fn error(kind: ErrorKind) -> std::io::Error {
@@ -708,46 +696,48 @@ fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
         let (_dir, home) = home();
         let go = slow_hub(&home, accepted("c_status", "1.2.3", 1));
         let clock: Arc<FakeClock> = FakeClock::new();
-        let (calls_tx, calls_rx) = mpsc::channel::<u64>();
+        let origin = clock.origin();
         let (done_tx, done_rx) = mpsc::channel();
-        let thread_clock = Arc::clone(&clock);
-        let thread_home = home.clone();
+        let (id_tx, id_rx) = mpsc::channel();
+        let (read_tx, read_rx) = mpsc::channel::<()>();
+        let worker_home = home.clone();
+        let worker_clock = Arc::clone(&clock);
         thread::spawn(move || {
-            let mut n = 0;
-            let mut before_read = || {
-                n += 1;
-                calls_tx.send(n).unwrap_or(());
-                if n == 1 {
-                    thread_clock.advance(Duration::from_secs(6));
-                } else if n == 2 {
-                    // Only after `ask` passed its deadline check again:
-                    // with a 5-second window the second check fails
-                    // first and this never runs, so the probe is late.
-                    go.send(()).unwrap_or(());
-                }
-            };
+            id_tx.send(thread::current().id()).unwrap_or(());
+            let mut before_read = || read_tx.send(()).unwrap_or(());
             done_tx
                 .send(probe_with(
-                    &thread_home,
-                    &*thread_clock,
+                    &worker_home,
+                    &*worker_clock,
                     within,
                     false,
-                    &mut || {},
                     &mut before_read,
+                    &mut || {},
                 ))
                 .unwrap_or(());
         });
+        let id = Deadline::after(DEADLINE)
+            .recv(&id_rx)
+            .expect("the probe worker reports its thread");
         let wait = Deadline::after(DEADLINE);
-        let got = wait.recv(&done_rx).expect("the probe returns");
+        // The first read is due once the unrelated line was read: six
+        // seconds in, six short of the status window, past the short one.
+        wait.recv(&read_rx).unwrap();
+        let due = origin + within;
+        let ahead = Duration::from_secs(6).min(due.saturating_duration_since(clock.now()));
+        clock.advance_when_parked(Some(due), Some(id), ahead, &Deadline::after(DEADLINE));
+        let got: Result<Status, Failure> = if reads {
+            go.send(()).unwrap_or(());
+            // The release is the completing event: the capped real poll
+            // delivers the answer with no further advance.
+            wait.recv(&done_rx).expect("the probe returns")
+        } else {
+            Err(wait.recv(&done_rx).expect("the probe returns").unwrap_err())
+        };
         if reads {
             let status = got.unwrap();
             assert_eq!(status.version.as_deref(), Some("1.2.3"));
-            assert_eq!(wait.recv(&calls_rx), Ok(1));
-            assert_eq!(
-                wait.recv(&calls_rx),
-                Ok(2),
-                "the answer arrives on the second read"
-            );
+            assert_eq!(clock.now(), origin + Duration::from_secs(6));
         } else {
             let error = got.unwrap_err();
             assert_eq!(error.code, ErrorCode::IoFailed);
@@ -756,11 +746,283 @@ fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
                 "{}",
                 error.message
             );
-            assert_eq!(wait.recv(&calls_rx), Ok(1));
-            assert!(
-                calls_rx.try_recv().is_err(),
-                "no second read after the deadline"
-            );
+            assert_eq!(clock.now(), due);
         }
     }
+}
+
+/// An accepted answer carrying `variables`.
+fn accepted_variables(id: &str, version: &str, clients: u64, variables: Value) -> String {
+    hub_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {
+            "running": true, "fiber_version": version, "clients": clients,
+            "variables": variables,
+        }}),
+    )
+}
+
+/// Runs `diagnose_with` on a worker thread, handing back its read and
+/// wait signals, its answer, and its thread id, so the test steps the
+/// fake clock naming that thread and its expected park instant.
+fn diagnose_signalled(
+    home: &Path,
+    clock: &Arc<FakeClock>,
+    within: Duration,
+) -> (
+    Receiver<()>,
+    Receiver<()>,
+    Receiver<Diagnostic>,
+    thread::ThreadId,
+) {
+    let (reads, read) = mpsc::channel();
+    let (waits_tx, waits) = mpsc::channel();
+    let (ids, id) = mpsc::channel();
+    let (done, result) = mpsc::channel();
+    let home = home.to_path_buf();
+    let clock = Arc::clone(clock);
+    thread::spawn(move || {
+        ids.send(thread::current().id()).unwrap_or(());
+        let mut before_read = || reads.send(()).unwrap_or(());
+        let mut before_wait = || waits_tx.send(()).unwrap_or(());
+        done.send(diagnose_with(
+            &home,
+            &*clock,
+            within,
+            &mut before_read,
+            &mut before_wait,
+        ))
+        .unwrap_or(());
+    });
+    let id = Deadline::after(DEADLINE)
+        .recv(&id)
+        .expect("the diagnose worker reports its thread");
+    (read, waits, result, id)
+}
+
+/// The diagnose answer for a hub serving `answer`, through the public
+/// entry point: served at once, the capped real poll delivers it with no
+/// parked advance.
+fn diagnosed(home: &Path, answer: &str, within: Duration) -> Diagnostic {
+    let home = home.to_path_buf();
+    let answer = answer.to_owned();
+    let (_got, _hub) = fake_hub(&home, move |mut stream| {
+        stream.write_all(answer.as_bytes()).unwrap();
+        hold(&stream);
+    });
+    let clock: Arc<FakeClock> = FakeClock::new();
+    fakes::within("the diagnose", DEADLINE, move || {
+        diagnose(&home, &*clock, within, false)
+    })
+}
+
+fn login_shell() -> Value {
+    json!({
+        "path": "/hub/bin:/usr/bin",
+        "names": ["EDITOR", "FIBER_HOME"],
+        "source": "login_shell",
+    })
+}
+
+#[test]
+fn answered_variables_name_the_login_shell() {
+    let (_dir, home) = home();
+    let answer = accepted_variables("c_status", "1.2.3", 3, login_shell());
+    let Diagnostic::Connected(Ok(reply)) = diagnosed(&home, &answer, ANSWER) else {
+        panic!("a full answer connects");
+    };
+    assert_eq!(reply.version, "1.2.3");
+    assert_eq!(reply.clients, 3);
+    let variables = reply.variables.expect("login-shell variables");
+    assert_eq!(variables.path, "/hub/bin:/usr/bin");
+    assert_eq!(variables.names, ["EDITOR", "FIBER_HOME"]);
+    assert_eq!(
+        variables.source,
+        contract::events::VariablesSource::LoginShell
+    );
+}
+
+#[test]
+fn inherited_variables_say_the_capture_failed() {
+    let (_dir, home) = home();
+    let answer = accepted_variables(
+        "c_status",
+        "1.2.3",
+        1,
+        json!({"path": "/usr/bin", "names": [], "source": "inherited"}),
+    );
+    let Diagnostic::Connected(Ok(reply)) = diagnosed(&home, &answer, ANSWER) else {
+        panic!("an inherited answer connects");
+    };
+    let variables = reply.variables.expect("inherited variables");
+    assert_eq!(variables.path, "/usr/bin");
+    assert!(variables.names.is_empty());
+    assert_eq!(
+        variables.source,
+        contract::events::VariablesSource::Inherited
+    );
+}
+
+#[test]
+fn a_silent_status_exchange_connects_err() {
+    let (_dir, home) = home();
+    let (_got, _hub) = fake_hub(&home, |stream| hold(&stream));
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (read, _waited, result, id) = diagnose_signalled(&home, &clock, ANSWER);
+    let due = origin + ANSWER;
+    Deadline::after(DEADLINE).recv(&read).unwrap();
+    clock.advance_when_parked(Some(due), Some(id), ANSWER, &Deadline::after(DEADLINE));
+    let Diagnostic::Connected(Err(failure)) = Deadline::after(DEADLINE).recv(&result).unwrap()
+    else {
+        panic!("a silent exchange connects err");
+    };
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert_eq!(failure.message, "the hub did not answer status in 5 s");
+    assert_eq!(clock.now(), due);
+}
+
+#[test]
+fn a_rejected_status_exchange_connects_err_with_its_code() {
+    let (_dir, home) = home();
+    let rejected = hub_line(
+        "command_rejected",
+        json!({"command_id": "c_status", "code": "invalid_arguments", "message": "nope"}),
+    );
+    let Diagnostic::Connected(Err(failure)) = diagnosed(&home, &rejected, ANSWER) else {
+        panic!("a rejection connects err");
+    };
+    assert_eq!(failure.code, ErrorCode::InvalidArguments);
+    assert_eq!(failure.message, "nope");
+}
+
+#[test]
+fn missing_variables_are_an_unknown_environment() {
+    let (_dir, home) = home();
+    let Diagnostic::Connected(Ok(reply)) =
+        diagnosed(&home, &accepted("c_status", "1.2.3", 1), ANSWER)
+    else {
+        panic!("an answer without variables connects");
+    };
+    assert_eq!(
+        reply.variables.unwrap_err(),
+        "the hub's answer to status has no variables"
+    );
+}
+
+#[test]
+fn malformed_variables_are_an_unknown_environment() {
+    let (_dir, home) = home();
+    let answer = accepted_variables("c_status", "1.2.3", 1, json!("login_shell"));
+    let Diagnostic::Connected(Ok(reply)) = diagnosed(&home, &answer, ANSWER) else {
+        panic!("an answer with malformed variables connects");
+    };
+    assert_eq!(
+        reply.variables.unwrap_err(),
+        "the hub's answer to status has malformed variables"
+    );
+}
+
+#[test]
+fn a_wrong_command_id_is_skipped_then_answered() {
+    let (_dir, home) = home();
+    let lines = [
+        "not json\n".to_owned(),
+        accepted("c_other", "9.9.9", 7),
+        accepted_variables("c_status", "1.2.3", 2, login_shell()),
+    ]
+    .concat();
+    let Diagnostic::Connected(Ok(reply)) = diagnosed(&home, &lines, ANSWER) else {
+        panic!("the matching answer connects");
+    };
+    assert_eq!(reply.version, "1.2.3");
+    assert_eq!(reply.clients, 2);
+    assert!(reply.variables.is_ok());
+}
+
+#[test]
+fn a_partially_written_answer_is_read_after_a_wait() {
+    let (_dir, home) = home();
+    let answer = accepted_variables("c_status", "1.2.3", 1, login_shell());
+    let (first, second) = answer.split_at(answer.len() / 2);
+    let first = first.to_owned();
+    let second = second.to_owned();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (_got, _hub) = fake_hub(&home, move |mut stream| {
+        stream.write_all(first.as_bytes()).unwrap();
+        stream.flush().unwrap();
+        go_rx.recv().unwrap_or(());
+        stream.write_all(second.as_bytes()).unwrap();
+        hold(&stream);
+    });
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let (read, waited, result, _id) = diagnose_signalled(&home, &clock, ANSWER);
+    let wait = Deadline::after(DEADLINE);
+    // The first part holds no answer line: the exchange waits at least
+    // once, then the release completes it with no parked advance.
+    wait.recv(&read).unwrap();
+    wait.recv(&waited).unwrap();
+    go_tx.send(()).unwrap();
+    let Diagnostic::Connected(Ok(reply)) = wait.recv(&result).unwrap() else {
+        panic!("the completed answer connects");
+    };
+    assert_eq!(reply.version, "1.2.3");
+    assert!(reply.variables.is_ok());
+}
+
+#[test]
+fn the_exchange_window_holds_then_releases_then_expires() {
+    // A held answer five seconds in does not time out: the exchange waits
+    // past the old connect deadline.
+    let (_dir, home5) = home();
+    let answer = accepted_variables("c_status", "1.2.3", 1, login_shell());
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (_got, _hub) = fake_hub(&home5, move |mut stream| {
+        go_rx.recv().unwrap_or(());
+        stream.write_all(answer.as_bytes()).unwrap();
+        hold(&stream);
+    });
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (read, _waited, result, id) = diagnose_signalled(&home5, &clock, STATUS_WITHIN);
+    let due = origin + STATUS_WITHIN;
+    Deadline::after(DEADLINE).recv(&read).unwrap();
+    clock.advance_when_parked(
+        Some(due),
+        Some(id),
+        Duration::from_secs(5),
+        &Deadline::after(DEADLINE),
+    );
+    assert!(
+        result.try_recv().is_err(),
+        "a held answer five seconds in is still waiting"
+    );
+    // Released before fifteen seconds it succeeds.
+    go_tx.send(()).unwrap();
+    let Diagnostic::Connected(Ok(reply)) = Deadline::after(DEADLINE).recv(&result).unwrap() else {
+        panic!("the released answer connects");
+    };
+    assert_eq!(reply.version, "1.2.3");
+    assert_eq!(clock.now(), origin + Duration::from_secs(5));
+
+    // Exactly fifteen seconds expires.
+    let (_dir_held, home_held) = home();
+    let (_got, _hub) = fake_hub(&home_held, |stream| hold(&stream));
+    let clock: Arc<FakeClock> = FakeClock::new();
+    let origin = clock.origin();
+    let (read, _waited, result, id) = diagnose_signalled(&home_held, &clock, STATUS_WITHIN);
+    let due = origin + STATUS_WITHIN;
+    Deadline::after(DEADLINE).recv(&read).unwrap();
+    clock.advance_when_parked(
+        Some(due),
+        Some(id),
+        STATUS_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    let Diagnostic::Connected(Err(failure)) = Deadline::after(DEADLINE).recv(&result).unwrap()
+    else {
+        panic!("an answer held to the window connects err");
+    };
+    assert_eq!(failure.message, "the hub did not answer status in 15 s");
+    assert_eq!(clock.now(), due);
 }

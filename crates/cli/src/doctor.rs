@@ -21,9 +21,8 @@ pub(crate) use startup::startup;
 mod tests;
 
 /// The hub's state for one report: the injected seam `run` tests through,
-/// and the bounded `probe` production fills. `Running` and `Unknown` are
-/// constructed by the hub exchange in Task 5.
-#[allow(dead_code, reason = "the hub exchange constructs these in Task 5")]
+/// and the bounded `probe` production fills.
+#[derive(Clone)]
 pub(crate) enum Hub {
     /// No hub socket, or a refused one.
     NotRunning,
@@ -156,10 +155,23 @@ fn logs(inputs: &Inputs<'_>, report: &mut impl FnMut(&str) -> Result<(), Failure
     }
 }
 
-/// The hub's state over the bounded diagnostic exchange (Task 5 wires it).
+/// The hub's state over the bounded diagnostic exchange: one connection
+/// within [`STATUS_WITHIN`], starting nothing. A hub that answers the
+/// connect but stays silent, refuses, or garbles its variables is still
+/// running, with its environment unknown.
 fn probe(home: &Path, clock: &dyn contract::clock::Clock) -> Hub {
-    let _ = (home, clock);
-    Hub::NotRunning
+    use crate::hub_status::{Diagnostic, STATUS_WITHIN, diagnose};
+    match diagnose(home, clock, STATUS_WITHIN, false) {
+        Diagnostic::Absent => Hub::NotRunning,
+        Diagnostic::Connected(result) => {
+            let environment = match result {
+                Ok(reply) => reply.variables,
+                Err(failure) => Err(failure.message),
+            };
+            Hub::Running { environment }
+        }
+        Diagnostic::Failed(failure) => Hub::Unknown(failure.message),
+    }
 }
 
 /// The public entry point: resolves home without creating anything and

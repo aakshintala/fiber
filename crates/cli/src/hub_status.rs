@@ -12,8 +12,11 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::events::Variables;
 use contract::shapes::Failure;
 use contract::{ErrorCode, HubLine};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fd::{AsFd, BorrowedFd};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -99,29 +102,21 @@ pub(crate) fn probe(
 /// Asks `home`'s hub for its status, all within `answer_within` on `clock`;
 /// a hub that is absent or refuses is not running. The connect, the
 /// handshake and the answer share one absolute deadline, so an EOF retry
-/// gets only what remains.
+/// gets only what remains. `before_read` runs just before each answer
+/// read, and `before_wait` after each wait's deadline check, just before
+/// [`Clock::wait_until`].
 fn probe_with(
     home: &Path,
     clock: &dyn Clock,
     answer_within: Duration,
     installed: bool,
-    before_hello_read: &mut dyn FnMut(),
     before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
 ) -> Result<Status, Failure> {
     let port = port(home)?;
     let devices = devices(home)?;
-    let deadline = clock.now() + answer_within;
-    let mut absent = false;
-    let connected = {
-        let mut start = || {
-            absent = true;
-            Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"))
-        };
-        doors::hub::connect_until(home, &mut start, clock, deadline, before_hello_read)
-    };
-    let stream = match connected {
-        Ok((stream, _)) => stream,
-        Err(_) if absent => {
+    let reply = match diagnose_with(home, clock, answer_within, before_read, before_wait) {
+        Diagnostic::Absent => {
             return Ok(Status {
                 running: false,
                 version: None,
@@ -131,68 +126,100 @@ fn probe_with(
                 installed,
             });
         }
-        Err(e) => return Err(failed(ErrorCode::IoFailed, format!("the hub: {e}"))),
+        Diagnostic::Connected(reply) => reply?,
+        Diagnostic::Failed(failure) => return Err(failure),
     };
-    let (version, clients) = ask(&stream, deadline, answer_within, clock, before_read)?;
     Ok(Status {
         running: true,
-        version: Some(version),
+        version: Some(reply.version),
         port,
         // The hub counts the asker too.
-        clients: clients.saturating_sub(1),
+        clients: reply.clients.saturating_sub(1),
         devices,
         installed,
     })
+}
+
+/// What one exchange with `home`'s hub found, without starting one.
+/// `port`/`devices` validation stays with the status probe, not here: an
+/// unreadable device list must not make a live hub look absent.
+pub(crate) enum Diagnostic {
+    /// No socket, or nobody listens: no hub runs.
+    Absent,
+    /// A connection was accepted: the status exchange's result, whose
+    /// variables may still be missing or malformed.
+    Connected(Result<Reply, Failure>),
+    /// Anything before a connection: the error.
+    Failed(Failure),
+}
+
+/// The hub's answer to `status`: its version, its client count including
+/// the asker, and its environment without values. A rejection or a lost
+/// connection is the exchange's `Err`, never this struct.
+pub(crate) struct Reply {
+    pub(crate) version: String,
+    pub(crate) clients: u64,
+    pub(crate) variables: Result<Variables, String>,
+}
+
+/// Whether `home`'s hub answers `status`, over one connection within
+/// `answer_within` on `clock`, starting nothing: an absent socket is
+/// [`Diagnostic::Absent`]. The connect, the handshake and the answer
+/// share one absolute deadline, so an EOF retry gets only what remains.
+/// `installed` travels with the status probe, not the exchange: diagnose
+/// takes it only so the probe and the doctor call one shape.
+pub(crate) fn diagnose(
+    home: &Path,
+    clock: &dyn Clock,
+    answer_within: Duration,
+    installed: bool,
+) -> Diagnostic {
+    let _ = installed;
+    diagnose_with(home, clock, answer_within, &mut || {}, &mut || {})
+}
+
+/// [`diagnose`] with hooks for tests: `before_read` runs just before
+/// each answer read, and `before_wait` after each wait's deadline check,
+/// just before [`Clock::wait_until`].
+fn diagnose_with(
+    home: &Path,
+    clock: &dyn Clock,
+    answer_within: Duration,
+    before_read: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Diagnostic {
+    let deadline = clock.now() + answer_within;
+    let connected = doors::hub::probe_until(home, clock, deadline);
+    let stream = match connected {
+        doors::hub::Probe::Absent => return Diagnostic::Absent,
+        doors::hub::Probe::Failed(error) => {
+            return Diagnostic::Failed(failed(ErrorCode::IoFailed, format!("the hub: {error}")));
+        }
+        doors::hub::Probe::Connected(Err(error)) => {
+            return Diagnostic::Connected(Err(failed(
+                ErrorCode::IoFailed,
+                format!("the hub: {error}"),
+            )));
+        }
+        doors::hub::Probe::Connected(Ok((stream, _))) => stream,
+    };
+    match ask(
+        &stream,
+        deadline,
+        answer_within,
+        clock,
+        before_read,
+        before_wait,
+    ) {
+        Ok(reply) => Diagnostic::Connected(Ok(reply)),
+        Err(failure) => Diagnostic::Connected(Err(failure)),
+    }
 }
 
 /// Whether a devices error means there are no devices: any other error
 /// fails the read.
 fn is_missing(kind: io::ErrorKind) -> bool {
     kind == io::ErrorKind::NotFound
-}
-
-/// Whether a status answer read error is the deadline passing: any other
-/// read error fails as the hub lost.
-fn is_answer_timeout(kind: io::ErrorKind) -> bool {
-    matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
-}
-
-/// Whether a read-timeout error is the closed-peer refusal to ignore:
-/// macOS refuses the option once the peer has closed, while its buffered
-/// bytes stay readable and a read of the closed socket does not block.
-fn is_closed_peer(kind: io::ErrorKind) -> bool {
-    kind == io::ErrorKind::InvalidInput
-}
-
-/// What one status answer read means.
-enum AnswerRead {
-    /// Bytes towards the answer.
-    Bytes(usize),
-    /// The hub closed before answering.
-    Closed,
-    /// The answer deadline passed.
-    Late,
-    /// Any other read failure.
-    Lost(io::Error),
-}
-
-/// Classifies one status answer read, so tests inject each outcome.
-fn classify_answer(read: io::Result<usize>) -> AnswerRead {
-    match read {
-        Ok(0) => AnswerRead::Closed,
-        Ok(read) => AnswerRead::Bytes(read),
-        Err(e) if is_answer_timeout(e.kind()) => AnswerRead::Late,
-        Err(e) => AnswerRead::Lost(e),
-    }
-}
-
-/// Folds a `set_read_timeout` result, ignoring the closed-peer refusal,
-/// so tests inject each outcome.
-fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
-    match set {
-        Err(error) if is_closed_peer(error.kind()) => Ok(()),
-        other => other,
-    }
 }
 
 /// The global `hub.port`; a project's value is never read.
@@ -242,16 +269,20 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
 }
 
 /// Sends `status` and reads lines until its answer, failing once
-/// `deadline` passes on `clock`: before each read the stream's timeout is
-/// the time left, so unrelated lines, trickled bytes and silence all end
-/// there.
+/// `deadline` passes on `clock`: the write and every read are
+/// non-blocking under the same deadline, so unrelated lines, trickled
+/// bytes and silence all end there. `before_read` runs just before each
+/// answer read; `before_wait` runs after each wait's deadline check, just
+/// before [`Clock::wait_until`]. The stream comes back blocking with no
+/// read timeout, as it arrived.
 fn ask(
     mut stream: &UnixStream,
     deadline: Instant,
     within: Duration,
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
-) -> Result<(String, u64), Failure> {
+    before_wait: &mut dyn FnMut(),
+) -> Result<Reply, Failure> {
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
     let late = || {
         failed(
@@ -262,41 +293,104 @@ fn ask(
             ),
         )
     };
+    stream.set_nonblocking(true).map_err(lost)?;
     let request = format!("{{\"id\":\"{STATUS_ID}\",\"command\":\"status\"}}\n");
-    stream.write_all(request.as_bytes()).map_err(lost)?;
-    let mut pending = Vec::new();
-    let mut chunk = [0u8; 1024];
-    loop {
-        let left = deadline
-            .checked_duration_since(clock.now())
-            .filter(|left| !left.is_zero())
-            .ok_or_else(late)?;
-        set_read_timeout(stream, Some(left)).map_err(lost)?;
-        before_read();
-        let read = match classify_answer(stream.read(&mut chunk)) {
-            AnswerRead::Bytes(read) => read,
-            AnswerRead::Closed => {
+    let mut sent = 0;
+    while sent < request.len() {
+        match stream.write(request.as_bytes().get(sent..).unwrap_or_default()) {
+            Ok(0) => {
                 return Err(failed(
                     ErrorCode::IoFailed,
                     "the hub closed the connection before answering status",
                 ));
             }
-            AnswerRead::Late => return Err(late()),
-            AnswerRead::Lost(e) => return Err(lost(e)),
-        };
-        pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            Ok(wrote) => sent += wrote,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if clock.now() >= deadline {
+                    return Err(late());
+                }
+                before_wait();
+                wait_clock(clock, deadline, stream.as_fd(), PollFlags::OUT);
+            }
+            Err(error) => return Err(lost(error)),
+        }
+    }
+    let mut pending = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        if clock.now() >= deadline {
+            return Err(late());
+        }
+        before_read();
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                return Err(failed(
+                    ErrorCode::IoFailed,
+                    "the hub closed the connection before answering status",
+                ));
+            }
+            Ok(read) => {
+                pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if clock.now() >= deadline {
+                    return Err(late());
+                }
+                before_wait();
+                wait_clock(clock, deadline, stream.as_fd(), PollFlags::IN);
+            }
+            Err(error) => return Err(lost(error)),
+        }
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
-            if let Some(answer) = answer(&line)? {
-                return Ok(answer);
+            if let Some(reply) = answer(&line)? {
+                ignore_closed_peer(stream.set_nonblocking(false)).map_err(lost)?;
+                return Ok(reply);
             }
         }
     }
 }
 
-/// The version and client count from the hub's answer to `status`; `None`
-/// for any other line.
-fn answer(line: &[u8]) -> Result<Option<(String, u64)>, Failure> {
+/// Parks `clock` until `until`, waiting on `fd` for real while parked:
+/// the full bound on a real clock, a short slice on a fake one, which the
+/// caller re-checks against the fake deadline after.
+fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFlags) {
+    clock.wait_until(Some(until), &mut |bound| {
+        let wait = bound.or(Some(Duration::from_millis(10)));
+        let spec = wait.map(|wait| Timespec {
+            tv_sec: wait.as_secs().min(i64::MAX as u64).cast_signed(),
+            tv_nsec: wait.subsec_nanos() as _,
+        });
+        let mut fds = [PollFd::new(&fd, events)];
+        // The park itself is the wait: a signal delivery or a woken fd
+        // both end it, so the count is discarded.
+        #[allow(
+            clippy::let_underscore_must_use,
+            reason = "a woken fd and an expired wait both end the park: the count is unused"
+        )]
+        let _ = poll(&mut fds, spec.as_ref());
+    });
+}
+
+/// Whether a status exchange error is the closed-peer refusal to ignore:
+/// macOS refuses the option once the peer has closed, while its buffered
+/// bytes stay readable and a read of the closed socket does not block.
+fn is_closed_peer(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::InvalidInput
+}
+
+/// Folds a `set_nonblocking` result, ignoring the closed-peer refusal,
+/// so tests inject each outcome.
+fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(error) if is_closed_peer(error.kind()) => Ok(()),
+        other => other,
+    }
+}
+
+/// The version, client count and environment from the hub's answer to
+/// `status`; `None` for any other line.
+fn answer(line: &[u8]) -> Result<Option<Reply>, Failure> {
     let Ok(line) = serde_json::from_slice::<HubLine>(line) else {
         return Ok(None);
     };
@@ -313,8 +407,17 @@ fn answer(line: &[u8]) -> Result<Option<(String, u64)>, Failure> {
             let clients = result
                 .and_then(|result| result.get("clients"))
                 .and_then(Value::as_u64);
+            let variables = match result.and_then(|result| result.get("variables")) {
+                None => Err("the hub's answer to status has no variables".to_owned()),
+                Some(variables) => serde_json::from_value::<Variables>(variables.clone())
+                    .map_err(|_| "the hub's answer to status has malformed variables".to_owned()),
+            };
             match (version, clients) {
-                (Some(version), Some(clients)) => Ok(Some((version.to_owned(), clients))),
+                (Some(version), Some(clients)) => Ok(Some(Reply {
+                    version: version.to_owned(),
+                    clients,
+                    variables,
+                })),
                 (Some(_) | None, Some(_) | None) => Err(failed(
                     ErrorCode::IoFailed,
                     "the hub's answer to status has no fiber_version or clients",
@@ -330,12 +433,6 @@ fn answer(line: &[u8]) -> Result<Option<(String, u64)>, Failure> {
         }
         _ => Ok(None),
     }
-}
-
-/// Sets `stream`'s read timeout, ignoring the closed-peer refusal (see
-/// [`is_closed_peer`]).
-fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
-    ignore_closed_peer(stream.set_read_timeout(timeout))
 }
 
 /// One `key: value` line per field.

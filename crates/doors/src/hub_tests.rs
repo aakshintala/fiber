@@ -230,3 +230,200 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
         "no read after the deadline passed"
     );
 }
+
+#[test]
+fn only_eagain_is_busy_and_only_einprogress_is_in_flight() {
+    assert!(is_busy(&rustix::io::Errno::AGAIN));
+    assert!(is_in_progress(&rustix::io::Errno::INPROGRESS));
+    assert!(!is_busy(&rustix::io::Errno::INPROGRESS));
+    assert!(!is_in_progress(&rustix::io::Errno::AGAIN));
+    for errno in [
+        rustix::io::Errno::NOENT,
+        rustix::io::Errno::CONNREFUSED,
+        rustix::io::Errno::TIMEDOUT,
+    ] {
+        assert!(!is_busy(&errno), "{errno:?}");
+        assert!(!is_in_progress(&errno), "{errno:?}");
+    }
+}
+
+/// A home with a `run/` directory and no hub yet.
+fn unit_home() -> support::Temp {
+    let temp = support::Temp::new();
+    std::fs::create_dir_all(temp.0.join("run")).unwrap();
+    temp
+}
+
+/// Runs the private probe on a worker thread, handing back its answer and
+/// the thread's id, so the test steps the fake clock naming that thread.
+fn spawn_probe(
+    home: std::path::PathBuf,
+    clock: Arc<fakes::clock::FakeClock>,
+    deadline: std::time::Instant,
+    mut accepted: impl FnMut() + Send + 'static,
+    mut before_wait: impl FnMut() + Send + 'static,
+) -> (
+    mpsc::Receiver<Probe>,
+    std::thread::ThreadId,
+    thread::JoinHandle<()>,
+) {
+    let (id_tx, id_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name("hub-test-probe".to_owned())
+        .spawn(move || {
+            id_tx.send(thread::current().id()).unwrap_or(());
+            done_tx
+                .send(probe_with(
+                    &home,
+                    &*clock,
+                    deadline,
+                    &mut accepted,
+                    &mut before_wait,
+                ))
+                .unwrap_or(());
+        })
+        .unwrap();
+    let id = Deadline::after(DEADLINE)
+        .recv(&id_rx)
+        .expect("the probe worker reports its thread");
+    (done_rx, id, worker)
+}
+
+#[test]
+fn a_probe_with_no_socket_reports_absence() {
+    let temp = unit_home();
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    assert!(matches!(
+        probe_with(&temp.0, &*clock, deadline, &mut || {}, &mut || {}),
+        Probe::Absent
+    ));
+}
+
+#[test]
+fn a_silent_probe_waits_each_park_and_connects_err() {
+    use std::os::unix::net::UnixListener;
+    let temp = unit_home();
+    let socket = temp.0.join("run").join("hub");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (silent, _) = listener.accept().unwrap();
+        release_rx.recv().unwrap_or(());
+        drop(silent);
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let deadline = origin + Duration::from_millis(50);
+    let waits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (done_rx, id, worker) = spawn_probe(temp.0.clone(), Arc::clone(&clock), deadline, || {}, {
+        let waits = Arc::clone(&waits);
+        move || {
+            waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(id),
+        Duration::from_millis(50),
+        &Deadline::after(DEADLINE),
+    );
+    match Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the silent probe answers")
+    {
+        Probe::Connected(Err(error)) => {
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "the hub at {} accepted but did not say hub_hello in 0.05 s",
+                    socket.display()
+                )
+            );
+        }
+        Probe::Connected(Ok(_)) => panic!("a silent hub has no hello"),
+        Probe::Absent => panic!("an accepted hub is not absent"),
+        Probe::Failed(error) => panic!("an accepted hub is not failed: {error}"),
+    }
+    assert_eq!(clock.now(), deadline);
+    assert!(
+        waits.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "the silent wait parks at least once"
+    );
+    release_tx.send(()).unwrap_or(());
+    worker.join().unwrap();
+}
+
+#[test]
+fn acceptance_runs_at_connect_time_before_the_hello_check() {
+    use std::os::unix::net::UnixListener;
+    let temp = unit_home();
+    let listener = UnixListener::bind(temp.0.join("run").join("hub")).unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(&hello_line()).unwrap();
+        stream.write_all(b"\n").unwrap();
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (done_rx, _, worker) = spawn_probe(
+        temp.0.clone(),
+        Arc::clone(&clock),
+        deadline,
+        {
+            let order = Arc::clone(&order);
+            move || order.lock().unwrap().push("accepted")
+        },
+        || {},
+    );
+    match Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the hello probe answers")
+    {
+        Probe::Connected(Ok((_, hello))) => assert_eq!(hello.kind, "hub_hello"),
+        Probe::Connected(Err(error)) => panic!("a hello connects: {error}"),
+        Probe::Absent => panic!("a hello is not absent"),
+        Probe::Failed(error) => panic!("a hello connects: {error}"),
+    }
+    assert_eq!(order.lock().unwrap().as_slice(), ["accepted"]);
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_wrong_version_probe_connects_err_naming_both() {
+    use std::os::unix::net::UnixListener;
+    let temp = unit_home();
+    let listener = UnixListener::bind(temp.0.join("run").join("hub")).unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let line = format!(
+            "{{\"kind\":\"hub_hello\",\"ts\":1,\"schema_version\":{},\"payload\":{{}}}}",
+            contract::SCHEMA_VERSION + 1
+        );
+        stream.write_all(line.as_bytes()).unwrap();
+        stream.write_all(b"\n").unwrap();
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    let (done_rx, _, worker) =
+        spawn_probe(temp.0.clone(), Arc::clone(&clock), deadline, || {}, || {});
+    match Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the wrong-version probe answers")
+    {
+        Probe::Connected(Err(error)) => {
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert!(
+                error.to_string().contains("schema version"),
+                "the refusal names both versions: {error}"
+            );
+        }
+        Probe::Connected(Ok(_)) => panic!("another schema version is refused"),
+        Probe::Absent => panic!("an accepted hub is not absent"),
+        Probe::Failed(error) => panic!("an accepted hub is not failed: {error}"),
+    }
+    worker.join().unwrap();
+}

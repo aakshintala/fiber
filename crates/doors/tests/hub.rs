@@ -47,6 +47,42 @@ impl Entry {
     }
 }
 
+/// Runs `entry` on a worker thread, handing back its result and the
+/// thread's id, so the test steps the fake clock through
+/// `advance_when_parked` naming that thread and its expected park
+/// instant. Calling code that blocks is a wait, so the test receives the
+/// result with a wall-clock deadline.
+fn spawn(
+    entry: Entry,
+    home: PathBuf,
+    start: impl FnMut() -> io::Result<()> + Send + 'static,
+    clock: Arc<FakeClock>,
+) -> (mpsc::Receiver<io::Result<Hub>>, thread::ThreadId) {
+    let name = entry.name();
+    let (id_tx, id_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-connect".to_owned())
+        .spawn(move || {
+            id_tx.send(thread::current().id()).unwrap_or(());
+            let mut start = start;
+            let hub = match entry {
+                Entry::Connect => hub::connect(&home, &mut start, &*clock),
+                Entry::Until(total) => {
+                    let deadline = clock.now() + total;
+                    hub::connect_until(&home, &mut start, &*clock, deadline, &mut || {})
+                }
+                Entry::Within(within) => hub::connect_within(&home, &mut start, &*clock, within),
+            };
+            done_tx.send(hub).unwrap_or(());
+        })
+        .unwrap();
+    let id = Deadline::after(DEADLINE)
+        .recv(&id_rx)
+        .unwrap_or_else(|_| panic!("{name} worker reports its thread before {DEADLINE:?}"));
+    (done_rx, id)
+}
+
 /// The entries a scenario that needs no timeout reaches.
 fn live() -> [Entry; 3] {
     [
@@ -62,25 +98,11 @@ fn live() -> [Entry; 3] {
 fn run(
     entry: Entry,
     home: PathBuf,
-    mut start: impl FnMut() -> io::Result<()> + Send + 'static,
+    start: impl FnMut() -> io::Result<()> + Send + 'static,
     clock: Arc<FakeClock>,
 ) -> io::Result<Hub> {
     let name = entry.name();
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-connect".to_owned())
-        .spawn(move || {
-            let hub = match entry {
-                Entry::Connect => hub::connect(&home, &mut start, &*clock),
-                Entry::Until(total) => {
-                    let deadline = clock.now() + total;
-                    hub::connect_until(&home, &mut start, &*clock, deadline, &mut || {})
-                }
-                Entry::Within(within) => hub::connect_within(&home, &mut start, &*clock, within),
-            };
-            done_tx.send(hub).unwrap_or(());
-        })
-        .unwrap();
+    let (done_rx, _) = spawn(entry, home, start, clock);
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .unwrap_or_else(|_| panic!("{name} answers before {DEADLINE:?}"))
@@ -677,57 +699,53 @@ fn a_cr_terminated_hello_is_read() {
 
 #[test]
 fn a_silent_hub_times_out_naming_its_hello_wait() {
-    let temp = Temp::new();
-    let home = run_home(&temp);
-    let socket = home.join("run").join("hub");
-    let listener = UnixListener::bind(&socket).unwrap();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let (silent, _) = listener.accept().unwrap();
-        // Held open, silent, until the test is done.
-        release_rx.recv().unwrap_or(());
-        drop(silent);
-    });
-    let error = run(
-        Entry::Within(Duration::from_millis(10)),
-        home,
-        never_start(),
-        FakeClock::new(),
-    )
-    .expect_err("a silent hub times out");
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert_eq!(
-        error.to_string(),
-        format!(
-            "the hub at {} accepted but did not say hub_hello in 0.01 s",
-            socket.display()
-        )
-    );
-    release_tx.send(()).unwrap_or(());
-
-    let temp = Temp::new();
-    let home = run_home(&temp);
-    let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    thread::spawn(move || {
-        let (silent, _) = listener.accept().unwrap();
-        // Held open, silent, until the test is done.
-        release_rx.recv().unwrap_or(());
-        drop(silent);
-    });
-    let error = run(
-        Entry::Until(Duration::from_millis(50)),
-        home,
-        never_start(),
-        FakeClock::new(),
-    )
-    .expect_err("a silent hub times out");
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert!(
-        error.to_string().contains("0.05 s"),
-        "the message names the shared deadline: {error}"
-    );
-    release_tx.send(()).unwrap_or(());
+    for (entry, within, named) in [
+        (
+            Entry::Within(Duration::from_millis(10)),
+            Duration::from_millis(10),
+            "0.01 s",
+        ),
+        (
+            Entry::Until(Duration::from_millis(50)),
+            Duration::from_millis(50),
+            "0.05 s",
+        ),
+    ] {
+        let temp = Temp::new();
+        let home = run_home(&temp);
+        let socket = home.join("run").join("hub");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            let (silent, _) = listener.accept().unwrap();
+            // Held open, silent, until the test is done.
+            release_rx.recv().unwrap_or(());
+            drop(silent);
+        });
+        let clock = Arc::new(FakeClock::new());
+        let origin = clock.origin();
+        let (done_rx, id) = spawn(entry, home, never_start(), Arc::clone(&clock));
+        // The silent peer parks the hello wait at its deadline; one
+        // parked advance to exactly that instant expires it.
+        let due = origin + within;
+        clock.advance_when_parked(Some(due), Some(id), within, &Deadline::after(DEADLINE));
+        let error = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .unwrap_or_else(|_| panic!("{} answers before {DEADLINE:?}", entry.name()))
+            .expect_err("a silent hub times out");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{}", entry.name());
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the hub at {} accepted but did not say hub_hello in {named}",
+                socket.display()
+            ),
+            "{}",
+            entry.name()
+        );
+        assert_eq!(clock.now(), due, "{}", entry.name());
+        release_tx.send(()).unwrap_or(());
+    }
 }
 
 #[test]
@@ -779,5 +797,362 @@ fn the_connected_stream_has_no_read_timeout() {
         assert_eq!(hello.kind, "hub_hello", "{}", entry.name());
         assert_eq!(stream.read_timeout().unwrap(), None, "{}", entry.name());
         release_tx.send(()).unwrap_or(());
+    }
+}
+
+/// A listener with no backlog the test saturates with held connects, so a
+/// further connect retries within the bind wait on Linux (`EAGAIN`) or
+/// waits for completion elsewhere: either way it never starts a hub.
+fn saturated_backlog(socket: &std::path::Path) -> (UnixListener, Vec<UnixStream>) {
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketType};
+    let fd = rustix::net::socket(AddressFamily::UNIX, SocketType::STREAM, None).expect("a socket");
+    rustix::net::bind(&fd, &SocketAddrUnix::new(socket).expect("a short path"))
+        .expect("the test binds run/hub");
+    rustix::net::listen(&fd, 0).expect("no backlog");
+    let mut held = Vec::new();
+    for _ in 0..32 {
+        held.push(UnixStream::connect(socket).expect("a queued connect"));
+    }
+    let listener: UnixListener = fd.into();
+    listener.set_nonblocking(true).expect("a polled stand-in");
+    (listener, held)
+}
+
+#[test]
+fn a_full_backlog_retries_the_connect_without_starting_until_release() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let socket = home.join("run").join("hub");
+    let (listener, held) = saturated_backlog(&socket);
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _guard = StopGuard(Arc::clone(&stop));
+    let thread_stop = Arc::clone(&stop);
+    thread::spawn(move || {
+        // Held: nothing accepts until the test releases.
+        release_rx.recv().unwrap_or(());
+        // Then every queued connection gets its hello until stopped.
+        while !thread_stop.load(Ordering::SeqCst) {
+            let Some(mut stream) =
+                accept_within(&listener, Deadline::after(DEADLINE), &thread_stop)
+            else {
+                break;
+            };
+            stream.write_all(&hello_line()).unwrap_or(());
+            stream.write_all(b"\n").unwrap_or(());
+        }
+    });
+    let clock = Arc::new(FakeClock::new());
+    let origin = clock.origin();
+    let (done_rx, id) = spawn(
+        Entry::Until(DEADLINE),
+        home,
+        never_start(),
+        Arc::clone(&clock),
+    );
+    // Five parked steps with nothing accepted: still trying, never
+    // starting, and the bind wait's instant never moves.
+    let bind = origin + DEADLINE;
+    for _ in 0..5 {
+        assert!(
+            done_rx.try_recv().is_err(),
+            "no answer while the backlog holds"
+        );
+        clock.advance_when_parked(
+            Some(bind),
+            Some(id),
+            Duration::from_secs(1),
+            &Deadline::after(DEADLINE),
+        );
+    }
+    release_tx.send(()).unwrap_or(());
+    // The release is the completing event: the capped real poll delivers
+    // the hello with no further advance.
+    let (stream, hello) = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .unwrap_or_else(|_| panic!("the released backlog answers before {DEADLINE:?}"))
+        .expect("the released backlog connects");
+    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(stream.read_timeout().unwrap(), None);
+    drop(held);
+}
+
+#[test]
+fn a_backlog_that_never_releases_fails_past_its_bind_deadline() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let socket = home.join("run").join("hub");
+    let (_listener, held) = saturated_backlog(&socket);
+    let clock = Arc::new(FakeClock::new());
+    let origin = clock.origin();
+    let (done_rx, id) = spawn(
+        Entry::Until(DEADLINE),
+        home,
+        never_start(),
+        Arc::clone(&clock),
+    );
+    let bind = origin + DEADLINE;
+    for _ in 0..10 {
+        clock.advance_when_parked(
+            Some(bind),
+            Some(id),
+            Duration::from_secs(1),
+            &Deadline::after(DEADLINE),
+        );
+    }
+    let error = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .unwrap_or_else(|_| panic!("the held backlog answers before {DEADLINE:?}"))
+        .expect_err("a backlog that never releases times out");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    // Where the platform refuses the saturated connect the bind wait
+    // expires; where it queues, the unanswered hello wait does. Either
+    // way the socket and its ten seconds are named.
+    assert!(
+        error.to_string().contains(&socket.display().to_string()),
+        "the error names the socket: {error}"
+    );
+    assert!(
+        error.to_string().contains("in 10 s"),
+        "the error names the bind wait: {error}"
+    );
+    assert_eq!(clock.now(), bind);
+    drop(held);
+}
+
+/// Runs the probe on a worker thread, handing back its answer and the
+/// thread's id, so the test steps the fake clock naming that thread.
+fn spawn_probe(
+    home: PathBuf,
+    clock: Arc<FakeClock>,
+    deadline: std::time::Instant,
+) -> (mpsc::Receiver<hub::Probe>, thread::ThreadId) {
+    let (id_tx, id_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-probe".to_owned())
+        .spawn(move || {
+            id_tx.send(thread::current().id()).unwrap_or(());
+            done_tx
+                .send(hub::probe_until(&home, &*clock, deadline))
+                .unwrap_or(());
+        })
+        .unwrap();
+    let id = Deadline::after(DEADLINE)
+        .recv(&id_rx)
+        .unwrap_or_else(|_| panic!("the probe worker reports its thread before {DEADLINE:?}"));
+    (done_rx, id)
+}
+
+#[test]
+fn a_probe_with_no_socket_is_absent() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let clock = FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    assert!(matches!(
+        hub::probe_until(&home, &*clock, deadline),
+        hub::Probe::Absent
+    ));
+}
+
+#[test]
+fn a_probe_with_a_stale_socket_is_absent() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let socket = home.join("run").join("hub");
+    // Bound, then closed without accepting: the file stays, nobody
+    // listens.
+    drop(UnixListener::bind(&socket).unwrap());
+    let clock = FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    assert!(matches!(
+        hub::probe_until(&home, &*clock, deadline),
+        hub::Probe::Absent
+    ));
+}
+
+#[test]
+fn a_probe_with_a_regular_file_at_the_socket_fails() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let socket = home.join("run").join("hub");
+    fs::write(&socket, b"not a socket").unwrap();
+    let clock = FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    assert!(matches!(
+        hub::probe_until(&home, &*clock, deadline),
+        hub::Probe::Failed(_)
+    ));
+}
+
+#[test]
+fn a_probe_with_a_hello_connects() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+    thread::spawn(move || serve_once(listener, &hello_line()));
+    let clock = FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    // Served at once: the capped real poll delivers the hello with no
+    // parked advance.
+    match hub::probe_until(&home, &*clock, deadline) {
+        hub::Probe::Connected(Ok((stream, hello))) => {
+            assert_eq!(hello.kind, "hub_hello");
+            assert_eq!(stream.read_timeout().unwrap(), None);
+            let flags = rustix::fs::fcntl_getfl(&stream).unwrap();
+            assert!(
+                !flags.contains(rustix::fs::OFlags::NONBLOCK),
+                "the returned stream blocks again: {flags:?}"
+            );
+        }
+        hub::Probe::Connected(Err(error)) => panic!("a hello connects: {error}"),
+        hub::Probe::Absent => panic!("a hello is not absent"),
+        hub::Probe::Failed(error) => panic!("a hello connects: {error}"),
+    }
+}
+
+#[test]
+fn a_probe_with_a_silent_hub_connects_err() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (silent, _) = listener.accept().unwrap();
+        release_rx.recv().unwrap_or(());
+        drop(silent);
+    });
+    let clock = Arc::new(FakeClock::new());
+    let origin = clock.origin();
+    let deadline = origin + Duration::from_millis(50);
+    let (done_rx, id) = spawn_probe(home, Arc::clone(&clock), deadline);
+    clock.advance_when_parked(
+        Some(deadline),
+        Some(id),
+        Duration::from_millis(50),
+        &Deadline::after(DEADLINE),
+    );
+    match Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .unwrap_or_else(|_| panic!("the silent hub answers before {DEADLINE:?}"))
+    {
+        hub::Probe::Connected(Err(error)) => {
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(
+                error.to_string().contains("did not say hub_hello"),
+                "the handshake error names the hello wait: {error}"
+            );
+        }
+        hub::Probe::Connected(Ok(_)) => panic!("a silent hub has no hello"),
+        hub::Probe::Absent => panic!("an accepted hub is not absent"),
+        hub::Probe::Failed(error) => panic!("an accepted hub is not failed: {error}"),
+    }
+    assert_eq!(clock.now(), deadline);
+    release_tx.send(()).unwrap_or(());
+}
+
+#[test]
+fn a_probe_that_meets_a_dropping_hub_is_failed() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _guard = StopGuard(Arc::clone(&stop));
+    let count = Arc::new(AtomicUsize::new(0));
+    let (done_tx, done_rx) = mpsc::channel();
+    let thread_stop = Arc::clone(&stop);
+    let thread_count = Arc::clone(&count);
+    thread::spawn(move || {
+        dropping_hub(
+            listener,
+            thread_count,
+            done_tx,
+            &thread_stop,
+            Deadline::after(DEADLINE),
+        )
+    });
+    let clock = FakeClock::new();
+    let deadline = clock.now() + DEADLINE;
+    // Every handshake ends at once, so the race loop needs no parked
+    // advance: the fake sleeps move its own clock.
+    match hub::probe_until(&home, &*clock, deadline) {
+        hub::Probe::Failed(error) => {
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+            assert_eq!(
+                error.to_string(),
+                "the hub closed the connection before `hub_hello`"
+            );
+        }
+        hub::Probe::Connected(_) => panic!("a dropping hub never answers"),
+        hub::Probe::Absent => panic!("a dropping hub is not absent"),
+    }
+    stop.store(true, Ordering::SeqCst);
+    let dropped = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the dropping hub reports its count");
+    assert!(dropped > 0, "the probe retried past at least one race");
+}
+
+#[test]
+fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
+    for entry in [Entry::Within(DEADLINE), Entry::Until(DEADLINE)] {
+        let temp = Temp::new();
+        let home = run_home(&temp);
+        let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+        let (accepted_tx, accepted_rx) = mpsc::channel::<()>();
+        let (byte_tx, byte_rx) = mpsc::channel::<u8>();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap_or(());
+            // One byte per test step, no newline: the line never completes.
+            for byte in byte_rx {
+                stream.write_all(&[byte]).unwrap_or(());
+                stream.flush().unwrap_or(());
+            }
+        });
+        let clock = Arc::new(FakeClock::new());
+        let origin = clock.origin();
+        let (done_rx, id) = spawn(entry, home, never_start(), Arc::clone(&clock));
+        Deadline::after(DEADLINE)
+            .recv(&accepted_rx)
+            .expect("the hub accepts");
+        let due = origin + DEADLINE;
+        let line = hello_line();
+        let mut mark = None;
+        for (step, byte) in line.iter().take(10).enumerate() {
+            byte_tx.send(*byte).unwrap();
+            // Short of the deadline: the byte arrives, the wait stays at
+            // the original instant.
+            let advanced = clock.advance_when_parked(
+                Some(due),
+                Some(id),
+                Duration::from_millis(10),
+                &Deadline::after(DEADLINE),
+            );
+            if step == 0 {
+                mark = Some(advanced);
+            }
+        }
+        assert!(
+            done_rx.try_recv().is_err(),
+            "{}: ten bytes are not a hello",
+            entry.name()
+        );
+        assert!(
+            clock.await_parked_since(mark.as_ref().expect("a first advance"), Some(due), DEADLINE),
+            "{}: the wait still parks at the original deadline",
+            entry.name()
+        );
+        // Exactly the deadline: the trickle never renewed it.
+        let left = due.saturating_duration_since(clock.now());
+        clock.advance_when_parked(Some(due), Some(id), left, &Deadline::after(DEADLINE));
+        let error = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .unwrap_or_else(|_| panic!("{} answers before {DEADLINE:?}", entry.name()))
+            .expect_err("a trickled hub times out");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{}", entry.name());
+        assert_eq!(clock.now(), due, "{}", entry.name());
     }
 }
