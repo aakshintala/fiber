@@ -537,17 +537,10 @@ impl SessionExtensions {
             .map(|(name, slug, opening)| {
                 let mut paths = Vec::new();
                 for relative in &opening.machine {
-                    paths.push(self.home.join("data").join(slug).join(relative));
+                    paths.push(config::extension_data_dir(&self.home, slug).join(relative));
                 }
                 for relative in &opening.project {
-                    paths.push(
-                        self.home
-                            .join("projects")
-                            .join(project.as_str())
-                            .join("data")
-                            .join(slug)
-                            .join(relative),
-                    );
+                    paths.push(config::project_data_dir(&self.home, project, slug).join(relative));
                 }
                 (name.clone(), paths, opening.budget_bytes)
             })
