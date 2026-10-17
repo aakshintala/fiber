@@ -24,8 +24,8 @@ use contract::model::{
     Bound, HostMessage, HostModel as _, HostModelReply, HostModelRequest, HostRole,
 };
 use contract::provider::{
-    CallError, CallUsage, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction,
+    CallError, CallUsage, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction,
 };
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, SessionId};
@@ -55,15 +55,16 @@ fn test_host(
     budget: Option<f64>,
     retry: Retry,
 ) -> ModelHost {
+    let model = Model {
+        reference: "scripted/s.json".to_owned(),
+        cost: None,
+        subscription: false,
+    };
     ModelHost::new(
         provider,
-        Model {
-            reference: "scripted/s.json".to_owned(),
-            cost: None,
-            subscription: false,
-        },
+        &model,
         budget,
-        retry,
+        &retry,
         dir,
         SessionId(id.to_owned()),
         clock,
@@ -121,9 +122,8 @@ fn bound(
     }
 }
 
-/// A fresh line sink and the lines it collected.
-
-/// One `usage_recorded` line for `generation` with `cost` dollars.
+/// A fresh line sink and the lines it collected: one `usage_recorded`
+/// line for `generation` with `cost` dollars.
 fn usage_line(generation: &str, cost: f64) -> UsageRecorded {
     UsageRecorded {
         generation_id: GenerationId(generation.to_owned()),
@@ -153,11 +153,19 @@ fn seed(
     clock: &Arc<FakeClock>,
     costs: &[(&str, f64)],
 ) -> PathBuf {
-    let log = log::Log::create(sessions, SessionId(id.to_owned()), Arc::clone(clock) as Arc<dyn Clock>)
-        .unwrap();
+    let log = log::Log::create(
+        sessions,
+        SessionId(id.to_owned()),
+        Arc::clone(clock) as Arc<dyn Clock>,
+    )
+    .unwrap();
     for (generation, cost) in costs {
-        log.append(&Event::UsageRecorded(usage_line(generation, *cost)), None, None)
-            .unwrap();
+        log.append(
+            &Event::UsageRecorded(usage_line(generation, *cost)),
+            None,
+            None,
+        )
+        .unwrap();
     }
     sessions.join(id)
 }
@@ -252,8 +260,11 @@ fn key_names_the_session_and_the_extension() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let reply = ok(host
-        .call("reviewer", request("scripted/s.json"), bound(clock, None, held)));
+    let reply = ok(host.call(
+        "reviewer",
+        request("scripted/s.json"),
+        bound(clock, None, held),
+    ));
     assert_eq!(reply.text, "hi");
     let sent = provider.requests();
     assert_eq!(sent.len(), 1);
@@ -325,7 +336,12 @@ fn repeated_generation_in_the_log_counts_once() {
     let root = TempDir::new("fiber-model-host");
     let sessions = root.path().join("sessions");
     let clock = test_clock();
-    let dir = seed(&sessions, "s_1", &clock, &[("g_same", 0.60), ("g_same", 0.60)]);
+    let dir = seed(
+        &sessions,
+        "s_1",
+        &clock,
+        &[("g_same", 0.60), ("g_same", 0.60)],
+    );
     let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
     let host = test_host(
         provider.clone(),
@@ -367,8 +383,9 @@ fn second_call_sees_the_first_lines_cost() {
         bound(Arc::clone(&clock), None, Arc::clone(&first_lines)),
     ));
     assert_eq!(provider.requests().len(), 1);
-    // The first line reached the callback but was never written to the log.
-    assert!(log::read(&dir).unwrap().is_empty());
+    // The first line reached the callback but was never written to the log:
+    // the log still holds only its seeded line.
+    assert_eq!(log::read(&dir).unwrap().len(), 1);
     let second_lines = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call(
         "tag",
@@ -401,7 +418,11 @@ fn failed_attempts_each_pass_a_line_in_order() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let reply = ok(host.call("tag", request("scripted/s.json"), bound(clock, None, Arc::clone(&held))));
+    let reply = ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
     assert_eq!(reply.text, "ok");
     assert_eq!(provider.requests().len(), 3);
     let held = held.lock().unwrap();
@@ -438,8 +459,11 @@ fn three_retries_then_fail_sends_four_times() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host
-        .call("tag", request("scripted/s.json"), bound(clock, None, Arc::clone(&held))));
+    let failure = err(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
     assert_eq!(failure.code, ErrorCode::RateLimited);
     assert_eq!(provider.requests().len(), 4);
     assert_eq!(held.lock().unwrap().len(), 4);
@@ -465,8 +489,11 @@ fn paused_too_long_is_not_retried() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host
-        .call("tag", request("scripted/s.json"), bound(clock, None, Arc::clone(&held))));
+    let failure = err(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
     assert_eq!(failure.code, ErrorCode::PausedTooLong);
     assert_eq!(provider.requests().len(), 1);
     assert_eq!(held.lock().unwrap().len(), 1);
@@ -514,8 +541,11 @@ fn paused_reply_returns_its_text_without_resend() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let reply = ok(host
-        .call("tag", request("scripted/s.json"), bound(clock, None, Arc::clone(&held))));
+    let reply = ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
     assert_eq!(reply.text, "held");
     assert_eq!(provider.requests().len(), 1);
     assert_eq!(held.lock().unwrap().len(), 1);
@@ -546,7 +576,13 @@ fn retry_after_at_the_cap_retries_past_it_fails() {
     let thread_clock = Arc::clone(&clock);
     let moved = std::thread::spawn({
         let held = Arc::clone(&held);
-        move || host.call("tag", request("scripted/s.json"), bound(thread_clock, None, held))
+        move || {
+            host.call(
+                "tag",
+                request("scripted/s.json"),
+                bound(thread_clock, None, held),
+            )
+        }
     });
     assert!(clock.await_parked(origin + Duration::from_secs(60), Duration::from_secs(5)));
     clock.advance(Duration::from_secs(60));
@@ -621,7 +657,7 @@ fn unparseable_log_fails_log_corrupt() {
         sessions.join("s_1"),
         "s_1",
         Arc::clone(&clock),
-        None,
+        Some(1.00),
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
@@ -644,12 +680,11 @@ fn missing_log_fails_not_found() {
         sessions.join("s_absent"),
         "s_absent",
         Arc::clone(&clock),
-        None,
+        Some(1.00),
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host
-        .call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    let failure = err(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
     assert_eq!(failure.code, ErrorCode::SessionNotFound);
     assert!(provider.requests().is_empty());
 }
@@ -671,8 +706,7 @@ fn other_provider_fails_model_unconfigured() {
         immediate_retry(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host
-        .call("tag", request("other/e.json"), bound(clock, None, held)));
+    let failure = err(host.call("tag", request("other/e.json"), bound(clock, None, held)));
     assert_eq!(failure.code, ErrorCode::ModelUnconfigured);
     assert_eq!(
         failure.message,
@@ -717,10 +751,10 @@ struct GatedCall {
 
 impl ModelCall for GatedCall {
     fn run(&self, _sink: &mut dyn FnMut(contract::provider::Delta)) -> Result<Reply, CallError> {
-        let _ = self.entered.send(());
+        let _sent = self.entered.send(());
         match self.release.lock().unwrap().take() {
             Some(release) => {
-                let _ = release.recv();
+                let _released = release.recv();
                 Ok(Reply {
                     actions: vec![ReplyAction::Text(TextCompleted {
                         text: "slow".to_owned(),
@@ -772,20 +806,21 @@ fn gate_holds_one_call_and_times_out_the_next() {
         entered: entered_tx,
         release: Mutex::new(Some(release_rx)),
     });
-    let first = test_host(
+    let host = Arc::new(test_host(
         provider.clone(),
-        dir.clone(),
+        dir,
         "s_1",
         Arc::clone(&clock),
         None,
         immediate_retry(),
-    );
+    ));
     let first_lines = Arc::new(Mutex::new(Vec::new()));
     let a_clock = Arc::clone(&clock);
+    let a_host = Arc::clone(&host);
     let a = std::thread::spawn({
         let first_lines = Arc::clone(&first_lines);
         move || {
-            first.call(
+            a_host.call(
                 "a",
                 request("scripted/s.json"),
                 bound(a_clock, None, first_lines),
@@ -794,21 +829,14 @@ fn gate_holds_one_call_and_times_out_the_next() {
     });
     // Call A is inside `run` before B reaches the gate.
     entered_rx.recv().unwrap();
-    let second = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
     let second_lines = Arc::new(Mutex::new(Vec::new()));
     let deadline = origin + Duration::from_secs(5);
     let b_clock = Arc::clone(&clock);
+    let b_host = Arc::clone(&host);
     let b = std::thread::spawn({
         let second_lines = Arc::clone(&second_lines);
         move || {
-            second.call(
+            b_host.call(
                 "b",
                 request("scripted/s.json"),
                 bound(b_clock, Some(deadline), second_lines),

@@ -472,6 +472,15 @@ pub(crate) fn run_new(
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
+    extensions.model_to(Arc::new(crate::model_host::ModelHost::new(
+        Arc::clone(&provider),
+        &model,
+        budget,
+        &retry,
+        dir.clone(),
+        id.clone(),
+        Arc::clone(&clock),
+    )));
     extensions.answerable(!one_turn);
     session.skills(r#loop::skills(&prompt_inputs, &workspace));
     // The session's MCP prompt rows, tagged with each server's name:
