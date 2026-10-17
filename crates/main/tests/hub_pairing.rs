@@ -25,6 +25,9 @@ fn record(setup: &Setup) {
 fn run(setup: &Setup, args: &[&str]) -> std::process::Output {
     run_to_exit(setup.deadline, "the device command", setup.fiber(args))
 }
+fn hub_log_path(setup: &Setup) -> std::path::PathBuf {
+    setup.home().join("logs/hub.log")
+}
 fn finish(hub: Arc<Mutex<Option<HubProc>>>, client: Socket) {
     drop(client);
     let hub = hub.lock().unwrap().take().unwrap();
@@ -130,10 +133,28 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
         json!({"change":"revoked","device":"phone","by":"local"})
     );
     assert!(!setup.home().join("hub/devices/phone").exists());
+    let log = hub_log_path(&setup);
+    let deadline = setup.deadline;
+    let seen = bounded(deadline, "the device_revoked line in hub.log", move || {
+        loop {
+            if fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains("device_revoked")
+            {
+                return true;
+            }
+            if deadline.left().is_zero() {
+                // Stops this worker thread after `bounded` has already reported
+                // the timeout naming the line; the returned value never
+                // decides the failure text.
+                return false;
+            }
+            std::thread::yield_now();
+        }
+    });
     assert!(
-        fs::read_to_string(setup.home().join("logs/hub.log"))
-            .unwrap()
-            .contains("device_revoked")
+        seen,
+        "waited until the deadline for the device_revoked line in hub.log"
     );
     finish(hub, client);
 }
@@ -329,7 +350,7 @@ fn a_revoked_token_is_refused_over_the_port() {
     assert!(!String::from_utf8(output.stdout).unwrap().contains(&token));
     assert!(!String::from_utf8(revoked.stdout).unwrap().contains(&token));
     assert!(
-        !fs::read_to_string(setup.home().join("logs/hub.log"))
+        !fs::read_to_string(hub_log_path(&setup))
             .unwrap()
             .contains(&token)
     );
