@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use contract::shapes::Failure;
@@ -327,13 +327,16 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn hub::S
     }));
     let child = Arc::new(Mutex::new(child));
     let watch = Arc::clone(&state);
+    let exit = Arc::new(Condvar::new());
     match thread::Builder::new().name("hub-drain".to_owned()).spawn({
         let child = Arc::clone(&child);
-        move || drain(&child, &watch)
+        let exit = Arc::clone(&exit);
+        move || drain(&child, &watch, &exit)
     }) {
         Ok(_) => Ok(Box::new(Spawned {
             id: id.clone(),
             state,
+            exit,
         })),
         Err(error) => {
             let mut child = lock(&child);
@@ -357,6 +360,8 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn hub::S
 struct Spawned {
     id: SessionId,
     state: Arc<Mutex<State>>,
+    /// Notified by `drain` once it sets `State::exited`.
+    exit: Arc<Condvar>,
 }
 
 struct State {
@@ -378,11 +383,23 @@ impl hub::Started for Spawned {
             provider: None,
         }))
     }
+
+    fn wait_exited(&self) -> Option<Failure> {
+        let mut state = lock(&self.state);
+        while !state.exited {
+            state = self
+                .exit
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(state);
+        self.exited()
+    }
 }
 
 /// Reads the session's stdout to EOF, keeping the `fiber_exited` line
 /// printed last, then reaps the child.
-fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
+fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>, exit: &Condvar) {
     let mut child = lock(child);
     if let Some(stdout) = child.stdout.take() {
         let mut read = BufReader::new(stdout);
@@ -403,6 +420,7 @@ fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
         Ok(_) | Err(_) => {}
     }
     lock(state).exited = true;
+    exit.notify_all();
 }
 
 /// The `code` and `message` of a `fiber_exited` line's `payload.error`.

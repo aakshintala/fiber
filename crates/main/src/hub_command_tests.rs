@@ -66,7 +66,7 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
             let child = Arc::clone(&child);
             let state = Arc::clone(&state);
             move || {
-                drain(&child, &state);
+                drain(&child, &state, &Condvar::new());
                 done_tx.send(()).unwrap_or(());
             }
         })
@@ -250,6 +250,7 @@ fn exited_is_none_while_the_session_runs() {
             exited: false,
             failure: None,
         })),
+        exit: Arc::new(Condvar::new()),
     };
     assert!(spawned.exited().is_none());
 }
@@ -262,6 +263,7 @@ fn exited_reports_the_drained_failure() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
+        exit: Arc::new(Condvar::new()),
     };
     let failure = spawned.exited().expect("the drained failure");
     assert_eq!(failure.code, ErrorCode::NoModel);
@@ -275,6 +277,7 @@ fn exited_without_a_verdict_is_io_failed() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
+        exit: Arc::new(Condvar::new()),
     };
     let failure = spawned.exited().expect("the fallback failure");
     assert_eq!(failure.code, ErrorCode::IoFailed);
@@ -433,26 +436,73 @@ fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
 #[track_caller]
 fn exit_of(started: Box<dyn hub::Started>) -> Failure {
     let (done_tx, done_rx) = mpsc::channel();
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     thread::Builder::new()
         .name("hub-test-exit".to_owned())
-        .spawn({
-            let stop = Arc::clone(&stop);
-            move || {
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Some(failure) = started.exited() {
-                        done_tx.send(failure).unwrap_or(());
-                        return;
-                    }
-                    thread::yield_now();
-                }
-            }
+        .spawn(move || {
+            done_tx.send(started.wait_exited()).unwrap_or(());
         })
         .unwrap();
-    let exit = Deadline::after(DRAIN_DEADLINE).recv(&done_rx);
-    // The poll thread ends with the wait, whichever way the wait ended.
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    exit.expect("the session exits before its deadline")
+    // `wait_exited` blocks: a wait, so the test receives it with a
+    // wall-clock deadline.
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&done_rx)
+        .expect("the session exits before its deadline")
+        .expect("the session exits before its deadline")
+}
+
+#[test]
+fn wait_exited_blocks_until_the_child_exits() {
+    // The stub blocks reading stdin until the test releases it, so a
+    // `wait_exited` that answers without waiting returns `None` and a
+    // `wait_exited` that never wakes misses the deadline: both fail here.
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("read line; printf '%s\\n' \"$line\"")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let state = Arc::new(Mutex::new(State {
+        exited: false,
+        failure: None,
+    }));
+    let exit = Arc::new(Condvar::new());
+    let child = Arc::new(Mutex::new(child));
+    thread::Builder::new()
+        .name("hub-test-drain".to_owned())
+        .spawn({
+            let child = Arc::clone(&child);
+            let state = Arc::clone(&state);
+            let exit = Arc::clone(&exit);
+            move || drain(&child, &state, &exit)
+        })
+        .unwrap();
+    let spawned = Spawned {
+        id: SessionId("s_wait".to_owned()),
+        state,
+        exit,
+    };
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-exit".to_owned())
+        .spawn(move || {
+            started_tx.send(()).unwrap_or(());
+            done_tx.send(spawned.wait_exited()).unwrap_or(());
+        })
+        .unwrap();
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&started_rx)
+        .expect("the waiter reports before it waits");
+    std::io::Write::write_all(&mut stdin, b"go\n").unwrap();
+    drop(stdin);
+    let failure = Deadline::after(DRAIN_DEADLINE)
+        .recv(&done_rx)
+        .expect("the session exits before its deadline")
+        .expect("the session exits before its deadline");
+    assert_eq!(failure.code, ErrorCode::IoFailed);
 }
 
 #[test]
