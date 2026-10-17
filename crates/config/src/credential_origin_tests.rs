@@ -304,3 +304,103 @@ fn a_regular_file_reads_through_the_validated_reader() {
     let text = read_validated(&file, false).unwrap();
     assert_eq!(text, "  spaced  \n");
 }
+
+#[test]
+fn a_configured_file_loop_is_an_io_error_not_an_absence() {
+    // A symlink loop never resolves, so following the configured path
+    // fails with `FilesystemLoop`, not `NotFound`: the validated read
+    // reports it, and the key is an error, never a silent absence.
+    let key = Home::new(|root| {
+        symlink(root.path().join("loop-b"), root.path().join("loop-a")).unwrap();
+        symlink(root.path().join("loop-a"), root.path().join("loop-b")).unwrap();
+        let file = root.path().join("loop-a");
+        fs::write(
+            root.path().join("home/config.json"),
+            format!(
+                r#"{{"providers": {{"fake": {{"credentials": {{"key": {{"file": "{}"}}}}}}}}}}"#,
+                file.display(),
+            ),
+        )
+        .unwrap();
+    });
+    let outcome = key
+        .config
+        .credentials()
+        .key_presence(&stored_provider(), "key", &|_: &str| None::<String>);
+    assert!(
+        matches!(outcome, Err(ConfigError::Io { .. })),
+        "a loop is an error, not an absence: {outcome:?}"
+    );
+    assert_eq!(outcome.unwrap_err().code(), ErrorCode::IoFailed);
+}
+
+#[test]
+fn a_configured_file_deleted_before_its_open_is_absent() {
+    // Listed, then gone before the open: the open reports the operating
+    // system's missing file, which holds no key.
+    let key = Home::new(|root| {
+        let file = root.path().join("key");
+        fs::write(&file, "from-file\n").unwrap();
+        fs::write(
+            root.path().join("home/config.json"),
+            format!(
+                r#"{{"providers": {{"fake": {{"credentials": {{"key": {{"file": "{}"}}}}}}}}}}"#,
+                file.display(),
+            ),
+        )
+        .unwrap();
+    });
+    let path = key._root.path().join("key");
+    let outcome = swapped(
+        key.config.clone(),
+        stored_provider(),
+        "key",
+        &path,
+        |path| {
+            fs::remove_file(path).unwrap();
+        },
+    );
+    assert!(matches!(outcome, Ok(Presence::Absent)), "{outcome:?}");
+    assert!(!reads(&path), "a deleted file was never read");
+}
+
+#[test]
+fn a_configured_file_swapped_for_a_loop_is_an_io_error() {
+    // A regular file at listing time, a symlink loop at open time: the
+    // following open fails instead of reading through the loop, and the
+    // key is an error, never a silent absence.
+    let key = Home::new(|root| {
+        let file = root.path().join("key");
+        fs::write(&file, "from-file\n").unwrap();
+        fs::write(
+            root.path().join("home/config.json"),
+            format!(
+                r#"{{"providers": {{"fake": {{"credentials": {{"key": {{"file": "{}"}}}}}}}}}}"#,
+                file.display(),
+            ),
+        )
+        .unwrap();
+    });
+    let path = key._root.path().join("key");
+    let outcome = swapped(
+        key.config.clone(),
+        stored_provider(),
+        "key",
+        &path,
+        |path| {
+            let other = path.with_extension("loop");
+            fs::remove_file(path).unwrap();
+            symlink(&other, path).unwrap();
+            symlink(path, &other).unwrap();
+        },
+    );
+    assert!(
+        matches!(outcome, Err(ConfigError::Io { .. })),
+        "a loop is an error, not an absence: {outcome:?}"
+    );
+    assert_eq!(outcome.unwrap_err().code(), ErrorCode::IoFailed);
+    assert!(
+        !reads(&path),
+        "a loop swapped in after the listing was read"
+    );
+}
