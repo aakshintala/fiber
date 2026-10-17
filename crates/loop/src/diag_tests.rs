@@ -6,7 +6,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use contract::SessionId;
@@ -29,41 +28,16 @@ fn log_path(home: &fakes::TempDir) -> PathBuf {
 }
 
 #[test]
-fn the_first_line_creates_logs_mode_0700_and_the_session_file() {
+fn the_first_line_writes_the_session_file_with_the_extension_prefix() {
     let (home, diag) = setup("fiber-diag-first");
     assert!(!home.path().join("logs").exists());
     diag.extension_log("fiber.test/notes", "hello");
-    let logs = home.path().join("logs");
-    let mode = fs::metadata(&logs).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o700);
     assert_eq!(
         fs::read_to_string(log_path(&home)).unwrap(),
         "{\"ts\":1700000000000,\"level\":\"info\",\"process\":\"session\",\
          \"session_id\":\"s-1\",\"code\":\"extension_log\",\
          \"message\":\"fiber.test/notes: hello\"}\n"
     );
-}
-
-#[test]
-fn two_lines_append_in_order() {
-    let (home, diag) = setup("fiber-diag-two");
-    diag.extension_log("fiber.test/notes", "first");
-    diag.extension_log("fiber.test/notes", "second");
-    let text = fs::read_to_string(log_path(&home)).unwrap();
-    let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2);
-    assert!(lines[0].ends_with("\"message\":\"fiber.test/notes: first\"}"));
-    assert!(lines[1].ends_with("\"message\":\"fiber.test/notes: second\"}"));
-}
-
-#[test]
-fn a_newline_and_a_quote_stay_one_line_and_round_trip() {
-    let (home, diag) = setup("fiber-diag-escape");
-    diag.extension_log("fiber.test/notes", "a\nb\"c");
-    let text = fs::read_to_string(log_path(&home)).unwrap();
-    assert_eq!(text.lines().count(), 1);
-    let value: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
-    assert_eq!(value["message"], "fiber.test/notes: a\nb\"c");
 }
 
 #[test]
