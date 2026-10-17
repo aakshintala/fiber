@@ -780,17 +780,23 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     script(
         &setup,
         "s.json",
-        // The second step is the extension's `host.model` call: the
-        // session's scripted provider answers from its own steps in call
-        // order (provider-only resolution), and the hook's call lands
-        // between the first and second session sends, so it takes this
-        // step while the session's steps stay the last three.
+        // The session's own steps: the tool call, then the handoff note.
+        // The extension's `host.model` call connects its own scripted
+        // provider for `e.json` below, so it takes no step of this script.
         &json!({"steps": [
             {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
              "usage": {"input": 100, "output": 10}},
-            {"text": "ext", "usage": {"input": 7, "output": 3}},
             {"text": "Handing off."},
             {"text": "Done."}
+        ]}),
+    );
+    script(
+        &setup,
+        "e.json",
+        // The extension's `host.model` call names this model: the reach
+        // connects a provider reading this script from its first step.
+        &json!({"steps": [
+            {"text": "ext", "usage": {"input": 7, "output": 3}},
         ]}),
     );
     script(
@@ -804,7 +810,10 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     );
     reviewed_by_script(
         &setup,
-        json!({"model": "scripted/s.json", "handoff": {"tokens": 5}}),
+        // The `roles` entry registers `scripted/e.json` for the hook's
+        // `host.model` call; no delegate runs, so it stays inert.
+        json!({"model": "scripted/s.json", "handoff": {"tokens": 5},
+               "roles": {"ext": "fiber:scripted/e.json"}}),
     );
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "{}", run.stderr);

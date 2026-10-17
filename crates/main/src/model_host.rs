@@ -11,25 +11,23 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::events::{CacheLifetime, UsageRecorded};
 use contract::model::{Bound, HostMessage, HostModel, HostModelReply, HostModelRequest, HostRole};
-use contract::provider::{
-    CallError, CallUsage, Cost, Delta, ImageRef, Input, ModelCall, ModelRequest, Provider,
-};
+use contract::provider::{CallError, CallUsage, Delta, ImageRef, Input, ModelCall, ModelRequest};
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::Cancel;
 use contract::{ErrorCode, GenerationId, SessionId};
+
+use crate::switch::{Reach, Reached};
 
 /// One model request through the session's routing and credentials, made by
 /// an extension's `host.model` call. Blocking; called from the worker thread
 /// the admit arm spawns.
 pub(crate) struct ModelHost {
-    /// The session's connected provider, with its credential already read.
-    provider: Arc<dyn Provider>,
-    /// The session's model reference, `provider/model`.
-    model_reference: String,
-    /// The session model's declared prices, for calls naming it.
-    prices: Option<Cost>,
-    /// Whether a subscription login serves the session's model.
-    subscription: bool,
+    /// How this host reaches its model reference: resolving it against
+    /// the registry and connecting it with the session's current
+    /// credential label, once per call, right after the budget gate and
+    /// before the first budget check. The reached route serves every
+    /// attempt and retry of that call.
+    reach: Reach,
     /// `budget.usd`, or none when the key is absent or not a number.
     budget: Option<f64>,
     /// How a failed model call is retried.
@@ -120,23 +118,23 @@ enum Attempt {
 }
 
 impl ModelHost {
-    /// Builds the host from the session's parts, where `drive_to` stands.
-    /// The model and retry policy arrive by reference: the session's later
-    /// steps still own them (`Retry` has public fields and no `Clone`, so
-    /// its fields are copied here).
+    /// Builds the host from the session's reach, where `drive_to` stands:
+    /// each call resolves its own model reference against the registry
+    /// and connects it with the session's current credential label. The
+    /// retry policy arrives by reference: the session's later steps still
+    /// own it (`Retry` has public fields and no `Clone`, so its fields
+    /// are copied here). The clock rides the call's bound, so the build
+    /// keeps none.
     pub(crate) fn new(
-        provider: Arc<dyn Provider>,
-        model: &r#loop::Model,
+        reach: Reach,
         budget: Option<f64>,
         retry: &r#loop::Retry,
         dir: PathBuf,
         id: SessionId,
+        _clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
-            provider,
-            model_reference: model.reference.clone(),
-            prices: model.cost.clone(),
-            subscription: model.subscription,
+            reach,
             budget,
             retry: r#loop::Retry {
                 attempts: retry.attempts,
@@ -160,7 +158,6 @@ impl ModelHost {
         request: &HostModelRequest,
         bound: &Bound,
     ) -> Result<HostModelReply, Failure> {
-        self.resolve(&request.model)?;
         // Registered before the first check, so a cancel that lands first
         // still wakes the wait: the checks below read it after subscribing.
         let wake: Arc<dyn Wake> = Arc::new(GateWake {
@@ -171,10 +168,16 @@ impl ModelHost {
         let _keep = &wake;
         self.acquire(bound)?;
         let _release = Guard { gate: &self.gate };
+        // Once per call, after the gate and before the first budget check:
+        // a reach failure (`model_unconfigured` for a reference that
+        // cannot connect, or the read's own code) returns with no send
+        // and the gate released. The `Reached` serves every attempt and
+        // retry of this call.
+        let reached = (self.reach)(&request.model)?;
         let mut retries: u32 = 0;
         loop {
             self.check_budget()?;
-            match self.attempt_once(extension, request, bound) {
+            match self.attempt_once(&reached, extension, request, bound) {
                 Attempt::Replied { text, tokens, cost } => {
                     return Ok(HostModelReply { text, tokens, cost });
                 }
@@ -191,26 +194,6 @@ impl ModelHost {
                 Attempt::TimedOut => return Err(timeout()),
             }
         }
-    }
-
-    /// Whether `reference` reaches the session's provider. Only the provider
-    /// part is resolved, as `docs/model-routing.md`, "Naming a model", does;
-    /// any other provider fails `model_unconfigured`.
-    fn resolve(&self, reference: &str) -> Result<(), Failure> {
-        let session = self.model_reference.split('/').next().unwrap_or("");
-        let same = reference
-            .split('/')
-            .next()
-            .is_some_and(|provider| !provider.is_empty() && provider == session);
-        if same {
-            return Ok(());
-        }
-        Err(Failure {
-            code: ErrorCode::ModelUnconfigured,
-            message: "host.model: only the session's provider is reachable".to_owned(),
-            retry_after_ms: None,
-            provider: None,
-        })
     }
 
     /// Takes the session's send slot, waiting through the callback's bound.
@@ -328,9 +311,15 @@ impl ModelHost {
 
     /// Sends the request once and runs the attempt to its end, passing one
     /// line to `bound.lines` and keeping it, however the attempt ended.
-    fn attempt_once(&self, extension: &str, request: &HostModelRequest, bound: &Bound) -> Attempt {
+    fn attempt_once(
+        &self,
+        reached: &Reached,
+        extension: &str,
+        request: &HostModelRequest,
+        bound: &Bound,
+    ) -> Attempt {
         let model_request = self.request(extension, request);
-        let call: Arc<dyn ModelCall> = self.provider.call(&model_request).into();
+        let call: Arc<dyn ModelCall> = reached.provider.call(&model_request).into();
         // The attempt runs on its own thread; the watcher below cancels it
         // when the callback ends. A provider that ignores `cancel` keeps
         // this thread, and the gate keeps every other call bounded.
@@ -357,7 +346,7 @@ impl ModelHost {
             // A run that never answers ends the callback at its bound.
             Err(_) => Attempt::TimedOut,
             Ok(Ok(reply)) => {
-                let line = self.line(extension, request, reply.usage(), reply.cost);
+                let line = self.line(reached, extension, request, reply.usage(), reply.cost);
                 let text = reply.text();
                 let attempt = Attempt::Replied {
                     text,
@@ -372,7 +361,7 @@ impl ModelHost {
                 should_retry,
                 usage,
             })) => {
-                let line = self.line(extension, request, *usage, None);
+                let line = self.line(reached, extension, request, *usage, None);
                 self.emit(&line, bound);
                 Attempt::Failed {
                     failure,
@@ -380,7 +369,7 @@ impl ModelHost {
                 }
             }
             Ok(Err(CallError::Cancelled { usage })) => {
-                let line = self.line(extension, request, *usage, None);
+                let line = self.line(reached, extension, request, *usage, None);
                 self.emit(&line, bound);
                 Attempt::TimedOut
             }
@@ -508,27 +497,23 @@ impl ModelHost {
     }
 
     /// One `usage_recorded` for the attempt: the helper every attempt's line
-    /// takes, with the calling extension set. A model other than the
-    /// session's startup model gets no prices, so its cost is the vendor
-    /// figure or null (`docs/events.md`, `usage_recorded`).
+    /// takes, with the calling extension set. The reached model's declared
+    /// prices figure the line; a model with no declared cost keeps the
+    /// vendor figure or null (`docs/events.md`, `usage_recorded`).
     fn line(
         &self,
+        reached: &Reached,
         extension: &str,
         request: &HostModelRequest,
         usage: CallUsage,
         inline_cost: Option<f64>,
     ) -> UsageRecorded {
-        let prices = if request.model == self.model_reference {
-            self.prices.as_ref()
-        } else {
-            None
-        };
         r#loop::extension_line(
             usage,
             inline_cost,
             &request.model,
-            prices,
-            self.subscription,
+            reached.cost.as_ref(),
+            reached.subscription,
             extension,
         )
     }

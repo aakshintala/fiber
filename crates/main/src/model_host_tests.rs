@@ -24,17 +24,18 @@ use contract::model::{
     Bound, HostMessage, HostModel as _, HostModelReply, HostModelRequest, HostRole,
 };
 use contract::provider::{
-    CallError, CallUsage, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    CallError, CallUsage, Cost, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
     ReplyAction,
 };
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Deadline, Scripted, ScriptedProvider, TempDir};
-use r#loop::{Model, Retry};
+use r#loop::Retry;
 use serde_json::{Map, Value};
 
 use crate::model_host::ModelHost;
+use crate::switch::{Reach, Reached};
 
 /// How long the test waits for a parked retry wait before failing it.
 const WAIT: Duration = Duration::from_secs(5);
@@ -44,8 +45,9 @@ fn test_clock() -> Arc<FakeClock> {
     FakeClock::new()
 }
 
-/// The host under test, holding the session's provider, model, budget,
-/// retry policy, directory, id and clock.
+/// The host under test, reaching its model through a fake that always
+/// connects `provider` with no declared prices and no subscription: the key,
+/// budget, retry and gate behaviour, with the reach itself covered below.
 fn test_host(
     provider: Arc<dyn Provider>,
     dir: PathBuf,
@@ -53,18 +55,20 @@ fn test_host(
     budget: Option<f64>,
     retry: Retry,
 ) -> ModelHost {
-    let model = Model {
-        reference: "scripted/s.json".to_owned(),
-        cost: None,
-        subscription: false,
-    };
+    let reach: Reach = Arc::new(move |_: &str| {
+        Ok(Reached {
+            provider: Arc::clone(&provider),
+            cost: None,
+            subscription: false,
+        })
+    });
     ModelHost::new(
-        provider,
-        &model,
+        reach,
         budget,
         &retry,
         dir,
         SessionId(id.to_owned()),
+        test_clock(),
     )
 }
 
@@ -618,23 +622,228 @@ fn missing_log_fails_not_found() {
     assert!(provider.requests().is_empty());
 }
 
-/// A model of another provider fails `model_unconfigured` with no send.
+/// Three retries make one reach, not four: the call resolves its model
+/// once, after the gate, and the `Reached` serves every attempt.
 #[test]
-fn other_provider_fails_model_unconfigured() {
+fn three_retries_make_one_reach() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_1")),
+        Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_2")),
+        Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_3")),
+        Scripted::text("ok"),
+    ]));
+    let reaches = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&reaches);
+    let connected = Arc::clone(&provider) as Arc<dyn Provider>;
+    let reach: Reach = Arc::new(move |reference: &str| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(reference, "scripted/s.json");
+        Ok(Reached {
+            provider: Arc::clone(&connected),
+            cost: None,
+            subscription: false,
+        })
+    });
+    let host = ModelHost::new(
+        reach,
+        None,
+        &immediate_retry(),
+        dir,
+        SessionId("s_1".to_owned()),
+        test_clock(),
+    );
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let reply = ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
+    assert_eq!(reply.text, "ok");
+    assert_eq!(provider.requests().len(), 4);
+    assert_eq!(held.lock().unwrap().len(), 4);
+    assert_eq!(reaches.load(Ordering::SeqCst), 1);
+}
+
+/// A reach answering a second provider after the first send does not move
+/// the call: its retries all go to the first provider, and the next call
+/// goes to the second.
+#[test]
+fn in_flight_call_keeps_its_reached_provider() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let first = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_1")),
+        Scripted::text("one"),
+    ]));
+    let second = Arc::new(ScriptedProvider::new([Scripted::text("two")]));
+    let first_sent = Arc::clone(&first);
+    let second_sent = Arc::clone(&second);
+    let first_p = Arc::clone(&first) as Arc<dyn Provider>;
+    let second_p = Arc::clone(&second) as Arc<dyn Provider>;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reach: Reach = Arc::new(move |_: &str| {
+        let answered: Arc<dyn Provider> = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Arc::clone(&first_p)
+        } else {
+            Arc::clone(&second_p)
+        };
+        Ok(Reached {
+            provider: answered,
+            cost: None,
+            subscription: false,
+        })
+    });
+    let host = ModelHost::new(
+        reach,
+        None,
+        &immediate_retry(),
+        dir,
+        SessionId("s_1".to_owned()),
+        test_clock(),
+    );
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let reply = ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(Arc::clone(&clock), None, Arc::clone(&held)),
+    ));
+    assert_eq!(reply.text, "one");
+    assert_eq!(first_sent.requests().len(), 2);
+    assert_eq!(second_sent.requests().len(), 0);
+    let reply = ok(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    assert_eq!(reply.text, "two");
+    assert_eq!(second_sent.requests().len(), 1);
+}
+
+/// `Reached.cost` prices the line: a declared cost figures it, and `None`
+/// leaves the vendor's figure.
+#[test]
+fn reached_cost_prices_the_line() {
+    let declared = Cost {
+        input: 1_000_000.0,
+        output: 1_000_000.0,
+        cache_read: None,
+        cache_write: None,
+        tiers: Vec::new(),
+    };
     let root = TempDir::new("fiber-model-host");
     let sessions = root.path().join("sessions");
     let clock = test_clock();
     let dir = seed(&sessions, "s_1", &clock, &[]);
     let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
-    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
-    let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host.call("tag", request("other/e.json"), bound(clock, None, held)));
-    assert_eq!(failure.code, ErrorCode::ModelUnconfigured);
-    assert_eq!(
-        failure.message,
-        "host.model: only the session's provider is reachable"
+    // Ten input and three output tokens at a dollar a token each: 13.00.
+    let connected = Arc::clone(&provider) as Arc<dyn Provider>;
+    let reach: Reach = Arc::new(move |_: &str| {
+        Ok(Reached {
+            provider: Arc::clone(&connected),
+            cost: Some(declared.clone()),
+            subscription: false,
+        })
+    });
+    let host = ModelHost::new(
+        reach,
+        None,
+        &immediate_retry(),
+        dir,
+        SessionId("s_1".to_owned()),
+        test_clock(),
     );
+    let held = Arc::new(Mutex::new(Vec::new()));
+    ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(Arc::clone(&clock), None, Arc::clone(&held)),
+    ));
+    assert_eq!(held.lock().unwrap().len(), 1);
+    assert_eq!(held.lock().unwrap()[0].cost, Some(13.0));
+
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([reply_with_cost("hi", "g_2", 0.02)]));
+    let connected = Arc::clone(&provider) as Arc<dyn Provider>;
+    let reach: Reach = Arc::new(move |_: &str| {
+        Ok(Reached {
+            provider: Arc::clone(&connected),
+            cost: None,
+            subscription: false,
+        })
+    });
+    let host = ModelHost::new(
+        reach,
+        None,
+        &immediate_retry(),
+        dir,
+        SessionId("s_1".to_owned()),
+        test_clock(),
+    );
+    let held = Arc::new(Mutex::new(Vec::new()));
+    ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(clock, None, Arc::clone(&held)),
+    ));
+    assert_eq!(held.lock().unwrap().len(), 1);
+    assert_eq!(held.lock().unwrap()[0].cost, Some(0.02));
+}
+
+/// A `Reach` failing `model_unconfigured` ends the call with that failure,
+/// with no send and no line; a following call still takes the gate.
+#[test]
+fn reach_failure_sends_nothing_and_releases_the_gate() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
+    let failing = Arc::new(Mutex::new(true));
+    let flag = Arc::clone(&failing);
+    let connected = Arc::clone(&provider) as Arc<dyn Provider>;
+    let reach: Reach = Arc::new(move |_: &str| {
+        if *flag.lock().unwrap() {
+            Err(Failure {
+                code: ErrorCode::ModelUnconfigured,
+                message: "the connect failed".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            })
+        } else {
+            Ok(Reached {
+                provider: Arc::clone(&connected),
+                cost: None,
+                subscription: false,
+            })
+        }
+    });
+    let host = ModelHost::new(
+        reach,
+        None,
+        &immediate_retry(),
+        dir,
+        SessionId("s_1".to_owned()),
+        test_clock(),
+    );
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let failure = err(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(Arc::clone(&clock), None, Arc::clone(&held)),
+    ));
+    assert_eq!(failure.code, ErrorCode::ModelUnconfigured);
+    assert_eq!(failure.message, "the connect failed");
     assert!(provider.requests().is_empty());
+    assert!(held.lock().unwrap().is_empty());
+    *failing.lock().unwrap() = false;
+    let reply = ok(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    assert_eq!(reply.text, "hi");
+    assert_eq!(provider.requests().len(), 1);
 }
 
 /// A provider that ignores `cancel`, blocking on a channel the test owns.

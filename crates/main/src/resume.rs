@@ -536,13 +536,14 @@ fn resumed_session(
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
+    let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
     extensions.model_to(Arc::new(crate::model_host::ModelHost::new(
-        Arc::clone(&provider),
-        &model,
+        switching.reacher(Arc::new(crate::connect)),
         budget,
         &retry,
         dir.to_path_buf(),
         id.clone(),
+        Arc::clone(&clock),
     )));
     extensions.answerable(!one_turn);
     session.skills(r#loop::skills(&prompt_inputs, Path::new(&folded.workspace)));
@@ -633,10 +634,7 @@ fn resumed_session(
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(
-                            switching.diagnostics(Arc::clone(&diag)).closure(door),
-                            switchable,
-                        )
+                        .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
