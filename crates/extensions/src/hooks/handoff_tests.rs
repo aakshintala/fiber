@@ -10,8 +10,6 @@
     reason = "test code"
 )]
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -23,7 +21,7 @@ use contract::events::{HandoffTrigger, ToolCallRequested};
 use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, Hooks};
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::tool::Cancel;
-use fakes::Deadline;
+use fakes::{Deadline, ProviderServer, Response};
 use serde_json::{Value, json};
 
 use super::super::SessionExtensions;
@@ -642,38 +640,11 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
 /// How long a test waits for the hook to reach its gate before failing.
 const GATE_WAIT: Duration = Duration::from_secs(10);
 
-/// Reads one HTTP request head from `stream`, runs `then`, and answers `{}`.
-/// The read carries a deadline, so a hook that never sends its request
-/// fails the test instead of hanging it.
-fn gate_then(stream: &mut TcpStream, then: impl FnOnce()) {
-    stream.set_read_timeout(Some(GATE_WAIT)).unwrap();
-    let mut head = Vec::new();
-    let mut byte = [0];
-    loop {
-        match stream.read(&mut byte) {
-            Ok(_) => {
-                head.push(byte[0]);
-                if head.ends_with(b"\r\n\r\n") {
-                    break;
-                }
-            }
-            Err(e) => panic!("waited for the hook's request: {e}"),
-        }
-    }
-    then();
-    stream
-        .write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{}",
-        )
-        .unwrap();
-    stream.flush().unwrap();
-}
-
 #[test]
 fn a_cancel_between_two_hooks_runs_no_later_hook() {
-    let server = fakes::ProviderServer::start([
-        fakes::Response::status(200, "{}"),
-        fakes::Response::status(200, "{}"),
+    let server = ProviderServer::start([
+        Response::status(200, "{}"),
+        Response::status(200, "{}"),
     ])
     .unwrap();
     let url = server.url();
