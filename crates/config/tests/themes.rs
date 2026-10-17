@@ -30,7 +30,7 @@ fn text_with(
         asked.borrow_mut().push(path.to_path_buf());
         answer(path)
     };
-    let got = theme_text(home, name, packages, enabled, &read);
+    let got = theme_text(home, name, packages, enabled, &read).map_err(|error| error.to_string());
     (got, asked.into_inner())
 }
 
@@ -254,7 +254,8 @@ fn bad_names_are_refused_without_a_read() {
         asked.borrow_mut().push(path.to_path_buf());
         Ok(String::new())
     };
-    let got = theme_text(home.path(), "a.b", &packages, &always_enabled, &read);
+    let got = theme_text(home.path(), "a.b", &packages, &always_enabled, &read)
+        .map_err(|error| error.to_string());
     assert_eq!(got, Ok(String::new()));
     assert_eq!(
         asked.into_inner(),
@@ -375,7 +376,8 @@ fn a_linked_package_theme_file_loads() {
     let packages = [(String::from("acme"), acme)];
     let got = theme_text(home.path(), "dusk", &packages, &always_enabled, &|path| {
         std::fs::read_to_string(path)
-    });
+    })
+    .map_err(|error| error.to_string());
     assert_eq!(got, Ok("linked".to_owned()));
 }
 
