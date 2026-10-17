@@ -14,6 +14,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "linux"))]
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
