@@ -2846,7 +2846,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2932,7 +2932,7 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2947,7 +2947,7 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -2977,7 +2977,7 @@ fn esc_sends_nothing() {
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3295,7 +3295,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3426,7 +3426,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -3489,7 +3489,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3603,7 +3603,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3626,7 +3626,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 

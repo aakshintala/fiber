@@ -60,7 +60,7 @@ fn assert_box_at_bottom(grid: &Grid) {
     let (cols, rows) = grid.size();
     assert_eq!((cols, rows), (160, 48));
     assert!(grid.rows[usize::from(rows - 6)].contains('▄'));
-    assert!(grid.rows[usize::from(rows - 1)].contains("↑ sessions · ↓ chips"));
+    assert!(grid.rows[usize::from(rows - 1)].contains("Enter opens the focused session"));
 }
 
 /// The project key of `workspace`, from its `projects/<key>` directory.

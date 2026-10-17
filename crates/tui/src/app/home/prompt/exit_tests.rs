@@ -407,7 +407,7 @@ fn esc_stays_and_shows_no_hint() {
     assert!(!app.hint());
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
