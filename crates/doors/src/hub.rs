@@ -278,6 +278,21 @@ fn connect_with(
     Err(Poll::Failed(unreachable_race()))
 }
 
+/// Whether the path at `socket` can still be a hub socket: it is missing,
+/// or it is a socket file (one a hub left behind when it exited). Any other
+/// filesystem object at the path never listened: on Linux its connect
+/// refuses exactly like an absent hub, while macOS reports a non-socket
+/// error, so the caller fails instead of starting or missing a hub.
+fn is_socket_or_missing(socket: &Path) -> bool {
+    match std::fs::metadata(socket) {
+        Err(_) => true,
+        Ok(meta) => {
+            use std::os::unix::fs::FileTypeExt;
+            meta.file_type().is_socket()
+        }
+    }
+}
+
 /// Whether a connect error means no hub runs, so the client starts one
 /// and keeps polling: the socket is absent or nobody listens yet. Any
 /// other error fails as is.
@@ -499,6 +514,9 @@ fn attempt(
                     Ok(Err(errno)) => {
                         let error = io::Error::from(errno);
                         if is_absent(error.kind()) {
+                            if !is_socket_or_missing(&socket) {
+                                return Err(Poll::Failed(error));
+                            }
                             wait_for_start(
                                 start
                                     .as_mut()
@@ -527,6 +545,9 @@ fn attempt(
             Err(errno) => {
                 let error = io::Error::from(errno);
                 if is_absent(error.kind()) {
+                    if !is_socket_or_missing(&socket) {
+                        return Err(Poll::Failed(error));
+                    }
                     wait_for_start(
                         start
                             .as_mut()

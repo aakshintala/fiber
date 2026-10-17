@@ -27,7 +27,7 @@ use fakes::Deadline;
 #[path = "../tests/support/mod.rs"]
 mod support;
 
-use support::{DEADLINE, hello_line};
+use support::{DEADLINE, Temp, hello_line};
 
 fn error(kind: io::ErrorKind) -> io::Error {
     io::Error::new(kind, "injected for the test")
@@ -49,6 +49,25 @@ fn absent_is_not_found_or_connection_refused() {
     ] {
         assert!(!is_absent(kind), "{kind:?}");
     }
+}
+
+#[test]
+fn only_a_missing_path_or_a_socket_file_can_be_an_absent_hub() {
+    let temp = Temp::new();
+    let missing = temp.0.join("gone");
+    assert!(is_socket_or_missing(&missing));
+    let file = temp.0.join("hub");
+    std::fs::write(&file, b"not a socket").unwrap();
+    assert!(!is_socket_or_missing(&file));
+    let dir = temp.0.join("dir");
+    std::fs::create_dir(&dir).unwrap();
+    assert!(!is_socket_or_missing(&dir));
+    let socket = temp.0.join("sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    assert!(is_socket_or_missing(&socket));
+    drop(listener);
+    // A stale listener file is still a socket: an exited hub stays absent.
+    assert!(is_socket_or_missing(&socket));
 }
 
 #[test]

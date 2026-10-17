@@ -811,8 +811,32 @@ fn saturated_backlog(socket: &std::path::Path) -> (UnixListener, Vec<UnixStream>
     rustix::net::listen(&fd, 0).expect("no backlog");
     let mut held = Vec::new();
     for _ in 0..32 {
-        held.push(UnixStream::connect(socket).expect("a queued connect"));
+        // Non-blocking: once the queue is full a blocking connect waits
+        // for an accept that never comes (Linux), hanging setup. A queued
+        // socket holds its slot; EAGAIN means the backlog is saturated.
+        let queued = rustix::net::socket(AddressFamily::UNIX, SocketType::STREAM, None)
+            .expect("a queued socket");
+        rustix::fs::fcntl_setfl(
+            &queued,
+            rustix::fs::fcntl_getfl(&queued).expect("a queued socket's flags")
+                | rustix::fs::OFlags::NONBLOCK,
+        )
+        .expect("a non-blocking queue");
+        match rustix::net::connect(&queued, &SocketAddrUnix::new(socket).expect("a short path")) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::INPROGRESS => {}
+            Err(error) if error == rustix::io::Errno::AGAIN => {
+                drop(queued);
+                break;
+            }
+            Err(error) => panic!("a queued connect: {error}"),
+        }
+        held.push(UnixStream::from(queued));
     }
+    assert!(
+        !held.is_empty(),
+        "at least one queued connect holds the backlog"
+    );
     let listener: UnixListener = fd.into();
     listener.set_nonblocking(true).expect("a polled stand-in");
     (listener, held)
