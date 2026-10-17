@@ -630,25 +630,16 @@ jobs:
             --paging "$RUNNER_TEMP/release/head/paging" \
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
-      # PROBE (see #2360; dropped before merge): times the musl jigs'
-      # scale-16 re-count for head and base in alternation (4 rounds of
-      # head then base) under /usr/bin/time -v, one line per run with
-      # wall, user, sys and page faults; then strace -c -f on one
-      # scale-16 re-count per side with the full table in the log; then
-      # the gnu scale-1 and scale-16 wall times, once each per side. It
-      # only reports, never fails; a missing jig reports unavailable.
-      - name: Probe paging sys time, faults and syscalls
+      # PROBE (see #2360; dropped before merge): profiles the musl jigs'
+      # scale-16 re-count under perf record -g for head and base in this
+      # same job and prints each perf report (self time) to the log, plus
+      # the gnu scale-1 re-count for head and base. It only reports, never
+      # fails; a missing jig reports unavailable.
+      - name: Probe the paging re-count under perf
         if: always()
         run: |
           tmp=$RUNNER_TEMP/probe-paging
           mkdir -p "$tmp"
-          if ! command -v strace >/dev/null 2>&1; then
-            echo "probe-paging: strace not installed; installing"
-            # shellcheck disable=SC2086 # APT_OPTS is a list of options
-            sudo apt-get $APT_OPTS update || true
-            # shellcheck disable=SC2086 # APT_OPTS is a list of options
-            sudo apt-get $APT_OPTS install -y --no-install-recommends strace || true
-          fi
           if ! command -v perf >/dev/null 2>&1; then
             echo "probe-paging: perf not installed; installing"
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
@@ -656,73 +647,44 @@ jobs:
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS install -y --no-install-recommends linux-tools-common linux-tools-generic || true
           fi
-          strace -V || true
           perf --version || true
-          /usr/bin/time --version || true
-          # Runs the jig at $1 (side $2) at scale $3, round $4, under
-          # /usr/bin/time -v, and prints one line with wall, user and
-          # sys ms plus minor and major faults. Never fails.
-          probe_time() {
-            if [ ! -x "$1" ] || [ ! -x /usr/bin/time ]; then
-              echo "probe-paging: run round=$4 side=$2 scale=$3 wall_ms=unavailable user_ms=unavailable sys_ms=unavailable minor_faults=unavailable major_faults=unavailable"
-              return 0
-            fi
-            /usr/bin/time -v "$1" "$3" 160 48 > "$tmp/$2-$4-$3.log" 2> "$tmp/$2-$4-$3.time" || true
-            line=$(grep '^slowest re-count at a new width:' "$tmp/$2-$4-$3.log" || true)
-            echo "probe-paging: $2 scale-$3 jig round $4: ${line:-missing}"
-            stats=$(awk '
-              /Elapsed \(wall clock\) time/ { w=$NF }
-              /User time \(seconds\)/ { u=$NF }
-              /System time \(seconds\)/ { s=$NF }
-              /Minor \(reclaiming a frame\) page faults/ { minor=$NF }
-              /Major \(requiring I\/O\) page faults/ { major=$NF }
-              END {
-                n = split(w, a, ":");
-                wall = 0;
-                if (n == 2) { wall = (a[1]*60 + a[2])*1000; }
-                else if (n == 3) { wall = ((a[1]*60 + a[2])*60 + a[3])*1000; }
-                printf "wall_ms=%.0f user_ms=%.0f sys_ms=%.0f minor_faults=%s major_faults=%s", wall, u*1000, s*1000, minor, major;
-              }' "$tmp/$2-$4-$3.time") || stats="wall_ms=unavailable user_ms=unavailable sys_ms=unavailable minor_faults=unavailable major_faults=unavailable"
-            echo "probe-paging: run round=$4 side=$2 scale=$3 $stats"
-          }
-          round=1
-          while [ "$round" -le 4 ]; do
-            probe_time "$RUNNER_TEMP/release/head/paging" head 16 "$round"
-            probe_time "$RUNNER_TEMP/release/base/paging" base 16 "$round"
-            round=$((round + 1))
-          done
-          # One scale-16 re-count per side under strace -c -f: the full
-          # table goes to the log, then the mmap-family and total rows.
-          probe_strace() {
-            if [ ! -x "$1" ]; then
-              echo "probe-paging: strace $2: no musl jig; unavailable"
-              return 0
-            fi
-            echo "probe-paging: strace $2: tracing one scale-16 re-count"
-            strace -c -f -o "$tmp/strace-$2.log" -- "$1" 16 160 48 > "$tmp/strace-$2-jig.log" 2>&1 || true
-            grep '^slowest re-count at a new width:' "$tmp/strace-$2-jig.log" | sed "s/^/probe-paging: strace $2 re-count: /" || true
-            echo "probe-paging: strace $2: full -c table"
-            cat "$tmp/strace-$2.log" || true
-            echo "probe-paging: strace $2: mmap-family and total rows"
-            grep -E '(mmap|munmap|madvise|mremap|brk|total)' "$tmp/strace-$2.log" || true
-          }
-          probe_strace "$RUNNER_TEMP/release/head/paging" head
-          probe_strace "$RUNNER_TEMP/release/base/paging" base
-          # The gnu scale-1 and scale-16 wall times, once each per side.
+          sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
+          # The gnu scale-1 re-count of the jig at $1, named $2: one run,
+          # printed to the log.
           probe_gnu() {
             if [ ! -x "$1" ]; then
-              echo "probe-paging: gnu $2 scale-$3 wall_ms=unavailable re-count: no gnu jig; unavailable"
+              echo "probe-paging: $2: no gnu jig; unavailable"
               return 0
             fi
-            start=$(date +%s%N)
-            line=$("$1" "$3" 160 48 2>/dev/null | grep '^slowest re-count at a new width:' || true)
-            end=$(date +%s%N)
-            echo "probe-paging: gnu $2 scale-$3 wall_ms=$(( (end - start) / 1000000 )) re-count: ${line:-missing}"
+            line=$("$1" 1 160 48 2>/dev/null | grep '^slowest re-count at a new width:' || true)
+            echo "probe-paging: $2 gnu scale-1 re-count: ${line:-missing}"
           }
-          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head 1
-          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base 1
-          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head 16
-          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base 16
+          # The musl jig's scale-16 re-count at $1, named $2, under
+          # perf record -g, with its perf report (self time) in the log.
+          probe_perf() {
+            if [ ! -x "$1" ]; then
+              echo "probe-paging: $2: no musl jig; unavailable"
+              return 0
+            fi
+            data="$tmp/$2.data"
+            echo "probe-paging: $2: recording the scale-16 re-count under perf"
+            if perf record -g -o "$data" -- "$1" 16 160 48 > "$tmp/$2-jig.log" 2>&1; then
+              grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-paging: $2 musl scale-16 re-count: /" || true
+              echo "probe-paging: $2: perf report --no-children (self time)"
+              perf report --no-children --stdio -i "$data" 2>&1 | head -n 120 || true
+              echo "probe-paging: $2: top 15 symbols by self time"
+              perf report --no-children --stdio -i "$data" 2>/dev/null | grep -E '^[[:space:]]+[0-9]+\.[0-9]+%' | head -n 15 || true
+            else
+              echo "probe-paging: $2: perf record failed; falling back to perf stat"
+              perf stat -o "$tmp/$2-stat.log" -- "$1" 16 160 48 > "$tmp/$2-fallback.log" 2>&1 || true
+              grep '^slowest re-count at a new width:' "$tmp/$2-fallback.log" | sed "s/^/probe-paging: $2 musl scale-16 re-count (stat fallback): /" || true
+              cat "$tmp/$2-stat.log" || true
+            fi
+          }
+          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head
+          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base
+          probe_perf "$RUNNER_TEMP/release/head/paging" head-musl
+          probe_perf "$RUNNER_TEMP/release/base/paging" base-musl
       - name: Print the attach stages
         run: |
           table=$(jq -r '
