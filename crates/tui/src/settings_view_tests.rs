@@ -673,3 +673,31 @@ fn shown_is_the_height_less_the_header_the_line_below_and_footer() {
         assert_eq!(settings.shown(&sized), want, "height {height}");
     }
 }
+
+#[test]
+fn ctrl_g_uses_key_ownership_even_for_default_rows() {
+    for (key, has_file, client) in [
+        ("tui.hover", true, true),
+        ("keys.quit", false, true),
+        ("model", true, false),
+        ("model", false, false),
+        ("tui.theme", false, true),
+    ] {
+        let mut selected = row(key, Shown::Unset, "default", WriteScope::GlobalOnly);
+        selected.file = has_file.then(|| PathBuf::from("/settings/config.json"));
+        let fake = Fake::new(vec![selected]);
+        let mut settings = Settings::open(&ctx(&fake));
+        let act = settings.key(&Key::CtrlG, &ctx(&fake));
+        match (act, client, has_file) {
+            (Act::OpenLocal(Some(path)), true, true) => {
+                assert_eq!(path, PathBuf::from("/settings/config.json"))
+            }
+            (Act::OpenLocal(None), true, false) => {}
+            (Act::Open(path), false, true) => {
+                assert_eq!(path, PathBuf::from("/settings/config.json"))
+            }
+            (Act::Open(path), false, false) => assert_eq!(path, fake.global),
+            (act, _, _) => panic!("wrong file ownership for {key}: {act:?}"),
+        }
+    }
+}

@@ -629,6 +629,107 @@ fn recv_disconnect(rx: &mpsc::Receiver<Input>, wait: &Deadline) {
 }
 
 #[test]
+fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
+    use std::io::{BufRead, BufReader};
+    for extra in [64, 65] {
+        let d = Deadline::start();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let retry = Retry::new(&clock);
+        let hub = Connection::new(Some(Arc::clone(&retry)));
+        let router = crate::remote::Router::new();
+        let (tx, rx) = mpsc::channel();
+        let feed = Feed::new(tx, hub.credits()).routed(Arc::clone(&router));
+        let (ours, theirs) = pair();
+        let (next, next_hub) = pair();
+        let (release, resume) = mpsc::channel();
+        let (served, server_done) = mpsc::channel();
+        std::thread::spawn(move || {
+            for index in 0..64 {
+                crate::link::write_line(&theirs, &wire(&format!("before-{index}"))).unwrap();
+            }
+            let mut request = String::new();
+            BufReader::new(theirs.try_clone().unwrap())
+                .read_line(&mut request)
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            for index in 0..extra {
+                crate::link::write_line(&theirs, &wire(&format!("extra-{index}"))).unwrap();
+            }
+            crate::link::write_line(&theirs,&json!({"kind":"command_accepted","ts":0,"schema_version":1,"payload":{"command_id":request["id"],"result":{"ok":true}}}).to_string()).unwrap_or(());
+            resume.recv().unwrap_or(());
+            if extra == 64 {
+                crate::link::write_line(&theirs, &wire("after-lend")).unwrap();
+            }
+            served.send(()).unwrap();
+        });
+        let (connect, _called, gone) = dial(vec![(ours, hello()), (next, hello())]);
+        crate::sources::spawn_hub(connect, feed, Arc::clone(&retry), clock);
+        assert!(matches!(
+            d.recv_or_fail(&rx, "connected before lend"),
+            Input::Connected(..)
+        ));
+        let mut held = Vec::new();
+        for index in 0..64 {
+            let input = d.recv_or_fail(&rx, "initial full queue");
+            assert_eq!(
+                kinds(std::slice::from_ref(&input)),
+                [format!("before-{index}")]
+            );
+            held.push(input);
+        }
+        let worker = Arc::clone(&router);
+        let (done, result) = mpsc::channel();
+        std::thread::spawn(move || {
+            done.send(worker.ask(
+                "configure",
+                json!({"operation":"settings"}),
+                crate::remote::Caller::Loop,
+            ))
+            .unwrap();
+        });
+        let answer = d.recv_or_fail(&result, "routed call past full queue");
+        for index in 0..64 {
+            let input = d.recv_or_fail(&rx, "extra bounded queue");
+            assert_eq!(
+                kinds(std::slice::from_ref(&input)),
+                [format!("extra-{index}")]
+            );
+            held.push(input);
+        }
+        if extra == 64 {
+            assert_eq!(
+                answer.unwrap().payload.get("result"),
+                Some(&json!({"ok":true}))
+            );
+            release.send(()).unwrap();
+            await_waiter(&hub.credits(), "reader after lend drops above cap");
+            assert!(rx.try_recv().is_err());
+            for input in held.iter().take(65) {
+                hub.credits().received(input);
+            }
+            recv_line(&rx, &d, "after-lend");
+            recv_disconnect(&rx, &d);
+        } else {
+            assert_eq!(answer.unwrap_err(), crate::remote::AskError::Lost);
+            recv_disconnect(&rx, &d);
+            release.send(()).unwrap();
+            for input in &held {
+                hub.credits().received(input);
+            }
+            retry.give(Duration::ZERO);
+            assert!(matches!(
+                d.recv_or_fail(&rx, "reconnected after lend overflow"),
+                Input::Connected(..)
+            ));
+        }
+        d.recv_or_fail(&server_done, "flood server done");
+        drop(next_hub);
+        drop(hub);
+        d.recv_or_fail(&gone, "hub thread stopped");
+    }
+}
+
+#[test]
 fn spawn_hub_full_queue_hang_up_then_reconnect() {
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let retry = Retry::new(&clock);

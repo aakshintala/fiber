@@ -140,6 +140,8 @@ pub(crate) enum Act {
     Theme(ThemeSetting),
     /// Open this file in the editor.
     Open(PathBuf),
+    /// Open a client-owned file; a default row uses the client's global file.
+    OpenLocal(Option<PathBuf>),
     /// Start the browser login for this provider.
     Login(String),
     /// Read the reviewer choices for this stored provider in the
@@ -315,7 +317,11 @@ impl Settings {
             return Act::Close;
         }
         if *key == Key::CtrlG {
-            let file = self.selected().and_then(|row| row.file.clone());
+            let row = self.selected();
+            let file = row.and_then(|row| row.file.clone());
+            if row.is_some_and(|row| crate::remote::client_owned(&row.key)) {
+                return Act::OpenLocal(file);
+            }
             return Act::Open(file.unwrap_or_else(|| ctx.seam.global_file()));
         }
         if *key == Key::Enter {

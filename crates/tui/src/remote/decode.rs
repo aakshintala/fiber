@@ -56,6 +56,9 @@ macro_rules! optional {
 pub(super) fn text(value: &Value) -> Option<String> {
     read!(value, "text")
 }
+pub(super) fn read_config(value: &Value) -> Option<(String, String)> {
+    Some((read!(value, "text")?, read!(value, "version")?))
+}
 pub(super) fn file(value: &Value) -> Option<PathBuf> {
     read!(value, "file")
 }

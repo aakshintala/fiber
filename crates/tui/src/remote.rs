@@ -67,6 +67,81 @@ impl Remote {
             .map(Path::to_path_buf)
             .ok_or_else(|| decode::io_error("global_file"))
     }
+    /// Searches on the hub, delivering only ranked rows to the loop.
+    pub(crate) fn search(
+        &self,
+        workspace: &Path,
+        text: &str,
+        fresh: bool,
+        generation: u64,
+    ) -> Result<(), AskError> {
+        let mut args = Map::from_iter([
+            ("workspace".into(), json!(workspace)),
+            ("text".into(), json!(text)),
+        ]);
+        if fresh {
+            drop(args.insert("fresh".into(), json!(true)));
+        }
+        self.router.ask_into(
+            "search_files",
+            Value::Object(args),
+            Box::new(move |line| {
+                let result = match decode::result(line, "search_files") {
+                    Err(error) if error.code == ErrorCode::StaleRequest => return None,
+                    Err(error) => Err(error.message),
+                    Ok(value) => {
+                        if let Some(error) = value.get("error") {
+                            Err(error
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| decode::io_error("search_files").message))
+                        } else {
+                            value
+                                .get("rows")
+                                .cloned()
+                                .and_then(|rows| serde_json::from_value(rows).ok())
+                                .ok_or_else(|| decode::io_error("search_files").message)
+                        }
+                    }
+                };
+                Some(crate::Input::Files { generation, result })
+            }),
+        )
+    }
+
+    /// Fetches an editable hub file and its optimistic-write version.
+    pub(crate) fn fetch_file(
+        &self,
+        workspace: &Path,
+        file: &Path,
+    ) -> Result<(String, String), ConfigureError> {
+        let line = self
+            .router
+            .ask(
+                "read_config",
+                json!({"workspace":self.workspace(workspace)?,"path":file}),
+                Caller::Loop,
+            )
+            .map_err(ask_error)?;
+        decode::read_config(&decode::result(&line, "read_config")?)
+            .ok_or_else(|| decode::io_error("read_config"))
+    }
+    /// Writes only the hub version that the editor originally fetched.
+    pub(crate) fn store_file(
+        &self,
+        workspace: &Path,
+        file: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), ConfigureError> {
+        let line=self.router.ask("write_config",json!({"workspace":self.workspace(workspace)?,"path":file,"text":text,"version":version}),Caller::Loop).map_err(ask_error)?;
+        decode::result(&line, "write_config").map(|_| ())
+    }
+    /// The client's global file, for client-owned default rows.
+    pub(crate) fn local_global_file(&self) -> PathBuf {
+        self.local.global_file()
+    }
+
     fn hub_global(&self) -> Result<PathBuf, ConfigureError> {
         if let Some(file) = self.router.cached_global() {
             return Ok(file);
@@ -299,6 +374,77 @@ impl Configure for Remote {
     fn save_keys(&self, edits: &[KeyEdit]) -> Result<(), ConfigureError> {
         self.local.save_keys(edits)
     }
+}
+
+/// The owned editor copy; removal on drop is best-effort, including shutdown.
+pub(crate) struct RemoteCopy {
+    pub(crate) dir: PathBuf,
+    pub(crate) temp: PathBuf,
+    pub(crate) hub: PathBuf,
+    pub(crate) version: String,
+}
+impl RemoteCopy {
+    /// Creates a private directory containing the hub text byte for byte.
+    pub(crate) fn create(
+        dir_parent: &Path,
+        hub: &Path,
+        text: &str,
+        version: String,
+    ) -> std::io::Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = dir_parent.join(format!("fiber-{}", crate::app::mint()));
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        let temp = dir.join(
+            hub.file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("config.json")),
+        );
+        let copy = Self {
+            dir,
+            temp,
+            hub: hub.into(),
+            version,
+        };
+        std::fs::write(&copy.temp, text)?;
+        Ok(copy)
+    }
+}
+impl Drop for RemoteCopy {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.dir));
+    }
+}
+/// The seam installed on the app, and the remote-only operations if applicable.
+pub(crate) struct Seams {
+    pub(crate) seam: Option<Arc<dyn Configure>>,
+    pub(crate) remote: Option<Arc<Remote>>,
+}
+/// Wraps only a remote terminal's seam; local launches retain the original.
+pub(crate) fn seams(
+    location: &crate::LaunchLocation,
+    seam: Option<Arc<dyn Configure>>,
+    router: &Arc<Router>,
+) -> Seams {
+    if matches!(location, crate::LaunchLocation::Remote { .. }) {
+        if let Some(local) = seam {
+            let client_dir = std::env::current_dir().unwrap_or_else(|_| {
+                local
+                    .global_file()
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default()
+            });
+            let remote = Arc::new(Remote::new(local, client_dir, Arc::clone(router)));
+            return Seams {
+                seam: Some(Arc::clone(&remote) as Arc<dyn Configure>),
+                remote: Some(remote),
+            };
+        }
+        return Seams {
+            seam: None,
+            remote: None,
+        };
+    }
+    Seams { seam, remote: None }
 }
 
 #[cfg(test)]

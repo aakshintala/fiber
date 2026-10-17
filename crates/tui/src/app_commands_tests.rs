@@ -1528,3 +1528,176 @@ fn the_unanswered_interval_shows_built_ins_only_and_sends_prompt() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "command");
 }
+
+fn remote_search_app(
+    workspace: &str,
+) -> (
+    App,
+    std::sync::Arc<crate::remote::Router>,
+    std::sync::mpsc::Receiver<Value>,
+    std::sync::mpsc::Receiver<crate::Input>,
+) {
+    use std::io::{BufRead, BufReader};
+    use std::sync::{Arc, mpsc};
+    let router = crate::remote::Router::new();
+    let (client, hub) = std::os::unix::net::UnixStream::pair().unwrap();
+    router.attach(client);
+    let (tx, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(hub).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let (tx, inputs) = mpsc::channel();
+    router.set_feed(tx, crate::link::Credits::new(64));
+    let mut app = connected();
+    app.workspace = workspace.into();
+    app.set_remote(Arc::new(crate::remote::Remote::new(
+        Arc::new(crate::configure_fake::Fake::new(vec![])),
+        "/client".into(),
+        Arc::clone(&router),
+    )));
+    (app, router, lines, inputs)
+}
+fn route_file_answer(router: &crate::remote::Router, line: &Value, kind: &str, result: Value) {
+    let payload = if kind == "command_accepted" {
+        json!({"command_id":line["id"],"result":result})
+    } else {
+        json!({"command_id":line["id"],"code":result["code"],"message":result["message"]})
+    };
+    let answer =
+        serde_json::from_value(json!({"kind":kind,"ts":0,"schema_version":1,"payload":payload}))
+            .unwrap();
+    assert!(router.route(&Line::Hub(answer)));
+}
+fn fold_file_answer(
+    app: &mut App,
+    inputs: &std::sync::mpsc::Receiver<crate::Input>,
+    deadline: &fakes::Deadline,
+) {
+    let crate::Input::Files { generation, result } =
+        deadline.recv_or_fail(inputs, "remote file result")
+    else {
+        panic!("file input")
+    };
+    app.on_files(generation, result);
+}
+
+#[test]
+fn remote_mentions_use_the_hub_and_keep_only_the_latest_generation() {
+    let d = fakes::Deadline::start();
+    let (mut app, router, lines, inputs) = remote_search_app("/remote/ws");
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
+    let first = d.recv_or_fail(&lines, "new remote panel");
+    assert_eq!(first["command"], "search_files");
+    assert_eq!(
+        first["args"],
+        json!({"workspace":"/remote/ws","text":"","fresh":true})
+    );
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    let latest = d.recv_or_fail(&lines, "query edit");
+    assert_eq!(latest["args"], json!({"workspace":"/remote/ws","text":"s"}));
+    route_file_answer(
+        &router,
+        &latest,
+        "command_accepted",
+        json!({"rows":["src/","settings.rs"]}),
+    );
+    fold_file_answer(&mut app, &inputs, &d);
+    assert_eq!(app.file_paths(), ["src/", "settings.rs"]);
+    route_file_answer(
+        &router,
+        &first,
+        "command_accepted",
+        json!({"rows":["stale"]}),
+    );
+    fold_file_answer(&mut app, &inputs, &d);
+    assert_eq!(app.file_paths(), ["src/", "settings.rs"]);
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    let directory = d.recv_or_fail(&lines, "directory row");
+    assert_eq!(
+        directory["args"],
+        json!({"workspace":"/remote/ws","text":"src/"})
+    );
+    route_file_answer(
+        &router,
+        &directory,
+        "command_accepted",
+        json!({"rows":["src/lib.rs"]}),
+    );
+    fold_file_answer(&mut app, &inputs, &d);
+    assert_eq!(app.file_paths(), ["src/lib.rs"]);
+    app.on_key(Key::Esc, now());
+    app.on_key(Key::Char(' '), now());
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
+    let reopened = d.recv_or_fail(&lines, "reopened panel");
+    assert_eq!(reopened["args"]["fresh"], true);
+}
+
+#[test]
+fn remote_search_errors_are_panel_errors_and_stale_changes_nothing() {
+    let d = fakes::Deadline::start();
+    let (mut app, router, lines, inputs) = remote_search_app("/remote/ws");
+    for (kind, result, expected) in [
+        (
+            "command_accepted",
+            json!({"error":"walk failed"}),
+            "walk failed",
+        ),
+        (
+            "command_rejected",
+            json!({"code":"invalid_arguments","message":"hub refused"}),
+            "hub refused",
+        ),
+        (
+            "command_accepted",
+            json!({"rows":7}),
+            "The search_files answer could not be read.",
+        ),
+    ] {
+        app.on_key(Key::Esc, now());
+        app.on_key(Key::Char(' '), now());
+        assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
+        let line = d.recv_or_fail(&lines, "search that fails");
+        route_file_answer(&router, &line, kind, result);
+        fold_file_answer(&mut app, &inputs, &d);
+        assert_eq!(
+            app.overlays.files.as_ref().unwrap().result,
+            Some(Err(expected.into()))
+        );
+    }
+    app.on_key(Key::Char('x'), now());
+    let line = d.recv_or_fail(&lines, "stale search");
+    route_file_answer(
+        &router,
+        &line,
+        "command_rejected",
+        json!({"code":"stale_request","message":"old"}),
+    );
+    assert!(inputs.try_recv().is_err());
+    assert_eq!(
+        app.overlays.files.as_ref().unwrap().result,
+        Some(Err("The search_files answer could not be read.".into()))
+    );
+}
+
+#[test]
+fn remote_mentions_without_workspace_or_link_do_not_fall_back_to_client_disk() {
+    for empty in [false, true] {
+        let (mut app, router, lines, _inputs) =
+            remote_search_app(if empty { "" } else { "/remote/ws" });
+        if !empty {
+            router.detach();
+        }
+        assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
+        assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
+        assert!(lines.try_recv().is_err());
+        assert!(app.overlays.files.as_ref().unwrap().result.is_none());
+    }
+    let mut local = connected();
+    assert_eq!(local.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    assert!(matches!(local.on_key(Key::Char('x'),now()),Effect::Search{query,..} if query=="x"));
+}

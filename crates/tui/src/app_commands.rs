@@ -334,7 +334,7 @@ impl App {
                 result: None,
             });
             self.overlays.generation = self.overlays.generation.saturating_add(1);
-            return Effect::ListFiles;
+            return self.search_files(String::new(), true);
         }
         self.query_changed()
     }
@@ -353,9 +353,26 @@ impl App {
             return Effect::None;
         };
         self.overlays.generation = self.overlays.generation.saturating_add(1);
-        Effect::Search {
-            generation: self.overlays.generation,
-            query,
+        self.search_files(query, false)
+    }
+
+    /// Remote panels never start a client-side walk, including while detached.
+    fn search_files(&self, query: String, fresh: bool) -> Effect {
+        if let Some(remote) = self.remote() {
+            let workspace = self.workspace();
+            if !workspace.as_os_str().is_empty() {
+                remote
+                    .search(&workspace, &query, fresh, self.overlays.generation)
+                    .unwrap_or(());
+            }
+            Effect::None
+        } else if fresh {
+            Effect::ListFiles
+        } else {
+            Effect::Search {
+                generation: self.overlays.generation,
+                query,
+            }
         }
     }
 
@@ -406,10 +423,7 @@ impl App {
                         let Some(query) = self.file_query() else {
                             return Some(Effect::None);
                         };
-                        return Some(Effect::Search {
-                            generation: self.overlays.generation,
-                            query,
-                        });
+                        return Some(self.search_files(query, false));
                     }
                     let end = self
                         .draft

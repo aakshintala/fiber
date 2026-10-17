@@ -412,6 +412,190 @@ fn browser_login_is_a_remote_device_login_through_the_seam() {
 }
 
 #[test]
+fn installation_preserves_local_seams_and_uses_the_clients_directory() {
+    let router = Router::new();
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let installed = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        Some(Arc::clone(&local)),
+        &router,
+    );
+    let remote = installed.remote.unwrap();
+    assert_eq!(remote.client_dir, std::env::current_dir().unwrap());
+    assert!(installed.seam.is_some());
+    assert!(Arc::ptr_eq(&remote.local, &local));
+    let missing = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        None,
+        &router,
+    );
+    assert!(missing.remote.is_none());
+    assert!(missing.seam.is_none());
+    let installed = seams(
+        &crate::LaunchLocation::default(),
+        Some(Arc::clone(&local)),
+        &router,
+    );
+    assert!(installed.remote.is_none());
+    assert!(Arc::ptr_eq(&installed.seam.unwrap(), &local));
+}
+
+#[test]
+fn editor_copies_are_private_exact_and_removed_on_drop() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = fakes::TempDir::new("remote-copy");
+    for text in ["", "{}", "{}\n", "a\r\nb\n\n"] {
+        let copy = RemoteCopy::create(
+            parent.path(),
+            Path::new("/hub/config.json"),
+            text,
+            "v1".into(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&copy.temp).unwrap(), text.as_bytes());
+        assert_eq!(
+            std::fs::metadata(&copy.dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(copy.temp.file_name().unwrap(), "config.json");
+        assert_eq!(copy.hub, PathBuf::from("/hub/config.json"));
+        assert_eq!(copy.version, "v1");
+        let dir = copy.dir.clone();
+        drop(copy);
+        assert!(!dir.exists());
+    }
+}
+
+#[test]
+fn ordinary_copy_cleanup_failure_is_best_effort() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = fakes::TempDir::new("remote-copy-failure");
+    let copy =
+        RemoteCopy::create(parent.path(), Path::new("/hub/rules"), "rules", "v".into()).unwrap();
+    let dir = copy.dir.clone();
+    let inner = dir.join("inner");
+    std::fs::create_dir(&inner).unwrap();
+    let file = inner.join("held");
+    std::fs::write(&file, "held").unwrap();
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o500)).unwrap();
+    assert_eq!(
+        std::fs::remove_file(&file).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "cleanup fixture must deny removal; do not run as root"
+    );
+    drop(copy);
+    assert!(dir.exists());
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn fetch_and_store_preserve_text_version_and_stale_rejections() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let d = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.fetch_file(Path::new("/w"), Path::new("/hub/config.json")))
+            .unwrap();
+    });
+    let line = d.recv_or_fail(&hub.lines, "read_config");
+    assert_eq!(line["command"], "read_config");
+    assert_eq!(
+        line["args"],
+        json!({"workspace":"/w","path":"/hub/config.json"})
+    );
+    hub.reply(&line, json!({"text":"{}\n","version":"v1"}));
+    assert_eq!(
+        d.recv_or_fail(&rx, "fetched copy").unwrap(),
+        ("{}\n".into(), "v1".into())
+    );
+    for stale in [false, true] {
+        let (tx, rx) = mpsc::channel();
+        let remote = Arc::clone(&hub.remote);
+        thread::spawn(move || {
+            tx.send(remote.store_file(
+                Path::new("/w"),
+                Path::new("/hub/config.json"),
+                "changed\n",
+                "v1",
+            ))
+            .unwrap();
+        });
+        let line = d.recv_or_fail(&hub.lines, "write_config");
+        assert_eq!(line["command"], "write_config");
+        assert_eq!(
+            line["args"],
+            json!({"workspace":"/w","path":"/hub/config.json","text":"changed\n","version":"v1"})
+        );
+        if stale {
+            let response=serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":"stale_request","message":"file changed"}})).unwrap();
+            assert!(hub.router.route(&crate::link::Line::Hub(response)));
+            assert_eq!(
+                d.recv_or_fail(&rx, "stale write").unwrap_err(),
+                ConfigureError {
+                    code: ErrorCode::StaleRequest,
+                    message: "file changed".into()
+                }
+            );
+        } else {
+            hub.reply(&line, json!(null));
+            d.recv_or_fail(&rx, "stored copy").unwrap();
+        }
+    }
+}
+
+#[test]
+fn search_maps_ranked_rows_errors_and_stale_without_taking_credits() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let d = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    hub.router.set_feed(tx, crate::link::Credits::new(0));
+    for fresh in [true, false] {
+        hub.remote
+            .search(Path::new("/hub/ws"), "../src", fresh, 19)
+            .unwrap();
+        let line = d.recv_or_fail(&hub.lines, "remote file search");
+        let mut args = json!({"workspace":"/hub/ws","text":"../src"});
+        if fresh {
+            args["fresh"] = json!(true);
+        }
+        assert_eq!(line["command"], "search_files");
+        assert_eq!(line["args"], args);
+        hub.reply(&line, json!({"rows":["../src/","README.md"]}));
+        assert!(
+            matches!(d.recv_or_fail(&rx,"ranked file rows"),crate::Input::Files {generation:19,result:Ok(rows)} if rows==["../src/","README.md"])
+        );
+    }
+    for (code, message, expected) in [
+        ("stale_request", "older search", None),
+        ("io_failed", "cannot search", Some("cannot search")),
+    ] {
+        hub.remote
+            .search(Path::new("/hub/ws"), "x", false, 20)
+            .unwrap();
+        let line = d.recv_or_fail(&hub.lines, "rejected search");
+        let response=serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":code,"message":message}})).unwrap();
+        assert!(hub.router.route(&crate::link::Line::Hub(response)));
+        if let Some(expected) = expected {
+            assert!(
+                matches!(d.recv_or_fail(&rx,"search rejection"),crate::Input::Files {generation:20,result:Err(message)} if message==expected)
+            );
+        } else {
+            assert!(rx.try_recv().is_err());
+        }
+    }
+    hub.remote
+        .search(Path::new("/hub/ws"), "~/", false, 21)
+        .unwrap();
+    let line = d.recv_or_fail(&hub.lines, "accepted search error");
+    hub.reply(&line, json!({"error":"permission denied"}));
+    assert!(
+        matches!(d.recv_or_fail(&rx,"search walk error"),crate::Input::Files {generation:21,result:Err(message)} if message=="permission denied")
+    );
+}
+
+#[test]
 fn errors_preserve_rejections_and_name_bad_answers() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));
     let error = hub
