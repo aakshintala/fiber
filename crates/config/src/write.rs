@@ -556,7 +556,7 @@ pub fn remove_extension_settings(home: &Path, extension: &str) -> Result<(), Con
 
 /// `config/<extension>.json` under a layer's directory, `<extension>`
 /// named as in `extensions/` (`docs/state.md`, "What each part holds").
-pub(crate) fn settings_file(dir: &Path, extension: &str) -> PathBuf {
+pub fn settings_file(dir: &Path, extension: &str) -> PathBuf {
     dir.join("config")
         .join(format!("{}.json", crate::names::dir_name(extension)))
 }

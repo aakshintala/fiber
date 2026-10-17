@@ -284,18 +284,9 @@ pub struct Removal {
     /// prompt: every path it deletes is named before anything goes.
     pub data: Vec<PathBuf>,
     home: PathBuf,
-    listed: Vec<Listed>,
+    data_dirs: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
     _lock: Lock,
-}
-
-/// One path a removal worked out: the single list `Removal.data` and
-/// `commit` both read, so the prompt and the deletion cannot disagree.
-enum Listed {
-    /// A data directory: shown in the prompt, deleted by `commit`.
-    Data(PathBuf),
-    /// A settings file: shown in the prompt, deleted through `config`.
-    Settings(PathBuf),
 }
 
 impl Removal {
@@ -304,13 +295,13 @@ impl Removal {
     /// settings path that is a directory fails naming it, instead of
     /// being removed as one.
     pub fn commit(self) -> Result<(), Error> {
-        for path in self.deleted() {
+        for path in &self.data_dirs {
             present(path)?;
         }
         for dir in &self.dirs {
             remove(dir)?;
         }
-        for path in self.deleted() {
+        for path in &self.data_dirs {
             // `present` already ran. A path that vanished since then is
             // already gone; any other failure names the path.
             let gone = if path.is_dir() {
@@ -328,14 +319,6 @@ impl Removal {
             config::remove_extension_settings(&self.home, name)?;
         }
         Ok(())
-    }
-
-    /// The data directories `commit` deletes itself.
-    fn deleted(&self) -> impl Iterator<Item = &PathBuf> {
-        self.listed.iter().filter_map(|listed| match listed {
-            Listed::Data(path) => Some(path),
-            Listed::Settings(_) => None,
-        })
     }
 }
 
@@ -396,31 +379,33 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     }
     let layers = layers(home)?;
     let mut dirs = Vec::new();
-    let mut listed = Vec::new();
+    let mut data_dirs = Vec::new();
+    let mut data = Vec::new();
     // The damaged directory is named by its directory, without reading
-    // its record; every orphan cascades from its healthy name.
+    // its record; every orphan cascades from its healthy name. The
+    // prompt and the deletion read the same results, so they agree.
     let mut orphan_names = names.iter();
     if let Some(dir) = damaged_dir {
         orphan_names.next();
         dirs.push(home.join("extensions").join(&dir));
-        listed.extend(existing_data(&layers, &dir)?);
+        let (gone, found) = existing_data(&layers, &dir)?;
+        data.extend(gone.iter().cloned());
+        data.extend(found.iter().cloned());
+        data_dirs.extend(gone);
     }
     for name in orphan_names {
         let dir = slug(name)?;
         dirs.push(home.join("extensions").join(&dir));
-        listed.extend(existing_data(&layers, &dir)?);
+        let (gone, found) = existing_data(&layers, &dir)?;
+        data.extend(gone.iter().cloned());
+        data.extend(found.iter().cloned());
+        data_dirs.extend(gone);
     }
-    let data = listed
-        .iter()
-        .map(|entry| match entry {
-            Listed::Data(path) | Listed::Settings(path) => path.clone(),
-        })
-        .collect();
     Ok(Removal {
         names,
         data,
         home: home.to_path_buf(),
-        listed,
+        data_dirs,
         dirs,
         _lock: lock,
     })
@@ -451,22 +436,26 @@ fn layers(home: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(layers)
 }
 
-/// What exists for the extension directory `dir`, in layer order.
-/// The settings paths are listed for the prompt only: `commit` deletes
-/// them through `config`.
-fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<Listed>, Error> {
-    let mut listed = Vec::new();
+/// What exists for the extension directory `dir`, in layer order: the
+/// data directories `commit` deletes itself, and the settings files the
+/// prompt lists. The settings paths are listed for the prompt only:
+/// `commit` deletes them through `config`.
+fn existing_data(layers: &[PathBuf], dir: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
+    let mut gone = Vec::new();
+    let mut found = Vec::new();
     for layer in layers {
         let data_dir = layer.join("data").join(dir);
         if present(&data_dir)? {
-            listed.push(Listed::Data(data_dir));
+            gone.push(data_dir);
         }
-        let settings = layer.join("config").join(format!("{dir}.json"));
+        // `dir` is already slugged, and slugging twice changes nothing:
+        // this is the file `remove_extension_settings` deletes.
+        let settings = config::settings_file(layer, dir);
         if present(&settings)? {
-            listed.push(Listed::Settings(settings));
+            found.push(settings);
         }
     }
-    Ok(listed)
+    Ok((gone, found))
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use std::thread;
 use common::{PROJECT, Setup, key};
 use config::{
     Layer, Scope, get_global, has_manifest, remove_extension_settings, replace_global, set,
-    set_global_if_unset,
+    set_global_if_unset, settings_file,
 };
 use contract::ErrorCode;
 use serde_json::json;
@@ -484,6 +484,17 @@ fn removing_an_extension_deletes_its_global_and_every_per_project_file() {
         assert!(!dir.join(file).exists());
         assert!(dir.join("other.json").exists());
     }
+}
+
+#[test]
+fn the_settings_file_is_what_removal_deletes() {
+    let setup = Setup::new();
+    let file = settings_file(&setup.home(), ACME);
+    setup.write(&file, "{}");
+    setup.write(&setup.home().join("config").join("other.json"), "{}");
+    remove_extension_settings(&setup.home(), ACME).unwrap();
+    assert!(!file.exists());
+    assert!(setup.home().join("config").join("other.json").exists());
 }
 
 #[test]

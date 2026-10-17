@@ -66,7 +66,7 @@ pub use settings::{SettingInfo, SettingValue};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,
     insert_entry, remove_entry, remove_extension_settings, replace_global, set,
-    set_global_if_unset, update_global_entries, write_atomic,
+    set_global_if_unset, settings_file, update_global_entries, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
@@ -334,10 +334,7 @@ impl Config {
         // Only a plain replace row merges holder-wins: a union row
         // holds every layer's names, and an entry-replaced row goes
         // whole to one layer, neither what the highest layer holds.
-        if keys::leaf(key).is_some_and(|row| row.merge != keys::Merge::Replace) {
-            return Fast::Merge;
-        }
-        if (0..key.len()).any(|len| {
+        if (0..=key.len()).any(|len| {
             key.get(..len).is_some_and(|prefix| {
                 keys::leaf(prefix).is_some_and(|row| row.merge != keys::Merge::Replace)
             })
