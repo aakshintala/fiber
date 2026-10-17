@@ -17,7 +17,7 @@ use contract::clock::Clock;
 use extensions::SessionExtensions;
 use serde_json::{Value, json};
 
-use super::{mode, read, reader};
+use super::{catalogue, mode, read, reader};
 
 /// Model-list fixtures with test-specific extension helpers.
 struct Setup {
@@ -169,8 +169,7 @@ fn the_readers_cached_read_lists_the_installed_models() {
     let setup = Setup::new("fiber-model-list-reader");
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let locks: std::sync::Arc<dyn contract::files::PathLock> =
-        std::sync::Arc::new(tools::PathLocks::new());
+    let locks: std::sync::Arc<dyn contract::files::PathLock> = Arc::new(tools::PathLocks::new());
     let catalogue = reader(
         setup.home(),
         setup.workspace(),
@@ -641,6 +640,51 @@ fn future_cache_reads_as_updated_now() {
             stale: false,
         }]
     );
+}
+
+/// An invalid configuration keeps its code through the typed read: the
+/// hub answers `config_invalid` with it, naming the file.
+#[test]
+fn an_invalid_configuration_keeps_its_config_invalid_code() {
+    let setup = Setup::new("fiber-model-list-invalid-code");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    std::fs::write(setup.home().join("config.json"), "{invalid").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let error = catalogue(
+        setup.home(),
+        setup.workspace(),
+        clock,
+        Arc::new(tools::PathLocks::new()),
+        Arc::default(),
+        tui::Refresh::Cached,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::ConfigInvalid);
+    assert!(
+        error.to_string().contains("config.json"),
+        "the message names the file: {error}"
+    );
+}
+
+/// An unreadable configuration file keeps its own code through the
+/// typed read: a directory `config.json` is `io_failed`, not
+/// `config_invalid`.
+#[test]
+fn an_unreadable_configuration_keeps_its_io_code() {
+    let setup = Setup::new("fiber-model-list-io-code");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    std::fs::create_dir(setup.home().join("config.json")).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let error = catalogue(
+        setup.home(),
+        setup.workspace(),
+        clock,
+        Arc::new(tools::PathLocks::new()),
+        Arc::default(),
+        tui::Refresh::Cached,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
 }
 
 /// The deadline of each wait in the command-source tests.
