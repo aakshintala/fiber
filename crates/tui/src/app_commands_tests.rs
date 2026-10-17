@@ -1381,8 +1381,16 @@ fn an_extension_model_takes_the_built_in_slot_and_dispatch() {
     );
     type_text(&mut app, "/model");
     let rows = shown(&app);
-    assert_eq!(rows.first().cloned(), Some("/model [speed]  Picks a fast model.  acme".to_owned()), "{rows:?}");
-    assert!(rows.iter().all(|row| *row != "/model  Opens the model picker.  command"), "{rows:?}");
+    assert_eq!(
+        rows.first().cloned(),
+        Some("/model [speed]  Picks a fast model.  acme".to_owned()),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| *row != "/model  Opens the model picker.  command"),
+        "{rows:?}"
+    );
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "command");

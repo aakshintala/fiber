@@ -1,8 +1,8 @@
 //! Tests for the `/` list.
 
 use super::{BUILT_INS, Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use contract::events::CommandInfo;
 use contract::commands::BUILT_IN_COMMANDS;
+use contract::events::CommandInfo;
 
 /// A `commands` answer row for the skill `name`, with no hint.
 fn skill(name: &str) -> CommandInfo {
@@ -123,13 +123,13 @@ fn an_extension_row_takes_its_built_in_slot() {
     let models: Vec<&Row> = all.iter().filter(|row| row.name == "model").collect();
     assert_eq!(models.len(), 1);
     let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
-    let at = table_names.iter().position(|name| *name == "model").unwrap();
+    let at = table_names
+        .iter()
+        .position(|name| *name == "model")
+        .unwrap();
     assert_eq!(all[at].name, "model");
     assert_eq!(all[at].tag, "acme");
-    assert_eq!(
-        all[at].line(),
-        "/model [speed]  Picks a fast model.  acme"
-    );
+    assert_eq!(all[at].line(), "/model [speed]  Picks a fast model.  acme");
 }
 
 #[test]
@@ -146,7 +146,12 @@ fn an_extension_row_for_an_undrawn_built_in_stays_in_answer_order() {
 
 #[test]
 fn extensions_lists_only_extension_rows_in_answer_order() {
-    let answer = vec![skill("tdd"), extension_row("deploy"), mcp_row("greet"), extension_row("model")];
+    let answer = vec![
+        skill("tdd"),
+        extension_row("deploy"),
+        mcp_row("greet"),
+        extension_row("model"),
+    ];
     assert_eq!(extensions(&answer), ["deploy", "model"]);
     assert!(extensions(&[]).is_empty());
 }

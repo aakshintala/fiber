@@ -776,7 +776,10 @@ fn slash_replaced() {
     ));
     type_text(&mut app, "/mo");
     let shown = screen(&app, 160, 48);
-    assert!(shown.contains("model") && shown.contains("Picks a fast model."), "{shown}");
+    assert!(
+        shown.contains("model") && shown.contains("Picks a fast model."),
+        "{shown}"
+    );
     assert!(shown.contains("acme"), "{shown}");
     assert!(!shown.contains("The model skill"), "{shown}");
     insta::assert_snapshot!("slash-replaced", shown);

@@ -323,6 +323,7 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
         commands.iter().any(|c| c["name"] == "sync-now"
             && c["description"] == "Sync now."
             && c["tag"] == "fiber.test/worker"
+            && c["extension"] == true
             && c.get("argument_hint").is_none()),
         "{result}"
     );

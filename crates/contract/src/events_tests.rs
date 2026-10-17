@@ -1531,7 +1531,10 @@ fn an_extension_command_result_marks_extension() {
     let plain = result_of(json!({"command_id": "c_1", "result": {"commands": [
         {"name": "tdd", "description": "Test first.", "tag": "skill"}]}}));
     let written = serde_json::to_value(&plain).unwrap();
-    assert!(written["commands"][0].get("extension").is_none(), "{written}");
+    assert!(
+        written["commands"][0].get("extension").is_none(),
+        "{written}"
+    );
 }
 
 #[test]
