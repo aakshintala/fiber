@@ -268,7 +268,16 @@ fn unchanged_instruction_file_adds_hosts_from_each_version() {
             json!({"path":"AGENTS.md", "reason":"changed", "content":url, "sent":"full"}),
         ));
     }
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"AGENTS.md", "reason":"own_edit", "extension":"test", "content":"https://extension.test/", "sent":"full"}),
+    ));
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"AGENTS.md", "reason":"deleted", "sent":"deleted"}),
+    ));
     assert!(known.all_known(&["https://first.test/".into(), "https://second.test/".into()]));
+    assert!(!known.all_known(&["https://extension.test/".into()]));
 }
 
 #[test]

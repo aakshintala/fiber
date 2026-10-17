@@ -1,9 +1,9 @@
 //! Known network hosts, folded only from trusted durable sources
 //! (`docs/tools.md`, "Web fetch and web search").
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use contract::events::{DecidedBy, Decision, Event, InputItem};
+use contract::events::{DecidedBy, Decision, Event, InputItem, InstructionReason};
 use contract::shapes::{ContentPart, Origin};
 
 type Host = (String, u16);
@@ -66,6 +66,9 @@ fn named_in(text: &str) -> impl Iterator<Item = Host> + '_ {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct KnownHosts {
     hosts: BTreeSet<Host>,
+    // Keep instruction provenance so a later session edit excludes every version.
+    instruction_hosts: BTreeMap<String, BTreeSet<Host>>,
+    changed_paths: BTreeSet<String>,
 }
 
 impl KnownHosts {
@@ -93,13 +96,26 @@ impl KnownHosts {
                 }
             }
             Event::InstructionFile(file) => {
-                if file.extension.is_none()
-                    && let Some(content) = &file.content
-                {
-                    self.hosts.extend(named_in(content));
+                if file.extension.is_none() {
+                    if file.reason == InstructionReason::OwnEdit {
+                        self.changed_paths.insert(file.path.clone());
+                        self.instruction_hosts.remove(&file.path);
+                    }
+                    if !self.changed_paths.contains(&file.path)
+                        && let Some(content) = &file.content
+                    {
+                        self.instruction_hosts
+                            .entry(file.path.clone())
+                            .or_default()
+                            .extend(named_in(content));
+                    }
                 }
             }
             Event::ToolCallCompleted(result) => {
+                for change in result.changes.iter().flatten() {
+                    self.changed_paths.insert(change.path.clone());
+                    self.instruction_hosts.remove(&change.path);
+                }
                 self.hosts
                     .extend(result.hosts_surfaced.iter().filter_map(|url| host_of(url)));
             }
@@ -184,9 +200,15 @@ impl KnownHosts {
     }
 
     pub(crate) fn all_known(&self, hosts: &[String]) -> bool {
-        hosts
-            .iter()
-            .all(|url| host_of(url).is_some_and(|host| self.hosts.contains(&host)))
+        hosts.iter().all(|url| {
+            host_of(url).is_some_and(|host| {
+                self.hosts.contains(&host)
+                    || self
+                        .instruction_hosts
+                        .values()
+                        .any(|hosts| hosts.contains(&host))
+            })
+        })
     }
 }
 
