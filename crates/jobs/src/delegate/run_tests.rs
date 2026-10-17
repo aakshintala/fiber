@@ -1226,7 +1226,20 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     let dir = TempDir::new("fiber-delegate-closed");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
+    // The fold signal, sent by the watcher thread once it stores each
+    // result: the test waits on it instead of sleeping.
+    let (fold_tx, fold_rx) = mpsc::channel();
+    super::lock(&super::ON_WATCH_FOLD).replace(Box::new(move || {
+        let _sent = fold_tx.send(());
+    }));
+    // The first watch blocks until the test releases it, so its `Retry`
+    // folds while the runner is paused between its result take and its
+    // launch decision: the launch block, not the take above, advances the
+    // backoff. Dropping the sender releases it too, so a failed test
+    // never leaves the watcher parked.
+    let (gate_tx, gate_rx) = mpsc::channel();
     let rig = rig(vec![
+        WatchReply::Block(gate_rx),
         WatchReply::Closed(vec![envelope(1, "turn_completed", serde_json::json!({}))]),
         WatchReply::Closed(vec![
             envelope(1, "turn_completed", serde_json::json!({})),
@@ -1236,13 +1249,44 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     ]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
-    rig.start(&shell, BOUND, 1024);
-    // The child waits for the third delivery before it may exit: the
-    // replay above cannot win the race with the reap. Each close backs
-    // the retry off 50 ms, then 100 ms, from the first call.
+    let done = rig.start(&shell, BOUND, 1024);
     wait_calls(&rig, 1);
-    let mut at = rig.script.calls()[0];
-    for (gap, calls) in [(50, 2), (100, 3)] {
+    // One-shot pause between the result take and the launch decision.
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    super::lock(&super::AFTER_TAKE_RESULT).replace(Box::new(move || {
+        let _sent = reached_tx.send(());
+        let _released = go_rx.recv();
+    }));
+    // Wakes the parked runner into the pause: the clock moves only to the
+    // runner's own park, and the take above the pause saw nothing, because
+    // the watch is still gated.
+    let at = rig.script.calls()[0];
+    rig.clock
+        .mark_parked(at + super::POLL, DEADLINE)
+        .expect("the runner parks while the watch runs");
+    rig.clock.advance(super::POLL);
+    Deadline::after(DEADLINE)
+        .recv(&reached_rx)
+        .expect("the runner pauses between the take and the launch");
+    // Releases the watch, waits for the `Retry` to fold inside the pause,
+    // then resumes the runner to its launch decision: the launch block
+    // backs the retry off 50 ms and doubles to 100 ms.
+    gate_tx
+        .send(())
+        .expect("the blocked watch takes its release");
+    Deadline::after(DEADLINE)
+        .recv(&fold_rx)
+        .expect("the watcher folds its result");
+    super::lock(&super::ON_WATCH_FOLD).take();
+    go_tx.send(()).expect("the runner resumes to the launch");
+    // The child waits for the fourth delivery before it may exit: the
+    // replay above cannot win the race with the reap. Each retry backs
+    // off 50 ms, then 100 ms, then 200 ms. The second gap proves the
+    // launch block doubled the backoff: halving it would park 25 ms out
+    // instead.
+    let mut at = rig.clock.now();
+    for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
         at += Duration::from_millis(gap);
         assert!(
             rig.clock.await_parked(at, DEADLINE),
@@ -1251,16 +1295,26 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         rig.clock.advance(Duration::from_millis(gap));
         wait_calls(&rig, calls);
     }
-    // The third call returns before the watch folds the envelope:
-    // releasing here lets the reap win, so wait for all three folds.
+    // The fourth call returns before the watch folds the envelope:
+    // releasing here lets the reap win, so wait for all three folds (the
+    // blocked first call folds none).
     wait_folded(&rig, 3);
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Completed);
-    assert_eq!(rig.script.calls().len(), 3);
+    assert_eq!(rig.script.calls().len(), 4);
     assert_eq!(
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Replayed.".into())
+    );
+    // Waiting for the runner to return rules out later watches and timer signals.
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the runner returns after `fiber_exited`");
+    assert_eq!(
+        rig.script.calls().len(),
+        4,
+        "after `fiber_exited` the watch rests"
     );
     watchdog.stand_down(DEADLINE);
 }
