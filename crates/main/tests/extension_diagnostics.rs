@@ -284,20 +284,23 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
         .iter()
         .filter(|line| line["code"] == "provider_request")
         .collect();
-    // The quota fetch plus the native model call in P3's shape. The Lua
-    // quota observation and the native model-call observation reach the
-    // same log from paths with no guaranteed order, so each record is
-    // found by its purpose rather than its position.
-    assert_eq!(requests.len(), 2);
-    let quota = requests
-        .iter()
-        .find(|line| line["data"]["purpose"] == "quota")
-        .expect("one quota provider_request");
-    assert_eq!(quota["message"], "A provider request ended.");
-    assert_eq!(quota["data"]["provider"], "test");
-    assert_eq!(quota["data"]["purpose"], "quota");
-    assert_eq!(quota["data"]["attempt"], 1);
-    assert_eq!(quota["data"]["status"], 200);
+    // The native model call's record is always in the ask log. The quota
+    // fetch runs off the request path and can outlive an ask, so its
+    // record may not have landed yet; the session test asserts it instead.
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|line| line["data"]["purpose"] == "model_call")
+            .count(),
+        1,
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|line| line["data"]["purpose"] == "model_call"
+                || line["data"]["purpose"] == "quota"),
+        "only the model call and the quota fetch write ask-log provider_request lines: {requests:?}"
+    );
     let native = requests
         .iter()
         .find(|line| line["data"]["purpose"] == "model_call")

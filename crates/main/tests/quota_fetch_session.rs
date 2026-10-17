@@ -18,7 +18,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
-use serde_json::json;
+use serde_json::{Value, json};
 use support::*;
 
 /// Installs the Lua extension `test-ext` with a `test` provider whose
@@ -79,7 +79,19 @@ fn start_routed() -> ProviderServer {
 }
 
 fn configure(setup: &Setup, model: &str) {
-    write_json(&setup.home().join("config.json"), &json!({"model": model}));
+    // Debug, so the quota fetch's `provider_request` line is written.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": model, "diagnostics": {"level": "debug"}}),
+    );
+}
+
+/// The held-open session's diagnostic file, parsed: a trailing fragment
+/// without its newline is still being written, so it is dropped.
+fn session_lines(setup: &Setup, id: &str) -> Vec<Value> {
+    let path = setup.home().join("logs").join(format!("session-{id}.log"));
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    complete_lines(&text)
 }
 
 #[test]
@@ -116,6 +128,28 @@ fn a_model_call_through_an_open_session_fetches_lua_quota() {
         );
         seen = server.requests().len();
     }
+    // The fetch thread writes the record synchronously before it stores
+    // the fetch, so once the fetch ends the line is in the session's
+    // file: poll the file to the test's one deadline, with no sleep, and
+    // expiry fails naming the missing record.
+    let quota = loop {
+        if let Some(quota) = session_lines(&setup, &session)
+            .into_iter()
+            .find(|line| line["code"] == "provider_request" && line["data"]["purpose"] == "quota")
+        {
+            break quota;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the quota provider_request record in the session log"
+        );
+        std::thread::yield_now();
+    };
+    assert_eq!(quota["message"], "A provider request ended.");
+    assert_eq!(quota["data"]["provider"], "test");
+    assert_eq!(quota["data"]["purpose"], "quota");
+    assert_eq!(quota["data"]["attempt"], 1);
+    assert_eq!(quota["data"]["status"], 200);
     drop(client);
     // SIGKILL the hub: the session keeps running on its own socket.
     let hub = hub.lock().unwrap().take().expect("the starter ran");
