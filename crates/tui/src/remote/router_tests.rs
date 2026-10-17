@@ -126,6 +126,49 @@ fn detached_send_and_loop_ask_return_without_registering() {
     assert_eq!(router.registered(), 0);
 }
 
+#[test]
+fn detach_under_an_outer_lock_returns_before_retrying_outside_it() {
+    let deadline = Deadline::start();
+    let router = Router::new();
+    let (client, hub) = UnixStream::pair().unwrap();
+    router.attach(client);
+    let old_lines = read(hub);
+    let (held, acquired) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let (sent, sent_rx) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    let worker = Arc::clone(&router);
+    thread::spawn(move || {
+        let lock = Mutex::new(());
+        let guard = support::lock(&lock);
+        held.send(()).unwrap();
+        let _ = resume.recv();
+        sent.send(worker.send("configure", json!({})).err())
+            .unwrap();
+        drop(guard);
+        worker.wait_link(&Cancel::default()).unwrap();
+        done.send(worker.send("configure", json!({})).unwrap().wait())
+            .unwrap();
+    });
+    deadline.recv_or_fail(&acquired, "outer lock acquired");
+    router.detach();
+    release.send(()).unwrap();
+    assert_eq!(
+        deadline.recv_or_fail(&sent_rx, "detached send under outer lock"),
+        Some(AskError::Detached)
+    );
+    assert_eq!(router.registered(), 0);
+    assert!(old_lines.try_recv().is_err());
+    await_link(&router, &deadline);
+    let (client, hub) = UnixStream::pair().unwrap();
+    let lines = read(hub);
+    router.attach(client);
+    let line = deadline.recv_or_fail(&lines, "retry outside outer lock");
+    assert!(router.route(&answer(line["id"].as_str().unwrap(), "command_accepted")));
+    assert!(deadline.recv_or_fail(&finished, "retried answer").is_ok());
+    router.detach();
+}
+
 fn await_link(router: &Router, deadline: &Deadline) {
     while router.link_waiters() != 1 {
         assert!(
