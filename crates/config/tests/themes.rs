@@ -61,9 +61,12 @@ fn package(home: &fakes::TempDir, dir: &str) -> (String, PathBuf) {
 fn a_home_file_wins_without_asking_any_package() {
     let home = fakes::TempDir::new("fiber-config-theme-home-wins");
     let packages = [package(&home, "acme")];
-    let answers = [(home_dir(&home).join("themes").join("dusk.json"), "home".to_owned())]
-        .into_iter()
-        .collect();
+    let answers = [(
+        home_dir(&home).join("themes").join("dusk.json"),
+        "home".to_owned(),
+    )]
+    .into_iter()
+    .collect();
     let (got, asked) = text_with(
         home.path(),
         "dusk",
@@ -79,9 +82,12 @@ fn a_home_file_wins_without_asking_any_package() {
 fn a_home_file_wins_without_calling_enabled() {
     let home = fakes::TempDir::new("fiber-config-theme-no-enabled");
     let packages = [package(&home, "acme")];
-    let answers = [(home.path().join("themes").join("dusk.json"), "home".to_owned())]
-        .into_iter()
-        .collect();
+    let answers = [(
+        home.path().join("themes").join("dusk.json"),
+        "home".to_owned(),
+    )]
+    .into_iter()
+    .collect();
     let enabled = |_: &str| -> bool { panic!("enabled must not be called") };
     let (got, _) = text_with(home.path(), "dusk", &packages, &enabled, &found(&answers));
     assert_eq!(got, Ok("home".to_owned()));
@@ -180,7 +186,10 @@ fn the_first_package_in_the_given_order_wins() {
     let a = home.path().join("extensions").join("a");
     let b = home.path().join("extensions").join("b");
     // The given order decides, not the directory order.
-    let packages = [(String::from("b"), b.clone()), (String::from("a"), a.clone())];
+    let packages = [
+        (String::from("b"), b.clone()),
+        (String::from("a"), a.clone()),
+    ];
     let answers = [
         (a.join("themes").join("dusk.json"), "a".to_owned()),
         (b.join("themes").join("dusk.json"), "b".to_owned()),
@@ -209,7 +218,10 @@ fn when_every_source_lacks_the_file_the_text_is_homes_error() {
     let home = fakes::TempDir::new("fiber-config-theme-absent");
     let a = home.path().join("extensions").join("a");
     let b = home.path().join("extensions").join("b");
-    let packages = [(String::from("a"), a.clone()), (String::from("b"), b.clone())];
+    let packages = [
+        (String::from("a"), a.clone()),
+        (String::from("b"), b.clone()),
+    ];
     let home_file = home.path().join("themes").join("dusk.json");
     let missing = |path: &Path| -> io::Result<String> {
         if path == home_file {
@@ -235,15 +247,7 @@ fn bad_names_are_refused_without_a_read() {
     let home = fakes::TempDir::new("fiber-config-theme-bad-names");
     let packages = [package(&home, "acme")];
     for name in [
-        "",
-        ".hidden",
-        "..",
-        "a/b",
-        "a\\b",
-        "/etc/x",
-        "auto",
-        "dark",
-        "light",
+        "", ".hidden", "..", "a/b", "a\\b", "/etc/x", "auto", "dark", "light",
     ] {
         let asked = RefCell::new(Vec::new());
         let read = |path: &Path| -> io::Result<String> {
@@ -262,7 +266,10 @@ fn bad_names_are_refused_without_a_read() {
     };
     let got = theme_text(home.path(), "a.b", &packages, &always_enabled, &read);
     assert_eq!(got, Ok(String::new()));
-    assert_eq!(asked.into_inner(), [home.path().join("themes").join("a.b.json")]);
+    assert_eq!(
+        asked.into_inner(),
+        [home.path().join("themes").join("a.b.json")]
+    );
 }
 
 /// Writes `text` to the theme file `name` in `dir`, making it.
@@ -278,7 +285,10 @@ fn names_lists_home_and_package_themes_once_sorted() {
     let packages = [(String::from("acme"), acme.clone())];
     write_theme(&home.path().join("themes"), "solar.json");
     write_theme(&home.path().join("themes"), "dusk.json");
-    write_theme(&home.path().join("extensions").join("acme").join("themes"), "dusk.json");
+    write_theme(
+        &home.path().join("extensions").join("acme").join("themes"),
+        "dusk.json",
+    );
     write_theme(&acme.join("themes"), "tide.json");
     assert_eq!(
         theme_names(home.path(), &packages, &always_enabled),
@@ -320,10 +330,7 @@ fn names_leaves_out_a_disabled_extensions_themes() {
     let home = fakes::TempDir::new("fiber-config-theme-names-disabled");
     let acme = home.path().join("extensions").join("acme");
     let other = home.path().join("extensions").join("other");
-    let packages = [
-        (String::from("acme"), acme),
-        (String::from("other"), other),
-    ];
+    let packages = [(String::from("acme"), acme), (String::from("other"), other)];
     write_theme(
         &home.path().join("extensions").join("acme").join("themes"),
         "dusk.json",
@@ -343,7 +350,10 @@ fn a_disabled_extensions_same_named_file_is_skipped_for_a_later_enabled_one() {
     let home = fakes::TempDir::new("fiber-config-theme-disabled-order");
     let aaa = home.path().join("extensions").join("aaa");
     let zzz = home.path().join("extensions").join("zzz");
-    let packages = [(String::from("off"), aaa.clone()), (String::from("on"), zzz.clone())];
+    let packages = [
+        (String::from("off"), aaa.clone()),
+        (String::from("on"), zzz.clone()),
+    ];
     let answers = [
         (aaa.join("themes").join("dusk.json"), "off".to_owned()),
         (zzz.join("themes").join("dusk.json"), "on".to_owned()),
@@ -373,12 +383,8 @@ fn a_linked_package_theme_file_loads() {
         .unwrap_or_else(|e| panic!("link: {e}"));
     let acme = home.path().join("extensions").join("acme");
     let packages = [(String::from("acme"), acme)];
-    let got = theme_text(
-        home.path(),
-        "dusk",
-        &packages,
-        &always_enabled,
-        &|path| std::fs::read_to_string(path),
-    );
+    let got = theme_text(home.path(), "dusk", &packages, &always_enabled, &|path| {
+        std::fs::read_to_string(path)
+    });
     assert_eq!(got, Ok("linked".to_owned()));
 }

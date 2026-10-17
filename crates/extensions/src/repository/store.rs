@@ -562,7 +562,12 @@ impl Store {
     fn complete(&self, item: &RepoItem, copy: &Path) -> Result<PathBuf, Error> {
         let home = copy.join(".fiber-depends");
         check_dirs(&item.name, &self.home, &home, false)?;
-        check_dirs(&item.name, &self.home, &config::extensions_dir(&home), false)?;
+        check_dirs(
+            &item.name,
+            &self.home,
+            &config::extensions_dir(&home),
+            false,
+        )?;
         Ok(home.join(".complete"))
     }
 

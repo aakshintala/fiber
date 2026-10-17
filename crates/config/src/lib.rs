@@ -57,11 +57,13 @@ pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
 };
-pub use layout::{crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir, project_data_dir};
-pub use prompt_files::{append_prompt, system_prompt};
-pub use themes::{theme_names, theme_text};
+pub use layout::{
+    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
+    project_data_dir,
+};
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
+pub use prompt_files::{append_prompt, system_prompt};
 pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
 pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held, delete_secret,
@@ -69,6 +71,7 @@ pub use secret::{
     valid_env_key,
 };
 pub use settings::{SettingInfo, SettingValue};
+pub use themes::{theme_names, theme_text};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,
     insert_entry, remove_entry, remove_extension_settings, replace_global, set,
