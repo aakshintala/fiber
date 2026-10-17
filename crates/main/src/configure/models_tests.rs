@@ -285,6 +285,35 @@ fn hub_models_defaults_to_the_cached_list() {
     );
 }
 
+/// An explicit `refresh: "cached"` is the same read as the default: the
+/// cached list is served and the Lua provider is never read.
+#[test]
+fn hub_models_explicit_cached_serves_the_cached_list() {
+    let rig = Rig::new("fiber-hub-models-explicit-cached");
+    let server = fakes::ProviderServer::start([listing(&["served"])]).unwrap();
+    install_lua(
+        rig.root.path(),
+        &rig.home,
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
+    write_cache(&rig.home, "acme", &server.url(), &["cached"]);
+    let wall = fakes::clock::FakeClock::new().wall();
+    date_cache(&rig.home, "acme", Duration::from_secs(90), wall);
+    let seam = Seam::new(rig.home.clone());
+    let catalogue = result(
+        &seam,
+        "models",
+        json!({"workspace": rig.workspace, "refresh": "cached"}),
+    );
+    assert_eq!(references(&catalogue), ["acme/cached"]);
+    assert!(
+        server.requests().is_empty(),
+        "a Cached read starts no extension"
+    );
+}
+
 /// `refresh: "every"` runs the refresh: the answer is the Lua
 /// provider's list, and its list time is the injected clock's wall, so
 /// the refresh ran and the model came from the hub's home.
