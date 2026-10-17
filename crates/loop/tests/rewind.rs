@@ -118,6 +118,18 @@ fn start_b(
     worktree: Option<Worktree>,
     script: Vec<Scripted>,
 ) -> (Loop, mpsc::Sender<Delivery>, Arc<ScriptedProvider>, PathBuf) {
+    start_b_with_summary(session, id, from, note, worktree, script, None)
+}
+
+fn start_b_with_summary(
+    session: &Session,
+    id: &str,
+    from: Point,
+    note: String,
+    worktree: Option<Worktree>,
+    script: Vec<Scripted>,
+    summary: Option<String>,
+) -> (Loop, mpsc::Sender<Delivery>, Arc<ScriptedProvider>, PathBuf) {
     let home = session.dir.parent().unwrap().to_path_buf();
     let clock = session.clock.clone();
     let log = Arc::new(Log::create(&home, SessionId(id.into()), clock.clone()).unwrap());
@@ -166,6 +178,7 @@ fn start_b(
         Rewound {
             from,
             note,
+            summary,
             worktree,
             name: r#loop::latest_name(&session.dir),
         },
@@ -360,6 +373,55 @@ fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
             .iter()
             .all(|line| line.kind != "preamble_built" && line.kind != "opening_message")
     );
+}
+
+#[test]
+fn a_summary_follows_history_before_the_note_live_and_resumed() {
+    let session = run_a();
+    let lines = log::read(&session.dir).unwrap();
+    let at = point(&lines);
+    let note = rewind_note(&session.dir, Seq(at)).unwrap();
+    let history = session.provider.requests()[1].conversation.clone();
+    let k = history.len() - 1;
+    let (b, tx, provider, dir) = start_b_with_summary(
+        &session,
+        B_ID,
+        Point { session_id: SessionId("s_test".into()), seq: Seq(at) },
+        note.clone(),
+        None,
+        vec![Scripted::text("three-done")],
+        Some("the summary".into()),
+    );
+    let logged = log::read(&dir).unwrap();
+    assert_eq!(kinds(&logged), ["session_started"]);
+    assert_eq!(logged[0].payload["rewind"]["summary"], "the summary");
+    let b = run_turn(b, &tx, "three");
+    let request = &provider.requests()[0];
+    assert_eq!(&request.conversation[..k], &history[..k]);
+    for (index, text) in [(k, "the summary"), (k + 1, note.as_str()), (k + 2, "three")] {
+        assert_eq!(request.conversation[index], Input::User { text: text.into(), images: vec![] });
+    }
+    drop(b);
+    let home = dir.parent().unwrap().to_path_buf();
+    let log = Arc::new(Log::open(&home, SessionId(B_ID.into()), session.clock.clone()).unwrap());
+    let resumed_provider = Arc::new(ScriptedProvider::new(vec![Scripted::text("four-done")]));
+    let (tx, rx) = mpsc::channel();
+    let b = Loop::resume(r#loop::Session {
+        log,
+        provider: resumed_provider.clone(),
+        model: Model { reference: MODEL.into(), cost: None, subscription: false },
+        prompt: PromptInputs::new(home, "/bin/sh".into(), dir.join("events.jsonl").display().to_string(), session.clock.clone(), fakes::CONTEXT_WINDOW),
+        inbox: rx,
+        tools: vec![],
+        permissions: Permissions {
+            workspace: session.workspace.display().to_string(),
+            credentials: session.credentials.clone(),
+            credential_files: vec![],
+            rules: session.rules.clone(),
+        },
+    }, r#loop::resumed(&dir).unwrap()).unwrap();
+    let _b = run_turn(b, &tx, "four");
+    assert_eq!(&resumed_provider.requests()[0].conversation[..request.conversation.len()], request.conversation.as_slice());
 }
 
 #[test]
@@ -894,6 +956,7 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
                 seq: Seq(1),
             },
             note: String::new(),
+            summary: None,
             worktree: None,
             name: r#loop::latest_name(&a_dir),
         },

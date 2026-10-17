@@ -23,6 +23,8 @@ pub struct Rewound {
     pub from: Point,
     /// Fiber's note: files written, shell calls and jobs since the point.
     pub note: String,
+    /// The old session's summary of the path after the point, when requested.
+    pub summary: Option<String>,
     /// The old session's worktree, when it runs in one: the new session
     /// runs there too and never removes it (`docs/events.md`, "Rewind").
     pub worktree: Option<Worktree>,
@@ -36,7 +38,7 @@ impl Loop {
     /// Starts a session that continues another from `start.from`, whose
     /// history is the old log folded to the point: `session_started`
     /// carries `forked_from`, the note and the jobs handed over, and the
-    /// old session's worktree, with no `parent` and no summary. The chain
+    /// old session's worktree, with no `parent`. The chain
     /// now includes this line, so the fold gives the new session the old
     /// log's history to the point. The new session adopts no job, so it
     /// clears its orphans, then builds through [`Loop::resume`], sending
@@ -51,7 +53,7 @@ impl Loop {
                 parent: None,
                 forked_from: Some(start.from),
                 rewind: Some(Rewind {
-                    summary: None,
+                    summary: start.summary,
                     note: start.note,
                     jobs: Vec::new(),
                 }),
@@ -138,6 +140,14 @@ pub(crate) fn note_input(rewind: &Rewind) -> Input {
         text: rewind.note.clone(),
         images: Vec::new(),
     }
+}
+
+/// The summary as one user message between the history and Fiber's note.
+pub(crate) fn summary_input(rewind: &Rewind) -> Option<Input> {
+    rewind.summary.as_ref().map(|summary| Input::User {
+        text: summary.clone(),
+        images: Vec::new(),
+    })
 }
 
 /// Builds the note for the point `point` in the log in `dir`: the files

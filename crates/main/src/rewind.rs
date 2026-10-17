@@ -93,6 +93,7 @@ pub(crate) fn session_rewound(
         Some(r#loop::Rewound {
             from: point,
             note,
+            summary: None,
             worktree,
             name,
         }),

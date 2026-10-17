@@ -488,6 +488,7 @@ pub(crate) fn render(
         // message, so a live start and a resume render it the same way.
         Event::SessionStarted(started) => {
             if let Some(rewind) = &started.rewind {
+                conversation.extend(crate::rewind::summary_input(rewind));
                 conversation.push(crate::rewind::note_input(rewind));
             }
         }

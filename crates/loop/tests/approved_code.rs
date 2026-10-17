@@ -1461,6 +1461,7 @@ fn start_rewound(
                 seq: contract::Seq(at),
             },
             note,
+            summary: None,
             worktree: None,
             name: r#loop::latest_name(&session.dir),
         },
