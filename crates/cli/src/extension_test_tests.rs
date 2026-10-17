@@ -27,8 +27,8 @@ use rustix::process::Signal;
 use serde_json::json;
 
 use super::{
-    ChildEnvironment, MAX_SOCKET_PATH, ProcessClock, RunDirectory, RunOptions, RunTimeouts,
-    WaitSignal, child_command, discover_cases, extension_test, extension_test_with, group_alive,
+    ChildEnvironment, MAX_SOCKET_PATH, RunDirectory, RunOptions, RunTimeouts, WaitSignal,
+    child_command, discover_cases, extension_test, extension_test_with, group_alive,
     longest_planned_socket, process_group_id, signal_group,
 };
 
@@ -454,7 +454,11 @@ fn public_entry_exit_codes() {
 fn public_entry(path: PathBuf, fiber: Result<PathBuf, String>) -> i32 {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || {
-        let _sent = send.send(extension_test(Some(&path), fiber));
+        let _sent = send.send(extension_test(
+            Some(&path),
+            fiber,
+            fakes::clock::FakeClock::new(),
+        ));
     });
     Deadline::after(TEST_WAIT)
         .recv(&receive)
@@ -612,41 +616,6 @@ fn prepare_wait_clears_an_earlier_wake_and_a_later_wake_releases_the_wait() {
             .expect("wake releases the bounded wait"),
         (false, true)
     );
-}
-
-#[test]
-fn process_clock_wait_until_calls_once_with_the_remaining_duration() {
-    let clock = ProcessClock;
-    let mut unbounded = Vec::new();
-    clock.wait_until(None, &mut |duration| unbounded.push(duration));
-    assert_eq!(unbounded, [None]);
-
-    let distance = Duration::from_secs(86_400);
-    let deadline = clock.now().checked_add(distance).unwrap();
-    let mut calls = 0;
-    clock.wait_until(Some(deadline), &mut |duration| {
-        calls += 1;
-        let Some(duration) = duration else {
-            panic!("a deadline must have a remaining duration");
-        };
-        assert!(duration > Duration::ZERO);
-        assert!(duration <= distance);
-    });
-    assert_eq!(calls, 1);
-
-    let past = clock.now().checked_sub(Duration::from_secs(1)).unwrap();
-    let mut expired = Vec::new();
-    clock.wait_until(Some(past), &mut |duration| expired.push(duration));
-    assert_eq!(expired, [Some(Duration::ZERO)]);
-}
-
-#[test]
-fn process_clock_sleep_advances_its_own_time_by_the_requested_duration() {
-    let clock = ProcessClock;
-    let duration = Duration::from_millis(5);
-    let before = clock.now();
-    clock.sleep(duration);
-    assert!(clock.now().saturating_duration_since(before) >= duration);
 }
 
 #[test]

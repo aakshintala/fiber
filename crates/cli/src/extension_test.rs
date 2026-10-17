@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::{failed, finish_code, write_line};
 use contract::ErrorCode;
@@ -78,14 +78,18 @@ struct RunOptions {
 }
 
 /// `fiber extension test [<path>]`: run every case in a package directory.
-pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
+pub fn extension_test(
+    path: Option<&Path>,
+    fiber: Result<PathBuf, String>,
+    clock: Arc<dyn Clock>,
+) -> i32 {
     let fiber = match fiber {
         Ok(fiber) => fiber,
         // The shared error branch prints the failure and gives code 1.
         Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
     };
     let options = RunOptions {
-        clock: Arc::new(ProcessClock),
+        clock,
         timeouts: RunTimeouts::process(),
         environment: ChildEnvironment::from_process(),
         temp_root: std::env::temp_dir(),
@@ -652,41 +656,6 @@ impl Drop for RunDirectory {
     fn drop(&mut self) {
         let _removed = fs::remove_dir_all(&self.path);
     }
-}
-
-/// The injected source of the process clock used for child deadlines.
-struct ProcessClock;
-
-impl Clock for ProcessClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case deadlines (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case timestamps (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case waits (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn sleep(&self, duration: Duration) {
-        thread::sleep(duration);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        wait(until.map(|until| until.saturating_duration_since(self.now())));
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn Wake>) {}
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
