@@ -316,7 +316,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
     .unwrap();
     opened
         .session
-        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             send(&client, r#"{"id":"c_early","command":"tools"}"#);
             let early = next(&client);
@@ -349,14 +349,15 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+            let Delivery::Reload(ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("reload reached the loop inbox") else {
+                panic!("reload arrives as Reload");
+            };
+            ack.0(Ok(None));
             let line = response(&client, "c_reload");
-            assert_eq!(
-                rejection(&line),
-                (
-                    "unknown_command",
-                    "`reload` is not built in this Fiber yet.",
-                ),
-            );
+            assert_eq!(kind(&line), "command_accepted");
+            assert!(line["payload"].get("result").is_none());
 
             send(
                 &client,

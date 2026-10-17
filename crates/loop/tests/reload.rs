@@ -151,9 +151,9 @@ fn a_shared_prompt_reload_drain_admits_carried_state_only_through_new_hooks() {
                 "extension_state_unset",
                 "turn_started",
             ],
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     let state = of_kind(&lines, "extension_state_unset");
@@ -261,9 +261,9 @@ fn reload_before_first_turn_builds_once_without_opening_or_skill_changes() {
                 "opening_message",
             ],
             &["turn_started"],
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     let reload = of_kind(&lines, "reloaded");
@@ -314,9 +314,9 @@ fn reload_after_a_turn_rebuilds_and_writes_tolerated_notices_in_order() {
         &[
             &["reloaded", "extensions_loaded", "notice", "preamble_built"],
             &["turn_started"],
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     assert_eq!(
@@ -391,9 +391,9 @@ fn removing_a_replacing_extension_restores_the_builtin_and_its_definition() {
                 "turn_started",
             ],
             call,
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     assert_eq!(extension.ran().len(), 1);
@@ -415,9 +415,9 @@ fn removing_a_replacing_extension_restores_the_builtin_and_its_definition() {
                 "turn_started",
             ],
             call,
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     assert_eq!(builtin.ran().len(), 1);
@@ -455,10 +455,7 @@ fn a_changed_skill_description_is_sent_once_after_an_intervening_turn_check() {
     .unwrap();
     session.inbox.send(delivery("two")).unwrap();
     session.turn();
-    assert_kinds(
-        &session.lines(),
-        &[&["turn_started"], &STEP, &REPLY, &ENDED],
-    );
+    assert_kinds(&session.lines(), &[&["turn_started"], STEP, REPLY, ENDED]);
     attach(&mut session, Arc::new(|_| Ok(prepared())));
     session
         .inbox
@@ -477,9 +474,9 @@ fn a_changed_skill_description_is_sent_once_after_an_intervening_turn_check() {
                 "skills_changed",
                 "turn_started",
             ],
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
     let changed = of_kind(&lines, "skills_changed");
@@ -502,9 +499,9 @@ fn a_changed_skill_description_is_sent_once_after_an_intervening_turn_check() {
                 "preamble_built",
                 "turn_started",
             ],
-            &STEP,
-            &REPLY,
-            &ENDED,
+            STEP,
+            REPLY,
+            ENDED,
         ],
     );
 }
@@ -554,7 +551,7 @@ fn post_offer_load_rebuilds_only_when_it_registers_a_tool() {
             prefix.push("preamble_built");
         }
         prefix.extend(["opening_message", "turn_started"]);
-        assert_kinds(&lines, &[&prefix, &STEP, &REPLY, &ENDED]);
+        assert_kinds(&lines, &[&prefix, STEP, REPLY, ENDED]);
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         let request = &session.provider.requests()[0];
         assert_eq!(
@@ -602,10 +599,7 @@ fn rejected_preparation_keeps_the_preamble_and_allows_a_later_reload() {
                 .code,
             code
         );
-        assert_kinds(
-            &session.lines(),
-            &[&["turn_started"], &STEP, &REPLY, &ENDED],
-        );
+        assert_kinds(&session.lines(), &[&["turn_started"], STEP, REPLY, ENDED]);
         assert_eq!(session.provider.requests()[1].system_prompt, old);
     }
 }
