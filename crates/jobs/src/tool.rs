@@ -118,6 +118,7 @@ fn effects_of(action: Action) -> Effects {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     }
 }
 

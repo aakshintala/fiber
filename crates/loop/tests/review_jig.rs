@@ -483,6 +483,7 @@ fn tool_result(text: &str) -> Event {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     })
 }
 
@@ -566,6 +567,7 @@ fn reviewer_denied(reason: &str) -> Event {
             model: "fake/reviewer".into(),
             stage: 2,
         }),
+        hosts: None,
     })
 }
 
@@ -585,6 +587,7 @@ fn legacy_reviewer_denied(reason: &str) -> Event {
             model: "fake/reviewer".into(),
             stage: 2,
         }),
+        hosts: None,
     })
 }
 
@@ -610,6 +613,7 @@ fn headless_denied(reason: &str) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -626,6 +630,7 @@ fn legacy_headless_denied(reason: &str) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -641,6 +646,7 @@ fn person_allowed() -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -657,6 +663,7 @@ fn rule_denied(reason: &str) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -1262,6 +1269,7 @@ fn inner_hosted_and_non_review_calls_print_no_lines_of_their_own() {
                 model: "fake/reviewer".into(),
                 stage: 1,
             }),
+            hosts: None,
         }),
         Some("t_1"),
         Some("a_inner"),
@@ -1771,6 +1779,7 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
                 model: "fake/reviewer".into(),
                 stage: 1,
             }),
+            hosts: None,
         }),
         Some("t_1"),
         Some("a_1"),

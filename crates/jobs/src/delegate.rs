@@ -208,6 +208,7 @@ impl Tool for DelegateSpawn {
             // session grant or standing allow skips it
             // (`docs/delegates.md`, "Permissions").
             always_reviewed: true,
+            hosts: None,
         })
     }
 

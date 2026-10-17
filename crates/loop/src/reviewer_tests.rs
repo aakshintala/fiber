@@ -205,6 +205,7 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             control: None,
             changed_by: None,
             provider_item: None,
+            hosts_surfaced: Vec::new(),
         }),
     ] {
         render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
@@ -401,6 +402,7 @@ fn an_always_reviewed_call_offers_no_rule() {
         subject: Some("npm test --watch".into()),
         prefix: Some("npm test".into()),
         always_reviewed: false,
+        hosts: None,
     };
     let offered = rule_offer(&plain).expect("a plain call offers its subject and prefix");
     assert_eq!(offered.subject, "npm test --watch");
@@ -524,6 +526,7 @@ impl contract::tool::Tool for ReviewTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -625,6 +628,7 @@ fn the_effects_item_names_the_call_under_review() {
         subject: None,
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     };
     for prepared in [
         crate::before_tool::Prepared {

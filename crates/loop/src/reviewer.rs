@@ -384,6 +384,7 @@ impl Loop {
         });
         let mut line = resolved(None, Decision::Allow, DecidedBy::Reviewer, reason, reviewer);
         line.call = Some(reviewed_call(under));
+        line.hosts = under.prepared.effects.hosts.clone();
         self.append(&Event::PermissionResolved(line), under.turn, Some(under.id))?;
         Ok(Ok(under.prepared.clone()))
     }
@@ -773,6 +774,7 @@ fn resolved(
         grant: None,
         rule: None,
         reviewer,
+        hosts: None,
     }
 }
 

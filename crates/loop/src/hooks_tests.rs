@@ -198,6 +198,7 @@ impl Tool for Fixed {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

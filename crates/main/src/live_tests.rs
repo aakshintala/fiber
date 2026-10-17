@@ -112,6 +112,7 @@ impl Tool for Shell {
             subject: Some(command),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

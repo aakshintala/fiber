@@ -49,6 +49,7 @@ mod inbox;
 mod inner_calls;
 mod interactions;
 mod jobs;
+mod known_hosts;
 mod late_cost;
 mod lifecycle;
 mod naming;
@@ -198,6 +199,8 @@ pub struct Loop {
     /// The session grants this loop's answers added, in order: the fold of
     /// the `permission_resolved` lines this loop wrote.
     grants: Vec<Grant>,
+    /// The session's known network hosts, folded from trusted durable events.
+    known_hosts: known_hosts::KnownHosts,
     /// What judges step 7's calls; `Err(no_model)` until `reviewer` sets
     /// one (`docs/permissions.md`, "How it runs").
     reviewer: Result<Reviewer, Failure>,
@@ -362,6 +365,7 @@ struct Seed {
     conversation: Vec<Input>,
     sent: Option<usize>,
     grants: Vec<Grant>,
+    known_hosts: known_hosts::KnownHosts,
     reviewed: Vec<reviewer::Reviewed>,
     session_blocks: u64,
     repository: offer::State,
@@ -440,6 +444,7 @@ impl Loop {
                 conversation: Vec::new(),
                 sent: None,
                 grants: Vec::new(),
+                known_hosts: known_hosts::KnownHosts::default(),
                 reviewed: Vec::new(),
                 session_blocks: 0,
                 repository: offer::State::default(),
@@ -478,6 +483,7 @@ impl Loop {
             conversation,
             sent,
             grants,
+            known_hosts,
             reviewed,
             session_blocks,
             repository,
@@ -546,6 +552,7 @@ impl Loop {
                 .collect(),
             rules: permissions.rules,
             grants,
+            known_hosts,
             reviewer: Err(no_model()),
             limits: BlockLimits::default(),
             reviewer_notes: String::new(),

@@ -7,6 +7,49 @@ use crate::{CommandId, SessionId, TurnId};
 
 const DOC: &str = include_str!("../../../docs/events.md");
 
+#[test]
+fn a_tool_call_completed_and_a_permission_resolved_omit_their_new_keys_when_empty() {
+    for (kind, payload, key) in [
+        (
+            "tool_call_completed",
+            json!({"status":"completed", "content":[]}),
+            "hosts_surfaced",
+        ),
+        (
+            "permission_resolved",
+            json!({"decision":"allow", "decided_by":"person"}),
+            "hosts",
+        ),
+    ] {
+        let event = Event::from_envelope(&line(kind, payload.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            payload
+        );
+        let mut populated = payload;
+        populated[key] = json!(["https://example.com/"]);
+        let event = Event::from_envelope(&line(kind, populated.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            populated
+        );
+    }
+    let event = Event::from_envelope(&line(
+        "tool_call_completed",
+        json!({"status":"completed", "content":[], "hosts_surfaced":[]}),
+    ))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(event.payload().unwrap()).unwrap(),
+        json!({"status":"completed", "content":[]})
+    );
+}
+
 /// Each kind under `docs/events.md`, "Kinds", with the class its text gives
 /// and the keys its payload table lists.
 fn doc_kinds() -> BTreeMap<&'static str, (Class, BTreeSet<&'static str>)> {

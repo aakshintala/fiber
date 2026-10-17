@@ -425,6 +425,7 @@ fn write_read_log(home: &Home, id: &str) -> Result<(), String> {
                 control: None,
                 changed_by: None,
                 provider_item: None,
+                hosts_surfaced: Vec::new(),
             }),
             None,
             Some(call.clone()),

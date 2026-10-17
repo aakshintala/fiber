@@ -445,6 +445,7 @@ impl ProbeTool {
                 subject: None,
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             }),
             "read it",
         )
@@ -463,6 +464,7 @@ impl ProbeTool {
                 subject: Some(subject.into()),
                 prefix: Some(name.into()),
                 always_reviewed: false,
+                hosts: None,
             }),
             "ran it",
         )
@@ -1895,6 +1897,7 @@ fn a_credential_deny_refuses_with_one_permission_record() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "read it",
     ));
@@ -2005,6 +2008,7 @@ fn schema_failing_arguments_enter_no_phase() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "read it",
     ));
@@ -2089,6 +2093,7 @@ fn an_invalid_rewrite_never_enters_permission() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "read it",
     ));
@@ -2706,6 +2711,7 @@ fn a_resumed_credential_deny_refuses_in_its_segment() {
             subject: Some("atlas run".into()),
             prefix: Some("atlas".into()),
             always_reviewed: false,
+            hosts: None,
         }),
         "ran it",
     ));
@@ -2931,6 +2937,7 @@ fn a_resumed_schema_failure_completes_unchecked() {
             subject: Some("atlas run".into()),
             prefix: Some("atlas".into()),
             always_reviewed: false,
+            hosts: None,
         }),
         "ran it",
     ))];
@@ -3716,6 +3723,7 @@ fn a_valid_rewrite_runs_rewritten_with_two_hook_lines() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "read it",
     ));
@@ -3816,6 +3824,7 @@ fn an_invalid_schema_rewrite_emits_before_only() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "read it",
     ));
@@ -3861,6 +3870,7 @@ fn an_invalid_effects_rewrite_emits_before_only() {
                 subject: None,
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             }),
             "read it",
         )
@@ -4825,6 +4835,7 @@ fn an_inner_credential_deny_refuses_with_its_record() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "inner",
     ));
@@ -4918,6 +4929,7 @@ fn an_inner_schema_failure_enters_no_phase() {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         }),
         "inner",
     ));

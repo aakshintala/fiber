@@ -61,6 +61,8 @@ pub(crate) struct Transcript<'a> {
     pub(crate) had: &'a mut BTreeMap<String, String>,
     /// The render state a handoff reads.
     pub(crate) carry: &'a mut crate::handoff::Carry,
+    /// The session's known network hosts, folded from the same durable events.
+    pub(crate) known: &'a mut crate::known_hosts::KnownHosts,
 }
 
 impl Transcript<'_> {
@@ -80,6 +82,7 @@ impl Transcript<'_> {
     ) -> Result<(), Error> {
         let line = log.append(event, turn.cloned(), action.cloned())?;
         if event.class() == Class::Durable {
+            self.known.fold(event);
             // A written `shell_command` waits for the next turn under its
             // line's `seq`: the `turn_started` naming it releases it.
             if let Event::ShellCommand(shell) = event
@@ -119,6 +122,7 @@ impl crate::Loop {
             reviewed: &mut self.reviewed,
             had: &mut self.changes.had,
             carry: &mut self.handoff.carry,
+            known: &mut self.known_hosts,
         }
         .write(&self.log, &self.model.reference, event, turn, action)?;
         // A completed handoff restarts the reviewer's input from the kept

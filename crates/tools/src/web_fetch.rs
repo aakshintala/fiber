@@ -136,14 +136,17 @@ impl Tool for WebFetch {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
         let uri = target::parse(&args.url).map_err(EffectsError::Arguments)?;
-        Ok(crate::tool_util::effects(
-            vec![Effect::Network],
-            // A request can change state on the server.
-            false,
-            None,
-            Some(target::subject(&uri)),
-            Some(target::prefix(&uri)),
-        ))
+        Ok(Effects {
+            hosts: Some(vec![target::prefix(&uri)]),
+            ..crate::tool_util::effects(
+                vec![Effect::Network],
+                // A request can change state on the server.
+                false,
+                None,
+                Some(target::subject(&uri)),
+                Some(target::prefix(&uri)),
+            )
+        })
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
