@@ -1773,6 +1773,7 @@ fn reload_replaces_whole_answers_and_handles_and_wires_the_new_hooks() {
     use contract::events::{CommandInfo, SkillInfo, SkillSource};
     let opened = Opened::open(Vec::new());
     let command = |name: &str| CommandInfo {
+        extension: false,
         name: name.into(),
         description: name.into(),
         argument_hint: None,
