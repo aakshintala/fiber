@@ -773,6 +773,7 @@ fn resolved(
         grant: None,
         rule: None,
         reviewer,
+        hosts: None,
     }
 }
 

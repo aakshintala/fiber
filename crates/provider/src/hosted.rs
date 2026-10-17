@@ -25,6 +25,7 @@ pub(crate) fn completed(item: Value, urls: &[&str]) -> ToolCallCompleted {
         control: None,
         changed_by: None,
         provider_item: Some(item),
+        hosts_surfaced: Vec::new(),
     }
 }
 
@@ -50,5 +51,6 @@ pub(crate) fn failed(item: Value, code: &str) -> ToolCallCompleted {
         control: None,
         changed_by: None,
         provider_item: Some(item),
+        hosts_surfaced: Vec::new(),
     }
 }

@@ -1055,6 +1055,7 @@ impl Tool for HostedSearch {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -1104,6 +1105,7 @@ fn hosted_action() -> contract::provider::ReplyAction {
             control: None,
             changed_by: None,
             provider_item: Some(search_result_block()),
+            hosts_surfaced: Vec::new(),
         },
     })
 }
@@ -1262,6 +1264,7 @@ impl Tool for AlwaysReviewedSearch {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: true,
+            hosts: None,
         })
     }
 

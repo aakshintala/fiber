@@ -156,6 +156,7 @@ impl Tool for DelegateMessage {
             // session grant or standing allow skips it
             // (`docs/delegates.md`, "Permissions").
             always_reviewed: true,
+            hosts: None,
         })
     }
 

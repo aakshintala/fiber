@@ -354,6 +354,7 @@ impl contract::tool::Tool for Inner {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

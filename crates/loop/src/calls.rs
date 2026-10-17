@@ -712,6 +712,7 @@ impl Loop {
             settle,
             servers,
             spilled,
+            hosts_surfaced: _,
         } = output;
         // The call's output reached `finish`: its turn entry leaves the
         // map, so the map holds only calls whose output has not.

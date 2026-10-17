@@ -319,6 +319,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
             }),
             rule: None,
             reviewer: None,
+            hosts: None,
         }),
         Some("a_1"),
     );
@@ -448,6 +449,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
                     model: "fake/reviewer-1".into(),
                     stage: 2,
                 }),
+                hosts: None,
             }),
             Some("a_old"),
         );
@@ -554,6 +556,7 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
                 grant: None,
                 rule: None,
                 reviewer: None,
+                hosts: None,
             }),
             Some("a_old"),
         );
@@ -1257,6 +1260,7 @@ fn denied_resolved(request_id: Option<&str>) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -1274,6 +1278,7 @@ fn closed_resolved(request_id: &str) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -1288,6 +1293,7 @@ fn allowed_resolved() -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -2421,6 +2427,7 @@ fn twenty_prior_denials(history: &History) {
                     model: "fake/reviewer-1".into(),
                     stage: 2,
                 }),
+                hosts: None,
             }),
             Some("a_old"),
         );

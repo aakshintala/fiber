@@ -293,6 +293,7 @@ impl Tool for CountingTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -1324,6 +1325,7 @@ fn rewrite_yields_both_fields_or_neither() {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     };
     let prepared = |rewritten: Option<Vec<String>>| super::Prepared {
         tool: tool.clone() as Arc<dyn Tool>,

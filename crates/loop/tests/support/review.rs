@@ -230,6 +230,7 @@ impl Tool for InertTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -936,6 +937,7 @@ impl Driver {
                 subject: None,
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             },
             rewritten,
         };

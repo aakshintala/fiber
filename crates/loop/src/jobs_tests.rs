@@ -288,6 +288,7 @@ impl Tool for Sends {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -328,6 +329,7 @@ impl Tool for Gated {
             subject: Some("npm publish".into()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

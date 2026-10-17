@@ -158,6 +158,7 @@ fn denied() -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -541,6 +542,7 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     });
     write_log(
         &sessions,
@@ -621,6 +623,7 @@ fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     });
     let (_home, sessions) = sessions("pdf-rewrite");
     write_log(

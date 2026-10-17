@@ -225,6 +225,7 @@ fn static_effects_are_returned_without_starting_a_callback() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     );
     assert_eq!(command(&ext, "count"), "0");
@@ -253,6 +254,7 @@ fn an_effects_function_answers_each_call_from_its_arguments() {
                 subject: Some(String::new()),
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             })
         );
     }
@@ -1508,6 +1510,7 @@ impl contract::tool::InnerCalls for ScriptRunner {
             control: None,
             changed_by: None,
             provider_item: None,
+            hosts_surfaced: Vec::new(),
         }))
     }
 }

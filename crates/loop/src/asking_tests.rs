@@ -573,6 +573,7 @@ impl contract::tool::Tool for SeesCancel {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
