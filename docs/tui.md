@@ -477,8 +477,7 @@ never from `details`, which has no fixed shape a client may rely on
 
 ⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
-file's diff. A Quota row opens nothing until `/quota` is specified
-([#2526](https://github.com/aakshintala/fiber/issues/2526)). The same views back `/model`, `/context`, `/usage` and `/tools`.
+file's diff, or the quota view. The same views back `/model`, `/context`, `/usage`, `/tools` and `/quota`.
 
 There is no built-in task list
 ([Task list](https://github.com/aakshintala/fiber/issues/56)).
@@ -608,6 +607,17 @@ a click on it returns too. The views are:
   "By turn", "By model" and "By delegate" are bold headings, then one row
   each: "turn 3 · 120k in · 15k out · $1.35 billed · $0.00 subscription".
   The last row is "budget left $17.90 of $20.00", dim.
+- **The quota view,** `/quota`: one row per entry of the `quota` answer
+  (`docs/events.md`), in its order, with the same name, figure and bar as
+  the panel card. The top row reads "Quota" bold, "  /quota" dim and
+  "Esc returns" dim, right-aligned. Each window's reset time follows its
+  bar, dim ("resets in 3h12m"). An unreachable entry shows its last value
+  and "unreachable" in `error`, or "unreachable" alone when it has no
+  last value. With no entries, one dim line reads "No provider reports
+  quota". While the fetch is in flight, the top row shows "fetching" dim.
+  Opening the view sends `quota` with `fetch: true`.
+  The view draws the cached answer at once and redraws on the fetch's
+  answer, which also updates the panel card.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -746,7 +756,7 @@ Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
-area. Clicking any other segment opens its card's view; a Quota segment opens nothing until `/quota` is specified.
+area. Clicking any other segment opens its card's view, the Quota segment the quota view.
 
 The status line sits on the `panel` tint, one column in, with segments joined
 by a dim "  │  ". Each card's segments are short forms of its rows: the working
