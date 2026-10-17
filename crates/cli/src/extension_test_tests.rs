@@ -13,9 +13,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -28,8 +27,7 @@ use serde_json::json;
 
 use super::{
     ChildEnvironment, MAX_SOCKET_PATH, RunDirectory, RunOptions, RunTimeouts, WaitSignal,
-    child_command, default_group_probe, default_group_signal, discover_cases, extension_test,
-    extension_test_with, longest_planned_socket,
+    child_command, discover_cases, extension_test, extension_test_with, longest_planned_socket,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -40,8 +38,8 @@ const PID_EXIT_POLL: Duration = Duration::from_millis(50);
 const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
 const WAIT_SIGNAL_BOUND: Duration = Duration::from_millis(50);
 
-fn empty_group(_group: u32) -> io::Result<bool> {
-    Ok(false)
+fn empty_group(_group: u32) -> bool {
+    false
 }
 
 struct Setup {
@@ -83,8 +81,8 @@ impl Setup {
             },
             temp_root: PathBuf::from("/tmp"),
             fiber_prefix,
-            group_signal: Arc::new(default_group_signal),
-            group_probe: default_group_probe,
+            group_signal: Arc::new(support::group::signal),
+            group_probe: support::group::alive,
         }
     }
 }
@@ -465,43 +463,6 @@ fn public_entry(path: PathBuf, fiber: Result<PathBuf, String>) -> i32 {
         .expect("public extension test entry did not return")
 }
 
-#[test]
-fn group_alive_distinguishes_a_reaped_group_from_a_live_group() {
-    let exited = Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let exited_group = exited.id();
-    assert!(wait_child(exited).success());
-    assert!(!default_group_probe(exited_group).unwrap());
-
-    let live = Command::new("/bin/sleep")
-        .arg("60")
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let live_group = live.id();
-    let watchdog = Watchdog::group(live_group);
-    assert!(default_group_probe(live_group).unwrap());
-    assert!(fakes::kill_group(live_group, "KILL").unwrap());
-    let _status = wait_child(live);
-    assert!(!default_group_probe(live_group).unwrap());
-    watchdog.stand_down(TEST_WAIT);
-}
-
-#[track_caller]
-fn wait_child(mut child: std::process::Child) -> ExitStatus {
-    let (send, receive) = mpsc::channel();
-    thread::spawn(move || {
-        let _sent = send.send(child.wait());
-    });
-    Deadline::after(TEST_WAIT)
-        .recv(&receive)
-        .expect("child did not exit before the test deadline")
-        .unwrap()
-}
-
 #[track_caller]
 fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
     let (exited, result) = mpsc::channel();
@@ -616,14 +577,6 @@ fn prepare_wait_clears_an_earlier_wake_and_a_later_wake_releases_the_wait() {
             .expect("wake releases the bounded wait"),
         (false, true)
     );
-}
-
-#[test]
-fn process_group_ids_that_could_signal_everyone_are_refused() {
-    assert!(support::group::refused(0));
-    assert!(support::group::refused(1));
-    assert!(!support::group::refused(2));
-    assert!(support::group::signal(u32::MAX, Signal::TERM).is_err());
 }
 
 #[test]

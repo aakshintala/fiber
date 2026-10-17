@@ -61,8 +61,8 @@ impl RunTimeouts {
     }
 }
 
-type GroupSignal = dyn Fn(u32, Signal) -> io::Result<()> + Send + Sync;
-type GroupProbe = fn(u32) -> io::Result<bool>;
+type GroupSignal = dyn Fn(u32, Signal) -> Result<(), support::group::Error> + Send + Sync;
+type GroupProbe = fn(u32) -> bool;
 
 /// Dependencies for one runner invocation. Tests supply the clock,
 /// environment and child command prefix instead of mutating process state.
@@ -94,8 +94,8 @@ pub fn extension_test(
         environment: ChildEnvironment::from_process(),
         temp_root: std::env::temp_dir(),
         fiber_prefix: Vec::new(),
-        group_signal: Arc::new(default_group_signal),
-        group_probe: default_group_probe,
+        group_signal: Arc::new(support::group::signal),
+        group_probe: support::group::alive,
     };
     extension_test_with(
         path,
@@ -462,8 +462,7 @@ fn run_child(
         grace_deadline,
         signal.as_ref(),
     )?;
-    let group_remains = (options.group_probe)(group)
-        .map_err(|error| format!("checking the case process group: {error}"))?;
+    let group_remains = (options.group_probe)(group);
     if status.is_none() || group_remains {
         (options.group_signal)(group, Signal::KILL)
             .map_err(|error| format!("sending SIGKILL to case group: {error}"))?;
@@ -558,25 +557,6 @@ fn after(clock: &dyn Clock, duration: Duration) -> Instant {
         .now()
         .checked_add(duration)
         .unwrap_or_else(|| clock.now())
-}
-
-/// Sends `signal` to a case group through the shared helper, keeping the
-/// runner's wording for a refused or failing id.
-fn default_group_signal(group: u32, signal: Signal) -> io::Result<()> {
-    support::group::signal(group, signal).map_err(|error| match error {
-        support::group::Error::Refused(id) => io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to signal process group {id}"),
-        ),
-        support::group::Error::Signal { source, .. } => source,
-        support::group::Error::Spawn(error) => error,
-    })
-}
-
-/// Probes a case group through the shared helper. A refused or vanished id
-/// reads empty, so the probe never fails.
-fn default_group_probe(group: u32) -> io::Result<bool> {
-    Ok(support::group::alive(group))
 }
 
 #[derive(Default)]
