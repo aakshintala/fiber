@@ -1912,6 +1912,7 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
         Scripted::text("Tried X."),
     ]);
     let before = log::read(&session.dir).unwrap().len();
+    let watcher = session.log.watch();
     let clock = session.clock.clone();
     let until = contract::clock::Clock::now(clock.as_ref()) + std::time::Duration::from_secs(2);
     let mut looped = session.looped.take().unwrap();
@@ -1946,7 +1947,6 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
             "assistant_message_started",
             "usage_recorded",
             "assistant_message_completed",
-            "retry_scheduled",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
@@ -1959,8 +1959,14 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
         tail[0].payload["input"],
         json!([{"type":"rewind", "command_id":"c_rewind"}])
     );
-    assert_eq!(tail[5].payload["delay_ms"], 2000);
-    assert_eq!(tail[11].payload["summary"], "Tried X.");
+    let (_, observed) = read_until(watcher, "the retried rewind", |line| line.kind == "rewound");
+    let retries: Vec<_> = observed
+        .iter()
+        .filter(|line| line.kind == "retry_scheduled")
+        .collect();
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0].payload["delay_ms"], 2000);
+    assert_eq!(tail[10].payload["summary"], "Tried X.");
     assert_eq!(session.provider.requests().len(), 5);
     assert_eq!(
         session.provider.requests()[3],
