@@ -393,19 +393,10 @@ fn a_summary_crosses_the_process_boundary_between_history_and_note() {
     let input = next_request["input"].as_array().unwrap();
     assert_eq!(input.len(), 6);
     assert_eq!(&input[..3], &before_input[..3]);
-    assert_eq!(
-        input[3],
-        json!({"role":"user", "content":[{"type":"input_text", "text":summary}]})
-    );
+    assert_eq!(input[3], json!({"role":"user", "content":summary}));
     let note = new_log[0]["payload"]["rewind"]["note"].as_str().unwrap();
-    assert_eq!(
-        input[4],
-        json!({"role":"user", "content":[{"type":"input_text", "text":note}]})
-    );
-    assert_eq!(
-        input[5],
-        json!({"role":"user", "content":[{"type":"input_text", "text":"three"}]})
-    );
+    assert_eq!(input[4], json!({"role":"user", "content":note}));
+    assert_eq!(input[5], json!({"role":"user", "content":"three"}));
     hubbed.close("sum_close", &next);
     hubbed.finish();
 }
@@ -416,7 +407,7 @@ fn a_failed_summary_creates_no_session_and_the_old_conversation_continues() {
     let server = ProviderServer::start([
         hello(),
         hello(),
-        fakes::provider_server::Response::status(404, "{}"),
+        fakes::Response::status(404, "{}"),
         hello(),
     ])
     .unwrap();
@@ -479,8 +470,8 @@ fn a_failed_summary_creates_no_session_and_the_old_conversation_continues() {
     let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
     let next: Value = serde_json::from_slice(&requests[3].body).unwrap();
     let mut expected = second["input"].as_array().unwrap().clone();
-    expected.push(json!({"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"Hello."}]}));
-    expected.push(json!({"role":"user", "content":[{"type":"input_text", "text":"three"}]}));
+    expected.push(json!({"type":"message", "content":[{"type":"output_text", "text":"Hello."}]}));
+    expected.push(json!({"role":"user", "content":"three"}));
     assert_eq!(next["input"], json!(expected));
     hubbed.close("fail_close", &old);
     hubbed.finish();
