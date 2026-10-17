@@ -164,7 +164,10 @@ struct Pass {
 /// window. The ledger and the reviewer's block count fold only the own
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
-    if !line.is_durable() {
+    // Process starts close the reviewer's summary window even though the
+    // fold itself does not use them. Leave every other unused payload unread.
+    if !line.is_durable() || !(FOLDED.contains(&line.kind.as_str()) || line.kind == "fiber_started")
+    {
         return Ok(());
     }
     let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
