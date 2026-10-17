@@ -302,6 +302,48 @@ fn a_repository_command_gates_and_a_persons_url_does_not() {
 }
 
 #[test]
+fn provenance_gates_when_the_declaration_is_removed_after_load() {
+    // The layers keep the repository's share after the file is gone, but
+    // the declarations are re-read: with nothing declared, each
+    // per-field provenance leg decides its own server.
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        &json!({"mcp": {"servers": {
+            "fx-cmd": {"command": "run"},
+            "fx-args": {"command": "run"},
+            "fx-env": {"command": "run"},
+        }}})
+        .to_string(),
+    );
+    setup.write(
+        &setup.repository(),
+        &json!({"mcp": {"servers": {
+            "fx-cmd": {"command": "run"},
+            "fx-args": {"args": ["--repo"]},
+            "fx-url": {"url": "https://fx.example/mcp"},
+            "fx-env": {"env": {"BASH_ENV": "/tmp/evil"}},
+        }}})
+        .to_string(),
+    );
+    let config = setup.load(&[]).unwrap();
+    fs::remove_file(setup.repository()).unwrap();
+    let found = mcp_servers(&config, &has_userinfo).unwrap();
+    assert!(found.refused.is_empty(), "{found:?}");
+    for name in ["fx-cmd", "fx-args", "fx-url", "fx-env"] {
+        let server = found
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .unwrap_or_else(|| panic!("a {name} server: {found:?}"));
+        assert!(
+            server.repository,
+            "{name} stays gated by its own field: {found:?}"
+        );
+    }
+}
+
+#[test]
 fn debug_prints_names_but_no_command_argument_value_or_url() {
     let found = checked(&json!({"mcp": {"servers": {
         "fx": {"command": "run-sekret-cmd", "args": ["--sekret-flag"], "env": {"KEY": "sekret-literal", "TOK": {"secret": "mcp.fx.API_KEY"}}},

@@ -223,13 +223,13 @@ pub fn mcp_servers(
                     .is_some_and(|declared| declared.mcp_servers.contains_key(name.as_str()));
                 // An error reading the declarations puts every server
                 // with a `command` on the repository side: nothing runs
-                // unapproved. The declarations name every server the
-                // repository layer can win a field for — both read the
-                // workspace's `.fiber/config.json`, and a field the file
-                // holds keeps its server declared — so per-field
-                // provenance legs could never decide this and are gone:
-                // any test reaching one would pass with it deleted.
-                let repository = declared_entry || declared.is_none();
+                // unapproved.
+                let declared_entry = declared_entry || declared.is_none();
+                let repository = declared_entry
+                    || from_repository(config, name.as_str(), "command")
+                    || from_repository(config, name.as_str(), "args")
+                    || from_repository(config, name.as_str(), "url")
+                    || env_from_repository(config, name.as_str());
                 servers.push(McpServer {
                     name: name.clone(),
                     required,
@@ -301,6 +301,35 @@ fn classify(config: &Config, name: &str, has_userinfo: &dyn Fn(&str) -> bool) ->
 /// The merged value of `mcp.servers."<name>".<field>` and its layer.
 fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
     config.get(&mcp_server_key(server, field), None)
+}
+
+/// Whether the merged value of one field effectively comes from the
+/// repository's layer.
+fn from_repository(config: &Config, server: &str, field: &str) -> bool {
+    server_field(config, server, field)
+        .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
+}
+
+/// Whether any effective `env` entry comes from the repository's layer:
+/// `env` merges key by key, so each entry's provenance is checked
+/// individually. `command` (`Str`) and `args` (`StrList`, which replaces)
+/// are whole values, so [`from_repository`] on the field is exact for them.
+fn env_from_repository(config: &Config, server: &str) -> bool {
+    let Some((Value::Object(env), _)) = server_field(config, server, "env") else {
+        return false;
+    };
+    env.keys().any(|key| {
+        config
+            .get(
+                &format!(
+                    "mcp.servers.{}.env.{}",
+                    quoted_segment(server),
+                    quoted_segment(key)
+                ),
+                None,
+            )
+            .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
+    })
 }
 
 /// The merged `env`: literals by key, and `{ "secret" }` references by
