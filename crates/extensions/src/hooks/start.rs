@@ -87,6 +87,7 @@ pub(super) fn provider_handles(
                 session.state.clone(),
             )?;
             session.notices.append(&mut notices);
+            let lua = lua.with_browser(session.browser.clone());
             Arc::new(match &session.host_script {
                 Some(script) => lua.with_host_script(Arc::clone(script)),
                 None => lua,
@@ -161,6 +162,7 @@ impl SessionExtensions {
                     locks,
                     self.state.clone(),
                 )?;
+                let lua = lua.with_browser(self.browser.clone());
                 let lua = match &self.host_script {
                     Some(script) => lua.with_host_script(Arc::clone(script)),
                     None => lua,
@@ -172,6 +174,18 @@ impl SessionExtensions {
                     None => lua,
                 };
                 let lua = Arc::new(lua);
+                // Lock order: provider_vms, then emitter. emit_to and seal
+                // drop emitter before collecting VMs, so neither misses this VM.
+                let emit = self
+                    .emitter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                #[cfg(test)]
+                self.at_late(super::LatePoint::Read);
+                if let Some(emit) = emit {
+                    lua.set_emit(emit);
+                }
                 vms.insert(extension.to_owned(), Arc::downgrade(&lua));
                 lua
             }

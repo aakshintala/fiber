@@ -8,6 +8,9 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod attend;
+#[cfg(test)]
+mod attend_tests;
 mod commands;
 mod extension_tools;
 mod first_party;

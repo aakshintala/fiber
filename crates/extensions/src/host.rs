@@ -147,6 +147,11 @@ pub(crate) fn install(
         memory_cap,
         secrets,
     } = ctx;
+    let browser: Arc<dyn Browser> = Arc::new(crate::attend::Noticing::new(
+        browser,
+        Arc::clone(hub),
+        extension.clone(),
+    ));
     let host = lua.create_table()?;
     let secret_home = home.clone();
     let secret_raw = lua.create_function(move |lua, name: LuaValue| {
