@@ -1091,7 +1091,7 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 
 - Each turn is one row, "before: <prompt>". The chosen turn opens into every
   step boundary: after the person's message and after each step, with the
-  step's summary. The default is the start of the latest turn.
+  step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
   that may have changed files, and that none of it is undone. Each job started
   since that still runs has stop, the default, or adopt. Jobs started before

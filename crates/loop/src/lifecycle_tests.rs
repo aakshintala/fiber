@@ -1574,7 +1574,9 @@ impl Hooks for FakeHooks {
                     InputItem::Message { content, .. } => crate::conversation::text(content),
                     InputItem::Jobs { .. } => "jobs".to_owned(),
                     InputItem::Handoff { .. } => "handoff".to_owned(),
-                    InputItem::ShellCommand { .. } | InputItem::Unknown => "other".to_owned(),
+                    InputItem::ShellCommand { .. }
+                    | InputItem::Rewind { .. }
+                    | InputItem::Unknown => "other".to_owned(),
                 })
                 .collect::<Vec<_>>()
         ));

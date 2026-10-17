@@ -830,6 +830,7 @@ fn the_hook_sees_a_skill_command_before_expansion_and_its_rewrite_expands() {
             InputItem::ShellCommand { .. }
             | InputItem::Jobs { .. }
             | InputItem::Handoff { .. }
+            | InputItem::Rewind { .. }
             | InputItem::Unknown => panic!("a message item"),
         })
         .collect();

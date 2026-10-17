@@ -349,6 +349,7 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 | `seq` | integer | yes | the point |
 | `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
 | `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
+| `summary` | string | no | the old session's summary of the path after the point |
 
 #### `turn_started`
 
@@ -366,6 +367,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
+| `rewind` | `command_id` (string) | a `rewind` command that asked for a summary: the summary's turn on the old session, between turns (`docs/events.md`, "Rewind") |
 
 #### `step_started`
 
@@ -1429,9 +1431,16 @@ earlier point. A person starts one from the terminal, a driver with the
   declared `executes` (`docs/permissions.md`, "Effects").
 - **A summary is optional.** A rewind may ask the old session's model to
   summarise the path after the point. A requested summary that fails fails
-  the whole `rewind` with `summary_failed`: no new session is created and the
-  old one is untouched. The client offers to retry, to rewind without a
+  the whole `rewind` with `summary_failed`: no new session is created, and
+  the old session goes on from where it was: its log gains only the summary
+  turn and its usage. The client offers to retry, to rewind without a
   summary, or to cancel, and each of the first two is a new `rewind`.
+
+  The summary is a turn of its own on the old session, with one step. Its
+  request meets the budget check and `before_model_call` as every model
+  request does (`docs/loop.md`, "Spending budget"); the step drains no inbox,
+  checks no context and runs no `turn_end`, and a budget stop or a hook's
+  refusal fails the summary.
 - **What the model receives, in order:** the old session's history up to the
   point, then the summary if there is one, then Fiber's note: the files written
   and shell calls since the point, and the jobs adopted or stopped. The first
@@ -1457,9 +1466,10 @@ earlier point. A person starts one from the terminal, a driver with the
 - **The old session is closed first.** While the process still holds the old
   session's lock, it writes a `job_completed` with `status: cancelled` for each
   job the person chose to stop. The summary's model call, when there is one,
-  is made on the old session, and its `usage_recorded` goes in the old
-  session's log. Then it writes `rewound`, naming the new session, the
-  point and the jobs handed over. `rewound` is the last line the process writes
+  is made on the old session, in a turn of its own whose input is the
+  `rewind` command, and its `usage_recorded` goes in the old session's log.
+  Then it writes `rewound`, naming the new session, the point, the summary
+  and the jobs handed over. `rewound` is the last line the process writes
   to that log, and it closes the process boundary there as `fiber_exited`
   does. Only then does the new session start.
 - **Only the holder rewinds.** The process that rewinds a session must hold
