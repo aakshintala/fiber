@@ -122,10 +122,10 @@ fn rebuild_with_cut(
     for (index, line) in lines.iter().enumerate().filter(|(_, l)| l.is_durable()) {
         if let Some(mut event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
             if index >= cut {
-                match &mut event {
-                    Event::HandoffCompleted(done) => done.outcome = Outcome::Failed,
-                    Event::OpeningMessage(_) => continue,
-                    _ => {}
+                if let Event::HandoffCompleted(done) = &mut event {
+                    done.outcome = Outcome::Failed;
+                } else if matches!(event, Event::OpeningMessage(_)) {
+                    continue;
                 }
             }
             rendered.push(

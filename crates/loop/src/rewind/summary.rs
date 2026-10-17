@@ -195,14 +195,20 @@ fn excerpt(lines: &[Envelope]) -> Option<String> {
             }
             continue;
         }
-        let text = match event {
-            Event::TurnStarted(started) => started.input.iter().find_map(|item| match item {
-                InputItem::Message { content, .. } => Some(crate::conversation::text(content)),
-                _ => None,
-            }),
-            Event::TextCompleted(text) => Some(text.text),
-            Event::ToolCallRequested(call) => Some(format!("A call to the `{}` tool.", call.name)),
-            _ => None,
+        let text = if let Event::TurnStarted(started) = event {
+            started.input.iter().find_map(|item| {
+                if let InputItem::Message { content, .. } = item {
+                    Some(crate::conversation::text(content))
+                } else {
+                    None
+                }
+            })
+        } else if let Event::TextCompleted(text) = event {
+            Some(text.text)
+        } else if let Event::ToolCallRequested(call) = event {
+            Some(format!("A call to the `{}` tool.", call.name))
+        } else {
+            None
         };
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
             return Some(text);
