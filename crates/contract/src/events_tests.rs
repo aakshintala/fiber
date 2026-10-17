@@ -503,7 +503,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
             "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
-            "control": {"handoff": "note"}, "changed_by": ["e"]}),
+            "control": {"handoff": "note"}, "changed_by": ["e"],
+            "hosts_surfaced": ["https://example.com/"]}),
         ),
         (
             "tool_call_completed",
@@ -587,6 +588,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"decision": "deny", "decided_by": "reviewer",
             "reason": "no", "reviewer": {"model": "p/m", "stage": 1},
             "effects": ["executes"], "reversible": false, "paths": ["/a"],
+            "hosts": ["https://example.com/"],
             "always_reviewed": true, "arguments": {"path": "b.txt"},
             "changed_by": ["ext"]}),
         ),

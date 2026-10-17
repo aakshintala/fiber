@@ -134,7 +134,7 @@ fn known_hosts_fold_only_trusted_sources_and_is_idempotent() {
                 "instruction_file",
                 json!({"path":"AGENTS.md", "reason":"own_edit", "content":url, "sent":"full"}),
             ),
-            true,
+            false,
         ),
         (
             event(
@@ -218,6 +218,99 @@ fn known_hosts_fold_only_trusted_sources_and_is_idempotent() {
         known.fold(&event);
         assert_eq!(known, once);
     }
+}
+
+#[test]
+fn own_edit_instruction_file_makes_no_version_known() {
+    let mut known = KnownHosts::default();
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"AGENTS.md", "reason":"own_edit", "content":"https://own.test/", "sent":"full"}),
+    ));
+    assert!(!known.all_known(&["https://own.test/".into()]));
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"AGENTS.md", "reason":"changed", "content":"https://later.test/", "sent":"full"}),
+    ));
+    assert!(!known.all_known(&["https://later.test/".into()]));
+    known.fold(&event(
+        "tool_call_completed",
+        json!({"status":"completed", "content":[], "hosts_surfaced":["https://own.test/"]}),
+    ));
+    assert!(known.all_known(&["https://own.test/".into()]));
+}
+
+#[test]
+fn instruction_file_named_in_earlier_changes_adds_nothing() {
+    let mut known = KnownHosts::default();
+    known.fold(&event(
+        "tool_call_completed",
+        json!({"status":"failed", "content":[], "changes":[{"path":"AGENTS.md", "added":1, "removed":0}]}),
+    ));
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"AGENTS.md", "reason":"changed", "content":"https://changed.test/", "sent":"full"}),
+    ));
+    assert!(!known.all_known(&["https://changed.test/".into()]));
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"other/AGENTS.md", "reason":"subdirectory", "content":"https://other.test/", "sent":"full"}),
+    ));
+    assert!(known.all_known(&["https://other.test/".into()]));
+}
+
+#[test]
+fn unchanged_instruction_file_adds_hosts_from_each_version() {
+    let mut known = KnownHosts::default();
+    for url in ["https://first.test/", "https://second.test/"] {
+        known.fold(&event(
+            "instruction_file",
+            json!({"path":"AGENTS.md", "reason":"changed", "content":url, "sent":"full"}),
+        ));
+    }
+    assert!(known.all_known(&["https://first.test/".into(), "https://second.test/".into()]));
+}
+
+#[test]
+fn later_changes_remove_all_instruction_versions_but_keep_other_sources() {
+    let mut known = KnownHosts::default();
+    known.fold(&event(
+        "opening_message",
+        json!({"environment":{"workspace":"/", "os":"linux", "arch":"x86_64", "shell":"sh", "session_log":"/log", "date":"2026-10-17"}, "instruction_files":[{"path":"AGENTS.md", "content":"https://opening.test/"}], "skills":[]}),
+    ));
+    for url in ["https://first.test/", "https://second.test/"] {
+        known.fold(&event(
+            "instruction_file",
+            json!({"path":"AGENTS.md", "reason":"changed", "content":url, "sent":"full"}),
+        ));
+    }
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"other/AGENTS.md", "reason":"subdirectory", "content":"https://second.test/", "sent":"full"}),
+    ));
+    known.fold(&event(
+        "tool_call_completed",
+        json!({"status":"completed", "content":[], "hosts_surfaced":["https://surfaced.test/"]}),
+    ));
+    assert!(known.all_known(&["https://first.test/".into(), "https://second.test/".into()]));
+    known.fold(&event(
+        "tool_call_completed",
+        json!({"status":"completed", "content":[], "changes":[{"path":"AGENTS.md", "added":1, "removed":0}], "hosts_surfaced":["https://result.test/"]}),
+    ));
+    assert!(!known.all_known(&["https://first.test/".into()]));
+    assert!(known.all_known(&[
+        "https://second.test/".into(),
+        "https://opening.test/".into(),
+        "https://surfaced.test/".into(),
+        "https://result.test/".into(),
+    ]));
+    known.fold(&event(
+        "instruction_file",
+        json!({"path":"other/AGENTS.md", "reason":"own_edit", "content":"https://own.test/", "sent":"full"}),
+    ));
+    assert!(!known.all_known(&["https://second.test/".into()]));
+    assert!(!known.all_known(&["https://own.test/".into()]));
+    assert!(known.all_known(&["https://opening.test/".into()]));
 }
 
 #[test]
