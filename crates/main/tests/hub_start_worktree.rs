@@ -240,7 +240,12 @@ fn lock_of(path: &Path) -> PathBuf {
 #[test]
 fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     let setup = Setup::new();
-    let server = ProviderServer::start([support::hello(), write_call("note.txt", "hi\n"), support::hello()]).unwrap();
+    let server = ProviderServer::start([
+        support::hello(),
+        write_call("note.txt", "hi\n"),
+        support::hello(),
+    ])
+    .unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
