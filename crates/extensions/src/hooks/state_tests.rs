@@ -350,7 +350,7 @@ fn state_seed_reaches_session_start_before_the_first_call() {
     let lines = session.take_change_state();
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].context, Some(0));
-    let Event::ExtensionStateSet(set) = &lines[0].event else {
+    let Event::ExtensionStateSet(set) = lines[0].clone().into_event() else {
         panic!("set")
     };
     assert_eq!(set.key, "seen");

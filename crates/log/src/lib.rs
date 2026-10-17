@@ -44,7 +44,7 @@ pub use scan::{
     started_sessions, started_sessions_in, try_hold,
 };
 pub use search::{Identity, SessionScan};
-pub use state_fold::{Fold, Ruled, StateFolded, fold, fold_boundary, fold_from, seed};
+pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
 pub use write::{Log, cut_joined, cut_notice};

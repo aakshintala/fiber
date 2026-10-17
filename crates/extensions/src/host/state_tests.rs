@@ -18,16 +18,13 @@ fn store_landings_count_only_accepted_writes_and_admission_is_monotone() {
             .unwrap();
         store.unset(Scope::Other, "k").unwrap();
         let line = contract::hook::StateLine {
-            event: Event::ExtensionStateUnset(contract::events::ExtensionStateUnset {
-                extension: "goal".into(),
-                key: "k".into(),
-            }),
+            value: None,
             extension: "goal".into(),
             key: "k".into(),
             landing,
             context: None,
         };
-        let expected_event = line.event.clone();
+        let expected_event = line.clone().into_event();
         assert_eq!(registry.admit(vec![line]), vec![expected_event]);
         assert_eq!(registry.take_outbox().len(), expected);
         assert!(registry.take_outbox().is_empty());

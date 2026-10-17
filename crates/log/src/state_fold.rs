@@ -7,7 +7,7 @@ use contract::events::{Event, OnFork};
 use serde_json::Value;
 
 /// The seed handed to extensions before their first call.
-pub use contract::hook::StateSeed as StateFolded;
+pub use contract::hook::StateSeed;
 
 /// Values and their last set's fork rules. An unset retains its rule.
 pub type Ruled = BTreeMap<String, BTreeMap<String, (Option<Value>, OnFork)>>;
@@ -25,7 +25,7 @@ pub enum Fold {
 }
 
 /// Folds a single log, without inherited state.
-pub fn fold<'a>(lines: impl IntoIterator<Item = &'a Envelope>, mode: Fold) -> StateFolded {
+pub fn fold<'a>(lines: impl IntoIterator<Item = &'a Envelope>, mode: Fold) -> StateSeed {
     seed(fold_from(Ruled::new(), lines, mode))
 }
 
@@ -101,7 +101,7 @@ pub fn fold_boundary<'a>(
 }
 
 /// Removes value-less keys only when producing an extension's starting view.
-pub fn seed(ruled: Ruled) -> StateFolded {
+pub fn seed(ruled: Ruled) -> StateSeed {
     ruled
         .into_iter()
         .filter_map(|(extension, keys)| {

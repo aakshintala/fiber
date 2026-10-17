@@ -9,7 +9,10 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value};
 
 use crate::SessionId;
-use crate::events::{CallStatus, Event, HandoffTrigger, InputItem, Notice, OnFork};
+use crate::events::{
+    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, InputItem, Notice,
+    OnFork,
+};
 use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
 use crate::tool::{Cancel, SpillFile};
@@ -268,16 +271,34 @@ pub type StateSeed = BTreeMap<String, BTreeMap<String, (Value, OnFork)>>;
 /// A state write carried beside the change its hook returned.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateLine {
-    /// The state event to write before the changed event.
-    pub event: Event,
     /// The extension that owns the key.
     pub extension: String,
     /// The key written.
     pub key: String,
+    /// The set value and fork rule, or none for an unset.
+    pub value: Option<(Value, OnFork)>,
     /// The write's position in the session's state view.
     pub landing: u64,
     /// The first context this hook added, or none for its other change.
     pub context: Option<usize>,
+}
+
+impl StateLine {
+    /// Builds the state event to write before the changed event.
+    pub fn into_event(self) -> Event {
+        match self.value {
+            Some((value, on_fork)) => Event::ExtensionStateSet(ExtensionStateSet {
+                extension: self.extension,
+                key: self.key,
+                value,
+                on_fork,
+            }),
+            None => Event::ExtensionStateUnset(ExtensionStateUnset {
+                extension: self.extension,
+                key: self.key,
+            }),
+        }
+    }
 }
 
 /// The session's hooks. Calls come from the loop thread, one at a time.
@@ -291,7 +312,7 @@ pub trait Hooks: Send + Sync {
 
     /// Admits carried writes, after draining any queued writes first.
     fn admit_state_lines(&self, lines: Vec<StateLine>) -> Vec<Event> {
-        lines.into_iter().map(|line| line.event).collect()
+        lines.into_iter().map(StateLine::into_event).collect()
     }
 
     /// Takes the state lines of the answer the last hook call returned.

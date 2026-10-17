@@ -1,19 +1,17 @@
 //! A session's extension-state view and the lines awaiting its log writer.
 
-use std::rc::Rc;
-
-use contract::ErrorCode;
-use mlua::{Lua, LuaSerdeExt, MultiValue, Value as LuaValue};
-
-use super::failure::{self, Raise};
-
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use contract::events::{Event, ExtensionStateSet, ExtensionStateUnset, OnFork};
+use contract::ErrorCode;
+use contract::events::{Event, OnFork};
 use contract::hook::{StateLine, StateSeed};
+use mlua::{Lua, LuaSerdeExt, MultiValue, Value as LuaValue};
 use serde_json::Value;
+
+use super::failure::{self, Raise};
 
 pub(crate) const MAX_BYTES: usize = 65_536;
 
@@ -287,14 +285,14 @@ fn admit(inner: &mut Inner, lines: Vec<StateLine>) -> Vec<Event> {
     for line in lines {
         let key = inner
             .extensions
-            .entry(line.extension)
+            .entry(line.extension.clone())
             .or_default()
             .keys
-            .entry(line.key)
+            .entry(line.key.clone())
             .or_default();
         if line.landing >= key.last_logged {
             key.last_logged = line.landing;
-            events.push(line.event);
+            events.push(line.into_event());
         }
     }
     events
@@ -438,22 +436,10 @@ impl ExtensionState {
         }
         inner.landing += 1;
         let landing = inner.landing;
-        let event = match &value {
-            Some(value) => Event::ExtensionStateSet(ExtensionStateSet {
-                extension: self.extension.clone(),
-                key: key.into(),
-                value: value.clone(),
-                on_fork: rule,
-            }),
-            None => Event::ExtensionStateUnset(ExtensionStateUnset {
-                extension: self.extension.clone(),
-                key: key.into(),
-            }),
-        };
         let line = StateLine {
-            event,
             extension: self.extension.clone(),
             key: key.into(),
+            value: value.clone().map(|value| (value, rule)),
             landing,
             context: None,
         };

@@ -70,17 +70,14 @@ impl Hooks for StateHooks {
 
     fn admit_state_lines(&self, lines: Vec<StateLine>) -> Vec<Event> {
         let mut events = self.take_state_lines();
-        events.extend(lines.into_iter().map(|line| line.event));
+        events.extend(lines.into_iter().map(|line| line.into_event()));
         events
     }
 }
 
 fn state_line(key: &str, landing: u64) -> StateLine {
     StateLine {
-        event: Event::ExtensionStateUnset(ExtensionStateUnset {
-            extension: "goal".into(),
-            key: key.into(),
-        }),
+        value: None,
         extension: "goal".into(),
         key: key.into(),
         landing,
@@ -89,11 +86,41 @@ fn state_line(key: &str, landing: u64) -> StateLine {
 }
 
 #[test]
+fn hook_state_line_builds_set_and_unset_events_from_its_only_identity() {
+    let unset = state_line("removed", 7);
+    assert_eq!(
+        unset.into_event(),
+        Event::ExtensionStateUnset(ExtensionStateUnset {
+            extension: "goal".into(),
+            key: "removed".into(),
+        })
+    );
+    for rule in [
+        crate::events::OnFork::AtPoint,
+        crate::events::OnFork::Latest,
+        crate::events::OnFork::Fresh,
+    ] {
+        let mut set = state_line("written", 8);
+        set.extension = "other".into();
+        set.value = Some((serde_json::json!({"n": 3}), rule));
+        assert_eq!(
+            set.into_event(),
+            Event::ExtensionStateSet(crate::events::ExtensionStateSet {
+                extension: "other".into(),
+                key: "written".into(),
+                value: serde_json::json!({"n": 3}),
+                on_fork: rule,
+            })
+        );
+    }
+}
+
+#[test]
 fn hook_state_defaults_leave_existing_implementors_unchanged() {
     assert!(Never.take_state_lines().is_empty());
     assert!(Never.take_change_state().is_empty());
     let lines = vec![state_line("first", 1), state_line("second", 2)];
-    let expected: Vec<_> = lines.iter().map(|line| line.event.clone()).collect();
+    let expected: Vec<_> = lines.iter().map(|line| line.clone().into_event()).collect();
     assert_eq!(Never.admit_state_lines(lines), expected);
     assert!(Never.admit_state_lines(Vec::new()).is_empty());
 }
@@ -103,17 +130,17 @@ fn hook_state_overrides_drain_each_buffer_once_and_admit_in_order() {
     let first = state_line("first", 1);
     let second = state_line("second", 2);
     let hooks = StateHooks {
-        outbox: Mutex::new(vec![first.event.clone()]),
+        outbox: Mutex::new(vec![first.clone().into_event()]),
         carried: Mutex::new(vec![second.clone()]),
     };
-    assert_eq!(hooks.take_state_lines(), vec![first.event.clone()]);
+    assert_eq!(hooks.take_state_lines(), vec![first.clone().into_event()]);
     assert!(hooks.take_state_lines().is_empty());
     assert_eq!(hooks.take_change_state(), vec![second.clone()]);
     assert!(hooks.take_change_state().is_empty());
-    *hooks.outbox.lock().unwrap() = vec![first.event.clone()];
+    *hooks.outbox.lock().unwrap() = vec![first.clone().into_event()];
     assert_eq!(
         hooks.admit_state_lines(vec![second.clone()]),
-        vec![first.event, second.event]
+        vec![first.into_event(), second.into_event()]
     );
     assert!(hooks.take_state_lines().is_empty());
 }

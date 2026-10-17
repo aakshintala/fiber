@@ -204,7 +204,7 @@ impl Hooks for StateHooks {
                     .then_some(index)
                 };
                 contract::hook::StateLine {
-                    event: state_event(point),
+                    value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
                     extension: "state".into(),
                     key: (*point).into(),
                     landing: 1,
@@ -236,7 +236,7 @@ impl Hooks for StateHooks {
             lines
                 .into_iter()
                 .filter(|line| !self.cases.supersede_note || line.key != "before_handoff")
-                .map(|line| line.event)
+                .map(|line| line.into_event())
                 .collect()
         }
     }
@@ -360,7 +360,7 @@ fn state_lines_split_context_edges_keep_every_line() {
     for count in 0..=2 {
         for index in 0..=2 {
             let mut line = contract::hook::StateLine {
-                event: state_event("context"),
+                value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
                 extension: "state".into(),
                 key: "context".into(),
                 landing: 1,
@@ -596,7 +596,7 @@ fn state_lines_held_contexts_and_continuations_share_their_commits() {
                     hook: "session_start".into(),
                 },
                 vec![contract::hook::StateLine {
-                    event: state_event(key),
+                    value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
                     extension: "state".into(),
                     key: key.into(),
                     landing: 1,
@@ -611,7 +611,7 @@ fn state_lines_held_contexts_and_continuations_share_their_commits() {
                 .lifecycle
                 .continued_state
                 .push(contract::hook::StateLine {
-                    event: state_event(&format!("end-{key}")),
+                    value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
                     extension: "state".into(),
                     key: format!("end-{key}"),
                     landing: 1,
@@ -1128,7 +1128,7 @@ fn state_lines_shutdown_between_held_context_commits_keeps_the_second_pair() {
                 hook: "session_start".into(),
             },
             vec![contract::hook::StateLine {
-                event: state_event(key),
+                value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
                 extension: "state".into(),
                 key: key.into(),
                 landing: 1,
@@ -1169,7 +1169,7 @@ fn state_lines_refused_continuation_commit_drops_its_carried_lines() {
         .lifecycle
         .continued_state
         .push(contract::hook::StateLine {
-            event: state_event("end"),
+            value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
             extension: "state".into(),
             key: "end".into(),
             landing: 1,
