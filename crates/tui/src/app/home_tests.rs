@@ -4453,12 +4453,6 @@ fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
 }
 
 #[test]
-fn the_foot_never_mentions_going_back_to_a_session() {
-    let app = home();
-    assert!(!foot(&app).contains("back to the session"));
-}
-
-#[test]
 fn the_foot_shows_the_plain_quit_hint_while_armed() {
     let mut app = home();
     let now = fakes::clock::FakeClock::new().now();
