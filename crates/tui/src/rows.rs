@@ -360,15 +360,15 @@ fn fitted_count(line: &Line<'_>, inner: usize) -> usize {
                 }
             }
             // The glyph opens the piece at `at`: wider than `inner` it
-            // stands alone, else it starts the used widths.
+            // stands alone, else it starts the used widths. No space is
+            // recorded: the piece starts at this glyph, and a split needs
+            // a space strictly inside its window, so a space here could
+            // never split (a later space overwrites it as usual).
             if width > inner {
                 pieces = pieces.saturating_add(1);
                 at = here.saturating_add(1);
             } else {
                 used = width;
-                if grapheme.symbol == " " {
-                    space = Some(here);
-                }
             }
         }
     }

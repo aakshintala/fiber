@@ -792,6 +792,7 @@ fn fitted_matches_plan_across_split_shapes() {
         Line::raw("x界"),
         Line::raw("abcd"),
         Line::raw("abcde"),
+        Line::raw("ab\u{301}"),
     ];
     lines.push(Line::raw("x".repeat(200)));
     for line in &lines {
@@ -856,6 +857,15 @@ fn fitted_count_cuts_the_scanned_restart_when_it_overflows() {
 #[test]
 fn fitted_count_joins_a_fitting_glyph_after_a_hard_cut() {
     assert_eq!(super::fitted_count(&Line::raw("abcd"), 2), 2);
+}
+
+#[test]
+fn fitted_count_joins_a_glyph_exactly_filling_inner() {
+    // The boundary of the wider-than-`inner` rule: a glyph exactly as
+    // wide as `inner` opens the fresh piece instead of standing alone,
+    // so the zero-width mark joins it and the line is two pieces, not
+    // three. Kills `width > inner` to `==` and to `>=`.
+    assert_eq!(super::fitted_count(&Line::raw("ab\u{301}"), 1), 2);
 }
 
 #[test]
