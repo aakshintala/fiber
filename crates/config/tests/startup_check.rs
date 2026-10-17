@@ -2,6 +2,8 @@
 //! the repository partition, name order, debug redaction, and the script
 //! read's bounded, never-blocking behavior.
 
+#![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
+
 mod common;
 
 use std::fs;
