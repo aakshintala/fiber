@@ -61,7 +61,9 @@ fn ids(rows: &[RecentRow]) -> Vec<String> {
 }
 
 fn page_of(home: &Path, before: Option<&str>, project: Option<&str>) -> Vec<String> {
-    ids(&page(home, before, project, &BTreeSet::new()).unwrap())
+    ids(&page_with_total(home, before, project, &BTreeSet::new())
+        .unwrap()
+        .0)
 }
 
 #[test]
@@ -153,7 +155,9 @@ fn the_newest_row_of_each_session_wins_newest_first() {
     let mut again = first;
     again.how = Left::Exited;
     temp.append(&again);
-    let listed = page(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    let listed = page_with_total(&temp.dir, None, None, &BTreeSet::new())
+        .unwrap()
+        .0;
     assert_eq!(ids(&listed), [id(1), id(2)]);
     assert_eq!(listed.first().unwrap().how, Left::Exited);
 }
@@ -184,12 +188,14 @@ fn a_running_session_is_skipped() {
     temp.append(&temp.row(2, "p", Left::Exited, None));
     let running = BTreeSet::from([id(2)]);
     assert_eq!(
-        ids(&page(&temp.dir, None, None, &running).unwrap()),
+        ids(&page_with_total(&temp.dir, None, None, &running).unwrap().0),
         [id(1)]
     );
     // A running session still anchors `before`.
     assert_eq!(
-        ids(&page(&temp.dir, Some(&id(2)), None, &running).unwrap()),
+        ids(&page_with_total(&temp.dir, Some(&id(2)), None, &running)
+            .unwrap()
+            .0),
         [id(1)]
     );
 }
@@ -241,8 +247,10 @@ fn count_covers_every_row_past_the_page() {
     for n in 100..102 {
         temp.append(&temp.row(n, "q", Left::Exited, None));
     }
-    assert_eq!(count(&temp.dir, Some("p"), &BTreeSet::new()), 53);
-    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), 55);
+    let (_, project) = page_with_total(&temp.dir, None, Some("p"), &BTreeSet::new()).unwrap();
+    assert_eq!(project, 53);
+    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    assert_eq!(all, 55);
 }
 
 #[test]
@@ -256,11 +264,13 @@ fn count_skips_running_delegate_and_missing_directory_rows() {
         Some(serde_json::from_value(status("n", "/w", "idle", Some(&id(1)))).unwrap());
     temp.append(&delegate);
     temp.append(&row(5, "p", Left::Exited, None));
-    let all = count(&temp.dir, None, &BTreeSet::new());
+    let (_, all) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
     assert_eq!(all, 3);
     let running = BTreeSet::from([id(3)]);
-    assert_eq!(count(&temp.dir, None, &running), 2);
-    assert_eq!(count(&temp.dir, Some("p"), &running), 2);
+    let (_, unfiltered) = page_with_total(&temp.dir, None, None, &running).unwrap();
+    assert_eq!(unfiltered, 2);
+    let (_, project) = page_with_total(&temp.dir, None, Some("p"), &running).unwrap();
+    assert_eq!(project, 2);
 }
 
 #[test]
@@ -269,9 +279,11 @@ fn count_is_not_capped_at_the_page_size() {
     for n in 0..RECENT_PAGE as u64 {
         temp.append(&temp.row(n, "p", Left::Exited, None));
     }
-    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE);
+    let (_, total) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    assert_eq!(total, RECENT_PAGE);
     temp.append(&temp.row(RECENT_PAGE as u64, "p", Left::Exited, None));
-    assert_eq!(count(&temp.dir, None, &BTreeSet::new()), RECENT_PAGE + 1);
+    let (_, total) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
+    assert_eq!(total, RECENT_PAGE + 1);
 }
 
 #[test]
@@ -290,12 +302,12 @@ fn an_unknown_before_is_an_error() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
     assert_eq!(
-        page(&temp.dir, Some(&id(9)), None, &BTreeSet::new()),
+        page_with_total(&temp.dir, Some(&id(9)), None, &BTreeSet::new()).map(|(rows, _)| rows),
         Err(PageError::UnknownBefore)
     );
     // Outside the project filter is not in the list either.
     assert_eq!(
-        page(&temp.dir, Some(&id(1)), Some("q"), &BTreeSet::new()),
+        page_with_total(&temp.dir, Some(&id(1)), Some("q"), &BTreeSet::new()).map(|(rows, _)| rows),
         Err(PageError::UnknownBefore)
     );
 }
