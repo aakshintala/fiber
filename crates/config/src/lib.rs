@@ -330,7 +330,10 @@ impl Config {
             return None;
         }
         for len in 0..key.len() {
-            if keys::leaf(&key[..len]).is_some_and(|row| row.merge != keys::Merge::Replace) {
+            let Some(prefix) = key.get(..len) else {
+                continue;
+            };
+            if keys::leaf(prefix).is_some_and(|row| row.merge != keys::Merge::Replace) {
                 return None;
             }
         }
@@ -364,9 +367,10 @@ impl Config {
                 }
                 return Some(Some((value.clone(), source.clone())));
             }
-            if (1..key.len())
-                .any(|len| path::get(seen, &key[..len]).is_some_and(|at| !at.is_object()))
-            {
+            if (1..key.len()).any(|len| {
+                key.get(..len)
+                    .is_some_and(|prefix| path::get(seen, prefix).is_some_and(|at| !at.is_object()))
+            }) {
                 hiding = true;
             }
         }

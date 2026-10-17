@@ -36,7 +36,10 @@ fn view_owns_a_layer_with_an_entry_for_the_model() {
 /// A `Config` loaded over empty directories, holding `layers` lowest
 /// first, past the file checks, so the table reaches shapes no file may
 /// hold (a scalar over an object, a scalar per-model entry).
-fn config_with(layers: Vec<(Source, Value)>) -> Config {
+/// The layers lowest first.
+type Layers = Vec<(Source, Value)>;
+
+fn config_with(layers: Layers) -> Config {
     let root = fakes::TempDir::new("fiber-get-differential");
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
@@ -108,7 +111,7 @@ fn get_equals_the_merged_value_for_every_key_shape() {
     // union, entry-replace, hiding and per-model rows each kill the
     // fast-path check they name: dropping it reads the holder where the
     // merge reads something else.
-    let cases: Vec<(Vec<(Source, Value)>, &str, Option<&str>)> = vec![
+    let cases: Vec<(Layers, &str, Option<&str>)> = vec![
         // A scalar in three layers: the top wins.
         (
             vec![
