@@ -30,7 +30,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Response, fingerprint};
 use provider::Endpoint;
 use provider::anthropic_messages::{Messages, decode};
 use serde_json::{Value, json};
@@ -2651,4 +2651,38 @@ fn only_a_token_budget_level_does_not_warm() {
     assert!(budget.warms(&at(Some(Off))));
     assert!(budget.warms(&at(None)));
     assert!(adaptive.warms(&at(Some(Low))));
+}
+
+#[test]
+fn a_bearer_model_sends_authorization_bearer_and_no_api_key() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let end = Endpoint {
+        compat: provider::Compat {
+            bearer: true,
+            ..provider::Compat::default()
+        },
+        ..endpoint(&server)
+    };
+    run(Box::new(Messages::new(end).request(&request())))
+        .0
+        .unwrap();
+    let sent = &server.requests()[0];
+    assert_eq!(
+        sent.header("authorization"),
+        Some(fingerprint("Bearer sk-secret").as_str())
+    );
+    assert_eq!(sent.header("x-api-key"), None);
+}
+
+#[test]
+fn a_default_model_sends_x_api_key_and_no_authorization() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(
+        Messages::new(endpoint(&server)).request(&request()),
+    ))
+    .0
+    .unwrap();
+    let sent = &server.requests()[0];
+    assert_ne!(sent.header("x-api-key"), None);
+    assert_eq!(sent.header("authorization"), None);
 }

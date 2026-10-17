@@ -1206,6 +1206,7 @@ fn state_lines_slash_rejection_drops_the_prompt_and_its_carried_state() {
         .unwrap()
         .server_prompts(crate::ServerPrompts {
             rows: vec![contract::events::CommandInfo {
+                extension: false,
                 name: "broken".into(),
                 description: String::new(),
                 argument_hint: None,
@@ -1573,7 +1574,9 @@ impl Hooks for FakeHooks {
                     InputItem::Message { content, .. } => crate::conversation::text(content),
                     InputItem::Jobs { .. } => "jobs".to_owned(),
                     InputItem::Handoff { .. } => "handoff".to_owned(),
-                    InputItem::ShellCommand { .. } | InputItem::Unknown => "other".to_owned(),
+                    InputItem::ShellCommand { .. }
+                    | InputItem::Rewind { .. }
+                    | InputItem::Unknown => "other".to_owned(),
                 })
                 .collect::<Vec<_>>()
         ));

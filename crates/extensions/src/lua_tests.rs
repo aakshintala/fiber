@@ -6,7 +6,7 @@ use std::thread;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::hub::Progress;
+use super::hub::{Progress, Run};
 use super::*;
 use contract::inbox::Delivery;
 
@@ -398,7 +398,7 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
         id,
         Progress::Started {
             deadline: Some(ago(at, 1100)),
-            parked: true,
+            run: Run::Parked,
         },
     );
     let err = returned(shared.judge("ext", id, &command("park"), asked, at)).unwrap_err();
@@ -411,6 +411,35 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
             }
         ),
         "{err:?}"
+    );
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+}
+
+#[test]
+fn a_login_wait_past_its_grace_reports_authentication_failed() {
+    let at = now();
+    let mut shared = ready(&[("login", 100)]);
+    let asked = ago(at, 2000);
+    let target = command("login");
+    let id = shared.push(target.clone(), Value::Null, asked);
+    shared.queue.clear();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(ago(at, 1100)),
+            run: Run::LoginWait,
+        },
+    );
+    let error = returned(shared.judge("ext", id, &target, asked, at)).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::LoginTimedOut {
+                timeout_ms: 100,
+                ..
+            }
+        ),
+        "{error:?}"
     );
     assert!(matches!(shared.phase, Phase::Ready(_)));
 }
@@ -429,7 +458,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
         id,
         Progress::Started {
             deadline: Some(inside),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
@@ -446,7 +475,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
         id,
         Progress::Started {
             deadline: Some(ago(at, 1100)),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &command("spin"), ago(at, 1200), at)).unwrap_err();
@@ -699,7 +728,10 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
-        Some(Progress::Started { parked: true, .. })
+        Some(Progress::Started {
+            run: Run::Parked,
+            ..
+        })
     )));
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
     stop(&hub);
@@ -736,7 +768,10 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
-        Some(Progress::Started { parked: true, .. })
+        Some(Progress::Started {
+            run: Run::Parked,
+            ..
+        })
     )));
     let asked = clock.now();
     let (second, sign) = {
@@ -790,7 +825,10 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         .expect("waited for spin to pass its clock check");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),
-        Some(Progress::Started { parked: false, .. })
+        Some(Progress::Started {
+            run: Run::Running,
+            ..
+        })
     )));
     stop(&hub);
     clock.advance(Duration::from_millis(1000));
@@ -991,7 +1029,10 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
-        Some(Progress::Started { parked: true, .. })
+        Some(Progress::Started {
+            run: Run::Parked,
+            ..
+        })
     )));
     let asked = clock.now();
     let (hook, sign) = {
@@ -1100,7 +1141,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hook),
-        Some(Progress::Started { parked: true, .. })
+        Some(Progress::Started {
+            run: Run::Parked,
+            ..
+        })
     )));
     let asked = clock.now();
     let (later, sign) = {
@@ -1352,7 +1396,7 @@ fn a_running_hook_at_its_deadline_times_out_and_leaves_the_vm_up() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &hook("before_message"), asked, at)).unwrap_err();
@@ -1377,7 +1421,7 @@ fn a_running_hook_before_its_deadline_waits() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: false,
+            run: Run::Running,
         },
     );
     let (Next::Sleep(until), _) =
@@ -1402,7 +1446,7 @@ fn a_running_hook_past_its_grace_abandons_the_vm() {
         id,
         Progress::Started {
             deadline: Some(ago(at, 1100)),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &hook("before_message"), asked, at)).unwrap_err();
@@ -1436,7 +1480,7 @@ fn a_timed_out_hook_still_running_past_its_grace_abandons_on_the_next_call() {
         id,
         Progress::Started {
             deadline: Some(ago(at, 1150)),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &hook("before_message"), asked, ago(at, 200)))
@@ -1472,7 +1516,7 @@ fn a_parked_hook_at_its_deadline_waits_out_its_grace() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: true,
+            run: Run::Parked,
         },
     );
     let (Next::Sleep(until), _) = shared.judge("ext", id, &hook("before_message"), asked, at)
@@ -1495,7 +1539,7 @@ fn a_running_command_at_its_deadline_times_out_and_leaves_the_vm_up() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
@@ -1523,7 +1567,7 @@ fn a_running_command_before_its_deadline_waits() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: false,
+            run: Run::Running,
         },
     );
     let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, ago(at, 1))
@@ -1553,7 +1597,7 @@ fn a_running_command_one_millisecond_inside_its_grace_times_out() {
             id,
             Progress::Started {
                 deadline: Some(deadline),
-                parked: false,
+                run: Run::Running,
             },
         );
         let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
@@ -1573,7 +1617,7 @@ fn a_running_command_one_millisecond_inside_its_grace_times_out() {
             id,
             Progress::Started {
                 deadline: Some(deadline),
-                parked: false,
+                run: Run::Running,
             },
         );
         let err = returned(shared.judge("ext", id, &command("spin"), asked, at)).unwrap_err();
@@ -1601,7 +1645,7 @@ fn a_parked_command_at_its_deadline_waits_out_its_grace() {
         id,
         Progress::Started {
             deadline: Some(at),
-            parked: true,
+            run: Run::Parked,
         },
     );
     let (Next::Sleep(until), _) = shared.judge("ext", id, &command("spin"), asked, at) else {
@@ -1624,7 +1668,7 @@ fn a_timed_out_command_still_running_past_its_grace_abandons_on_the_next_call() 
         id,
         Progress::Started {
             deadline: Some(ago(at, 1150)),
-            parked: false,
+            run: Run::Running,
         },
     );
     let err = returned(shared.judge("ext", id, &command("spin"), asked, ago(at, 200))).unwrap_err();
@@ -1744,7 +1788,13 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     // the advance below waits on.
     assert!(
         until(&ext.hub, |shared| shared.calls.values().any(
-            |progress| matches!(progress, Progress::Started { parked: false, .. })
+            |progress| matches!(
+                progress,
+                Progress::Started {
+                    run: Run::Running,
+                    ..
+                }
+            )
         )),
         "waited for the worker to run the hook"
     );
@@ -1810,7 +1860,13 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     // signal the advance below waits on.
     assert!(
         until(&ext.hub, |shared| shared.calls.values().any(
-            |progress| matches!(progress, Progress::Started { parked: false, .. })
+            |progress| matches!(
+                progress,
+                Progress::Started {
+                    run: Run::Running,
+                    ..
+                }
+            )
         )),
         "waited for the worker to run the command"
     );

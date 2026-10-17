@@ -401,6 +401,7 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
         r#loop::Rewound {
             from,
             note: "continued".into(),
+            summary: None,
             worktree: None,
             name: r#loop::latest_name(&session.dir),
         },

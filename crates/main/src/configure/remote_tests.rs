@@ -1054,6 +1054,7 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "login_targets",
             "store_key",
             "reviewer_models",
+            "models",
             "set_reviewer",
             "tool_switches",
             "switch_tool",

@@ -186,6 +186,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("model {}", args.model)
         }
+        Delivery::Reload(ack) => {
+            ack.0(Ok(None));
+            "reload".to_owned()
+        }
         Delivery::Credential(args, ack) => {
             ack.0(Ok(None));
             format!("credential {}", args.label)
@@ -198,7 +202,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
-        Delivery::Rewind(args, ack) => {
+        Delivery::Rewind(_, args, ack) => {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
@@ -312,7 +316,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
     .unwrap();
     opened
         .session
-        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             send(&client, r#"{"id":"c_early","command":"tools"}"#);
             let early = next(&client);
@@ -345,14 +349,15 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+            let Delivery::Reload(ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("reload reached the loop inbox") else {
+                panic!("reload arrives as Reload");
+            };
+            ack.0(Ok(None));
             let line = response(&client, "c_reload");
-            assert_eq!(
-                rejection(&line),
-                (
-                    "unknown_command",
-                    "`reload` is not built in this Fiber yet.",
-                ),
-            );
+            assert_eq!(kind(&line), "command_accepted");
+            assert!(line["payload"].get("result").is_none());
 
             send(
                 &client,
@@ -1176,6 +1181,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
+                | Delivery::Reload(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1214,6 +1220,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
+                | Delivery::Reload(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1304,6 +1311,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Reload(..)
                 | Delivery::Reply(..)
                 | Delivery::Rewind(..)
                 | Delivery::Close(_)
@@ -1384,11 +1392,11 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 .recv(&inbox)
                 .expect("the rewind is delivered")
             {
-                Delivery::Rewind(args, ack) => {
+                Delivery::Rewind(id, args, ack) => {
+                    assert_eq!(id.0, "c_r1");
                     assert_eq!(args.seq, Some(contract::Seq(5)));
                     assert_eq!(args.from_session_id, None);
                     assert!(!args.summarise);
-                    assert!(args.adopt.is_empty());
                     ack.0(Ok(Some(CommandResult::Rewind {
                         new_session_id: SessionId("s_9e2b0000000000b2".into()),
                     })));
@@ -1399,6 +1407,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Reload(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)
@@ -1427,7 +1436,8 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 .recv(&inbox)
                 .expect("the second rewind is delivered")
             {
-                Delivery::Rewind(args, ack) => {
+                Delivery::Rewind(id, args, ack) => {
+                    assert_eq!(id.0, "c_r2");
                     assert_eq!(args.seq, None);
                     ack.0(Err(Rejection {
                         code: ErrorCode::Busy,
@@ -1440,6 +1450,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Reload(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
                 | Delivery::Close(_)
@@ -3307,12 +3318,14 @@ fn commands_answers_with_the_rows_it_was_given_while_the_inbox_is_unread() {
     let opened = Opened::open(vec![]);
     opened.session.commands(vec![
         CommandInfo {
+            extension: false,
             name: "review".into(),
             description: "Review a diff.".into(),
             argument_hint: Some("[base]".into()),
             tag: "template".into(),
         },
         CommandInfo {
+            extension: false,
             name: "tdd".into(),
             description: "Test first.".into(),
             argument_hint: None,

@@ -32,7 +32,7 @@ use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
+use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
@@ -2981,6 +2981,34 @@ fn a_job_completed_after_its_restart_owes_nothing() {
     orphans.fold(&started());
     orphans.fold(&Event::JobCompleted(failed(JOB)));
     assert!(orphans.finish().is_empty());
+}
+
+#[test]
+fn a_rewound_line_settles_no_job() {
+    use contract::events::{Event, JobStarted, Rewound};
+    let started = Event::JobStarted(JobStarted {
+        job_id: JobId(JOB.into()),
+        tool: None,
+        extension: None,
+        description: "a job".into(),
+        output_path: "jobs/j_5e10c0ffee123456.jsonl".into(),
+    });
+    let rewound = Event::Rewound(Rewound {
+        new_session_id: SessionId("s_0000000000000001".into()),
+        seq: Seq(3),
+        from_session_id: None,
+        summary: None,
+    });
+    // A `rewound` settles no job: the job a rewind stopped has its own
+    // `job_completed` before it, so the open job is still owed its
+    // orphaned end.
+    let mut orphans = super::Orphans::default();
+    orphans.fold(&started);
+    orphans.fold(&rewound);
+    let done = orphans.finish();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].job_id.0, JOB);
+    assert_eq!(done[0].error.as_ref().unwrap().code, ErrorCode::Orphaned);
 }
 
 #[test]

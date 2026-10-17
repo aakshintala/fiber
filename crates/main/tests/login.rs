@@ -21,7 +21,7 @@ use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use fakes::{ProviderServer, Response, Watchdog};
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, group_alive};
+use support::{Deadline, KillGroup, Setup, group_alive, spawn_watched};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -274,16 +274,6 @@ struct Run {
     stderr: String,
 }
 
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    // A failed watchdog spawn still kills the child on unwind.
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
 /// Writes `input` to the child's stdin on a thread and closes it, so a
 /// child that never reads it is bounded by the run's exit wait. `fiber` may
 /// refuse a run before it reads stdin and exit, so a closed pipe is not a
@@ -298,18 +288,6 @@ fn feed(child: &mut Child, input: &str) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
         Err(e) => panic!("writing to the stdin of `fiber`: {e}"),
     });
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        // A panic between spawn and reap still kills the group. Failure
-        // here is ignored: the process may already be gone.
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// A pseudo-terminal, opened through rustix's safe calls.

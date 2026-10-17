@@ -1220,6 +1220,7 @@ fn a_rewound_loop_reuses_its_logged_preamble_silently() {
                 seq: contract::Seq(1),
             },
             note: String::new(),
+            summary: None,
             worktree: None,
             name: None,
         },

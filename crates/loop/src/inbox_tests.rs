@@ -671,6 +671,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::Name(..)
             | Delivery::Message(_)
             | Delivery::Model(..)
+            | Delivery::Reload(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
             | Delivery::Handoff(..)

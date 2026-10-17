@@ -345,7 +345,7 @@ fn rewound() -> Event {
         new_session_id: SessionId("s_9e2b0000000000b2".into()),
         seq: contract::Seq(1),
         from_session_id: None,
-        jobs: Vec::new(),
+        summary: None,
     })
 }
 

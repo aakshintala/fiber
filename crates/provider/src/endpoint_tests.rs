@@ -21,6 +21,7 @@ fn output_limit_is_the_smaller_of_the_two_that_are_set() {
 #[test]
 fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
     assert!(!Compat::from_data(&serde_json::Map::new()).thinking_budget);
+    assert!(!Compat::from_data(&serde_json::Map::new()).bearer);
     for (data, want) in [
         (json!({"thinking_budget": true}), true),
         (json!({"thinking_budget": false}), false),
@@ -28,6 +29,17 @@ fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
     ] {
         assert_eq!(
             Compat::from_data(data.as_object().unwrap()).thinking_budget,
+            want,
+            "{data}"
+        );
+    }
+    for (data, want) in [
+        (json!({"bearer": true}), true),
+        (json!({"bearer": false}), false),
+        (json!({"bearer": "yes"}), false),
+    ] {
+        assert_eq!(
+            Compat::from_data(data.as_object().unwrap()).bearer,
             want,
             "{data}"
         );

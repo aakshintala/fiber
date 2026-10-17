@@ -60,7 +60,7 @@ An extension is one directory. Its manifest, `extension.json`, states
   declare is not loaded for the session, with the notice `extension_failed`,
   and a model whose base URL its provider's entry does not list is left out of
   the model list. A base URL with a per-account host lists its pattern, such
-  as `https://{workspace}/ai-gateway/anthropic`, and the setting that fills it
+  as `https://{workspace}/ai-gateway/anthropic/v1`, and the setting that fills it
   (`docs/model-routing.md`, "A per-account host"). So what an install or an
   offer shows is everything the extension can take over
 - the files in its data directories whose text goes in the opening message,
@@ -369,7 +369,14 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   statuses its `pending` lists, as well as `authorization_pending`. With
   nobody attached to answer, `open`, `show`, `callback` and `poll` fail with
   `authentication_failed` before they open, show, listen or send
-  anything (`docs/model-routing.md`, "Keys, tokens and OAuth").
+  anything (`docs/model-routing.md`, "Keys, tokens and OAuth"). Somebody is
+  attached while a `full` connection is, as `clients` counts them
+  (`docs/events.md`); a `summary` connection and `fiber ask` never are. Each
+  helper asks just before it acts. `open` and `show` also send the URL, and
+  `show` the code, to every attached client as a `notice` with code
+  `login_url`, so a person on another machine can finish a device-code login.
+  A `credential()` still waiting in `callback`, or between `poll` requests,
+  when its timeout passes fails with `authentication_failed`.
 - **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
@@ -508,7 +515,7 @@ tools or hooks.
 
 A provider may have five pieces of Lua:
 
-- `models()`, which discovers its models
+- `models()`, which receives `{ key, placeholders }` (`docs/model-routing.md`, "Model discovery") and discovers its models
 - `quota()`, which receives `{ label, credential, key, token, headers }`,
   where `key` is the label's key (absent when the provider's token comes
   from `credential()`), and `token` and `headers` are what `credential()`
@@ -630,7 +637,8 @@ A call case invokes a provider function without starting a session. It requires
 `call` with `provider`, `function` and `arg`, plus exactly one of `returns` or
 `error`. The runner supports `cost`, `models`, `quota`, `login`, `credential` and
 `sign`. A `cost` return is `null` or a finite number at or above 0. `models` takes `{}`
-as its `arg`, and its return is the model list, matched as a session case's
+with an optional `key` (a string or null) and an optional `placeholders` (an object of
+strings) as its `arg`, and its return is the model list, matched as a session case's
 `expect` is: an object checks only the fields it gives, an array matches in
 full, and an expected `null` matches a missing field. An error checks its
 `code` and may also check its `message`. The case can script the same `host`

@@ -55,11 +55,13 @@ pub(crate) enum Ink {
     Muted,
     /// One role's colour, such as a context category's.
     Role(Role),
+    /// One role's colour in reverse video, such as a diff's differing words.
+    Marked(Role),
 }
 
 impl Ink {
     /// The cell's style.
-    fn style(self) -> Style {
+    pub(crate) fn style(self) -> Style {
         match self {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
@@ -67,6 +69,9 @@ impl Ink {
                 .fg(Role::Muted.color())
                 .add_modifier(Modifier::DIM),
             Ink::Role(role) => Style::new().fg(role.color()),
+            Ink::Marked(role) => Style::new()
+                .fg(role.color())
+                .add_modifier(Modifier::REVERSED),
         }
     }
 }

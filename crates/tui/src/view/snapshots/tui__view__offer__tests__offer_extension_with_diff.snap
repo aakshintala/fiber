@@ -8,17 +8,17 @@ expression: "draw(&app, 80, 24).0"
   extension lint 1.2.0
   files: index.ts
   the declaration changed
-    --- a/index.ts
-    +++ b/index.ts
-    @@ -1 +1 @@
-    -old()
-    +new()
+      @@ -1 +1 @@
+    1 -old()
+    1 +new()
   ( ) approve   (•) skip for this session   ( ) never
 
 A package's TUI files are never installed from a repository.
 
 ↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
   Send · 0 approve, 1 skip, 0 never
+
+
 
 
 

@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -186,6 +187,10 @@ fn a_symlink_is_not_followed_when_modes_are_restored() {
 /// Run on its own it does nothing.
 #[test]
 #[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+#[allow(
+    clippy::print_stderr,
+    reason = "the parent test quotes this line in its failure message"
+)]
 fn child_leaves_a_read_only_directory() {
     let Ok(prefix) = std::env::var(CHILD_PREFIX) else {
         return;
@@ -197,12 +202,109 @@ fn child_leaves_a_read_only_directory() {
     println!("{}", dir.path().display());
     std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let mut rest = String::new();
-    std::io::stdin().read_line(&mut rest).unwrap();
+    let read = std::io::stdin().read_line(&mut rest);
+    eprintln!("read_line: {read:?}");
 }
 
 #[test]
 fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
-    let mut child = ChildGuard(Some(
+    let mut child = spawn_child();
+    let leftover = printed_dir(&mut child);
+
+    if let Some(running) = child.0.as_mut() {
+        match running.kill() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    let mut killed = child.0.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = killed.wait().and_then(|status| {
+            let mut stderr = String::new();
+            match killed.stderr.take() {
+                Some(mut pipe) => {
+                    use std::io::Read;
+                    pipe.read_to_string(&mut stderr).map(|_| (status, stderr))
+                }
+                None => Ok((status, stderr)),
+            }
+        });
+        match tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    let (status, stderr) = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
+        .unwrap();
+    assert!(
+        status.signal() == Some(9),
+        "the child did not die by SIGKILL: {status}; its stderr: {stderr:?}"
+    );
+    assert!(
+        leftover.exists(),
+        "the kill left {}; the child's stderr: {stderr:?}",
+        leftover.display()
+    );
+
+    let next = TempDir::new("fk");
+    assert_ne!(next.path(), leftover);
+    assert!(next.path().is_dir());
+    assert_eq!(fs::read_dir(next.path()).unwrap().count(), 0);
+    fs::write(next.path().join("probe"), "ok").unwrap();
+
+    super::restore_modes(&leftover);
+    fs::remove_dir_all(&leftover).unwrap();
+    assert!(!leftover.exists());
+}
+
+#[test]
+fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
+    let mut child = spawn_child();
+    let leftover = printed_dir(&mut child);
+    drop(child.0.as_mut().unwrap().stdin.take());
+    let mut exited = child.0.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = exited.wait().and_then(|status| {
+            let mut stderr = String::new();
+            match exited.stderr.take() {
+                Some(mut pipe) => {
+                    use std::io::Read;
+                    pipe.read_to_string(&mut stderr).map(|_| (status, stderr))
+                }
+                None => Ok((status, stderr)),
+            }
+        });
+        match tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    let (status, stderr) = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to exit after stdin closed"))
+        .unwrap();
+    assert!(
+        status.code() == Some(0),
+        "the child did not exit cleanly: {status}; its stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("read_line: Ok(0)"),
+        "the child's stderr did not report a clean stdin close: {stderr:?}"
+    );
+    assert!(
+        !leftover.exists(),
+        "closing stdin left {}; the child's stderr: {stderr:?}",
+        leftover.display()
+    );
+}
+
+/// Kills the child unless it was already reaped, so a failed wait does not
+/// leave it running.
+struct ChildGuard(Option<Child>);
+
+fn spawn_child() -> ChildGuard {
+    ChildGuard(Some(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", CHILD, "--nocapture"])
             .env(CHILD_PREFIX, "fk")
@@ -211,7 +313,10 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap(),
-    ));
+    ))
+}
+
+fn printed_dir(child: &mut ChildGuard) -> PathBuf {
     let stdout = child.0.as_mut().unwrap().stdout.take().unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -228,6 +333,15 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
                     let trimmed = line.trim();
                     if trimmed.starts_with('/') {
                         send_line(&tx, Some(trimmed.to_owned()));
+                        // Drain to EOF: the child's harness prints to stdout after
+                        // the test body, and a closed pipe would make it panic.
+                        loop {
+                            line.clear();
+                            match lines.read_line(&mut line) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
                         break;
                     }
                 }
@@ -250,37 +364,8 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
         "the child printed {}",
         leftover.display()
     );
-
-    if let Some(running) = child.0.as_mut() {
-        match running.kill() {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    let mut killed = child.0.take().unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || match tx.send(killed.wait()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
-    });
-    Deadline::after(DEADLINE)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
-        .unwrap();
-    assert!(leftover.exists(), "the kill left {}", leftover.display());
-
-    let next = TempDir::new("fk");
-    assert_ne!(next.path(), leftover);
-    assert!(next.path().is_dir());
-    assert_eq!(fs::read_dir(next.path()).unwrap().count(), 0);
-    fs::write(next.path().join("probe"), "ok").unwrap();
-
-    super::restore_modes(&leftover);
-    fs::remove_dir_all(&leftover).unwrap();
-    assert!(!leftover.exists());
+    leftover
 }
-
-/// Kills the child unless it was already reaped, so a failed wait does not
-/// leave it running.
-struct ChildGuard(Option<Child>);
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {

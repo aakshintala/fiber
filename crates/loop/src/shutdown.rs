@@ -74,7 +74,7 @@ impl Loop {
     }
 
     /// Sends each of `running` its stop. A job already sent one ignores it.
-    fn stop_jobs(&self, running: &[JobId]) {
+    pub(crate) fn stop_jobs(&self, running: &[JobId]) {
         if let Some(jobs) = &self.ending.jobs {
             for id in running {
                 jobs.stop(id);
@@ -87,7 +87,7 @@ impl Loop {
     /// `job_completed`, all through `Transcript::write` with no turn and
     /// no action. No model reads the session after the settle, so the
     /// render has no reader; the lines in the log are unchanged.
-    fn write_job_end(
+    pub(crate) fn write_job_end(
         &mut self,
         ahead: Vec<Taken>,
         completed: JobCompleted,
@@ -134,8 +134,9 @@ impl Loop {
             Delivery::Prompt(_, ack)
             | Delivery::Steer(_, ack)
             | Delivery::Handoff(_, _, ack)
-            | Delivery::Rewind(_, ack)
+            | Delivery::Rewind(_, _, ack)
             | Delivery::Model(_, ack)
+            | Delivery::Reload(ack)
             | Delivery::Name(_, ack)
             | Delivery::Credential(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);

@@ -73,7 +73,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "full-picker",
         help: "the workspace picker open over the fleet",
-        check: "the picker centred over the fleet with `Workspaces` bold accent; the typed row `› ~/work/fiber/█` with the launch directory's listing, the first `›` on the bar; a blank row, dim `── recents ──` and the four recents dim, the launch directory first; the bold-key legend foot with `Esc closes`.",
+        check: "the picker centred over the fleet with `Workspaces` bold accent; the typed row `› ~/work/fiber/█` with the launch directory's listing, the first `›` on the bar; a blank row, dim `── recents ──` and the four recents dim, the launch directory first; the bold-key legend foot with `Esc closes`, at 80×24 the picker's bottom edge sits on the row above the input box, which stays whole, and the sessions show on both sides of it",
         build: || Look {
             sel: Some(0),
             fleet: FleetUi {
@@ -135,8 +135,6 @@ const LIST_TOP: usize = 5;
 /// The prompt box's rows: the slab's thin edge, the entry row, a blank
 /// row, the chip row, and the slab's thin edge.
 const BOX_H: usize = 5;
-/// The workspace picker's first row over the fleet.
-const PICK_Y: usize = 12;
 
 /// The fewest rows that still draw header, one list line, box and hint.
 const fn tall_min() -> usize {
@@ -1097,68 +1095,97 @@ fn listing(root: &str) -> &'static [&'static str] {
     }
 }
 
-/// The workspace picker over the fleet, the same for every door: the typed
-/// row at the root, its completions with the focused one on a full-width
-/// selection bar, then a blank row, the dim `── recents ──` divider and the
-/// dim recents, in the shared panel frame with a bold-key legend foot. With
-/// no recents the divider and its rows are left out. `wsel` indexes the
-/// completions, then the recents.
-fn picker(
-    wsel: usize,
-    cols: usize,
-    root: &str,
-    recents: &[&str],
+/// The workspace picker's typed row and its list rows: the completions,
+/// then a blank row, the dim `── recents ──` divider and the dim recents.
+/// With no recents the divider and its rows are left out. `wsel` indexes
+/// the completions, then the recents.
+fn picker_content(wsel: usize, root: &str, recents: &[&str]) -> (super::Row, Vec<super::Row>) {
+    let typed = row(vec![
+        sp("› ", fg(CYAN)),
+        sp(root.to_string(), Style::new()),
+        sp("█", dim()),
+    ]);
+    let names = listing(root);
+    let mut list = vec![];
+    for (i, r) in names.iter().enumerate() {
+        if i == wsel {
+            list.extend(super::panel::bar(vec![row(vec![
+                sp("› ", bold()),
+                sp(r.to_string(), bold()),
+            ])]));
+        } else {
+            list.push(row(vec![sp("  ", dim()), sp(r.to_string(), Style::new())]));
+        }
+    }
+    if !recents.is_empty() {
+        list.push(row(vec![]));
+        list.push(row(vec![sp("── recents ──", dim())]));
+    }
+    for (i, r) in recents.iter().enumerate() {
+        if names.len() + i == wsel {
+            list.extend(super::panel::bar(vec![row(vec![
+                sp("› ", bold()),
+                sp(r.to_string(), bold()),
+            ])]));
+        } else {
+            list.push(row(vec![sp("  ", dim()), sp(r.to_string(), dim())]));
+        }
+    }
+    (typed, list)
+}
+
+/// The picker's width for its full body, so a windowed picker keeps the
+/// columns the whole one has.
+fn picker_width(typed: &super::Row, full: &[super::Row], cols: usize) -> usize {
+    const TITLE: &str = "Workspaces";
+    let natural = core::iter::once(typed)
+        .chain(full)
+        .map(|r| super::width(&r.spans))
+        .max()
+        .unwrap_or(0)
+        .max(TITLE.width())
+        .max("↑↓ move · Enter open · Esc closes".width());
+    super::panel::fit_width(natural, 55, cols)
+}
+
+/// The picker's frame around its typed row and (possibly windowed) list
+/// rows, with the bold-key legend foot.
+fn picker_frame(
+    typed: super::Row,
+    list: Vec<super::Row>,
     escapes: bool,
+    w: usize,
 ) -> Vec<super::Row> {
     const TITLE: &str = "Workspaces";
     let mut legend = vec![("↑↓", "move"), ("Enter", "open")];
     if escapes {
         legend.push(("Esc", "closes"));
     }
-    let mut body = vec![row(vec![
-        sp("› ", fg(CYAN)),
-        sp(root.to_string(), Style::new()),
-        sp("█", dim()),
-    ])];
-    let names = listing(root);
-    for (i, r) in names.iter().enumerate() {
-        if i == wsel {
-            body.extend(super::panel::bar(vec![row(vec![
-                sp("› ", bold()),
-                sp(r.to_string(), bold()),
-            ])]));
-        } else {
-            body.push(row(vec![sp("  ", dim()), sp(r.to_string(), Style::new())]));
-        }
-    }
-    if !recents.is_empty() {
-        body.push(row(vec![]));
-        body.push(row(vec![sp("── recents ──", dim())]));
-    }
-    for (i, r) in recents.iter().enumerate() {
-        if names.len() + i == wsel {
-            body.extend(super::panel::bar(vec![row(vec![
-                sp("› ", bold()),
-                sp(r.to_string(), bold()),
-            ])]));
-        } else {
-            body.push(row(vec![sp("  ", dim()), sp(r.to_string(), dim())]));
-        }
-    }
-    let natural = body
-        .iter()
-        .map(|r| super::width(&r.spans))
-        .max()
-        .unwrap_or(0)
-        .max(TITLE.width())
-        .max("↑↓ move · Enter open · Esc closes".width());
-    let w = super::panel::fit_width(natural, 55, cols);
+    let mut body = vec![typed];
+    body.extend(list);
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
         body,
         Some(super::panel::footer_legend(&legend)),
         w,
     )
+}
+
+/// The picker's list rows that fit `fit` rows with the focused row kept
+/// in view: the window's start and its length. `selected` is `wsel` as a
+/// list-row index, past the blank row and the divider when recents show.
+/// At least one row while rows show, so the focused row always draws.
+fn picker_window(selected: usize, len: usize, fit: usize) -> (usize, usize) {
+    if len == 0 {
+        return (0, 0);
+    }
+    let take = fit.min(len).max(1);
+    let start = selected
+        .min(len.saturating_sub(1))
+        .saturating_add(1)
+        .saturating_sub(take)
+        .min(len.saturating_sub(take));
+    (start, take)
 }
 
 /// The recent workspace a picker row names, if any: the row's text past
@@ -1286,17 +1313,40 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         }
     }
     if c.fleet.wpick.is_some() {
-        let prows = picker(
-            c.fleet.wsel,
-            cols,
-            &picker_root(&c.fleet.ws),
-            c.remote_rows.unwrap_or(RECENTS),
-            c.fleet.ws != NO_WORKSPACE,
-        );
-        let pw = super::width(&prows[0].spans);
+        let root = picker_root(&c.fleet.ws);
+        let recents = c.remote_rows.unwrap_or(RECENTS);
+        let escapes = c.fleet.ws != NO_WORKSPACE;
+        let (typed, list) = picker_content(c.fleet.wsel, &root, recents);
+        let w = picker_width(&typed, &list, cols);
+        // The chrome never drops out of a window: two edges, two pad
+        // rows, the title and its gap, and the footer's gap and row.
+        const CHROME: usize = 8;
+        let full = CHROME + 1 + list.len();
+        let centred = rows.saturating_sub(full) / 2;
+        // The picker is centred down the screen; when that would cover
+        // the input box's top row its bottom edge sits on the row above
+        // the box instead. When it does not fit above the box either,
+        // its list rows show a window around the focused row.
+        let (first, prows) = if centred + full > box_top {
+            let room = box_top.saturating_sub(CHROME + 1);
+            let names = listing(&root).len();
+            let selected = if c.fleet.wsel < names {
+                c.fleet.wsel
+            } else {
+                // Past the blank row and the divider when recents show.
+                c.fleet.wsel + if recents.is_empty() { 0 } else { 2 }
+            };
+            let (off, take) = picker_window(selected, list.len(), room);
+            let windowed = list[off..off + take].to_vec();
+            let prows = picker_frame(typed, windowed, escapes, w);
+            (box_top.saturating_sub(prows.len()), prows)
+        } else {
+            (centred, picker_frame(typed, list, escapes, w))
+        };
+        let pw = w;
         let px0 = super::panel::x_for(pw, cols);
         for (k, r) in prows.into_iter().enumerate() {
-            let y = PICK_Y + k;
+            let y = first + k;
             if y >= rows {
                 break;
             }
@@ -1304,11 +1354,13 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             if let Some(i) = recent_at(&text) {
                 hits.push((y as u16, px0 as u16, (px0 + pw) as u16, Target::Recent(i)));
             }
-            screen[y] = vec![Placed {
+            // The picker draws over the screen: the rows behind keep
+            // their cells outside the picker's columns.
+            screen[y].push(Placed {
                 x: px0 as u16,
                 w: pw as u16,
                 row: r,
-            }];
+            });
         }
     }
     Frame {
@@ -2085,6 +2137,260 @@ mod tests {
             assert!(t.contains(&format!("  {ws}")), "missing recent {ws}");
         }
         assert!(t.contains("Esc closes"));
+    }
+
+    /// The whole workspace picker, as the frame draws it when nothing is
+    /// windowed: the tests' geometry reads the picker's own rows, not the
+    /// frame's.
+    fn picker(
+        wsel: usize,
+        cols: usize,
+        root: &str,
+        recents: &[&str],
+        escapes: bool,
+    ) -> Vec<crate::Row> {
+        let (typed, list) = picker_content(wsel, root, recents);
+        let w = picker_width(&typed, &list, cols);
+        picker_frame(typed, list, escapes, w)
+    }
+
+    /// The picker rows the frame draws at `cols`: their count, width and
+    /// left margin, from the picker's own content, not from the frame.
+    fn picker_geom(c: &Look, cols: usize) -> (usize, usize, usize) {
+        let prows = picker(
+            c.fleet.wsel,
+            cols,
+            &picker_root(&c.fleet.ws),
+            c.remote_rows.unwrap_or(RECENTS),
+            c.fleet.ws != NO_WORKSPACE,
+        );
+        let pw = crate::width(&prows[0].spans);
+        (prows.len(), pw, crate::panel::x_for(pw, cols))
+    }
+
+    /// The screen rows carrying picker content: rows where a placed row
+    /// exactly matches a non-blank picker row, placed at the picker's
+    /// own width. Background rows are full width, so none matches.
+    fn picker_rows(c: &Look, cols: usize, rows: usize) -> (usize, usize) {
+        let prows = picker(
+            c.fleet.wsel,
+            cols,
+            &picker_root(&c.fleet.ws),
+            c.remote_rows.unwrap_or(RECENTS),
+            c.fleet.ws != NO_WORKSPACE,
+        );
+        let texts: Vec<String> = prows
+            .into_iter()
+            .map(|r| {
+                r.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        let pw = picker_geom(c, cols).1;
+        let fr = frame(c, cols, rows, false);
+        let mut ys = vec![];
+        for (y, ps) in fr.screen.iter().enumerate() {
+            for p in ps {
+                let t: String = p
+                    .row
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>();
+                if p.w as usize == pw && texts.iter().any(|x| x == &t) {
+                    ys.push(y);
+                    break;
+                }
+            }
+        }
+        (*ys.iter().min().unwrap(), *ys.iter().max().unwrap())
+    }
+
+    #[test]
+    fn picker_sits_above_input_box_at_80x24() {
+        for name in ["full-picker", "full-remote-picker"] {
+            let open = crate::cases::lookup(CASES, name).unwrap();
+            // The closed frame is the same case with the picker shut:
+            // every row but the picker's own is identical by construction.
+            let mut closed = crate::cases::lookup(CASES, name).unwrap();
+            closed.fleet.wpick = None;
+            let (cols, rows) = (80usize, 24usize);
+            let box_top = rows - 1 - BOX_H;
+            assert_eq!(box_top, 18, "input box moved");
+            let (ph, pw, px0) = picker_geom(&open, cols);
+            // 80x24 exercises the rule's second arm: centred, the picker
+            // would cover the box's top row.
+            assert!(
+                (rows - ph) / 2 + ph > box_top,
+                "{name}: fixture no longer covers the box: ph={ph}"
+            );
+            let (first, last) = picker_rows(&open, cols, rows);
+            // When the whole picker does not fit above the box its list
+            // shows a window around the focused row, so the drawn rows
+            // are the room above the box; otherwise every row draws.
+            assert_eq!(
+                last - first + 1,
+                ph.min(box_top),
+                "{name}: drawn rows wrong: ph={ph}"
+            );
+            assert_eq!(
+                last,
+                box_top - 1,
+                "{name}: bottom edge not above the box: ph={ph}"
+            );
+            let open_text = text(&open, cols as u16, rows as u16);
+            let open_lines: Vec<&str> = open_text.split('\n').collect();
+            let closed_text = text(&closed, cols as u16, rows as u16);
+            let closed_lines: Vec<&str> = closed_text.split('\n').collect();
+            // The input box and the foot hint are unchanged by the picker.
+            for y in box_top..rows {
+                assert_eq!(
+                    open_lines[y], closed_lines[y],
+                    "{name}: box row {y} changed by the picker"
+                );
+            }
+            // Beside the picker the sessions show through.
+            let ob = buffer(&open, cols as u16, rows as u16);
+            let cb = buffer(&closed, cols as u16, rows as u16);
+            for y in first..=last {
+                for x in 0..cols as u16 {
+                    if (px0 as u16..(px0 + pw) as u16).contains(&x) {
+                        continue;
+                    }
+                    assert_eq!(
+                        ob[(x, y as u16)].symbol(),
+                        cb[(x, y as u16)].symbol(),
+                        "{name}: cell ({x},{y}) beside the picker differs"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picker_is_centred_at_160x48() {
+        for name in ["full-picker", "full-remote-picker"] {
+            let c = crate::cases::lookup(CASES, name).unwrap();
+            let (cols, rows) = (160usize, 48usize);
+            let (ph, _, _) = picker_geom(&c, cols);
+            let (first, last) = picker_rows(&c, cols, rows);
+            // Room to spare, so nothing is windowed and the picker is
+            // centred down the screen.
+            assert_eq!(last - first + 1, ph, "{name}: picker cut off: ph={ph}");
+            assert_eq!(
+                first,
+                (rows - ph) / 2,
+                "{name}: picker not centred: ph={ph}"
+            );
+        }
+    }
+
+    /// At, just below and just above the height where the centred picker
+    /// starts covering the input box's top row: shifted with its bottom
+    /// edge above the box, or centred down the screen.
+    #[test]
+    fn picker_cover_edge_shifts_or_centres() {
+        let c = crate::cases::lookup(CASES, "full-picker").unwrap();
+        let cols = 80usize;
+        let (ph, _, _) = picker_geom(&c, cols);
+        assert_eq!(ph, 19, "fixture changed height");
+        for (rows, want_first, want_last) in [(29usize, 4usize, 22usize), (30, 5, 23), (31, 6, 24)]
+        {
+            let box_top = rows - 1 - BOX_H;
+            let (first, last) = picker_rows(&c, cols, rows);
+            assert_eq!(last - first + 1, ph, "rows={rows}: picker cut off");
+            if (rows - ph) / 2 + ph > box_top {
+                assert_eq!(
+                    last,
+                    box_top - 1,
+                    "rows={rows}: bottom edge not above the box"
+                );
+            } else {
+                assert_eq!(first, (rows - ph) / 2, "rows={rows}: not centred");
+            }
+            assert_eq!(first, want_first, "rows={rows}: first row wrong");
+            assert_eq!(last, want_last, "rows={rows}: last row wrong");
+        }
+    }
+
+    /// At, just below and just above the height where the picker stops
+    /// fitting above the input box: a window of the room above the box,
+    /// an exact fit, or the whole picker shifted above the box.
+    #[test]
+    fn picker_window_edge_fits_or_windows() {
+        let c = crate::cases::lookup(CASES, "full-picker").unwrap();
+        let cols = 80usize;
+        let (ph, _, _) = picker_geom(&c, cols);
+        assert_eq!(ph, 19, "fixture changed height");
+        for (rows, want_count) in [(24usize, 18usize), (25, 19), (26, 19)] {
+            let box_top = rows - 1 - BOX_H;
+            let (first, last) = picker_rows(&c, cols, rows);
+            assert_eq!(last, box_top - 1, "rows={rows}: bottom edge moved");
+            assert_eq!(
+                last - first + 1,
+                want_count,
+                "rows={rows}: drawn rows wrong: ph={ph}"
+            );
+        }
+    }
+
+    /// With the focus on the last recent at 80x24 the window keeps it in
+    /// view: its row draws and stays a hit target, while the top of the
+    /// list scrolls out.
+    #[test]
+    fn picker_focus_on_last_recent_stays_drawn_at_80x24() {
+        let mut c = crate::cases::lookup(CASES, "full-picker").unwrap();
+        // `wsel` runs over the completions then the recents.
+        c.fleet.wsel = listing(&picker_root(&c.fleet.ws)).len() + RECENTS.len() - 1;
+        let (cols, rows) = (80usize, 24usize);
+        let box_top = rows - 1 - BOX_H;
+        let (ph, pw, _) = picker_geom(&c, cols);
+        assert!(ph > box_top, "fixture no longer needs its window");
+        let (first, last) = picker_rows(&c, cols, rows);
+        assert_eq!(last, box_top - 1, "bottom edge not above the box");
+        let fr = frame(&c, cols, rows, false);
+        let placed_text = |p: &Placed| {
+            p.row
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        let mut focused = vec![];
+        let mut top_completion = vec![];
+        for (y, ps) in fr.screen.iter().enumerate() {
+            for p in ps {
+                if p.w as usize != pw {
+                    continue;
+                }
+                let t = placed_text(p);
+                if t.contains(RECENTS[RECENTS.len() - 1]) {
+                    focused.push(y);
+                }
+                if t.contains("crates") {
+                    top_completion.push(y);
+                }
+            }
+        }
+        assert_eq!(focused.len(), 1, "last recent drawn twice or not at all");
+        assert!(
+            (first..=last).contains(&focused[0]),
+            "focused recent outside the drawn rows"
+        );
+        assert!(
+            top_completion.is_empty(),
+            "top completion should have scrolled out"
+        );
+        assert!(
+            fr.hits
+                .iter()
+                .any(|&(y, _, _, t)| y as usize == focused[0]
+                    && t == Target::Recent(RECENTS.len() - 1)),
+            "focused recent not a hit target"
+        );
     }
 
     fn remote_frame(name: &str, recents: &[&str]) {

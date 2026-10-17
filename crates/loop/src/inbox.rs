@@ -483,6 +483,7 @@ impl Loop {
             | Delivery::Message(_)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Reload(..)
             | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
@@ -558,6 +559,7 @@ impl Loop {
             Delivery::Credential(args, ack) => {
                 self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
+            Delivery::Reload(ack) => self.take_reload(ack)?,
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
@@ -567,8 +569,8 @@ impl Loop {
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
-            Delivery::Rewind(args, ack) => {
-                self.take_rewind(args, ack, input)?;
+            Delivery::Rewind(id, args, ack) => {
+                self.take_rewind(id, args, ack, input)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -703,6 +705,17 @@ impl Loop {
                     self.take_switch(crate::switch::Asked::Credential(args), ack, false)?;
                 }
             }
+            Delivery::Reload(ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(
+                        ack,
+                        ErrorCode::Busy,
+                        "A turn is running; reload once it ends.",
+                    );
+                }
+            }
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
@@ -712,7 +725,7 @@ impl Loop {
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             // While a turn runs the session cannot close first: rewind
             // once it ends.
-            Delivery::Rewind(_, ack) => {
+            Delivery::Rewind(_, _, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {

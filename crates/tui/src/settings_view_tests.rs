@@ -439,12 +439,29 @@ fn applies_by_key() {
         ("diagnostics.level", Applies::ProcessStart),
         ("model", Applies::NewSessions),
         ("thinking", Applies::NewSessions),
-        ("models.x.thinking", Applies::Reload),
+        ("models.x.thinking", Applies::NewSessions),
+        ("models.openai/gpt.6.thinking", Applies::NewSessions),
+        ("providers.openai.credential", Applies::NewSessions),
+        ("providers.openai.credentials", Applies::NewSessions),
+        ("providers.openai.credentials.work", Applies::NewSessions),
+        ("providers.openai.reviewer_model", Applies::Reload),
+        ("models.x.price", Applies::Reload),
+        ("models.x.thinking.extra", Applies::Reload),
+        ("providers.openai.credential.extra", Applies::Reload),
+        ("providers.openai.credentials_extra", Applies::Reload),
         ("skills.disabled", Applies::NextTurn),
         ("handoff.tokens", Applies::Reload),
     ] {
         assert_eq!(applies(key), when, "{key}");
     }
+}
+
+#[test]
+fn a_credential_write_applies_to_new_sessions() {
+    assert_eq!(
+        applies_text("providers.openai.credential", None),
+        "Applies to new sessions."
+    );
 }
 
 #[test]

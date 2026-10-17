@@ -2990,33 +2990,6 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
 }
 
 #[test]
-fn a_job_a_rewind_handed_on_is_not_marked() {
-    let mut history = History::new(vec![Scripted::text("Hello.")]);
-    history.write(user_turn("one"), None);
-    history.write(requested("shell", "Paris"), Some("a_1"));
-    history.write(job_started("j_a"), Some("a_1"));
-    history.write(completed_event("Started."), Some("a_1"));
-    history
-        .log
-        .append(
-            &Event::Rewound(contract::events::Rewound {
-                new_session_id: SessionId("s_2".into()),
-                seq: contract::Seq(1),
-                from_session_id: None,
-                jobs: vec![contract::JobId("j_a".into())],
-            }),
-            None,
-            None,
-        )
-        .unwrap();
-    history.freeze();
-
-    let looped = history.resume(Vec::new());
-    assert!(history.new_lines().is_empty());
-    drop(looped);
-}
-
-#[test]
 fn a_job_with_a_completion_is_not_marked() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);

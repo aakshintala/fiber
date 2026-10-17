@@ -148,11 +148,25 @@ impl SkillSet {
             .collect();
     }
 
+    /// Refreshes the discovery inputs without changing the last-sent listing.
+    pub(crate) fn reloaded(&self, inputs: PromptInputs) {
+        lock(&self.0).inputs = inputs;
+    }
+
+    /// A reload also sends descriptions that differ from the last-sent text.
+    pub(crate) fn reload_check(&self) -> SkillCheck {
+        self.check_listing(true)
+    }
+
     /// The turn-start check (`docs/system-prompt.md`, "Added and removed
     /// skills"): the current listing against what the model was last
     /// given. One `skills_changed`, written only when a skill was added
     /// or removed.
     pub(crate) fn check(&self) -> SkillCheck {
+        self.check_listing(false)
+    }
+
+    fn check_listing(&self, descriptions: bool) -> SkillCheck {
         let inputs = self.inputs_now();
         let mut inner = lock(&self.0);
         let pending = inner.pending_notice.take();
@@ -204,9 +218,15 @@ impl SkillSet {
         // The set differences, both in name order (`BTreeMap`
         // iteration).
         let mut added = Vec::new();
-        for (name, entry) in &current {
-            if !inner.listed.contains_key(name) {
-                added.push(entry.clone());
+        for (name, entry) in &mut current {
+            match inner.listed.get(name) {
+                None => added.push(entry.clone()),
+                Some(previous) if descriptions => {
+                    if previous.description != entry.description {
+                        added.push(entry.clone());
+                    }
+                }
+                Some(previous) => entry.description.clone_from(&previous.description),
             }
         }
         let mut removed = Vec::new();

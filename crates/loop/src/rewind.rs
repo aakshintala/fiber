@@ -15,6 +15,8 @@ use crate::prompt::{fill, message};
 use crate::{Error, Loop, Preamble, Session, variables};
 
 pub(crate) mod command;
+pub(crate) mod stop;
+pub(crate) mod summary;
 
 /// What the new session starts from: the point, the note, and the old
 /// session's worktree.
@@ -23,6 +25,8 @@ pub struct Rewound {
     pub from: Point,
     /// Fiber's note: files written, shell calls and jobs since the point.
     pub note: String,
+    /// The old session's summary of the path after the point, when requested.
+    pub summary: Option<String>,
     /// The old session's worktree, when it runs in one: the new session
     /// runs there too and never removes it (`docs/events.md`, "Rewind").
     pub worktree: Option<Worktree>,
@@ -35,11 +39,11 @@ pub struct Rewound {
 impl Loop {
     /// Starts a session that continues another from `start.from`, whose
     /// history is the old log folded to the point: `session_started`
-    /// carries `forked_from`, the note and the jobs handed over, and the
-    /// old session's worktree, with no `parent` and no summary. The chain
+    /// carries `forked_from`, the note and the summary, and the
+    /// old session's worktree, with no `parent`. The chain
     /// now includes this line, so the fold gives the new session the old
-    /// log's history to the point. The new session adopts no job, so it
-    /// clears its orphans, then builds through [`Loop::resume`], sending
+    /// log's history to the point. The new session starts with no jobs, so
+    /// it clears its orphans, then builds through [`Loop::resume`], sending
     /// the fold's latest `preamble_built` verbatim as its first request.
     /// It writes no `preamble_built`: nothing was built. Everything a new
     /// loop runs on rides [`crate::Session`].
@@ -51,9 +55,8 @@ impl Loop {
                 parent: None,
                 forked_from: Some(start.from),
                 rewind: Some(Rewind {
-                    summary: None,
+                    summary: start.summary,
                     note: start.note,
-                    jobs: Vec::new(),
                 }),
                 worktree: start.worktree,
             }),
@@ -70,13 +73,16 @@ impl Loop {
         }
         let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
-        // The new session adopts no job: nothing it folds can orphan. It
-        // continues the logged build verbatim, so it writes no
-        // `model_changed` for a label the log changed after the point
-        // (`docs/events.md`, "Rewind").
+        // The new session starts with no jobs: the jobs the folded history
+        // holds open were stopped by the rewind in the old log, not orphaned.
+        // The handoff carry drops them too, so a handoff started in the new
+        // session names no job. It continues the logged build verbatim, so it
+        // writes no `model_changed` for a label the log changed after the
+        // point (`docs/events.md`, "Rewind").
         folded.orphans = Vec::new();
         folded.settings = None;
         let mut rewound = Loop::resume(session, folded)?;
+        rewound.handoff.carry.jobs.clear();
         // A rewound session starts for its own reason, whatever the
         // preamble it adopted was built for.
         rewound.lifecycle.reason = contract::hook::StartReason::Rewind;
@@ -140,13 +146,20 @@ pub(crate) fn note_input(rewind: &Rewind) -> Input {
     }
 }
 
-/// Builds the note for the point `point` in the log in `dir`: the files
-/// the session's tools wrote after the point and the shell calls after it
-/// that may have changed files, from the effects on each
-/// `tool_call_started` after the point (`docs/events.md`, "Rewind"). The
-/// text comes only from logged fields, so it is the same bytes whenever it
-/// is rendered.
-pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
+/// The summary as one user message between the history and Fiber's note.
+pub(crate) fn summary_input(rewind: &Rewind) -> Option<Input> {
+    rewind.summary.as_ref().map(|summary| Input::User {
+        text: summary.clone(),
+        images: Vec::new(),
+    })
+}
+
+/// Collects what the session did after the point `point` in the log in
+/// `dir`: the paths its tools wrote and the shell calls that may have
+/// changed files, each in first-seen order, from the effects each
+/// `tool_call_started` declares. The text comes only from logged fields,
+/// so it is the same bytes whenever it is rendered.
+fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> {
     let lines = log::read(dir)?;
     let mut requested: HashMap<ActionId, ToolCallRequested> = HashMap::new();
     for line in &lines {
@@ -207,11 +220,44 @@ pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
             calls.push(ran);
         }
     }
-    Ok(note(&paths, &calls))
+    Ok((paths, calls))
 }
 
-/// The note text over `paths` written and `calls` run after the point.
-fn note(paths: &[String], calls: &[String]) -> String {
+/// Builds the note for the point `point` in the log in `dir`: the files
+/// written and the shell calls run after the point, from [`changes`]
+/// (`docs/events.md`, "Rewind"). The text comes only from logged fields,
+/// so it is the same bytes whenever it is rendered.
+///
+/// debt: `pub` only for the integration tests in `crates/loop/tests/`,
+/// ceiling one re-export; move the callers in `rewind.rs` and
+/// `approved_code.rs` there to [`rewind_note_with_jobs`], after which
+/// `rewind_note` goes crate-private.
+pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
+    let (paths, calls) = changes(dir, point)?;
+    Ok(note(&paths, &calls, &[]))
+}
+
+/// The note with the jobs the rewind stopped, read from the rewound
+/// session's own log (`docs/events.md`, "Rewind"): `old` is that log's
+/// directory, `dir` the point's. With no stopped job the output equals
+/// `rewind_note` byte for byte.
+pub fn rewind_note_with_jobs(old: &Path, dir: &Path, point: Seq) -> Result<String, Error> {
+    let stopped = stop::stopped_jobs(old)?;
+    let (paths, calls) = changes(dir, point)?;
+    let jobs = stopped
+        .iter()
+        .map(|job| match &job.description {
+            Some(description) => format!("- {}: {description}", job.job_id.0),
+            None => format!("- {}", job.job_id.0),
+        })
+        .collect::<Vec<_>>();
+    Ok(note(&paths, &calls, &jobs))
+}
+
+/// The note text over `paths` written, `calls` run after the point, and
+/// `jobs` stopped by the rewind: the jobs section follows the changes,
+/// joined with a blank line, only when at least one job was stopped.
+fn note(paths: &[String], calls: &[String], jobs: &[String]) -> String {
     let changes = match (paths.is_empty(), calls.is_empty()) {
         (true, true) => message("rewind-unchanged").to_owned(),
         _ => {
@@ -230,7 +276,15 @@ fn note(paths: &[String], calls: &[String]) -> String {
             parts.join("\n\n")
         }
     };
-    fill(message("rewind-note"), &[("changes", &changes)])
+    let noted = fill(message("rewind-note"), &[("changes", &changes)]);
+    if jobs.is_empty() {
+        noted
+    } else {
+        format!(
+            "{noted}\n\n{}",
+            fill(message("rewind-jobs"), &[("stopped", &jobs.join("\n"))])
+        )
+    }
 }
 
 #[cfg(test)]

@@ -1755,6 +1755,122 @@ impl contract::hook::Hooks for InboxHooks {
     }
 }
 
+struct ReloadDoor;
+impl contract::extension::ExtensionDoor for ReloadDoor {
+    fn command(
+        &self,
+        _: &CommandId,
+        _: &str,
+        _: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+        Ok(Box::new(|| {}))
+    }
+    fn seal(&self) {}
+}
+
+#[test]
+fn reload_replaces_whole_answers_and_handles_and_wires_the_new_hooks() {
+    use contract::events::{CommandInfo, SkillInfo, SkillSource};
+    let opened = Opened::open(Vec::new());
+    let command = |name: &str| CommandInfo {
+        extension: false,
+        name: name.into(),
+        description: name.into(),
+        argument_hint: None,
+        tag: "skill".into(),
+    };
+    let skill = |name: &str| SkillInfo {
+        name: name.into(),
+        description: name.into(),
+        path: format!("/{name}/SKILL.md"),
+        source: SkillSource::Repository,
+        extension: None,
+        model_invocable: true,
+        disabled: false,
+        shadows: Vec::new(),
+        shadowed_by: None,
+    };
+    let old_door: Arc<dyn contract::extension::ExtensionDoor> = Arc::new(ReloadDoor);
+    let old_hooks: Arc<dyn contract::hook::Hooks> = Arc::new(InboxHooks(Mutex::new(None)));
+    opened.session.commands(vec![command("old")]);
+    opened.session.skills(vec![skill("old")]);
+    opened.session.extensions(old_door.clone());
+    opened.session.hooks(old_hooks.clone());
+    assert_eq!(opened.session.gate.commands(), [command("old")]);
+    assert_eq!(opened.session.gate.skills(), [skill("old")]);
+    assert!(Arc::ptr_eq(&opened.session.gate.door().unwrap(), &old_door));
+    let replace = opened.session.reloader();
+    let gate = opened.session.gate.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let (tx, rx) = mpsc::channel();
+            let hooks: Arc<dyn contract::hook::Hooks> = Arc::new(InboxHooks(Mutex::new(Some(tx))));
+            let door: Arc<dyn contract::extension::ExtensionDoor> = Arc::new(ReloadDoor);
+            replace(super::Replacement {
+                commands: vec![command("new")],
+                skills: vec![skill("new")],
+                door: Some(door.clone()),
+                hooks: Some(hooks.clone()),
+            });
+            assert_eq!(gate.commands(), [command("new")]);
+            assert_eq!(gate.skills(), [skill("new")]);
+            assert!(Arc::ptr_eq(&gate.door().unwrap(), &door));
+            let given = Deadline::after(DEADLINE)
+                .recv(&rx)
+                .expect("replacement hooks received the inbox");
+            given.send(Delivery::Cancelled).unwrap();
+            assert!(matches!(
+                Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("new hooks delivered to the loop inbox"),
+                Delivery::Cancelled
+            ));
+            replace(super::Replacement {
+                commands: Vec::new(),
+                skills: Vec::new(),
+                door: None,
+                hooks: None,
+            });
+            assert!(gate.commands().is_empty());
+            assert!(gate.skills().is_empty());
+            assert!(gate.door().is_none());
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn reloader_before_run_wires_the_replacement_hooks_when_run_starts() {
+    let opened = Opened::open(Vec::new());
+    let (tx, rx) = mpsc::channel();
+    opened.session.reloader()(super::Replacement {
+        commands: Vec::new(),
+        skills: Vec::new(),
+        door: None,
+        hooks: Some(Arc::new(InboxHooks(Mutex::new(Some(tx))))),
+    });
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            Deadline::after(DEADLINE)
+                .recv(&rx)
+                .expect("run handed the replacement hooks its inbox")
+                .send(Delivery::Cancelled)
+                .unwrap();
+            assert!(matches!(
+                Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("hooks reached the inbox"),
+                Delivery::Cancelled
+            ));
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
 #[test]
 fn run_hands_the_hooks_the_loops_inbox() {
     let opened = Opened::open(Vec::new());
@@ -3140,7 +3256,6 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
             rewind: Some(Rewind {
                 summary: None,
                 note: "n".into(),
-                jobs: Vec::new(),
             }),
             worktree: None,
         })
@@ -3218,7 +3333,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
             seq: contract::Seq(5),
             from_session_id: None,
-            jobs: Vec::new(),
+            summary: None,
         }),
     ] {
         log.append(&event, None, None).unwrap();

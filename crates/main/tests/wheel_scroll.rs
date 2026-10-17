@@ -144,7 +144,8 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     );
     // The opened call draws its first 20 lines, then the more row.
     let opened = run.wait_screen("the read's more row", |grid| {
-        grid.contents.contains("\u{2026} 280 more lines")
+        grid.contents
+            .contains("\u{2026} 280 more lines (Enter to view)")
     });
     assert!(
         opened.rows.iter().any(|row| row.contains("L0020")),
@@ -157,13 +158,16 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     let more = opened
         .rows
         .iter()
-        .position(|row| row.contains("\u{2026} 280 more lines"))
+        .position(|row| row.contains("\u{2026} 280 more lines (Enter to view)"))
         .expect("the more row");
     // The more row's own cells are dim.
     let row = &opened.rows[more];
-    let at = row.find("\u{2026} 280 more lines").expect("the more row");
+    let at = row
+        .find("\u{2026} 280 more lines (Enter to view)")
+        .expect("the more row");
     let start = u16::try_from(row[..at].chars().count()).unwrap();
-    let end = start + u16::try_from("\u{2026} 280 more lines".chars().count()).unwrap();
+    let end =
+        start + u16::try_from("\u{2026} 280 more lines (Enter to view)".chars().count()).unwrap();
     let y = u16::try_from(more).unwrap();
     for x in start..end {
         assert!(opened.cell(x, y).dim, "the more row's cell {x} is dim");

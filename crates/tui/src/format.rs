@@ -523,23 +523,22 @@ pub(crate) fn label(name: &str, arguments: &str) -> String {
     }
 }
 
-/// What opening a call shows: a failed call's "<code>: <message>", a
-/// denial's reason, an edit's diff, else the content's text.
-pub(crate) fn detail(done: &ToolCallCompleted) -> String {
+/// A failed call's "<code>: <message>", a denial's reason, else empty:
+/// the first row an opened call draws (`docs/tui.md`, "Tool groups and
+/// the ledger").
+pub(crate) fn headline(done: &ToolCallCompleted) -> String {
     if let (CallStatus::Failed, Some(error)) = (done.status, &done.error) {
         return format!("{}: {}", code(&error.code), error.message);
     }
     if let (CallStatus::Denied, Some(reason)) = (done.status, &done.reason) {
         return reason.clone();
     }
-    if let Some(diff) = done
-        .details
-        .as_ref()
-        .and_then(|details| details.get("diff"))
-        .and_then(Value::as_str)
-    {
-        return diff.to_owned();
-    }
+    String::new()
+}
+
+/// The result's text parts joined with "\n": images, PDFs and unknown
+/// parts are not text and stay out.
+pub(crate) fn content_text(done: &ToolCallCompleted) -> String {
     done.content
         .iter()
         .filter_map(|part| match part {

@@ -255,6 +255,7 @@ impl SessionCommands {
                 description: cmd.description.clone(),
                 argument_hint: None,
                 tag: cmd.extension.clone(),
+                extension: true,
             })
             .collect()
     }

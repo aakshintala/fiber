@@ -4,7 +4,7 @@ use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
 use serde_json::json;
 
-use super::{Call, Group, Section, Streaming, Thought};
+use super::{Call, CallResult, Group, Section, Streaming, Thought};
 use crate::theme::Role;
 
 #[test]
@@ -434,14 +434,17 @@ fn an_empty_body_draws_no_summary_row() {
     assert!(rows.is_empty());
 }
 
-fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, detail: &str) -> Call {
+fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, content: &str) -> Call {
     Call {
         id,
         action: format!("a_{id}"),
         name: "shell".to_owned(),
         arguments: json!({"command": command}),
         status: Some(CallStatus::Completed),
-        detail: detail.to_owned(),
+        result: Some(Box::new(CallResult {
+            content: content.to_owned(),
+            ..CallResult::default()
+        })),
         exit,
         lines,
         started: true,
@@ -456,7 +459,10 @@ fn failed_call(id: usize) -> Call {
         name: "shell".to_owned(),
         arguments: json!({"command": "cargo t"}),
         status: Some(CallStatus::Failed),
-        detail: "nonzero_exit: exit 101".to_owned(),
+        result: Some(Box::new(CallResult {
+            headline: "nonzero_exit: exit 101".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
@@ -469,7 +475,10 @@ fn denied_call(id: usize) -> Call {
         name: "web_fetch".to_owned(),
         arguments: json!({"url": "u"}),
         status: Some(CallStatus::Denied),
-        detail: "not allowed".to_owned(),
+        result: Some(Box::new(CallResult {
+            headline: "not allowed".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
@@ -482,10 +491,46 @@ fn cancelled_call(id: usize) -> Call {
         name: "custom".to_owned(),
         arguments: json!("raw text"),
         status: Some(CallStatus::Cancelled),
-        detail: "x".to_owned(),
+        result: Some(Box::new(CallResult {
+            content: "x".to_owned(),
+            ..CallResult::default()
+        })),
         started: true,
         ..Call::default()
     }
+}
+
+/// `call` with its result's content replaced.
+fn with_content(mut call: Call, content: &str) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.content = content.to_owned();
+    call
+}
+
+/// `call` with its result's headline replaced.
+fn with_headline(mut call: Call, headline: &str) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.headline = headline.to_owned();
+    call
+}
+
+/// `call` with its result's details replaced by `details` JSON text.
+fn with_details(mut call: Call, details: serde_json::Value) -> Call {
+    let result = call
+        .result
+        .get_or_insert_with(|| Box::new(CallResult::default()));
+    result.details = Some(details.to_string());
+    call
+}
+
+/// `call` opened.
+fn with_open(mut call: Call) -> Call {
+    call.open = true;
+    call
 }
 
 fn ask_call(id: usize) -> Call {
@@ -712,10 +757,7 @@ fn ledger_results_name_what_each_call_did() {
             // A shell with no process shows its first line, or "done".
             shell_call(6, "echo hi", None, 0, "a\nb"),
             shell_call(7, "true", None, 0, ""),
-            Call {
-                detail: "\n\nfirst\nsecond".to_owned(),
-                ..shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond")
-            },
+            shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond"),
             failed_call(9),
             denied_call(10),
             cancelled_call(11),
@@ -723,10 +765,10 @@ fn ledger_results_name_what_each_call_did() {
             edit_call(13, "e.rs", 2, 0),
             // An edit with no changes shows its first line like any
             // other call.
-            Call {
-                detail: "wrote it".to_owned(),
-                changes: vec![],
-                ..edit_call(14, "f.rs", 0, 0)
+            {
+                let mut call = edit_call(14, "f.rs", 0, 0);
+                call.changes = vec![];
+                with_content(call, "wrote it")
             },
         ])],
         ..Group::default()
@@ -777,6 +819,32 @@ fn ledger_results_name_what_each_call_did() {
         rows[11].spans[6].style.fg,
         crate::markdown::style(Role::Attention).fg
     );
+}
+
+/// A failed call with no error names no headline, so its ledger row
+/// falls back to the first line of its content.
+#[test]
+fn a_failed_call_with_no_error_falls_back_to_its_content_on_the_ledger_row() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![with_content(
+                with_headline(failed_call(1), ""),
+                "boom\nsecond",
+            )],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 100);
+    assert_eq!(rows.len(), 1);
+    let result: String = rows[0].spans[6..]
+        .iter()
+        .map(|span| span.content.as_ref().to_owned())
+        .collect();
+    assert_eq!(result.trim_end(), "boom");
 }
 
 /// The target is cut with "…" to what the result leaves: one column more
@@ -1042,7 +1110,7 @@ fn thinking_rows_without_a_heading_show_the_bare_form() {
 }
 
 fn open_read_call(id: usize, lines: usize) -> Call {
-    let detail = (1..=lines)
+    let content = (1..=lines)
         .map(|n| format!("L{n:04}"))
         .collect::<Vec<_>>()
         .join("\n");
@@ -1052,7 +1120,11 @@ fn open_read_call(id: usize, lines: usize) -> Call {
         name: "read".to_owned(),
         arguments: json!({"path": "notes.txt"}),
         status: Some(CallStatus::Completed),
-        detail,
+        result: Some(Box::new(CallResult {
+            details: Some(json!({"start_line": 1}).to_string()),
+            content,
+            ..CallResult::default()
+        })),
         lines: lines as u64,
         started: true,
         open: true,
@@ -1082,20 +1154,20 @@ fn opened_group(call: Call) -> Group {
     }
 }
 
-/// An opened call shows its output indented eight columns: 19 lines draw
-/// whole, 20 draw with no "more" row, and 21 draw 20 rows then "… 1 more
-/// line" dim.
+/// An opened read shows its lines numbered from the first line read:
+/// 19 lines draw whole, 20 draw with no "more" row, and 21 draw 20 rows
+/// then "… 1 more line (Enter to view)" dim.
 #[test]
 fn an_opened_call_is_capped_at_twenty_lines() {
     for (lines, shown, more) in [
         (19usize, 19usize, None),
         (20, 20, None),
-        (21, 20, Some("… 1 more line")),
+        (21, 20, Some("… 1 more line (Enter to view)")),
     ] {
         let rows = opened_rows(&opened_group(open_read_call(1, lines)), 76);
         assert_eq!(rows.len(), shown + usize::from(more.is_some()), "{lines}");
-        assert_eq!(rows[0], "        L0001");
-        assert_eq!(rows[shown - 1], format!("        L{shown:04}"));
+        assert_eq!(rows[0], "         1 L0001");
+        assert_eq!(rows[shown - 1], format!("        {:>2} L{shown:04}", shown));
         match more {
             None => assert!(!rows.iter().any(|row| row.contains('…')), "{lines}"),
             Some(last) => assert_eq!(rows[shown], format!("        {last}")),
@@ -1107,62 +1179,70 @@ fn an_opened_call_is_capped_at_twenty_lines() {
     // 300 lines draw 20 rows, then "… 280 more lines".
     let rows = opened_rows(&opened_group(open_read_call(1, 300)), 76);
     assert_eq!(rows.len(), 21);
-    assert_eq!(rows[19], "        L0020");
-    assert_eq!(rows[20], "        … 280 more lines");
+    assert_eq!(rows[19], "        20 L0020");
+    assert_eq!(rows[20], "        … 280 more lines (Enter to view)");
     assert!(!rows.iter().any(|row| row.contains("L0021")));
 }
 
-/// An opened diff of 25 lines is capped with its colours kept.
+/// An opened edit draws its diff with the headers dropped: the `+`
+/// span keeps its added colour, body text is not dim, and 26 logical
+/// lines cap at 20 with "… 6 more lines (Enter to view)".
 #[test]
 fn an_opened_diff_is_capped_with_its_colours() {
-    let detail = (1..=25)
-        .map(|n| {
-            if n % 2 == 0 {
-                format!("+added {n}")
-            } else {
-                format!("-removed {n}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let call = Call {
-        detail,
-        changes: vec![contract::events::FileChange {
-            path: "a.rs".to_owned(),
-            added: 13,
-            removed: 12,
-        }],
-        open: true,
-        ..edit_call(1, "a.rs", 13, 12)
-    };
+    let mut diff =
+        "diff --git a/a.rs b/a.rs\nindex 123..456 100644\n--- a/a.rs\n+++ b/a.rs\n@@ -1,14 +1,13 @@\n-old\n+new\n"
+            .to_owned();
+    for n in 1..=23 {
+        diff.push_str(&format!(" context {n}\n"));
+    }
+    let call = with_open(with_details(
+        edit_call(1, "a.rs", 13, 12),
+        json!({"diff": diff}),
+    ));
     let (rows, _) = summary_row(&opened_group(call), false, 76);
     let shown: Vec<_> = rows.into_iter().skip(2).collect();
     assert_eq!(shown.len(), 21);
-    assert_eq!(shown[20].0.to_string(), "        … 5 more lines");
-    let added = &shown[1].0;
     assert_eq!(
-        added.style.fg,
+        shown[20].0.to_string(),
+        "        … 6 more lines (Enter to view)"
+    );
+    // The diff's own headers never draw.
+    assert!(
+        !shown
+            .iter()
+            .any(|row| ["diff --git", "index ", "---", "+++"]
+                .iter()
+                .any(|header| row.0.to_string().contains(header))),
+        "{shown:?}"
+    );
+    let added = shown
+        .iter()
+        .find(|row| row.0.to_string().contains("+new"))
+        .expect("the added row");
+    assert_eq!(
+        added.0.spans[2].style.fg,
         Some(crate::theme::Role::Added.color()),
         "{added:?} keeps its colour"
     );
+    // Body text is not dim; the hunk row and the gutters are.
+    for row in &shown[1..20] {
+        for span in row.0.spans.iter().skip(2) {
+            assert!(
+                !span.style.add_modifier.contains(Modifier::DIM),
+                "{span:?} body not dim"
+            );
+        }
+    }
 }
 
-/// An opened failure reads "<code>: <message>", and empty output reads
-/// "no output".
+/// An opened failure shows its headline first, then its view; empty
+/// output reads "no output" dim.
 #[test]
 fn an_opened_call_shows_its_error_or_no_output() {
-    let call = Call {
-        detail: "ambiguous_match: boom".to_owned(),
-        open: true,
-        ..failed_call(1)
-    };
+    let call = with_open(with_headline(failed_call(1), "ambiguous_match: boom"));
     let rows = opened_rows(&opened_group(call), 76);
     assert_eq!(rows, vec!["        ambiguous_match: boom".to_owned()]);
-    let call = Call {
-        detail: "".to_owned(),
-        open: true,
-        ..shell_call(2, "true", Some(0), 0, "")
-    };
+    let call = with_open(shell_call(2, "true", Some(0), 0, ""));
     let rows = opened_rows(&opened_group(call), 76);
     assert_eq!(rows, vec!["        no output".to_owned()]);
 }
@@ -1425,4 +1505,15 @@ fn pad_target_keeps_a_target_that_fills_its_room() {
     // filled, so the result keeps its columns.
     assert_eq!(super::pad_target("ab界cd", 4), "ab… ");
     assert_eq!(crate::format::width(&super::pad_target("ab界cd", 4)), 4);
+}
+
+/// A call-view target opens nothing: the call stays as it was.
+#[test]
+fn set_open_ignores_a_call_view_target() {
+    let mut group = opened_group(open_read_call(1, 2));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+    assert!(!group.set_open(&crate::app::Target::CallView(1), true));
+    assert!(group.calls().next().is_some_and(|call| call.open));
+    assert!(!group.set_open(&crate::app::Target::CallView(1), false));
+    assert!(group.calls().next().is_some_and(|call| call.open));
 }

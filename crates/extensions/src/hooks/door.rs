@@ -39,7 +39,13 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
     }
 
     fn seal(&self) {
-        for extension in &self.lua {
+        self.emitter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        #[cfg(test)]
+        self.at_late(super::LatePoint::Cleared);
+        for extension in self.attached_vms() {
             extension.seal();
         }
     }
@@ -58,6 +64,16 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
 }
 
 impl SessionExtensions {
+    /// Every session VM, including one started later, logs in through `browser`
+    /// while the live `attended` reader returns true.
+    pub fn browse_with(
+        &self,
+        browser: std::sync::Arc<dyn crate::Browser>,
+        attended: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    ) {
+        self.browser.set(browser, attended);
+    }
+
     /// Sets whether a client can answer an extension's `host.ask`.
     pub fn answerable(&self, yes: bool) {
         for extension in &self.lua {

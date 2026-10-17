@@ -623,6 +623,7 @@ impl Driver {
     /// handoffs completed, and nothing moves across a handoff.
     fn drive(&mut self, chain: &[Indexed]) -> Result<(), String> {
         let index = Self::index_chain(chain)?;
+        let mut summary = false;
         for (position, item) in chain.iter().enumerate() {
             let envelope = &item.envelope;
             let event = Event::from_envelope(envelope).map_err(|error| {
@@ -637,6 +638,11 @@ impl Driver {
                 // A consumer skips any kind it does not recognise.
                 continue;
             };
+            // The gate also covers completed_handoff's render below. None of
+            // the three render paths, or tool reviews, sees summary output.
+            if r#loop::summary_skips(&mut summary, &event) {
+                continue;
+            }
             if matches!(event, Event::ReviewerKept(_)) {
                 // The driver owns selection: a source record never
                 // overwrites the selection its own handoffs make.

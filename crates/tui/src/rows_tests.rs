@@ -577,6 +577,43 @@ fn pad_respects_the_row_start_and_width_boundaries() {
 }
 
 #[test]
+fn pad_keeps_an_exact_fit_and_splits_one_cell_more_by_grapheme_width() {
+    use ratatui::text::Span;
+
+    let mut rows = Rows::default();
+    rows.push((
+        Line::from(vec![Span::raw("界"), Span::raw("e\u{301}")]),
+        None,
+    ));
+    rows.push((
+        Line::from(vec![Span::raw("界"), Span::raw("e\u{301}x")]),
+        None,
+    ));
+    rows.pad(0, 1, 3);
+    let (lines, texts) = rows.into_parts();
+    // The fitting row keeps its spans; splitting it would merge them.
+    assert_eq!(
+        lines,
+        vec![
+            (
+                Line::from(vec![Span::raw(" "), Span::raw("界"), Span::raw("e\u{301}")]),
+                None,
+            ),
+            (
+                Line::from(vec![Span::raw(" "), Span::raw("界e\u{301}")]),
+                None
+            ),
+            (Line::from(vec![Span::raw(" "), Span::raw("x")]), None),
+        ]
+    );
+    assert_eq!(
+        texts.iter().map(|text| text.skip).collect::<Vec<_>>(),
+        [1, 1, 1]
+    );
+    assert_eq!(texts[2].join, Join::Wrap);
+}
+
+#[test]
 fn pad_keeps_an_exact_fit_line_intact() {
     let empty = ratatui::text::Span::styled(
         "",
@@ -726,4 +763,165 @@ fn gap_inserts_one_plain_blank_row_at_the_index() {
             ..RowText::plain()
         }
     );
+}
+
+/// A texts vector shorter than its rows ends the pad: the rows keep
+/// their shape instead of drawing half-moved.
+#[test]
+fn pad_with_a_missing_text_row_leaves_the_rows() {
+    let mut out = Rows {
+        rows: vec![(Line::raw("abc"), None)],
+        texts: Vec::new(),
+        scopes: Vec::new(),
+        all_open: false,
+    };
+    out.pad(0, 1, 10);
+    assert_eq!(out.rows.len(), 1);
+    assert_eq!(out.rows[0].0.to_string(), "abc");
+}
+
+/// The old computation, kept as the reference: the plan over the built
+/// cell vector.
+fn planned(line: &Line<'_>, inner: u16) -> usize {
+    super::plan(&super::cells_of(line), usize::from(inner))
+        .len()
+        .max(1)
+}
+
+#[test]
+fn fitted_matches_plan_across_split_shapes() {
+    // Every line the count helper must agree on: plain, styled
+    // multi-span (styles change nothing), wide glyphs, empty, an exact
+    // fit, a trailing space, and lines longer than `inner`, at widths
+    // that hit every split branch including a zero inner.
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let styled: Line<'_> = Line::from(vec![
+        Span::styled("hello ", dim),
+        Span::styled("wo", bold),
+        Span::raw("rld"),
+    ]);
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::raw("hello world"),
+        styled,
+        Line::styled("aaaa bbbb cccc", dim),
+        Line::raw("界界ab界"),
+        Line::raw(""),
+        Line::raw("abcde"),
+        Line::raw("abcd "),
+        Line::raw("aaaa bbbb cccc dddd eeee ffff"),
+        Line::raw(" abcde"),
+        Line::raw("\u{301} 界"),
+        Line::raw("\u{301} a界"),
+        Line::raw("a bcdefg"),
+        Line::raw("aa bb cc"),
+        Line::raw("ab cde"),
+        Line::raw("    "),
+        Line::raw("x"),
+        Line::raw("界"),
+        Line::raw("ab"),
+        Line::raw("a  b"),
+        Line::raw("ab  "),
+        Line::raw("aa bbbbbbbb cc"),
+        Line::raw("界xy"),
+        Line::raw("x界"),
+        Line::raw("abcd"),
+        Line::raw("abcde"),
+        Line::raw("ab\u{301}"),
+    ];
+    lines.push(Line::raw("x".repeat(200)));
+    for line in &lines {
+        for inner in [0, 1, 2, 3, 4, 5, 6, 10, 30] {
+            assert_eq!(
+                super::fitted(line, inner),
+                planned(line, inner),
+                "{line:?} at {inner}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fitted_count_is_zero_for_an_empty_line() {
+    assert_eq!(super::fitted_count(&Line::raw(""), 6), 0);
+}
+
+#[test]
+fn fitted_count_is_zero_for_a_zero_inner() {
+    assert_eq!(super::fitted_count(&Line::raw("hi"), 0), 0);
+}
+
+#[test]
+fn fitted_is_one_for_an_exact_fit() {
+    assert_eq!(super::fitted(&Line::raw("abcde"), 5), 1);
+}
+
+#[test]
+fn fitted_count_gives_a_wide_glyph_its_own_piece() {
+    assert_eq!(super::fitted_count(&Line::raw("界界"), 1), 2);
+}
+
+#[test]
+fn fitted_count_cuts_hard_after_a_leading_space() {
+    // The space sits at the piece start, so no split drops it.
+    assert_eq!(super::fitted_count(&Line::raw(" abcde"), 3), 2);
+}
+
+#[test]
+fn fitted_count_restarts_after_a_split_space() {
+    assert_eq!(super::fitted_count(&Line::raw("a bcdefg"), 5), 3);
+}
+
+#[test]
+fn fitted_count_extends_the_restart_past_its_scanned_glyphs() {
+    assert_eq!(super::fitted_count(&Line::raw("ab cde"), 4), 2);
+}
+
+#[test]
+fn fitted_count_skips_no_piece_when_a_space_ends_the_window() {
+    // The window holds only the combining mark and the space, so the
+    // restart past the space is empty and the wide glyph stands alone.
+    assert_eq!(super::fitted_count(&Line::raw("\u{301} 界"), 1), 2);
+}
+
+#[test]
+fn fitted_count_cuts_the_scanned_restart_when_it_overflows() {
+    assert_eq!(super::fitted_count(&Line::raw("\u{301} a界"), 2), 3);
+}
+
+#[test]
+fn fitted_count_joins_a_fitting_glyph_after_a_hard_cut() {
+    assert_eq!(super::fitted_count(&Line::raw("abcd"), 2), 2);
+}
+
+#[test]
+fn fitted_count_joins_a_glyph_exactly_filling_inner() {
+    // The boundary of the wider-than-`inner` rule: a glyph exactly as
+    // wide as `inner` opens the fresh piece instead of standing alone.
+    // The combining mark clusters into `b`, so this is two glyphs and
+    // two pieces.
+    assert_eq!(super::fitted_count(&Line::raw("ab\u{301}"), 1), 2);
+}
+
+#[test]
+fn fitted_count_lets_a_zero_width_glyph_join_a_fresh_piece_at_the_width_limit() {
+    // `b` overflows the window, so it opens a fresh piece exactly as
+    // wide as `inner`; the zero-width space is a grapheme of its own
+    // (a combining mark would cluster into `b`) and joins that piece.
+    // Standing `b` alone would make three pieces.
+    let line = Line::raw("ab\u{200B}");
+    assert_eq!(super::fitted_count(&line, 1), 2);
+    assert_eq!(super::fitted_count(&line, 1), planned(&line, 1));
+}
+
+#[test]
+fn fitted_count_cuts_hard_without_a_space() {
+    assert_eq!(super::fitted_count(&Line::raw("abcde"), 2), 3);
+}
+
+#[test]
+fn fitted_count_cuts_a_word_longer_than_inner() {
+    assert_eq!(super::fitted_count(&Line::raw("aa bbbbbbbb cc"), 4), 4);
 }

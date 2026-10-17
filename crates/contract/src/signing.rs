@@ -29,6 +29,13 @@ pub enum Error {
         /// The first line of the failure's own text.
         message: String,
     },
+    /// A login the credential needed did not finish within `credential()`'s timeout;
+    /// it reports `authentication_failed`.
+    #[error("{message}")]
+    LoginTimedOut {
+        /// The first line of the failure's own text.
+        message: String,
+    },
 }
 
 /// Adds a signature to each request a provider sends.

@@ -40,7 +40,7 @@ pub(crate) enum Applies {
     HubStart,
     /// When each Fiber process starts again.
     ProcessStart,
-    /// For sessions started after the write.
+    /// Route settings apply only to sessions started after the write.
     NewSessions,
     /// At the next turn start.
     NextTurn,
@@ -60,7 +60,15 @@ pub(crate) fn applies(key: &str) -> Applies {
         Applies::HubStart
     } else if key == "diagnostics.level" {
         Applies::ProcessStart
-    } else if key == "model" || key == "thinking" {
+    } else if key == "model"
+        || key == "thinking"
+        || matches!(
+            key.split('.').collect::<Vec<_>>().as_slice(),
+            ["models", _, .., "thinking"]
+                | ["providers", _, "credential"]
+                | ["providers", _, "credentials", ..]
+        )
+    {
         Applies::NewSessions
     } else if key == "skills.disabled" {
         Applies::NextTurn

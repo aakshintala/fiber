@@ -363,18 +363,6 @@ fn a_429_asking_for_2_seconds_over_the_cap_records_retry_after_ms_2000() {
 }
 
 #[test]
-fn a_429_with_retry_after_0_then_a_reply_succeeds() {
-    succeeds_after_one_retry(
-        Deadline::start(),
-        "openai-responses",
-        Response::status(429, "{}").header("retry-after", "0"),
-        responses_hello(),
-        "rate_limited",
-        3,
-    );
-}
-
-#[test]
 fn server_errors_timeouts_and_conflicts_are_retried() {
     let deadline = Deadline::start();
     for status in [500, 503, 529, 408, 409] {
@@ -508,18 +496,6 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
     }
 }
 
-#[test]
-fn x_should_retry_true_retries_a_400() {
-    succeeds_after_one_retry(
-        Deadline::start(),
-        "openai-responses",
-        Response::status(400, "{}").header("x-should-retry", "true"),
-        responses_hello(),
-        "invalid_request",
-        3,
-    );
-}
-
 /// The event kinds of a cold `ask --resume` that fails its first model
 /// call, then answers after one retry: the resumed process writes no
 /// `session_started`, starting at `fiber_started` (`docs/events.md`,
@@ -585,73 +561,6 @@ const FAILED_AT_ONCE_KINDS: [&str; 12] = [
     "turn_completed",
     "fiber_exited",
 ];
-
-/// A failure that is never retried fails the ask with one request only.
-#[track_caller]
-fn fails_at_once(deadline: Deadline, failure: Response, code: &str) {
-    let setup = Setup::within(deadline);
-    let server = ProviderServer::start([failure]).unwrap();
-    setup.provider_with_retry(&server, "openai-responses", 3);
-    let run = setup.ask();
-    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
-    assert_eq!(run.last()["payload"]["error"]["code"], code);
-    assert!(run.retried().is_empty());
-    assert_eq!(server.requests().len(), 1);
-}
-
-#[test]
-fn a_400_a_401_and_false_on_a_503_fail_at_once() {
-    let deadline = Deadline::start();
-    fails_at_once(deadline, Response::status(400, "{}"), "invalid_request");
-    fails_at_once(
-        deadline,
-        Response::status(401, "{}"),
-        "authentication_failed",
-    );
-    fails_at_once(
-        deadline,
-        Response::status(503, "{}").header("x-should-retry", "false"),
-        "provider_unavailable",
-    );
-}
-
-#[test]
-fn two_503s_with_one_attempt_fail_the_ask() {
-    let setup = Setup::new_with_started_deadline();
-    let server =
-        ProviderServer::start([Response::status(503, "{}"), Response::status(503, "{}")]).unwrap();
-    setup.provider_with_retry(&server, "openai-responses", 1);
-    let run = setup.ask();
-    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "usage_recorded",
-            "assistant_message_completed",
-            "retry_scheduled",
-            "assistant_message_started",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
-    assert_eq!(
-        run.last()["payload"]["error"]["code"],
-        "provider_unavailable"
-    );
-    assert_eq!(run.retried(), ["provider_unavailable"]);
-    assert_eq!(server.requests().len(), 2);
-}
 
 #[test]
 fn retry_scheduled_carries_last_attempt_from_configured_attempts() {

@@ -97,6 +97,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // and one in the child never share it.
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),
+        summary: false,
     };
     let mut end = 0;
     let Some(own) = segments.len().checked_sub(1) else {
@@ -157,6 +158,7 @@ struct Pass {
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
+    summary: bool,
 }
 
 /// Folds one line of segment `pass.index` into `resumed`: the workspace
@@ -165,7 +167,10 @@ struct Pass {
 /// window. The ledger and the reviewer's block count fold only the own
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
-    if !line.is_durable() || !FOLDED.contains(&line.kind.as_str()) {
+    // Process starts close the reviewer's summary window even though the
+    // fold itself does not use them. Leave every other unused payload unread.
+    if !line.is_durable() || !(FOLDED.contains(&line.kind.as_str()) || line.kind == "fiber_started")
+    {
         return Ok(());
     }
     // Results without host lists or file changes cannot affect known hosts.
@@ -178,12 +183,18 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
         return Ok(());
     };
-    render_reviewed(
-        &mut resumed.reviewed,
-        &event,
-        line.action_id.as_ref(),
-        line.seq,
-    );
+    let summary = crate::reviewer::summary_skips(&mut pass.summary, &event);
+    if !FOLDED.contains(&line.kind.as_str()) {
+        return Ok(());
+    }
+    if !summary {
+        render_reviewed(
+            &mut resumed.reviewed,
+            &event,
+            line.action_id.as_ref(),
+            line.seq,
+        );
+    }
     resumed.known_hosts.fold(&event);
     pass.orphans.fold(&event);
     resumed.offers.fold(&event);

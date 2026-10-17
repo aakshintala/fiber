@@ -24,12 +24,6 @@ pub(crate) const REWOUND_CLOSING: &str = "The session was rewound and takes no m
 /// `rewind` on a delegate: its parent forks again instead.
 const DELEGATE: &str = "A delegate cannot be rewound.";
 
-/// `rewind` asking for a summary: no summary is built in this Fiber yet.
-const NO_SUMMARY: &str = "Summaries are not built in this Fiber yet.";
-
-/// `rewind` while jobs run: stop them before rewinding.
-const JOBS_RUNNING: &str = "Jobs are running; stop them before rewinding.";
-
 /// `rewind` with no turn to rewind to.
 const NO_TURN: &str = "This session has no turn to rewind to.";
 
@@ -58,15 +52,20 @@ fn valid_session_id(text: &str) -> bool {
 
 impl Loop {
     /// Takes `rewind` while idle (`docs/events.md`, "Rewind"): the refusals
-    /// in order, then `rewound` as the last line, naming the minted new
-    /// session and the point, and the new session's id as the answer. Every
-    /// refusal leaves the log byte for byte as it was, mints nothing and
-    /// starts nothing. On success the loop stops late-cost lookups and
-    /// writes what settled, appends `rewound`, sets `rewound`, and only
-    /// then accepts, so the acknowledgement is sent after `rewound` is
-    /// written.
+    /// in order, then the optional summary, then the stop, then `rewound`
+    /// as the last line, naming the minted new session and the point, and
+    /// the new session's id as the answer. Every refusal before the
+    /// optional summary leaves the log byte for byte as it was, mints
+    /// nothing, starts nothing, and stops no job. A failed summary keeps
+    /// only its turn and usage. On success the loop stops late-cost
+    /// lookups and writes what settled, closes admission, stops every
+    /// running job and writes each end that arrives, mints the new
+    /// session, appends `rewound`, sets `rewound`, drains what came after,
+    /// and only then accepts, so the acknowledgement is sent after
+    /// `rewound` is written.
     pub(crate) fn take_rewind(
         &mut self,
+        id: contract::CommandId,
         args: RewindArgs,
         ack: Ack,
         input: &TurnInput,
@@ -105,29 +104,6 @@ impl Loop {
                 return Ok(());
             }
         };
-        if args.summarise {
-            reject(ack, ErrorCode::SummaryFailed, NO_SUMMARY);
-            return Ok(());
-        }
-        let running = self.running();
-        if !running.is_empty() {
-            reject(ack, ErrorCode::Busy, JOBS_RUNNING);
-            return Ok(());
-        }
-        if !args.adopt.is_empty() {
-            let adopted = args
-                .adopt
-                .iter()
-                .map(|job| job.0.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            reject(
-                ack,
-                ErrorCode::StaleRequest,
-                &format!("The adopted jobs are not running: {adopted}."),
-            );
-            return Ok(());
-        }
         let lines = log::read(&target.dir)?;
         let point = match point_for(&lines, &target, args.seq) {
             Ok(point) => point,
@@ -136,10 +112,26 @@ impl Loop {
                 return Ok(());
             }
         };
+        let summary = if args.summarise {
+            match self.summarise(id, &target, point)? {
+                Ok(summary) => Some(summary),
+                Err(failure) => {
+                    reject(
+                        ack,
+                        ErrorCode::SummaryFailed,
+                        &format!("The summary could not be made: {}", failure.message),
+                    );
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
         self.write_last_settled()?;
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
         self.close_admission();
+        self.stop_jobs_for_rewind()?;
         let new_session_id = SessionId(crate::mint("s_"));
         // `rewound` names the point's session only for an ancestor point:
         // for this session's own point the key is absent.
@@ -149,12 +141,15 @@ impl Loop {
                 new_session_id: new_session_id.clone(),
                 seq: Seq(point),
                 from_session_id,
-                jobs: Vec::new(),
+                summary,
             }),
             None,
             None,
         )?;
         self.rewound = true;
+        for delivery in self.deferred.drain(..) {
+            refuse_after_rewound(delivery);
+        }
         (ack.0)(Ok(Some(CommandResult::Rewind { new_session_id })));
         Ok(())
     }
@@ -222,13 +217,14 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::SteerDrop(_, ack)
         | Delivery::Handoff(_, _, ack)
         | Delivery::Model(_, ack)
+        | Delivery::Reload(ack)
         | Delivery::Name(_, ack)
         | Delivery::Shell(_, ack)
         | Delivery::Credential(_, ack)
         | Delivery::Reply(_, ack)
         | Delivery::Close(ack)
         | Delivery::Resolved(_, ack)
-        | Delivery::Rewind(_, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
+        | Delivery::Rewind(_, _, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Message(_)
@@ -241,7 +237,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
 }
 
 /// The point `requested` names in the point log's `lines`, or the default
-/// point: the latest `turn_started` at or before the bound, minus one. The
+/// point: the latest non-summary `turn_started` at or before the bound, minus one. The
 /// point is a step boundary: the log holds a `turn_started` or a
 /// `step_started` just after it, and no tool call before it is answered
 /// after it (`docs/events.md`, "Rewind"). A point past the bound is not in
@@ -253,16 +249,23 @@ pub(crate) fn point_for(
 ) -> Result<u64, Rejection> {
     match requested {
         None => {
-            let latest = lines
-                .iter()
-                .filter(|line| {
-                    line.kind == "turn_started"
-                        && target
-                            .bound
-                            .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))
-                })
-                .filter_map(|line| line.seq.map(|seq| seq.0))
-                .max();
+            let mut latest = None;
+            for line in lines.iter().filter(|line| {
+                line.kind == "turn_started"
+                    && target
+                        .bound
+                        .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))
+            }) {
+                let event = Event::from_envelope(line).map_err(|error| Rejection {
+                    code: ErrorCode::LogCorrupt,
+                    message: error.to_string(),
+                })?;
+                if let Some(Event::TurnStarted(started)) = event
+                    && !crate::reviewer::summary_turn(&started)
+                {
+                    latest = latest.max(line.seq.map(|seq| seq.0));
+                }
+            }
             match latest.and_then(|start| start.checked_sub(1)) {
                 Some(point) => Ok(point),
                 None => Err(Rejection {

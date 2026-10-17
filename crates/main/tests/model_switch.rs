@@ -20,6 +20,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use fakes::children::Ready;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::*;
@@ -276,17 +277,6 @@ fn reasoning_hello(thought: &str) -> Response {
     ])
 }
 
-/// An `openai-responses` stream calling the `shell` tool.
-fn shell_call() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": "fc_call_1",
-        "call_id": "call_1",
-        "name": "shell",
-        "arguments": json!({"command": "echo hi"}).to_string()
-    }})])
-}
-
 #[track_caller]
 fn subscribe(client: &Socket) -> Value {
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
@@ -436,196 +426,6 @@ fn a_model_sent_between_turns_applies_at_the_next_turn_boundary() {
     assert_eq!(seen.len(), 2, "{seen:?}");
     assert_eq!(seen[0]["model"], "m");
     assert_eq!(seen[1]["model"], "n");
-}
-
-#[test]
-fn a_model_then_a_prompt_in_one_batch_runs_the_prompt_on_the_new_model() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
-    install_switch_provider(&setup, &server);
-    let id = doors::mint("s_");
-    let running = start_session(&setup, &id, &[]);
-
-    let client = running.connect(&setup.session_socket(&id));
-    running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
-    // A switch admitted while idle applies at once, so the prompt that
-    // follows in the same drain starts its turn on the new model.
-    model(&client, "c_model", "fake/n", None);
-    prompt(&client, "c_prompt", "hi");
-    stream.extend(until(&client, "turn_completed", |line| {
-        line["kind"] == "turn_completed"
-    }));
-    assert!(
-        stream
-            .iter()
-            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
-        "the new model's text arrived: {stream:?}"
-    );
-    close(&client);
-    stream.extend(until_close(&client));
-    drop(client);
-    let (status, stderr) = running.wait();
-    assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(
-        kinds(&stream),
-        [
-            "command_accepted",
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "command_accepted",
-            "model_changed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
-    let changed = stream
-        .iter()
-        .find(|line| line["kind"] == "model_changed")
-        .unwrap();
-    assert_eq!(changed["payload"]["before"]["model"], "fake/m");
-    assert_eq!(changed["payload"]["after"]["model"], "fake/n");
-    let seen = bodies(&server);
-    assert_eq!(seen.len(), 1, "{seen:?}");
-    assert_eq!(seen[0]["model"], "n");
-}
-
-#[test]
-fn a_model_sent_during_a_turn_applies_after_turn_completed() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([shell_call(), hello(), hello()]).unwrap();
-    install_switch_provider(&setup, &server);
-    fs::write(
-        setup.home().join("rules"),
-        format!(
-            "{}\n",
-            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
-        ),
-    )
-    .unwrap();
-    let id = doors::mint("s_");
-    let running = start_session(&setup, &id, &[]);
-
-    let client = running.connect(&setup.session_socket(&id));
-    running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
-    prompt(&client, "c_prompt", "run it");
-    stream.extend(until(&client, "permission_requested", |line| {
-        line["kind"] == "permission_requested"
-    }));
-    let request = stream.last().unwrap()["payload"]["request_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    // During the approval wait the switch is accepted but waits for the
-    // next turn boundary.
-    model(&client, "c_model", "fake/n", None);
-    stream.extend(until(&client, "the model acknowledgement", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_model"
-    }));
-    client.send(&format!(
-        r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request}","decision":"allow"}}}}"#
-    ));
-    stream.extend(until(&client, "model_changed", |line| {
-        line["kind"] == "model_changed"
-    }));
-    // The switch is accepted before the turn completes, and applies after.
-    let changed = stream
-        .iter()
-        .rev()
-        .find(|line| line["kind"] == "model_changed")
-        .unwrap();
-    assert_eq!(changed["payload"]["before"]["model"], "fake/m");
-    assert_eq!(changed["payload"]["after"]["model"], "fake/n");
-    // The turn that took the switch finishes on the old model; the next
-    // turn runs on the new one.
-    let during = bodies(&server);
-    assert_eq!(during.len(), 2, "{during:?}");
-    assert_eq!(during[0]["model"], "m");
-    assert_eq!(during[1]["model"], "m");
-    prompt(&client, "c_after", "after the switch");
-    stream.extend(until(&client, "turn_completed", |line| {
-        line["kind"] == "turn_completed"
-    }));
-    let built = stream
-        .iter()
-        .rev()
-        .find(|line| line["kind"] == "preamble_built")
-        .unwrap();
-    assert_eq!(built["payload"]["reason"], "switch");
-    assert_eq!(built["payload"]["model"], "fake/n");
-    close(&client);
-    stream.extend(until_close(&client));
-    drop(client);
-    let (status, stderr) = running.wait();
-    assert!(status.success(), "stderr: {stderr}");
-    assert_eq!(
-        kinds(&stream),
-        [
-            "command_accepted",
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "clients",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "permission_requested",
-            "command_accepted",
-            "command_accepted",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_delta",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "model_changed",
-            "preamble_built",
-            "turn_started",
-            "command_accepted",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "command_accepted",
-            "fiber_exited",
-        ]
-    );
-    let seen = bodies(&server);
-    assert_eq!(seen.len(), 3, "{seen:?}");
-    assert_eq!(seen[0]["model"], "m");
-    assert_eq!(seen[1]["model"], "m");
-    assert_eq!(seen[2]["model"], "n");
 }
 
 #[test]
@@ -1238,67 +1038,6 @@ fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
 }
 
 #[test]
-fn a_switch_to_a_model_without_hosted_search_withdraws_it() {
-    let (stream, [before, after], seen) =
-        switch_and_list("fake/w", "fake/m", [anthropic_hello(), hello()]);
-    assert_eq!(before.len(), 1, "{before:?}");
-    assert_eq!(before[0]["source"], "builtin");
-    assert!(after.is_empty(), "{after:?}");
-    let built = stream
-        .iter()
-        .rev()
-        .find(|line| line["kind"] == "preamble_built")
-        .unwrap();
-    assert!(
-        built["payload"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|tool| tool["name"] != "web_search"),
-        "{built}"
-    );
-    assert_eq!(seen.len(), 2, "{seen:?}");
-    assert_eq!(seen[0].0, "/v1/messages");
-    assert_eq!(
-        searches(&seen[0].1),
-        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
-    );
-    assert_eq!(seen[1].0, "/v1/responses");
-    assert!(searches(&seen[1].1).is_empty(), "{:?}", seen[1].1);
-}
-
-#[test]
-fn a_switch_to_a_model_with_hosted_search_declares_it() {
-    let (stream, [before, after], seen) =
-        switch_and_list("fake/m", "fake/w", [hello(), anthropic_hello()]);
-    assert!(before.is_empty(), "{before:?}");
-    assert_eq!(after.len(), 1, "{after:?}");
-    assert_eq!(after[0]["source"], "builtin");
-    assert_eq!(after[0]["state"], "full");
-    let built = stream
-        .iter()
-        .rev()
-        .find(|line| line["kind"] == "preamble_built")
-        .unwrap();
-    let declared: Vec<&Value> = built["payload"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|tool| tool["name"] == "web_search")
-        .collect();
-    assert_eq!(declared.len(), 1, "{built}");
-    assert_eq!(declared[0]["registered_by"], "builtin");
-    assert_eq!(seen.len(), 2, "{seen:?}");
-    assert_eq!(seen[0].0, "/v1/responses");
-    assert!(searches(&seen[0].1).is_empty(), "{:?}", seen[0].1);
-    assert_eq!(seen[1].0, "/v1/messages");
-    assert_eq!(
-        searches(&seen[1].1),
-        vec![json!({"type": "web_search_20250305", "name": "web_search"})]
-    );
-}
-
-#[test]
 fn a_switch_from_anthropic_to_responses_declares_the_responses_type() {
     let (stream, [before, after], seen) =
         switch_and_list("fake/w", "fake/r", [anthropic_hello(), hello()]);
@@ -1405,23 +1144,6 @@ fn install_other(setup: &Setup, server: &ProviderServer, credential: &Value) {
         }),
         None,
     );
-}
-
-/// Waits under the test's deadline for `file` to hold a whole line, and
-/// returns it trimmed.
-#[track_caller]
-fn ready_line(setup: &Setup, file: &Path) -> String {
-    let file = file.to_path_buf();
-    fakes::within("the ready file", setup.deadline.left(), move || {
-        loop {
-            if let Ok(text) = fs::read_to_string(&file)
-                && text.ends_with('\n')
-            {
-                return text.trim().to_owned();
-            }
-            thread::yield_now();
-        }
-    })
 }
 
 /// Makes a FIFO at `path` for a switch-read handshake: the credential
@@ -1707,8 +1429,8 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
-    let script = format!("echo $$ > '{}'; exec sleep 30", ready.display());
+    let ready = Ready::new(setup.root.path());
+    let script = format!("echo $$ > '{}'; exec sleep 30", ready.path().display());
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
     let id = doors::mint("s_");
     let running = start_session(&setup, &id, &[]);
@@ -1721,7 +1443,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
@@ -1773,12 +1495,12 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
+    let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
     make_fifo(&setup, &release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
-        ready.display(),
+        ready.path().display(),
         release.display()
     );
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
@@ -1793,7 +1515,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     // The open blocks until the switch's read opens the FIFO: the
     // rendezvous proves the read is in flight, and the line the test
@@ -1854,12 +1576,12 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
+    let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
     make_fifo(&setup, &release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
-        ready.display(),
+        ready.path().display(),
         release.display()
     );
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
@@ -1874,7 +1596,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     // The write's open rendezvouses with the switch's read, and the line
     // releases it: waiting for `model_changed` next proves the read

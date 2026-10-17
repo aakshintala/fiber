@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
@@ -55,6 +56,18 @@ pub struct Session {
     accept: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// The answers and extension handles installed together by a reload.
+pub struct Replacement {
+    /// The complete command listing.
+    pub commands: Vec<CommandInfo>,
+    /// The complete skill discovery listing.
+    pub skills: Vec<SkillInfo>,
+    /// The extension command and interaction endpoint.
+    pub door: Option<Arc<dyn contract::extension::ExtensionDoor>>,
+    /// The session's replacement hooks.
+    pub hooks: Option<Arc<dyn contract::hook::Hooks>>,
+}
+
 type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
 const DEFAULT_QUOTA_NOTICE_AT: f64 = 80.0;
 
@@ -69,10 +82,10 @@ pub(crate) struct Gate {
     pub(crate) tools: Mutex<Vec<ToolInfo>>,
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
-    commands: OnceLock<Vec<CommandInfo>>,
+    commands: Mutex<Vec<CommandInfo>>,
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
-    skills: OnceLock<Vec<SkillInfo>>,
+    skills: Mutex<Vec<SkillInfo>>,
     quota: OnceLock<QuotaRead>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
@@ -92,10 +105,10 @@ pub(crate) struct Gate {
     jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
-    hooks: OnceLock<Arc<dyn contract::hook::Hooks>>,
+    hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
     /// The session's extensions as the door reaches them, for the `command`
     /// driver command.
-    door: OnceLock<Arc<dyn contract::extension::ExtensionDoor>>,
+    door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
     /// The image child's driver, which pasted images are processed through.
     /// None leaves image parts rejected: this Fiber processes no images yet.
     images: OnceLock<Arc<dyn contract::images::Images>>,
@@ -123,6 +136,7 @@ pub(crate) struct Gate {
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
     clients: ClientCounts,
+    one_turn: AtomicBool,
     /// The live connections, their writers, and whether the session stopped.
     pub(crate) conns: Conns,
 }
@@ -231,7 +245,8 @@ impl Session {
         if let Some(jobs) = self.gate.jobs.get() {
             jobs.deliver_to(inbox.clone());
         }
-        if let Some(hooks) = self.gate.hooks.get() {
+        let hooks = lock(&self.gate.hooks).clone();
+        if let Some(hooks) = hooks {
             hooks.deliver_to(inbox.clone());
         }
         *lock(&self.gate.inbox) = Some(inbox);
@@ -239,6 +254,17 @@ impl Session {
         debug_assert!(stored.is_ok(), "cancel is wired once");
         self.start_accept()?;
         run(waiting)
+    }
+
+    /// Whether a person can answer now: a full connection is attached, except
+    /// in `fiber ask`. Holds the gate weakly; a gate that is gone reads false.
+    pub fn attended(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move || {
+            gate.upgrade().is_some_and(|gate| {
+                !gate.one_turn.load(Ordering::SeqCst) && gate.clients.count() > 0
+            })
+        })
     }
 
     /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
@@ -253,6 +279,7 @@ impl Session {
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
+        self.gate.one_turn.store(true, Ordering::SeqCst);
         let (done, rejection) = mpsc::channel();
         let ack = Ack(Box::new(move |answer| {
             if let Err(rejection) = answer {
@@ -304,13 +331,30 @@ impl Session {
         debug_assert!(stored.is_ok(), "driver_shell is wired once");
     }
 
+    /// Replaces the session's listings and extension handles on reload.
+    pub fn reloader(&self) -> Arc<dyn Fn(Replacement) + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move |replacement| {
+            let Some(gate) = gate.upgrade() else {
+                return;
+            };
+            *lock(&gate.commands) = replacement.commands;
+            *lock(&gate.skills) = replacement.skills;
+            *lock(&gate.door) = replacement.door;
+            *lock(&gate.hooks) = replacement.hooks.clone();
+            let inbox = lock(&gate.inbox).clone();
+            if let (Some(hooks), Some(inbox)) = (replacement.hooks, inbox) {
+                hooks.deliver_to(inbox);
+            }
+        })
+    }
+
     /// Every `/name` the session runs, which the `commands` driver command
     /// answers with verbatim (`docs/invocation.md`, "What each command
     /// does"). Set before [`Session::run`]; with none set, the answer is an
     /// empty list.
     pub fn commands(&self, commands: Vec<CommandInfo>) {
-        let stored = self.gate.commands.set(commands);
-        debug_assert!(stored.is_ok(), "commands is wired once");
+        *lock(&self.gate.commands) = commands;
     }
 
     /// Every skill discovery read, switched-off and shadowed ones included
@@ -319,8 +363,7 @@ impl Session {
     /// before [`Session::run`]; with none set, the answer is an empty
     /// list.
     pub fn skills(&self, skills: Vec<SkillInfo>) {
-        let stored = self.gate.skills.set(skills);
-        debug_assert!(stored.is_ok(), "skills is wired once");
+        *lock(&self.gate.skills) = skills;
     }
 
     /// Wires the non-waiting cached quota reader before the session runs.
@@ -339,14 +382,12 @@ impl Session {
 
     /// The session's hooks, which receive the loop's inbox beside the jobs.
     pub fn hooks(&self, hooks: Arc<dyn contract::hook::Hooks>) {
-        let stored = self.gate.hooks.set(hooks);
-        debug_assert!(stored.is_ok(), "hooks is wired once");
+        *lock(&self.gate.hooks) = Some(hooks);
     }
 
     /// The session's extensions as the `command` driver command reaches them.
     pub fn extensions(&self, door: Arc<dyn contract::extension::ExtensionDoor>) {
-        let stored = self.gate.door.set(door);
-        debug_assert!(stored.is_ok(), "door is wired once");
+        *lock(&self.gate.door) = Some(door);
     }
 
     /// The in-process driver `host.drive` sends through (`docs/extensions.md`,
@@ -596,7 +637,7 @@ impl Gate {
     }
 
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
-        self.commands.get().cloned().unwrap_or_default()
+        lock(&self.commands).clone()
     }
 
     pub(crate) fn quota(&self) -> (Vec<QuotaInfo>, f64) {
@@ -606,11 +647,11 @@ impl Gate {
     }
 
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
-        self.skills.get().cloned().unwrap_or_default()
+        lock(&self.skills).clone()
     }
 
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
-        self.door.get().cloned()
+        lock(&self.door).clone()
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
@@ -697,8 +738,8 @@ fn open_in(
         clock: Arc::clone(&clock),
         session_id,
         tools: Mutex::new(tools),
-        commands: OnceLock::new(),
-        skills: OnceLock::new(),
+        commands: Mutex::new(Vec::new()),
+        skills: Mutex::new(Vec::new()),
         quota: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
@@ -706,8 +747,8 @@ fn open_in(
         close_now: OnceLock::new(),
         driver_shell: OnceLock::new(),
         jobs: OnceLock::new(),
-        hooks: OnceLock::new(),
-        door: OnceLock::new(),
+        hooks: Mutex::new(None),
+        door: Mutex::new(None),
         images: OnceLock::new(),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
@@ -718,6 +759,7 @@ fn open_in(
         #[cfg(test)]
         probe: Mutex::new(None),
         clients: ClientCounts::new(),
+        one_turn: AtomicBool::new(false),
         conns: Conns::new(),
     });
     // The session's `Arc<Gate>` keeps this subscription alive: the weak

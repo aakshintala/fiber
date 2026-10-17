@@ -60,6 +60,7 @@ mod process;
 mod progress;
 mod prompt;
 mod questions;
+mod reload;
 mod resume;
 mod retry;
 mod reviewer;
@@ -97,10 +98,13 @@ pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::{DisabledReader, PromptInputs};
+pub use reload::{PrepareReload, PromptPatch, ReloadPrepared, ReloadRoute, ReloadSettings};
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
-pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed};
-pub use rewind::{Rewound, latest_name, rewind_note};
+pub use reviewer::{
+    BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed, summary_skips,
+};
+pub use rewind::{Rewound, latest_name, rewind_note, rewind_note_with_jobs};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use slash::{FetchPrompt, ServerPrompts};
@@ -138,8 +142,8 @@ pub struct Loop {
     /// The session's maintained skill set: what `/name` and the `skill`
     /// tool answer from (`docs/system-prompt.md`, "Skills").
     skills: skill_set::SkillSet,
-    /// Why the one build writes `preamble_built`: `start` on a new
-    /// session, `resume` on a resumed one.
+    /// Why the latest build writes `preamble_built`: start, resume,
+    /// switch or reload.
     preamble_reason: PreambleReason,
     /// The built preamble: what every request sends and what
     /// `preamble_built` records. `None` until the first turn builds it
@@ -295,6 +299,10 @@ pub struct Loop {
     warming: warm::Warming,
     /// How a `model` command is prepared, with what the session started with.
     switcher: Option<(Prepare, Switchable)>,
+    /// Prepares a replacement configuration without changing the route.
+    reloader: Option<PrepareReload>,
+    /// A reload built before the process's post-offer load was due.
+    load_after_reload: bool,
     /// Switches admitted during a turn, applied at the next turn boundary.
     pending: Vec<Prepared>,
     /// The session's own thinking choice.
@@ -583,6 +591,8 @@ impl Loop {
             ending: jobs::Ending::default(),
             warming: warm::Warming::default(),
             switcher: None,
+            reloader: None,
+            load_after_reload: false,
             pending: Vec::new(),
             chosen,
             inbox_wake: None,

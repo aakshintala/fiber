@@ -336,7 +336,7 @@ the envelope's `ts`.
 | `variables` | object | yes | the environment variables the session runs commands with, without their values: `path` (string, the `PATH`), `names` (array of strings, the other variables' names, sorted) and `source`, `login_shell` when the hub's login-shell capture succeeded, or `inherited` when it failed or for a session `fiber ask` started; a delegate carries its parent's (`docs/invocation.md`, "A session's environment") |
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
-| `rewind` | object | no | for a rewind: `summary` (string, optional), `note` (string) and `jobs` (array of strings, the `job_id`s adopted) |
+| `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
 | `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
@@ -348,7 +348,7 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 | `new_session_id` | string | yes | the session that continues this one |
 | `seq` | integer | yes | the point |
 | `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
-| `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
+| `summary` | string | no | the old session's summary of the path after the point |
 
 #### `turn_started`
 
@@ -366,6 +366,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
+| `rewind` | `command_id` (string) | a `rewind` command that asked for a summary: the summary's turn on the old session, between turns (`docs/events.md`, "Rewind") |
 
 #### `step_started`
 
@@ -852,7 +853,7 @@ Ephemeral. The envelope's `action_id` is the failed assistant message.
 
 #### `notice`
 
-Ephemeral. A failure outside any action.
+Ephemeral. A failure outside any action, or a login a person must finish (`login_url`).
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -1329,7 +1330,7 @@ Every driver command is answered with exactly one of these, echoing its id
 |---|---|
 | `rewind` | `new_session_id` (string), the session that continues this one |
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `tool` (string, the server's own name for the tool, when the source is `mcp`), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
-| `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) (`docs/invocation.md`, "What each command does") |
+| `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) and `extension` (boolean, true on an extension's command, absent otherwise) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
@@ -1378,10 +1379,10 @@ What the reader can tell about work that was in flight, from the log alone:
 | `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
-| `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, unless a `rewound` lists the job |
+| `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned` |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
 | `fiber_started`, no `fiber_exited` or `rewound` after it | that process died rather than exited |
-| `rewound` last | the session continued elsewhere; the jobs it lists were handed over, so they are not orphaned |
+| `rewound` last | the session continued elsewhere |
 | `handoff_started`, no `handoff_completed` | the process died during a handoff; the handoff did not take effect, and the model's context is what it was before it |
 
 On open, Fiber writes that `job_completed` and does not touch any process. A
@@ -1431,37 +1432,44 @@ earlier point. A person starts one from the terminal, a driver with the
   declared `executes` (`docs/permissions.md`, "Effects").
 - **A summary is optional.** A rewind may ask the old session's model to
   summarise the path after the point. A requested summary that fails fails
-  the whole `rewind` with `summary_failed`: no new session is created and the
-  old one is untouched. The client offers to retry, to rewind without a
+  the whole `rewind` with `summary_failed`: no new session is created, and
+  the old session goes on from where it was: its log gains only the summary
+  turn and its usage. The client offers to retry, to rewind without a
   summary, or to cancel, and each of the first two is a new `rewind`.
+
+  The summary is a turn of its own on the old session, with one step. Its
+  request meets the budget check and `before_model_call` as every model
+  request does (`docs/loop.md`, "Spending budget"); the step drains no inbox,
+  checks no context and runs no `turn_end`, and a budget stop or a hook's
+  refusal fails the summary.
 - **What the model receives, in order:** the old session's history up to the
   point, then the summary if there is one, then Fiber's note: the files written
-  and shell calls since the point, and the jobs adopted or stopped. The first
+  and shell calls since the point, and the jobs stopped. The first
   request matches the old session's up to the point, so it hits the prompt
   cache while the cache is warm. Everything after the history rides on the new
-  session's `session_started`, as `rewind { summary?, note, jobs }`, where
-  `jobs` is the adopted `job_id`s.
+  session's `session_started`, as `rewind { summary?, note }`.
 - **A handoff is inherited by position.** A handoff completed in the old
   session at or before the point applies to the new session. One after it does
   not.
-- **Jobs.** A job started before the point and still running is adopted by the
-  new session: its history shows the job starting, so it must own it. Each job
-  started after the point and still running is listed, and the person chooses
-  to stop it or adopt it. Stop is the default. The choice travels on the
-  `rewind` command, which names the jobs to adopt; every other such job stops
-  (`docs/invocation.md`). The client lists them from the log before it sends
-  the command, so no interaction is raised. Stopping is the normal job stop. An adopted job's later `job_line` and
-  `job_completed` go to the new session's log.
+- **Jobs stop.** Every job still running when the session is rewound stops,
+  whether it started before the point or after it. A job is a child of the
+  process that started it (`docs/tools.md`, "Background jobs"), and the new
+  session runs in a new process, so it starts with no jobs. Stopping is the
+  normal job stop, so a job ends `cancelled`, or `failed` with
+  `indeterminate`; the note lists both as stopped, so the model can start
+  again any it still needs.
 - **It keeps the name.** The new session's first lines after `session_started` include the parent's latest `session_named`, unchanged, when there is one. A fork does not.
 - **It never starts a turn.** The new session waits for a prompt, whichever
   point it continues from, including one just after the person's input or
   after a step.
 - **The old session is closed first.** While the process still holds the old
-  session's lock, it writes a `job_completed` with `status: cancelled` for each
-  job the person chose to stop. The summary's model call, when there is one,
-  is made on the old session, and its `usage_recorded` goes in the old
-  session's log. Then it writes `rewound`, naming the new session, the
-  point and the jobs handed over. `rewound` is the last line the process writes
+  session's lock, each job still running ends as the normal stop ends it,
+  `cancelled` or `failed` with `indeterminate`, before `rewound`, and the
+  note lists both as stopped. The summary's model call, when there is one,
+  is made on the old session, in a turn of its own whose input is the
+  `rewind` command, and its `usage_recorded` goes in the old session's
+  log. Then it writes `rewound`, naming the new session, the point and
+  the summary. `rewound` is the last line the process writes
   to that log, and it closes the process boundary there as `fiber_exited`
   does. Only then does the new session start.
 - **Only the holder rewinds.** The process that rewinds a session must hold

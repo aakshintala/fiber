@@ -147,6 +147,11 @@ pub(crate) fn install(
         memory_cap,
         secrets,
     } = ctx;
+    let browser: Arc<dyn Browser> = Arc::new(crate::attend::Noticing::new(
+        browser,
+        Arc::clone(hub),
+        extension.clone(),
+    ));
     let host = lua.create_table()?;
     let secret_home = home.clone();
     let secret_raw = lua.create_function(move |lua, name: LuaValue| {
@@ -308,6 +313,20 @@ pub(crate) enum Request {
     Lock,
     /// `host.oauth.poll`: wait this long on the extension's clock.
     Sleep(Duration),
+}
+
+impl Request {
+    pub(crate) fn waits_on_login(&self) -> bool {
+        match self {
+            Self::Callback { .. } | Self::Sleep(_) => true,
+            Self::Http(_)
+            | Self::Ask(_)
+            | Self::Tool(_)
+            | Self::Drive(_)
+            | Self::Exec(_)
+            | Self::Lock => false,
+        }
+    }
 }
 
 /// One `host.drive` call, copied out of Lua so the session's door can run

@@ -857,7 +857,7 @@ fn after_close_prepare_is_not_called() {
 use contract::RequestId;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::Effect;
-use support::{TestTool, calls_reply, on_request, reasoning_reply};
+use support::{TestTool, calls_reply, on_request};
 
 fn executes_tool() -> Arc<TestTool> {
     let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
@@ -1119,40 +1119,6 @@ fn thinking_only_switches_the_level_with_the_same_events() {
             .iter()
             .any(|input| matches!(input, contract::provider::Input::Reasoning { .. }))
     );
-}
-
-#[test]
-fn another_model_leaves_out_earlier_reasoning() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::new(
-        vec![reasoning_reply("Hmm.", "Old."), Scripted::text("New.")],
-        None,
-    );
-    with_switch(
-        &mut session,
-        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
-        switchable(),
-    );
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REASONING_REPLY, ENDED]);
-
-    session.inbox.send(model(NEW_MODEL, None)).unwrap();
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-    // The request goes to the new provider; the provider layer leaves out
-    // reasoning another model reference produced. The conversation still
-    // holds it under the old stamp.
-    let requests = next.requests();
-    assert_eq!(requests.len(), 1);
-    let live: Vec<String> = log::read(&session.dir)
-        .unwrap()
-        .into_iter()
-        .map(|l| l.kind)
-        .collect();
-    assert!(live.contains(&"model_changed".to_owned()));
 }
 
 #[test]

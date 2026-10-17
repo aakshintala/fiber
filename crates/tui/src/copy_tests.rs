@@ -249,6 +249,7 @@ fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
             super::super::Target::Copy { .. } => Some(target),
             super::super::Target::Group(_)
             | super::super::Target::Call(_)
+            | super::super::Target::CallView(_)
             | super::super::Target::Thought(_)
             | super::super::Target::Login
             | super::super::Target::Note(_)

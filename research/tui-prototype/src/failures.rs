@@ -63,13 +63,13 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "rewind",
         help: "the /rewind view with turns and step boundaries",
-        check: "the Rewind header, one before: row per turn, the chosen turn opened into its step boundaries, the files and calls since with none of it undone, the job with stop then adopt, and the Rewind row last.",
+        check: "the Rewind header, one before: row per turn, the chosen turn opened into its step boundaries, the files and calls since with none of it undone, the Jobs that stop row, and the Rewind row last.",
         build: || Look { kind: Kind::Rewind },
     },
     Case {
         name: "rewound",
         help: "the ⟲ line after a rewind",
-        check: "the ⟲ line naming the new session, what was not restored, and which jobs stopped or were adopted.",
+        check: "the ⟲ line naming the new session, what was not restored, and which jobs stopped.",
         build: || Look {
             kind: Kind::Rewound,
         },
@@ -200,13 +200,9 @@ fn rewind_rows() -> Vec<super::Row> {
             dim(),
         )]),
         row(vec![
-            sp("Jobs since: ", Style::new()),
+            sp("Jobs that stop: ", Style::new()),
             sp("smoke", Style::new()),
-            sp(" still runs (", dim()),
-            sp("stop", bold()),
-            sp(", the default · ", dim()),
-            sp("adopt", Style::new()),
-            sp(")", dim()),
+            sp(" — every running job stops", dim()),
         ]),
         super::Row::default(),
         row(vec![sp(
@@ -293,7 +289,7 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             out.push(row(vec![
                 sp("⟲ ", fg(PURPLE)),
                 sp("rewound to after step 1 · now s_b31f", Style::new()),
-                sp(" · files not restored · stopped smoke, adopted lint", dim()),
+                sp(" · files not restored · stopped smoke, lint", dim()),
             ]));
             out
         }
@@ -672,7 +668,8 @@ mod tests {
             assert!(t.contains("after step 1"), "no step boundary");
             assert!(t.contains("none of it is undone"), "no undone note");
             assert!(t.contains("stop"), "no stop");
-            assert!(t.contains("adopt"), "no adopt");
+            assert!(t.contains("Jobs that stop"), "no Jobs that stop");
+            assert!(!t.contains(&["ado", "pt"].concat()), "choice remains");
             let rewind = t.rfind(" Rewind ").unwrap();
             let chat_after = t[rewind..].lines().skip(1).all(|l| l.trim().is_empty());
             assert!(chat_after, "a row after Rewind");
@@ -688,7 +685,7 @@ mod tests {
             "no ⟲ line"
         );
         assert!(t.contains("files not restored"), "no unrestored note");
-        assert!(t.contains("stopped smoke, adopted lint"), "no job fates");
+        assert!(t.contains("stopped smoke, lint"), "no job fates");
         let buf = buffer(&c, 160, 48);
         let painted = buf_text(&buf, 160, 48);
         let y = painted.lines().position(|l| l.contains('⟲')).unwrap() as u16;
