@@ -482,10 +482,11 @@ impl Drop for ReleaseGapOnDrop {
 
 /// Shutdown ends a condvar wait held between its park becoming visible
 /// and its condvar wait: the waiter signals from the hold with the wake
-/// mutex held, shutdown takes that mutex before its notify, and the
-/// release lets the notify land after the waiter parks. A shutdown that
-/// notified without the mutex would miss the held waiter, which would
-/// then sleep its guard instead of ending within the operation bound.
+/// mutex held, shutdown signals before that mutex and blocks on it, and
+/// the release lets the notify land after the waiter parks. A shutdown
+/// that notified without the mutex would miss the held waiter, which
+/// would then sleep its guard instead of ending within the operation
+/// bound.
 #[test]
 fn a_shutdown_in_the_park_gap_ends_the_wait() {
     let clock = fake_clock();
@@ -502,16 +503,17 @@ fn a_shutdown_in_the_park_gap_ends_the_wait() {
     )
     .expect("the core binds");
     let budget = budget(&clock);
-    let (reached_rx, release_tx) = server.test_park_gap();
-    // Dropped when an assertion below fails, before the scope joins the
-    // held waiter: the release lets the join end, so a red assertion
-    // fails the test instead of hanging it.
-    let _release_gap = ReleaseGapOnDrop {
-        release: release_tx.clone(),
-    };
     let (wait_tx, wait_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
     thread::scope(|scope| {
+        let (reached_rx, release_tx) = server.test_park_gap();
+        // Dropped when an assertion below fails, before the scope joins
+        // the held waiter: the release lets the join end, so a red
+        // assertion fails the test instead of hanging it.
+        let _release_gap = ReleaseGapOnDrop {
+            release: release_tx.clone(),
+        };
+        let wake_rx = server.test_shutdown_before_wake_lock();
         scope.spawn(|| {
             let mut seq = 0;
             let mut acked = None;
@@ -533,16 +535,17 @@ fn a_shutdown_in_the_park_gap_ends_the_wait() {
                 Ok(()) | Err(_) => {}
             }
         });
-        // Shutdown either returned while the waiter was held, proving
-        // it notified without the wake mutex and missed the waiter, or
-        // is still blocked on the wake mutex the held waiter owns, so
-        // its notify lands after the waiter parks.
-        if let Ok(joined) = Deadline::after(OP).recv(&stop_rx) {
-            assert!(joined, "shutdown stops the server");
-        }
+        // Shutdown reached the wake mutex it blocks on while the waiter
+        // is held, so releasing the gap lets its notify land after the
+        // waiter parks.
+        Deadline::after(OP).recv_or_fail(&wake_rx, "shutdown before the wake mutex");
         release_tx
             .send(())
             .expect("the waiter is held in the park gap");
+        assert!(
+            Deadline::after(OP).recv_or_fail(&stop_rx, "the stopped shutdown"),
+            "shutdown stops the server"
+        );
         assert!(
             matches!(
                 Deadline::after(OP).recv_or_fail(&wait_rx, "the stopped wait"),
