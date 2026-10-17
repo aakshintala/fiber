@@ -1,8 +1,8 @@
 //! The terminal's theme from `tui.theme` (`docs/configuration.md`, "Keys";
-//! `docs/tui.md`, "Themes"): `main` reads the theme file, from Fiber home's
-//! `themes/` or an installed extension's, and the terminal parses it. Only
-//! `config` knows the layout of Fiber home (`docs/architecture.md`, "The
-//! call rules"); these pass on what it returns.
+//! `docs/tui.md`, "Themes"): `main` supplies the reader and the package
+//! list, `config` resolves the file, and the terminal parses what it
+//! returns. Only `config` knows the layout of Fiber home
+//! (`docs/architecture.md`, "The call rules").
 
 use std::io;
 use std::path::Path;

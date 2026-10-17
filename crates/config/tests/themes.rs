@@ -49,33 +49,8 @@ fn always_enabled(_: &str) -> bool {
     true
 }
 
-fn home_dir(home: &fakes::TempDir) -> PathBuf {
-    home.path().to_path_buf()
-}
-
 fn package(home: &fakes::TempDir, dir: &str) -> (String, PathBuf) {
     (dir.to_owned(), home.path().join("extensions").join(dir))
-}
-
-#[test]
-fn a_home_file_wins_without_asking_any_package() {
-    let home = fakes::TempDir::new("fiber-config-theme-home-wins");
-    let packages = [package(&home, "acme")];
-    let answers = [(
-        home_dir(&home).join("themes").join("dusk.json"),
-        "home".to_owned(),
-    )]
-    .into_iter()
-    .collect();
-    let (got, asked) = text_with(
-        home.path(),
-        "dusk",
-        &packages,
-        &always_enabled,
-        &found(&answers),
-    );
-    assert_eq!(got, Ok("home".to_owned()));
-    assert_eq!(asked, [home.path().join("themes").join("dusk.json")]);
 }
 
 #[test]
@@ -89,8 +64,9 @@ fn a_home_file_wins_without_calling_enabled() {
     .into_iter()
     .collect();
     let enabled = |_: &str| -> bool { panic!("enabled must not be called") };
-    let (got, _) = text_with(home.path(), "dusk", &packages, &enabled, &found(&answers));
+    let (got, asked) = text_with(home.path(), "dusk", &packages, &enabled, &found(&answers));
     assert_eq!(got, Ok("home".to_owned()));
+    assert_eq!(asked, [home.path().join("themes").join("dusk.json")]);
 }
 
 #[test]
@@ -272,7 +248,7 @@ fn bad_names_are_refused_without_a_read() {
     );
 }
 
-/// Writes `text` to the theme file `name` in `dir`, making it.
+/// Writes the theme file `name` holding `{}` in `dir`, making it.
 fn write_theme(dir: &Path, name: &str) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
     std::fs::write(dir.join(name), "{}").unwrap_or_else(|e| panic!("write: {e}"));
