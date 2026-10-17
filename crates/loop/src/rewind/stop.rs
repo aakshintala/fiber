@@ -32,9 +32,9 @@ pub(crate) struct StoppedJob {
     pub(crate) description: Option<String>,
 }
 
-/// Whether `kind` is a job-record line: the four kinds the stop wait writes
-/// between `write_last_settled` and `rewound`, so nothing else in the run
-/// is the stop's.
+/// Whether `kind` is a job-record line: the four kinds the stop wait and
+/// the Grant 2 batch write between `write_last_settled` and `rewound`, so
+/// a line of any other kind ends the run.
 fn is_job_record(kind: &str) -> bool {
     matches!(
         kind,
@@ -57,11 +57,17 @@ fn is_stopped(completed: &JobCompleted) -> bool {
 /// The jobs a rewind stopped, read from the old session's own log: the
 /// run of job-record lines directly before the last line, when that line
 /// is `rewound`, in log order. A log not ending in `rewound` yields
-/// nothing, as does a run with no listed end.
+/// nothing, as does a run with no listed end. An end the `rewind` found
+/// already admitted carries the marker turn
+/// ([`Loop::take_rewind`]'s Grant 2 batch) and is skipped: the person
+/// stopped that job, not the rewind. In-turn ends never reach the run:
+/// every turn closes with `turn_completed` before an idle `rewind`, and
+/// that kind breaks the run.
 ///
-/// Sound because `stop_jobs_for_rewind` is the only writer between
-/// `write_last_settled` and `rewound`, and it writes only job-record
-/// lines there.
+/// Sound because only two writers run between `write_last_settled` and
+/// `rewound`: the Grant 2 batch, whose ends carry the marker turn, and
+/// `stop_jobs_for_rewind`, whose ends carry none, and both write only
+/// job-record lines there.
 pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
     let lines = log::read(old)?;
     let Some(last) = lines.last() else {
@@ -91,6 +97,10 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
         if let Some(Event::JobCompleted(completed)) =
             Event::from_envelope(line).map_err(Error::Unreadable)?
             && is_stopped(&completed)
+            // Admitted news carries the marker turn: the person stopped
+            // that job, not the rewind. The stop wait's own ends carry
+            // no turn.
+            && line.turn_id.is_none()
         {
             stopped.push(StoppedJob {
                 job_id: completed.job_id.clone(),

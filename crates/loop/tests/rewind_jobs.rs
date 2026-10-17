@@ -822,6 +822,52 @@ fn a_job_that_ended_just_before_the_rewind_is_written_first() {
 }
 
 #[test]
+fn a_person_stopped_end_in_the_rewind_batch_is_not_listed_as_stopped() {
+    // The person's own stop of j_0 lands its cancelled end in the same
+    // admit batch as the rewind, while j_1 still runs. The Grant 2 batch
+    // writes j_0 before the stop wait; the note lists only j_1, which the
+    // stop wait stopped.
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    jobs.end(&session.inbox, "j_0", Outcome::Cancelled, None);
+    let (rw, answered) = support::rewind(args(None, None, false));
+    let inbox = session.inbox.clone();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    inbox.send(rw).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&stops)
+        .expect("the running job is stopped");
+    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    accepted(answer_of(answered));
+    let lines = log::read(&dir).unwrap();
+    let tail: Vec<&str> = lines
+        .iter()
+        .rev()
+        .take(3)
+        .map(|line| line.kind.as_str())
+        .collect();
+    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
+    let note = rewind_note_with_jobs(&dir, &dir, Seq(0)).unwrap();
+    assert!(note.contains("- j_1"), "{note}");
+    assert!(!note.contains("j_0"), "{note}");
+}
+
+#[test]
 fn a_closed_inbox_ends_the_wait_with_the_job_still_running() {
     let mut session = run_a_with_id(A_ID);
     let dir = session.dir.clone();
