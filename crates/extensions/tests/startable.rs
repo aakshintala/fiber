@@ -32,15 +32,19 @@ fn model(window: Option<u64>, levels: &[ThinkingLevel], protocol: Protocol) -> M
 #[test]
 fn a_missing_or_zero_window_is_refused_and_a_positive_one_passes() {
     for window in [None, Some(0)] {
-        let refusal = context_window(&model(window, &[], Protocol::OpenaiResponses), "fake/m");
+        let Err(refusal) = context_window(&model(window, &[], Protocol::OpenaiResponses), "fake/m")
+        else {
+            panic!("a missing window resolves");
+        };
+        assert_eq!(refusal.code(), contract::ErrorCode::NoModel);
         assert_eq!(
-            refusal,
-            Err("The model `fake/m` declares no `context_window`.".to_owned())
+            refusal.to_string(),
+            "The model `fake/m` declares no `context_window`."
         );
     }
     assert_eq!(
-        context_window(&model(Some(1000), &[], Protocol::OpenaiResponses), "fake/m"),
-        Ok(1000)
+        context_window(&model(Some(1000), &[], Protocol::OpenaiResponses), "fake/m").unwrap(),
+        1000
     );
 }
 

@@ -164,9 +164,9 @@ mod warm_tests;
 /// credential is read or any connection made. The loop holds the window
 /// as a plain `u64` and trusts it to be positive.
 pub(crate) fn context_window(model: &ModelData, reference: &str) -> Result<u64, Failure> {
-    extensions::context_window(model, reference).map_err(|message| Failure {
-        code: ErrorCode::NoModel,
-        message,
+    extensions::context_window(model, reference).map_err(|error| Failure {
+        code: error.code(),
+        message: error.to_string(),
         retry_after_ms: None,
         provider: None,
     })

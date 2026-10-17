@@ -164,7 +164,7 @@ fn logs(inputs: &Inputs<'_>, report: &mut impl FnMut(&str) -> Result<(), Failure
 /// running, with its environment unknown.
 fn probe(home: &Path, clock: &dyn contract::clock::Clock) -> Hub {
     use crate::hub_status::{Diagnostic, STATUS_WITHIN, diagnose};
-    match diagnose(home, clock, STATUS_WITHIN, false) {
+    match diagnose(home, clock, STATUS_WITHIN) {
         Diagnostic::Absent => Hub::NotRunning,
         Diagnostic::Connected(result) => {
             let environment = match result {

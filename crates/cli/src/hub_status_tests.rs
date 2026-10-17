@@ -242,9 +242,9 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     clock.advance_when_parked(Some(due), Some(id), left, &Deadline::after(DEADLINE));
     // The retry's silent peer gets the shared deadline, not a fresh 5 s:
     // the whole probe fails naming the hello wait, at the one instant.
-    let error = Deadline::after(DEADLINE)
+    let error = Deadline::after(Duration::from_secs(2))
         .recv(&done_rx)
-        .unwrap()
+        .expect("the probe fails at its total deadline, not a fresh one")
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(
@@ -812,7 +812,7 @@ fn diagnosed(home: &Path, answer: &str, within: Duration) -> Diagnostic {
     });
     let clock: Arc<FakeClock> = FakeClock::new();
     fakes::within("the diagnose", DEADLINE, move || {
-        diagnose(&home, &*clock, within, false)
+        diagnose(&home, &*clock, within)
     })
 }
 

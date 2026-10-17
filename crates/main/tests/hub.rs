@@ -557,23 +557,25 @@ fn read_file_answers_an_artifact_and_refuses_an_escape() {
 
 /// Starts `hub serve` without the provider's key in its environment and
 /// waits until it answers, so the connect below never starts a keyed hub.
+/// The hub's own `hub_hello` is the readiness signal: one blocking connect
+/// waits for it, bounded by what remains of the test's deadline as a hang
+/// guard, with no sleep pacing the wait.
 fn keyless_hub(setup: &Setup) -> HubProc {
     let mut serve = setup.fiber(&["hub", "serve"]);
     serve.env_remove("FIBER_TEST_FAKE_KEY");
     let hub = HubProc::spawn_command(setup.deadline, &mut serve);
-    let tries = setup.deadline.left().as_millis() / 50 + 1;
-    for _ in 0..tries {
-        let mut started = false;
-        let mut start = || {
-            started = true;
-            Ok(())
-        };
-        if doors::hub::connect(&setup.home(), &mut start, &SystemClock).is_ok() && !started {
-            return hub;
-        }
-        SystemClock.sleep(std::time::Duration::from_millis(50));
+    let deadline = SystemClock.now() + setup.deadline.left();
+    let mut start = || Ok(());
+    if let Err(error) = doors::hub::connect_until(
+        &setup.home(),
+        &mut start,
+        &SystemClock,
+        deadline,
+        &mut || {},
+    ) {
+        panic!("the keyless hub never answered: {error}");
     }
-    panic!("the keyless hub never answered");
+    hub
 }
 
 #[test]

@@ -94,18 +94,11 @@ pub(crate) fn startup(
         }
     };
     let mut notices: Vec<contract::events::Notice> = config.notices().to_vec();
-    let inventory = match Providers::load(home) {
-        Ok((providers, _)) => providers,
-        Err(error) => {
-            let blocker = extension_blocker(&error);
-            return Startup {
-                lines: vec![blocker.line.clone()],
-                blocker: Some(blocker),
-                secrets: Vec::new(),
-                notices,
-            };
-        }
-    };
+    // The unfiltered inventory is display only; the enabled path below
+    // decides the blockers, as the session starts from it. A disabled
+    // package's malformed provider JSON loads here and not there, so
+    // its failure is an informational line, never the exit.
+    let inventory = Providers::load(home);
     let mut enabled = match Providers::load_enabled(home, &config) {
         Ok((providers, loaded)) => {
             notices.extend(loaded);
@@ -136,22 +129,29 @@ pub(crate) fn startup(
     if let Some((serde_json::Value::String(typed), _)) = config.get("model", None) {
         enabled.add_scripted(&typed);
     }
+    let display: &Providers = match &inventory {
+        Ok((providers, _)) => providers,
+        Err(_) => &enabled,
+    };
     let mut checked = Checked {
         lines: Vec::new(),
         blocker: None,
-        outcome: Outcome::None,
+        chosen: None,
         workspace,
         config: &config,
-        inventory: &inventory,
+        inventory: display,
         enabled: &enabled,
         env,
         has_userinfo,
     };
+    if let Err(error) = &inventory {
+        checked.lines.push(extension_blocker(error).line);
+    }
     checked.model();
     checked.providers();
     checked.permissions();
     checked.mcp();
-    let secrets = secrets(home, &config, &inventory);
+    let secrets = secrets(home, &config, display);
     Startup {
         lines: checked.lines,
         blocker: checked.blocker,
@@ -190,28 +190,14 @@ fn extension_blocker(error: &extensions::Error) -> Blocker {
 struct Checked<'a> {
     lines: Vec<String>,
     blocker: Option<Blocker>,
-    outcome: Outcome,
+    /// The chosen model's provider, when the model resolved to one in data.
+    chosen: Option<String>,
     workspace: &'a Path,
     config: &'a Config,
     inventory: &'a Providers,
     enabled: &'a Providers,
     env: &'a dyn Fn(&str) -> Option<String>,
     has_userinfo: &'a dyn Fn(&str) -> bool,
-}
-
-/// What the model choice resolved to: data, extension code, an error, or
-/// nothing chosen.
-#[derive(Clone, PartialEq, Eq)]
-enum Outcome {
-    /// No model was chosen.
-    None,
-    /// The chosen model's provider, from data (`scripted` included).
-    Chosen(String),
-    /// The chosen model's provider, absent from data but registrable by
-    /// an enabled extension's code.
-    Code(String),
-    /// The choice failed.
-    Failed,
 }
 
 /// One label's row: its listed origin, or the selected label's missing
@@ -249,7 +235,6 @@ impl Checked<'_> {
                 // session runs its code: not checked, not a blocker. The
                 // line prints here: the provider is absent from data, so
                 // the label blocks below never list it.
-                self.outcome = Outcome::Code(provider.clone());
                 self.lines.push(format!("model: {shown}"));
                 self.lines.push(format!(
                     "{}: registered by extension code, not checked",
@@ -257,7 +242,6 @@ impl Checked<'_> {
                 ));
             }
             Err(error) => {
-                self.outcome = Outcome::Failed;
                 self.lines.push(format!("model: {shown}"));
                 let line = clean(&error.to_string());
                 self.block(line.clone(), error.code(), false);
@@ -265,7 +249,7 @@ impl Checked<'_> {
             }
             Ok(model) => {
                 let provider = clean(&model.provider.name);
-                self.outcome = Outcome::Chosen(model.provider.name.clone());
+                self.chosen = Some(model.provider.name.clone());
                 self.lines
                     .push(format!("model: {shown} (provider {provider})"));
                 self.window(&model);
@@ -287,11 +271,11 @@ impl Checked<'_> {
     /// one never reaches here: the load leaves it out, so resolving it is
     /// `UnknownModel`; this refusal is pinned through the shared function.
     fn window(&mut self, model: &Model<'_>) {
-        if let Err(message) = extensions::context_window(model.model, &model.reference()) {
+        if let Err(error) = extensions::context_window(model.model, &model.reference()) {
             let line = format!(
                 "{} Run `fiber models` and set another with \
                  `fiber config set model <provider/model>`.",
-                clean(&message)
+                clean(&error.to_string())
             );
             self.block(line.clone(), ErrorCode::NoModel, false);
             self.lines.push(line);
@@ -339,8 +323,15 @@ impl Checked<'_> {
         match read_script(&path) {
             Ok(ScriptRead::Readable | ScriptRead::NotChecked) => {}
             Err(error) => {
+                // The `Io` case names the operating system's sentence, as the
+                // session's script read does, so the report's first sentence
+                // matches the session's failure line byte for byte.
+                let mut why = error.to_string();
+                if let ConfigError::Io { source, .. } = &error {
+                    why = source.to_string();
+                }
                 let line = format!(
-                    "The script `{}` could not be read: {error}. Check that path, \
+                    "The script `{}` could not be read: {why}. Check that path, \
                      resolved against the workspace, and that you can read the file.",
                     clean(&path.display().to_string())
                 );
@@ -373,7 +364,7 @@ impl Checked<'_> {
             }
             rows.sort_by(|a, b| a.0.cmp(&b.0));
             let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
-            let chosen = self.outcome == Outcome::Chosen(name.to_owned());
+            let chosen = self.chosen.as_deref() == Some(name);
             for (label, row) in &rows {
                 let mark = if label == &selected { "*" } else { " " };
                 let (origin, note) = self.label_row(data, &selected, label, row, chosen);
@@ -435,10 +426,13 @@ impl Checked<'_> {
                 (origin, " (no key)")
             }
             Ok(Presence::Empty) => {
+                // Labels permit newlines and terminal escapes; every
+                // interpolation is cleaned, so one line stays one line.
+                let shown = clean(label);
                 self.block(
                     format!(
-                        "the stored key for {} under {label} is empty: run `fiber logout \
-                         {0} --as {label}`, then `fiber login {0} --as {label}`.",
+                        "the stored key for {} under {shown} is empty: run `fiber logout \
+                         {0} --as {shown}`, then `fiber login {0} --as {shown}`.",
                         clean(&data.name)
                     ),
                     ErrorCode::CredentialFailed,
@@ -481,12 +475,8 @@ impl Checked<'_> {
 /// blocker, and neither line changes the exit code. A name that is also
 /// an installed provider's is skipped, as `fiber login` skips it.
 fn secrets(home: &Path, config: &Config, inventory: &Providers) -> Vec<String> {
-    let declared: Vec<(String, String)> = inventory
-        .declared_secrets()
-        .map(|(extension, name)| (extension.to_owned(), name.to_owned()))
-        .collect();
     let mut lines = Vec::new();
-    for (extension, name) in &declared {
+    for (extension, name) in inventory.declared_secrets() {
         if !is_enabled(config, extension) {
             continue;
         }

@@ -225,8 +225,8 @@ fn cut_display(code: &str, message: &str) -> (String, String) {
     (code.to_owned(), message[..end].to_owned())
 }
 
-/// The newest crash in `crashes/`: its full path and mtime, the later name
-/// winning ties. Entries are stated without following links and no crash
+/// The newest crash in `crashes/`: its full path and mtime, compared at
+/// full resolution with the later name winning ties. Entries are stated without following links and no crash
 /// file is opened or read.
 pub(crate) fn newest_crash(crashes: &Path) -> Option<(PathBuf, SystemTime)> {
     let dir = open_dir(crashes)?;
@@ -239,8 +239,9 @@ pub(crate) fn newest_crash(crashes: &Path) -> Option<(PathBuf, SystemTime)> {
         if stat.st_mode & 0o170_000 != 0o100_000 {
             continue;
         }
-        let mtime =
-            SystemTime::UNIX_EPOCH + Duration::from_secs(stat.st_mtime.max(0).cast_unsigned());
+        let secs = stat.st_mtime.max(0).cast_unsigned();
+        let nanos = u32::try_from(stat.st_mtime_nsec).unwrap_or(0);
+        let mtime = SystemTime::UNIX_EPOCH + Duration::new(secs, nanos);
         if best.as_ref().is_none_or(|(at, ..)| mtime >= *at) {
             best = Some((mtime, name));
         }

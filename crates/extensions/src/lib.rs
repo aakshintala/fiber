@@ -323,6 +323,13 @@ pub enum Error {
         /// The model id.
         model: String,
     },
+    /// A model that declares no `context_window`, or a zero one: it
+    /// cannot start.
+    #[error("The model `{reference}` declares no `context_window`.")]
+    NoContextWindow {
+        /// The model, as typed.
+        reference: String,
+    },
     /// The session's model, or one named, is left out for its per-account host.
     #[error("{message}")]
     Unconfigured {
@@ -503,9 +510,10 @@ impl Error {
             | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
-            Self::UnknownModel { .. } | Self::ModelMissing { .. } | Self::NoModel => {
-                ErrorCode::NoModel
-            }
+            Self::UnknownModel { .. }
+            | Self::ModelMissing { .. }
+            | Self::NoModel
+            | Self::NoContextWindow { .. } => ErrorCode::NoModel,
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,

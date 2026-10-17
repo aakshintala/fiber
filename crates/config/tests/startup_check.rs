@@ -11,7 +11,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use common::Setup;
-use config::{McpRefusalKind, McpServer, McpTransport, ScriptRead, mcp_servers, read_script};
+use config::{
+    ConfigError, McpRefusalKind, McpServer, McpTransport, ScriptRead, mcp_servers, read_script,
+};
 use serde_json::json;
 
 /// Whether the URL holds a user name or password, as the tests see it.
@@ -313,7 +315,7 @@ fn debug_prints_names_but_no_command_argument_value_or_url() {
 
 /// One `read_script` call on a worker thread, so a blocking read would
 /// fail the test instead of hanging it.
-fn read_on_worker(path: &Path) -> std::io::Result<ScriptRead> {
+fn read_on_worker(path: &Path) -> Result<ScriptRead, ConfigError> {
     let path = path.to_path_buf();
     fakes::within("a script read", fakes::MUST_SUCCEED_WITHIN, move || {
         read_script(&path)
@@ -375,10 +377,14 @@ fn read_script_never_waits_on_a_fifo_or_its_link() {
 fn read_script_reports_a_missing_file_and_a_directory_as_io_errors() {
     let setup = Setup::new();
     let missing = setup.root().join("absent.sh");
-    let error = read_on_worker(&missing).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-    let error = read_on_worker(setup.root()).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::IsADirectory);
+    let ConfigError::Io { source, .. } = read_on_worker(&missing).unwrap_err() else {
+        panic!("a missing script is an Io error");
+    };
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+    let ConfigError::Io { source, .. } = read_on_worker(setup.root()).unwrap_err() else {
+        panic!("a directory script is an Io error");
+    };
+    assert_eq!(source.kind(), std::io::ErrorKind::IsADirectory);
 }
 
 #[test]
@@ -392,8 +398,10 @@ fn read_script_reports_an_unreadable_file_as_io_errors() {
         // refusal to check here.
         return;
     }
-    let error = read_on_worker(&file).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    let ConfigError::Io { source, .. } = read_on_worker(&file).unwrap_err() else {
+        panic!("an unreadable script is an Io error");
+    };
+    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
 }
 
 /// The shared classification answers through one entry point.

@@ -166,15 +166,7 @@ pub(crate) struct Reply {
 /// `answer_within` on `clock`, starting nothing: an absent socket is
 /// [`Diagnostic::Absent`]. The connect, the handshake and the answer
 /// share one absolute deadline, so an EOF retry gets only what remains.
-/// `installed` travels with the status probe, not the exchange: diagnose
-/// takes it only so the probe and the doctor call one shape.
-pub(crate) fn diagnose(
-    home: &Path,
-    clock: &dyn Clock,
-    answer_within: Duration,
-    installed: bool,
-) -> Diagnostic {
-    let _ = installed;
+pub(crate) fn diagnose(home: &Path, clock: &dyn Clock, answer_within: Duration) -> Diagnostic {
     diagnose_with(home, clock, answer_within, &mut || {}, &mut || {})
 }
 

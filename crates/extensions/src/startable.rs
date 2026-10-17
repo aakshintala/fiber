@@ -7,12 +7,12 @@ use contract::ThinkingLevel;
 
 /// The model's declared context window, in tokens: a model that declares
 /// none — or a zero window — cannot start.
-pub fn context_window(model: &ModelData, reference: &str) -> Result<u64, String> {
+pub fn context_window(model: &ModelData, reference: &str) -> Result<u64, crate::Error> {
     match model.context_window {
         Some(window) if window > 0 => Ok(window),
-        _ => Err(format!(
-            "The model `{reference}` declares no `context_window`."
-        )),
+        _ => Err(crate::Error::NoContextWindow {
+            reference: reference.to_owned(),
+        }),
     }
 }
 

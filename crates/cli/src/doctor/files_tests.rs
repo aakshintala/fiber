@@ -519,6 +519,30 @@ fn newest_crash_breaks_mtime_ties_by_name() {
 }
 
 #[test]
+fn newest_crash_compares_nanoseconds_within_one_second() {
+    // Same second, different nanoseconds: the earlier name is newer,
+    // so name order must not decide.
+    let setup = Setup::new();
+    let older = setup.crashes().join("s_b-1.txt");
+    let newer = setup.crashes().join("s_a-1.txt");
+    for (path, nanos) in [(&older, 100), (&newer, 900)] {
+        fs::write(path, "x").unwrap();
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::new(1_699_990_000, nanos))
+            .unwrap();
+    }
+    let (path, mtime) = newest_crash(&setup.crashes()).unwrap();
+    assert_eq!(path, newer);
+    assert_eq!(
+        mtime,
+        SystemTime::UNIX_EPOCH + Duration::new(1_699_990_000, 900)
+    );
+}
+
+#[test]
 fn newest_crash_is_none_when_missing_empty_or_linked() {
     let setup = Setup::new();
     assert_eq!(newest_crash(&setup.crashes()), None);

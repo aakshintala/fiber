@@ -7,12 +7,12 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::{Config, Source, declared, mcp_secret_name_ok};
+use crate::{Config, ConfigError, Source, declared, mcp_secret_name_ok};
 
 /// The `mcp.servers` entries, classified: runnable ones with the
 /// repository's flagged, and refusals with their notices' wording. Names
@@ -386,15 +386,21 @@ pub enum ScriptRead {
 /// descriptor is proven regular first, so a swapped-in FIFO is never
 /// waited on; symlinks are followed. A directory, or missing or
 /// unreadable file, is an error with the same kind `fs::read` would give.
-pub fn read_script(path: &Path) -> io::Result<ScriptRead> {
+pub fn read_script(path: &Path) -> Result<ScriptRead, ConfigError> {
+    let failed = |source| ConfigError::Io {
+        file: path.to_owned(),
+        source,
+    };
     let file = match crate::credential_origin::open_validated(path, false) {
         Ok(file) => file,
         Err(crate::credential_origin::OpenFail::NotRegular) => return Ok(ScriptRead::NotChecked),
         Err(crate::credential_origin::OpenFail::IsDir) => {
-            return Err(crate::credential_origin::is_directory_error());
+            return Err(failed(crate::credential_origin::is_directory_error()));
         }
-        Err(crate::credential_origin::OpenFail::NotFound(error)) => return Err(error),
-        Err(crate::credential_origin::OpenFail::Other(error)) => return Err(error),
+        Err(crate::credential_origin::OpenFail::NotFound(source))
+        | Err(crate::credential_origin::OpenFail::Other(source)) => {
+            return Err(failed(source));
+        }
     };
     crate::credential_origin::seam::note_read(path);
     let mut file = file;
@@ -403,7 +409,7 @@ pub fn read_script(path: &Path) -> io::Result<ScriptRead> {
         match file.read(&mut chunk) {
             Ok(0) => return Ok(ScriptRead::Readable),
             Ok(_) => {}
-            Err(error) => return Err(error),
+            Err(source) => return Err(failed(source)),
         }
     }
 }

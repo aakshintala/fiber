@@ -311,6 +311,55 @@ fn a_disabled_package_gives_provider_missing_but_keeps_its_block() {
 }
 
 #[test]
+fn a_disabled_package_with_malformed_provider_json_is_informational() {
+    // The session starts from the enabled set and skips the disabled
+    // package before reading its provider file; doctor must not exit 1
+    // for what the session never reads.
+    let setup = Setup::new();
+    setup.fake();
+    setup.place(
+        "off",
+        &[provider(
+            "bogus",
+            &[model("m", "openai-responses", 1_000, None)],
+            None,
+            None,
+        )],
+        manifest("off"),
+    );
+    fs::write(
+        setup.home().join("extensions/off/providers/bogus.json"),
+        "{",
+    )
+    .unwrap();
+    setup.write_config(&json!({"model": "fake/m", "extensions": {"off": {"enabled": false}}}));
+    let lines = setup.ready(&[], &env_of(&[("FIBER_TEST_UNSET_KEY", "k")]));
+    assert!(
+        lines
+            .first()
+            .is_some_and(|line| line.starts_with("extensions do not load:")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|line| line == "fake:"), "{lines:?}");
+}
+
+#[test]
+fn an_empty_key_under_a_control_label_stays_on_one_line() {
+    // Labels permit newlines and terminal escapes; the selected empty
+    // label is interpolated three times, all cleaned.
+    let setup = Setup::new();
+    setup.fake();
+    let label = "we\nird\u{1b}[2J";
+    setup.write_config(&json!({"model": "fake/m", "providers": {"fake": {"credential": label}}}));
+    setup.store("fake", label, "   ");
+    let (code, line) = setup.blocked(&[], &env_of(&[]));
+    assert_eq!(code, ErrorCode::CredentialFailed);
+    assert_eq!(line.lines().count(), 1, "{line:?}");
+    assert!(!line.chars().any(|c| c.is_control()), "{line:?}");
+    assert_eq!(line.matches("we ird [2J").count(), 3, "{line:?}");
+}
+
+#[test]
 fn a_provider_with_no_label_gives_the_plain_login_line() {
     let setup = Setup::new();
     setup.fake();
