@@ -262,10 +262,15 @@ fn home_quit_hint() {
     let mut app = home(80, 24);
     let now = fakes::clock::FakeClock::new().now();
     app.on_key(Key::CtrlC, now);
-    assert!(
-        app.home_screen()
-            .is_some_and(|screen| screen.foot == QUIT_HINT)
-    );
+    assert!(app.home_screen().is_some_and(|screen| {
+        screen
+            .foot
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+            == QUIT_HINT
+    }));
     insta::assert_snapshot!("home_quit_hint", screen(&app, 80, 24));
 }
 
@@ -943,9 +948,52 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
                 .lines()
                 .nth(usize::from(height - 1))
                 .unwrap()
-                .contains("↑ sessions · ↓ chips")
+                .contains("Enter opens the focused session")
         );
     }
+}
+
+#[test]
+fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
+    use ratatui::style::Modifier;
+    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit";
+    // Wide: the whole foot fits, centred, each key bold and the rest dim.
+    let app = home(160, 48);
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let frame = text(&buf);
+    let row = frame.lines().nth(47).expect("foot row");
+    assert!(row.contains(foot), "{row}");
+    let start = row.find("Enter").expect("foot starts");
+    assert_eq!(start, (160 - crate::format::width(foot)) / 2);
+    let y = 47u16;
+    for key in ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"] {
+        let at = row.find(key).unwrap_or_else(|| panic!("{key} shows"));
+        let x = u16::try_from(row[..at].chars().count()).expect("foot x");
+        for dx in 0..key.chars().count() {
+            let cell = &buf[(x + u16::try_from(dx).expect("key dx"), y)];
+            assert!(cell.modifier.contains(Modifier::BOLD), "{key}");
+            assert!(!cell.modifier.contains(Modifier::DIM), "{key}");
+        }
+    }
+    let label_at = start + "Enter".len();
+    let label_x = u16::try_from(row[..label_at].chars().count()).expect("label x");
+    let label_cell = &buf[(label_x, y)];
+    assert!(!label_cell.modifier.contains(Modifier::BOLD));
+    assert!(label_cell.modifier.contains(Modifier::DIM));
+    // Narrow: the foot is cut at the frame's edge, never wrapped.
+    let app = home(40, 10);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let frame = text(&buf);
+    let rows: Vec<&str> = frame.lines().collect();
+    let cut: String = foot.chars().take(40).collect();
+    assert_eq!(rows[9], cut);
+    assert!(!rows[8].contains("twice to quit"));
+    assert!(!rows[8].contains("the key map"));
+    assert!(buf[(0, 9)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -3274,9 +3322,10 @@ fn the_reconnect_banner_draws_over_home() {
     down.next_retry();
     let shown = screen(&down, 80, 24);
     assert!(shown.contains("Connection lost · reconnecting"), "{shown}");
-    // The foot hint stays on the last row.
+    // The foot hint stays on the last row; at 80 columns only its
+    // start shows.
     let last = shown.lines().last().unwrap_or_default();
-    assert!(last.contains("Ctrl+C"), "{shown}");
+    assert!(last.contains("Enter opens the focused session"), "{shown}");
 }
 
 /// A recents-only picker still parks the cursor in the draft; with the

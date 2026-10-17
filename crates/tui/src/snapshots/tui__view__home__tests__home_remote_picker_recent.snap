@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 1144
 expression: remote_picker_frame(true)
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -26,4 +25,4 @@ fiber +  4 live · $0  › notes
 ▌
 ▌ [no workspace]  [test/model]  [thinking: high]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit
+Enter opens the focused session, or starts one from the box · ↑↓ move · Delete d
