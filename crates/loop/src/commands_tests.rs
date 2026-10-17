@@ -85,6 +85,16 @@ fn prompt(name: &str, description: &str, tag: &str) -> CommandInfo {
     row(name, description, Some("<who>"), tag)
 }
 
+fn extension(name: &str, description: &str, tag: &str) -> CommandInfo {
+    CommandInfo {
+        name: name.into(),
+        description: description.into(),
+        argument_hint: None,
+        tag: tag.into(),
+        extension: true,
+    }
+}
+
 #[test]
 fn prompt_rows_follow_the_skills() {
     let tree = Tree::new();
@@ -93,6 +103,7 @@ fn prompt_rows_follow_the_skills() {
         &tree.inputs(),
         &tree.top(),
         &[prompt("greet", "Greets.", "fx")],
+        &[],
     );
     assert_eq!(
         listed.rows,
@@ -117,6 +128,7 @@ fn a_skill_shadows_a_prompt_with_a_notice() {
         &tree.inputs(),
         &tree.top(),
         &[prompt("greet", "Greets.", "fx")],
+        &[],
     );
     assert_eq!(
         listed.rows,
@@ -145,6 +157,7 @@ fn the_first_servers_prompt_wins_a_shared_name_with_a_notice() {
             prompt("greet", "Greets from aa.", "aa"),
             prompt("greet", "Greets from zz.", "zz"),
         ],
+        &[],
     );
     assert_eq!(listed.rows, [prompt("greet", "Greets from aa.", "aa")]);
     assert_eq!(listed.notices.len(), 1);
@@ -164,7 +177,12 @@ fn a_disabled_name_drops_the_prompt_without_a_notice() {
     let tree = Tree::new();
     let mut inputs = tree.inputs();
     inputs.skills_disabled = vec!["greet".into()];
-    let listed = commands(&inputs, &tree.top(), &[prompt("greet", "Greets.", "fx")]);
+    let listed = commands(
+        &inputs,
+        &tree.top(),
+        &[prompt("greet", "Greets.", "fx")],
+        &[],
+    );
     assert!(listed.rows.is_empty());
     assert!(listed.notices.is_empty());
 }
@@ -173,7 +191,161 @@ fn a_disabled_name_drops_the_prompt_without_a_notice() {
 fn no_prompts_gives_the_skill_rows_unchanged() {
     let tree = Tree::new();
     skill(&tree.top().join(".fiber/skills"), "a", "review", "Reviews.");
-    let listed = commands(&tree.inputs(), &tree.top(), &[]);
+    let listed = commands(&tree.inputs(), &tree.top(), &[], &[]);
     assert_eq!(listed.rows, [row("review", "Reviews.", None, "skill")]);
+    assert!(listed.notices.is_empty());
+}
+
+#[test]
+fn a_skill_shadows_an_extension_command_with_a_notice() {
+    let tree = Tree::new();
+    let path = skill(
+        &tree.top().join(".fiber/skills"),
+        "a",
+        "deploy",
+        "Deploys in-house.",
+    );
+    let listed = commands(
+        &tree.inputs(),
+        &tree.top(),
+        &[],
+        &[extension("deploy", "Deploys.", "fx-ext")],
+    );
+    assert_eq!(
+        listed.rows,
+        [row("deploy", "Deploys in-house.", None, "skill")]
+    );
+    assert_eq!(listed.notices.len(), 1);
+    let notice = &listed.notices[0];
+    assert_eq!(notice.code, ErrorCode::SkillShadowed);
+    assert_eq!(notice.extension.as_deref(), Some("fx-ext"));
+    assert!(
+        notice.message.contains("`fx-ext`")
+            && notice.message.contains("`/deploy`")
+            && notice.message.contains(&path.display().to_string()),
+        "the notice names the extension, the command and the skill's path: {}",
+        notice.message,
+    );
+}
+
+#[test]
+fn a_template_shadows_an_extension_command() {
+    let tree = Tree::new();
+    let path = skill(
+        &tree.top().join(".agents/skills"),
+        "a",
+        "deploy",
+        "Deploys in-house.",
+    );
+    // Any discovered skill or template shadows: the path names the winner.
+    let listed = commands(
+        &tree.inputs(),
+        &tree.top(),
+        &[],
+        &[extension("deploy", "Deploys.", "fx-ext")],
+    );
+    assert_eq!(listed.rows.len(), 1);
+    assert_eq!(listed.rows[0].tag, "skill");
+    assert_eq!(listed.notices.len(), 1);
+    assert_eq!(listed.notices[0].extension.as_deref(), Some("fx-ext"));
+    assert!(
+        listed.notices[0]
+            .message
+            .contains(&path.display().to_string()),
+        "{}",
+        listed.notices[0].message,
+    );
+}
+
+#[test]
+fn an_unshadowed_extension_command_lists_last_with_no_notice() {
+    let tree = Tree::new();
+    skill(&tree.top().join(".fiber/skills"), "a", "review", "Reviews.");
+    let listed = commands(
+        &tree.inputs(),
+        &tree.top(),
+        &[prompt("greet", "Greets.", "fx")],
+        &[extension("ship", "Ships.", "fx-ext")],
+    );
+    assert_eq!(
+        listed.rows,
+        [
+            row("review", "Reviews.", None, "skill"),
+            prompt("greet", "Greets.", "fx"),
+            extension("ship", "Ships.", "fx-ext"),
+        ]
+    );
+    assert!(listed.notices.is_empty());
+}
+
+#[test]
+fn an_extension_command_shadows_a_prompt_with_a_notice() {
+    let tree = Tree::new();
+    let listed = commands(
+        &tree.inputs(),
+        &tree.top(),
+        &[prompt("greet", "Greets.", "fx")],
+        &[extension("greet", "Greets fast.", "fx-ext")],
+    );
+    assert_eq!(listed.rows, [extension("greet", "Greets fast.", "fx-ext")]);
+    assert_eq!(listed.notices.len(), 1);
+    let notice = &listed.notices[0];
+    assert_eq!(notice.code, ErrorCode::SkillShadowed);
+    assert_eq!(notice.extension.as_deref(), Some("fx-ext"));
+    assert!(
+        notice.message.contains("`fx`")
+            && notice.message.contains("`/greet`")
+            && notice.message.contains("`fx-ext`"),
+        "the notice names the server, the prompt and the extension: {}",
+        notice.message,
+    );
+}
+
+#[test]
+fn a_skill_and_a_prompt_and_an_extension_give_two_notices() {
+    let tree = Tree::new();
+    skill(
+        &tree.top().join(".fiber/skills"),
+        "a",
+        "greet",
+        "Greets in-house.",
+    );
+    let listed = commands(
+        &tree.inputs(),
+        &tree.top(),
+        &[prompt("greet", "Greets.", "fx")],
+        &[extension("greet", "Greets fast.", "fx-ext")],
+    );
+    assert_eq!(listed.rows.len(), 1);
+    assert_eq!(listed.rows[0].tag, "skill");
+    assert_eq!(listed.notices.len(), 2);
+    assert!(
+        listed
+            .notices
+            .iter()
+            .all(|notice| notice.code == ErrorCode::SkillShadowed)
+    );
+    assert!(
+        listed
+            .notices
+            .iter()
+            .any(|notice| notice.extension.as_deref() == Some("fx-ext")),
+        "{:?}",
+        listed.notices,
+    );
+}
+
+#[test]
+fn a_disabled_name_keeps_the_extension_command() {
+    let tree = Tree::new();
+    let mut inputs = tree.inputs();
+    inputs.skills_disabled = vec!["ship".into()];
+    let listed = commands(
+        &inputs,
+        &tree.top(),
+        &[],
+        &[extension("ship", "Ships.", "fx-ext")],
+    );
+    assert_eq!(listed.rows, [extension("ship", "Ships.", "fx-ext")]);
     assert!(listed.notices.is_empty());
 }
