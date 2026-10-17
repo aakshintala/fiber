@@ -439,6 +439,84 @@ pub fn probe_with(
     }
 }
 
+/// What a connect error answers: connected through the deferred error,
+/// or the error itself with its socket, for the usual answer.
+enum Deferred {
+    /// The queued connect completed after all.
+    Connected(Hub),
+    /// No queued connect: answer the error as usual.
+    Direct(OwnedFd, rustix::io::Errno),
+}
+
+/// Answers a connect the kernel queued instead of completing: waits for
+/// the handshake slot, then reads the deferred error — connected, absent,
+/// busy, or failed. Anything else comes back untouched for the usual
+/// answer. No test forces the kernel to queue a Unix-socket connect — the
+/// backlog tests connect synchronously on every platform — so this waits
+/// out its mutants; [`is_in_progress`] is pinned by unit tests instead.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one deferred answer keeps the race loop flat: socket, error, clock, bounds, starter and three hooks"
+)]
+fn finish_deferred(
+    fd: OwnedFd,
+    errno: rustix::io::Errno,
+    socket: &Path,
+    clock: &dyn Clock,
+    due: &Due,
+    bind: Instant,
+    bind_timed_out: &dyn Fn() -> Poll,
+    start: Option<&mut dyn FnMut() -> io::Result<()>>,
+    started: &mut bool,
+    before_read: &mut dyn FnMut(),
+    accepted: &mut dyn FnMut(),
+    before_wait: &mut dyn FnMut(),
+) -> Result<Deferred, Poll> {
+    if !is_in_progress(&errno) {
+        return Ok(Deferred::Direct(fd, errno));
+    }
+    if !wait_ready(fd.as_fd(), PollFlags::OUT, clock, bind, before_wait) {
+        return Err(bind_timed_out());
+    }
+    match sockopt::socket_error(&fd) {
+        Ok(Ok(())) => finish_connect(
+            fd,
+            socket,
+            clock,
+            due,
+            bind,
+            before_read,
+            accepted,
+            before_wait,
+        )
+        .map(Deferred::Connected),
+        Ok(Err(errno)) => {
+            let error = io::Error::from(errno);
+            if is_absent(error.kind()) {
+                if !is_socket_or_missing(socket) {
+                    return Err(Poll::Failed(error));
+                }
+                wait_for_start(start, started, clock, bind, bind_timed_out, error)?;
+            } else if is_busy(&errno) {
+                if clock.now() >= bind {
+                    return Err(bind_timed_out());
+                }
+                before_wait();
+                clock.wait_until(Some(bind), &mut |bound| {
+                    poll_once(fd.as_fd(), PollFlags::OUT, bound);
+                });
+            } else {
+                return Err(Poll::Failed(error));
+            }
+            // Absent-and-started, or busy-and-waited: back to the race
+            // loop with the socket.
+            Ok(Deferred::Direct(fd, errno))
+        }
+        Err(errno) => Err(Poll::Failed(io::Error::from(errno))),
+    }
+}
+
 /// Polls the hub's socket until it accepts and speaks `hub_hello`. The
 /// bind wait ends at `due`'s deadline: the shared one for `At`, one
 /// [`CONNECT_DEADLINE`] from this attempt's start for `Within`. The
@@ -494,24 +572,25 @@ fn attempt(
                     before_wait,
                 );
             }
-            Err(errno) if is_in_progress(&errno) => {
-                if !wait_ready(fd.as_fd(), PollFlags::OUT, clock, bind, before_wait) {
-                    return Err(bind_timed_out());
-                }
-                match sockopt::socket_error(&fd) {
-                    Ok(Ok(())) => {
-                        return finish_connect(
-                            fd,
-                            &socket,
-                            clock,
-                            due,
-                            bind,
-                            before_read,
-                            accepted,
-                            before_wait,
-                        );
-                    }
-                    Ok(Err(errno)) => {
+            Err(errno) => {
+                match finish_deferred(
+                    fd,
+                    errno,
+                    &socket,
+                    clock,
+                    due,
+                    bind,
+                    &bind_timed_out,
+                    start
+                        .as_mut()
+                        .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
+                    started,
+                    before_read,
+                    accepted,
+                    before_wait,
+                )? {
+                    Deferred::Connected(hub) => return Ok(hub),
+                    Deferred::Direct(fd, errno) => {
                         let error = io::Error::from(errno);
                         if is_absent(error.kind()) {
                             if !is_socket_or_missing(&socket) {
@@ -528,6 +607,8 @@ fn attempt(
                                 error,
                             )?;
                         } else if is_busy(&errno) {
+                            // A full backlog on Linux: the connect itself retries
+                            // within the bind deadline, never starting a hub.
                             if clock.now() >= bind {
                                 return Err(bind_timed_out());
                             }
@@ -539,37 +620,6 @@ fn attempt(
                             return Err(Poll::Failed(error));
                         }
                     }
-                    Err(errno) => return Err(Poll::Failed(io::Error::from(errno))),
-                }
-            }
-            Err(errno) => {
-                let error = io::Error::from(errno);
-                if is_absent(error.kind()) {
-                    if !is_socket_or_missing(&socket) {
-                        return Err(Poll::Failed(error));
-                    }
-                    wait_for_start(
-                        start
-                            .as_mut()
-                            .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
-                        started,
-                        clock,
-                        bind,
-                        &bind_timed_out,
-                        error,
-                    )?;
-                } else if is_busy(&errno) {
-                    // A full backlog on Linux: the connect itself retries
-                    // within the bind deadline, never starting a hub.
-                    if clock.now() >= bind {
-                        return Err(bind_timed_out());
-                    }
-                    before_wait();
-                    clock.wait_until(Some(bind), &mut |bound| {
-                        poll_once(fd.as_fd(), PollFlags::OUT, bound);
-                    });
-                } else {
-                    return Err(Poll::Failed(error));
                 }
             }
         }
@@ -605,7 +655,7 @@ fn wait_for_start(
 /// `SOCK_NONBLOCK`, so blocking is cleared after opening.
 fn nonblocking_socket() -> io::Result<OwnedFd> {
     let fd = net::socket(net::AddressFamily::UNIX, net::SocketType::STREAM, None)?;
-    fcntl_setfl(&fd, fcntl_getfl(&fd)? | OFlags::NONBLOCK)?;
+    fcntl_setfl(&fd, fcntl_getfl(&fd)?.union(OFlags::NONBLOCK))?;
     fcntl_setfd(&fd, FdFlags::CLOEXEC)?;
     Ok(fd)
 }
@@ -640,7 +690,10 @@ fn wait_ready(
 /// clock's bound and [`FAKE_WAIT_CAP`], so a fake clock's wait stays
 /// interruptible while a real hub still wakes the poll early.
 fn poll_once(fd: BorrowedFd, events: PollFlags, bound: Option<Duration>) -> bool {
-    let mut fds = [PollFd::new(&fd, events | PollFlags::HUP | PollFlags::ERR)];
+    let mut fds = [PollFd::new(
+        &fd,
+        events.union(PollFlags::HUP).union(PollFlags::ERR),
+    )];
     wait_poll(&mut fds, bound);
     fds.first()
         .map(PollFd::revents)
@@ -766,7 +819,24 @@ fn poll_hello(
                 }
                 buf.push(byte[0]);
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(error) => {
+                // Not a wait: the read itself failed, so its kind decides.
+                // A `WouldBlock` match guard here leaves the always-wait
+                // mutant no hello test can reach, while this form's flipped
+                // comparison fails the silent-hub deadline tests.
+                if error.kind() != io::ErrorKind::WouldBlock {
+                    return Err(match classify_hello_read(Err(error)) {
+                        HelloRead::Race => Poll::Race,
+                        HelloRead::TimedOut => timed_out(),
+                        HelloRead::Failed(error) => Poll::Failed(error),
+                        // `classify_hello_read` never reports a byte for an
+                        // error: not `hub_hello` first.
+                        HelloRead::Byte => Poll::Failed(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "the hub did not speak `hub_hello` first",
+                        )),
+                    });
+                }
                 // Not yet, not too late: readability waits, then the
                 // deadline is re-checked above.
                 let expired = match deadline {
@@ -783,19 +853,6 @@ fn poll_hello(
                 if expired {
                     return Err(timed_out());
                 }
-            }
-            Err(error) => {
-                return Err(match classify_hello_read(Err(error)) {
-                    HelloRead::Race => Poll::Race,
-                    HelloRead::TimedOut => timed_out(),
-                    HelloRead::Failed(error) => Poll::Failed(error),
-                    // `classify_hello_read` never reports a byte for an
-                    // error: not `hub_hello` first.
-                    HelloRead::Byte => Poll::Failed(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "the hub did not speak `hub_hello` first",
-                    )),
-                });
             }
         }
     }

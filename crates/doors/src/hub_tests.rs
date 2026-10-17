@@ -266,6 +266,24 @@ fn only_eagain_is_busy_and_only_einprogress_is_in_flight() {
     }
 }
 
+#[test]
+fn poll_once_reports_readiness_truthfully() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    // Nothing to read: not ready, even with no wait left.
+    assert!(!poll_once(
+        reader.as_fd(),
+        PollFlags::IN,
+        Some(Duration::ZERO)
+    ));
+    // A waiting byte: ready.
+    writer.write_all(b"x").unwrap();
+    assert!(poll_once(
+        reader.as_fd(),
+        PollFlags::IN,
+        Some(Duration::from_secs(5))
+    ));
+}
+
 /// A home with a `run/` directory and no hub yet.
 fn unit_home() -> support::Temp {
     let temp = support::Temp::new();
