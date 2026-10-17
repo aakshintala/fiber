@@ -22,8 +22,11 @@ const WALL: u64 = 1_700_000_000_000;
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.attach(contract::SessionId(SESSION.to_owned()));

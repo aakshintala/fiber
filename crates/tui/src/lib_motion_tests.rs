@@ -258,8 +258,11 @@ fn under_reduced_motion_a_working_line_arms_its_next_second() {
     let origin = clock.origin();
     // Home, a working feed row and a busy turn: the line draws.
     lp.app.set_home(crate::home::Launch {
-        workspace: std::path::PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     lp.app.on_line(hello());
@@ -283,8 +286,11 @@ fn a_waiting_card_arms_for_ten_seconds_then_stops() {
     // Home and two live sessions, one waiting since the wall time: the
     // rail draws at 200 columns.
     lp.app.set_home(crate::home::Launch {
-        workspace: std::path::PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     lp.app.attach(contract::SessionId(SESSION.to_owned()));

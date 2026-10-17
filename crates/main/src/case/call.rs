@@ -366,9 +366,7 @@ fn provider_extension(
     attended: bool,
 ) -> Option<Arc<extensions::LuaExtension>> {
     let extension_for = |package: &extensions::Installed| {
-        let dir = home
-            .join("extensions")
-            .join(config::dir_name(&package.name));
+        let dir = config::extensions_dir(home).join(config::dir_name(&package.name));
         Arc::new(
             extensions::LuaExtension::new(
                 package.name.clone(),
@@ -387,9 +385,7 @@ fn provider_extension(
         return Some(extension_for(package));
     }
     installed.iter().find_map(|package| {
-        let dir = home
-            .join("extensions")
-            .join(config::dir_name(&package.name));
+        let dir = config::extensions_dir(home).join(config::dir_name(&package.name));
         let manifest = config::read_manifest(&dir).ok()?;
         (manifest.providers.contains_key(provider)
             && dir

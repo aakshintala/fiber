@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 2366
 expression: "screen(&picking(160, 48), 160, 48)"
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -17,23 +18,23 @@ repo0 +  1 live · $0.00
 
 
 
-
-
-
-
                                                             ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                                                               Workspaces
 
-                                                              › /w
+                                                              › /w/█
+                                                              › crates
+                                                                docs
+                                                                research
+                                                                scripts
+
+                                                              ── recents ──
+                                                                /w
                                                                 /repo0
 
                                                               ↑↓ move · Enter open · Esc closes
 
                                                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
 
 
 

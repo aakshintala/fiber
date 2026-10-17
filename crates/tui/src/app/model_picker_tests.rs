@@ -11,9 +11,11 @@ use std::path::PathBuf;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -110,9 +112,11 @@ fn ctrl_s(app: &mut App) -> Effect {
 fn scoped_home(scoped: &[&str]) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -461,9 +465,11 @@ fn the_picker_is_a_picker_context() {
         serde_json::from_value(json!({"send": "ctrl+s"})).unwrap();
     app.set_keys(crate::KeysSetup { user });
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -573,9 +579,11 @@ fn the_quit_question_takes_keys_over_the_picker() {
 fn open_starts_on_the_home_chips_model_and_level() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("zeta/z1".to_owned()),
@@ -1561,9 +1569,11 @@ fn session_only_rebinds() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_keys(crate::KeysSetup { user });
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -1603,9 +1613,11 @@ fn typing_s_in_an_overlay_is_unaffected_by_rebinding_session_only() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_keys(crate::KeysSetup { user });
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

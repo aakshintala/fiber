@@ -641,6 +641,7 @@ Durable. The call's outcome.
 | `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries"); `skill` (an object holding `name` and `path`, both strings), a skill the call loaded (`docs/tools.md`, "Skills") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
+| `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes
@@ -698,6 +699,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `effects` | array of strings | no | as in "Declared effects", on a reviewed call's decision that has no `request_id` |
 | `reversible` | boolean | no | as in "Declared effects", with the keys above |
 | `paths` | array of strings | no | as in "Declared effects", with the keys above |
+| `hosts` | array of strings | no | on an `allow` decided by `person` or `reviewer`, the hosts the allowed call declared, which become known in the session (`docs/tools.md`, "Web fetch and web search", "Effects") |
 | `always_reviewed` | boolean | no | as in "Declared effects", with the keys above |
 | `arguments` | object | no | the arguments the reviewer judged, when a `before_tool` hook rewrote them, with the keys above |
 | `changed_by` | `changed_by` | no | with `arguments`, with the keys above |

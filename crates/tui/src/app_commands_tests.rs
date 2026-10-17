@@ -10,6 +10,51 @@ use std::time::Instant;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
+#[test]
+fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
+    for model in [None, Some("test/model".to_owned())] {
+        let mut app = connected();
+        type_text(&mut app, "keep this draft");
+        app.set_home(crate::home::Launch {
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
+            model,
+            ..Default::default()
+        });
+        // Enter sends only the open picker's home listing, never a start.
+        let asks = sent(app.on_enter());
+        assert_eq!(asks.len(), 1);
+        assert_eq!(asks[0]["command"], "directories");
+        assert_eq!(asks[0]["args"]["path"], "~/");
+        assert_eq!(app.draft(), "keep this draft");
+        assert!(app.home_screen().unwrap().picker.is_some());
+        assert!(!app.model_picker_open());
+        app.disconnected();
+        assert_eq!(app.on_enter(), Effect::None);
+        assert_eq!(app.draft(), "keep this draft");
+        assert!(app.home_screen().unwrap().picker.is_some());
+        app.on_line(Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }));
+        app.on_line(session_line("session_status", json!({
+            "name":"chosen", "workspace":"/remote/chosen", "project":"p", "state":"idle", "since":0,
+            "started":0, "calls":0, "delegates":0, "jobs":0, "clients":0,
+            "model":"test/model", "spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}
+        })));
+        app.home_click(crate::home::Spot::Pick(0));
+        // A model is now present, so the selected workspace can start.
+        app.home.as_mut().unwrap().launch.model = Some("test/model".to_owned());
+        let lines = sent(app.on_enter());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["command"], "start");
+        assert_eq!(lines[0]["args"]["workspace"], "/remote/chosen");
+    }
+}
+
 /// The injected clock's now.
 fn now() -> Instant {
     fakes::clock::FakeClock::new().now()

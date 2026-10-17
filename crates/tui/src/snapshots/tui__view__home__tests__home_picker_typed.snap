@@ -1,16 +1,16 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 2920
 expression: shown
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
 ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
 ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    1 working · $0.00 live
-▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
-                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-repo0 +  1 live · $0
-⌥1 ● fix the parser   Workspaces                                   WORKING  0s ✕
-    s_00000000000000
-                      › /repo/fi█
+▀▄ █     ▄▄█▄▄ █▀▀█ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+repo0 +  1 live · $0  Workspaces
+⌥1 ● fix the parser                                                WORKING  0s ✕
+    s_00000000000000  › /repo/fi█
                       › fiber
                         fiber-worktrees
 
@@ -20,7 +20,8 @@ repo0 +  1 live · $0
 
                       ↑↓ move · Enter open · Esc closes
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █? for shortcuts
 ▌
 ▌ [w]  [no model]  [thinking: default]  Enter starts a session

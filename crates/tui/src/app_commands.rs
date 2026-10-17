@@ -661,6 +661,11 @@ impl App {
         }
         let has_image = self.draft.has_image();
         let text = self.draft.expand();
+        if matches!(self.phase, Phase::Starting)
+            && self.home.as_ref().is_some_and(|home| home.no_workspace())
+        {
+            return self.home_click(crate::home::Spot::Workspace);
+        }
         // A command sent after the connection is lost goes nowhere, so the
         // draft stays. An empty draft stays too, unless it holds an image.
         if matches!(self.link, Link::Down | Link::Refused) {
