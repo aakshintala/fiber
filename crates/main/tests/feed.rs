@@ -167,7 +167,7 @@ fn client(setup: &Setup) -> Socket {
 #[track_caller]
 fn feed(client: &Socket) {
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = recv_reply(client, "the feed acknowledgement");
+    let ack = recv_answer(client, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_feed");
 }
