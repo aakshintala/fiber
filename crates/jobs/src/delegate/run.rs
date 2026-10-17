@@ -93,6 +93,21 @@ const POLL: Duration = Duration::from_secs(1);
 #[cfg(test)]
 static AFTER_DRAIN_DEADLINE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 
+/// Test-only pause between taking the watch result and deciding the next
+/// launch: the test installs a one-shot hook, which the drive loop takes
+/// and runs past the lock, so the test can stage the next pause while
+/// this one holds the runner. Empty means no effect and production never
+/// sets it.
+#[cfg(test)]
+static AFTER_TAKE_RESULT: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Test-only signal after the watcher stores each result: the test
+/// installs a hook the watcher runs once the fold lands, so the test can
+/// wait for the fold without sleeping. Empty means no effect and
+/// production never sets it.
+#[cfg(test)]
+static ON_WATCH_FOLD: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+
 /// Why the runner itself ended the delegate, and when a stop's SIGKILL is
 /// due. The stop closure and the runner thread share it; the first reason
 /// set wins.
@@ -368,6 +383,14 @@ impl Runner {
                 }
                 None => {}
             }
+            // Taken under the lock but run past it: the hook blocks
+            // while the test stages the next pause, which needs the lock.
+            #[cfg(test)]
+            let hook = lock(&AFTER_TAKE_RESULT).take();
+            #[cfg(test)]
+            if let Some(hook) = hook {
+                hook();
+            }
             // The cap is judged on the real length of the log, on every
             // wake, whether or not a connection is up.
             if over_cap(&self.output_path, self.cap) {
@@ -414,6 +437,18 @@ impl Runner {
             // starts while one is outstanding.
             let launch = {
                 let mut fold = lock(&fold);
+                // The watcher may have folded between the take above and
+                // this lock: a result older than this read must not decide
+                // the launch, so the take and the decision share this lock
+                // hold for every result kind, the same as the take above.
+                match fold.result.take() {
+                    Some(WatchResult::Exited) => exited_seen = true,
+                    Some(WatchResult::Retry) => {
+                        next_retry = later(self.clock.as_ref(), backoff);
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                    }
+                    None => {}
+                }
                 if exited_seen || fold.outstanding || self.clock.now() < next_retry {
                     false
                 } else {
@@ -582,6 +617,10 @@ impl Watcher {
                 Ok(Watched::Exited) => WatchResult::Exited,
                 Ok(Watched::Closed) | Err(_) => WatchResult::Retry,
             });
+        }
+        #[cfg(test)]
+        if let Some(hook) = lock(&ON_WATCH_FOLD).as_ref() {
+            hook();
         }
         // Wakes the runner's park at once: the result must not wait for
         // the next clock move.

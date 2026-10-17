@@ -228,6 +228,7 @@ final message, any questions, usage totals and worktree state. Their keys are
   and the delegate shuts down within the bound (`docs/invocation.md`,
   "Shutdown"). A dropped socket connection is only a client leaving: the
   parent reconnects and the delegate carries on.
+- After `fiber_exited`, the runner starts no further watch.
 - A Fiber delegate starts its own MCP servers and process extensions, as
   every session does (`docs/mcp.md`, "Where servers run"). It never raises a
   repository's offer: code its repository declares loads only if a person
