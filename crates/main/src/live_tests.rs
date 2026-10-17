@@ -134,6 +134,10 @@ impl Tool for Shell {
 /// Twenty reviewed calls through the reviewer's real provider. It asserts
 /// only that every call got a `permission_resolved`, and prints the share
 /// decided at stage 2 with the reviewer's tokens.
+#[allow(
+    clippy::print_stderr,
+    reason = "the live test's turn-failure and billed-token diagnostics are its only output; it is #[ignore]d"
+)]
 #[test]
 #[ignore = "live: needs FIBER_LIVE_REVIEWER_KEY_FILE and FIBER_LIVE_REVIEWER_MODEL, billed per token; run with --ignored"]
 fn live_reviewer() {

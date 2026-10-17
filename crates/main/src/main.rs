@@ -3,11 +3,6 @@
 //! installed providers and the credential, and hands them to a door
 //! (`docs/invocation.md`). It holds no feature logic.
 
-#![allow(
-    clippy::print_stderr,
-    reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
-)]
-
 mod builtin;
 mod case;
 mod cli;
@@ -86,6 +81,10 @@ fn main() -> ExitCode {
     ExitCode::from(u8::try_from(run()).unwrap_or(1))
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
 fn run() -> i32 {
     let fiber = std::env::current_exe().map_err(|error| format!("the running binary: {error}"));
     // Help and version print before anything reads the home, configuration,
@@ -274,6 +273,10 @@ fn run() -> i32 {
     }
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
 fn print_help(words: &[String]) -> i32 {
     match cli::render_help(words) {
         Ok(text) => {
@@ -328,6 +331,10 @@ fn mcp_layer(project: bool, repo: bool) -> Layer {
 /// `fiber mcp add|remove|list`: the parser shapes argv and `cli` checks
 /// every value. A shape the parser cannot say — both a url and a command,
 /// neither, `-e` or `--secret` with a url — is a usage error here.
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
 fn mcp_command(command: cli::McpCommands, clock: Arc<dyn contract::clock::Clock>) -> i32 {
     match command {
         cli::McpCommands::Add(args) => match mcp_declaration(&args) {
@@ -388,6 +395,10 @@ fn mcp_declaration(args: &cli::McpAddArgs) -> Result<::cli::McpDeclaration, Stri
     }
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
 fn fail(e: Failure) -> i32 {
     eprintln!("fiber: {}", e.message);
     doors::exit_code(&e)

@@ -24,6 +24,10 @@ pub(crate) fn tty_refusal(stdin_tty: bool, stdout_tty: bool) -> Option<&'static 
 
 /// Refuses without a tty on standard input and output, before anything is
 /// read or started: `Some(2)` after printing the sentence on stderr.
+#[allow(
+    clippy::print_stderr,
+    reason = "prints the usage sentence (docs/code-quality.md, \"Lints\")"
+)]
 pub(crate) fn needs_tty() -> Option<i32> {
     match tty_refusal(
         std::io::stdin().is_terminal(),
