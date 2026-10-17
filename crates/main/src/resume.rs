@@ -537,6 +537,10 @@ fn resumed_session(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
+    extensions.browse_with(
+        Arc::new(extensions::SystemBrowser::default()),
+        session.attended(),
+    );
     session.skills(r#loop::skills(&prompt_inputs, Path::new(&folded.workspace)));
     // The session's MCP prompt rows, as a new session lists them: the
     // `commands` answer lists them beside skills, and `/name` runs them
