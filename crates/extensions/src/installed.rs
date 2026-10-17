@@ -387,14 +387,16 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     if let Some(dir) = damaged_dir {
         orphan_names.next();
         dirs.push(home.join("extensions").join(&dir));
-        data.extend(existing_data(&layers, &dir)?);
-        data_dirs.extend(existing_data_dirs(&layers, &dir)?);
+        let (gone, listed) = existing_data(&layers, &dir)?;
+        data_dirs.extend(gone);
+        data.extend(listed);
     }
     for name in orphan_names {
         let dir = slug(name)?;
         dirs.push(home.join("extensions").join(&dir));
-        data.extend(existing_data(&layers, &dir)?);
-        data_dirs.extend(existing_data_dirs(&layers, &dir)?);
+        let (gone, listed) = existing_data(&layers, &dir)?;
+        data_dirs.extend(gone);
+        data.extend(listed);
     }
     Ok(Removal {
         names,
@@ -431,35 +433,26 @@ fn layers(home: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(layers)
 }
 
-/// The data directories and settings files that exist for the extension
-/// directory `dir`. The settings paths are listed for the prompt only:
-/// `commit` deletes them through `config`.
-fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
-    let mut data = Vec::new();
+/// What exists for the extension directory `dir`, in layer order: the
+/// data directories `commit` deletes itself, and the data directories
+/// with each layer's settings file, for the prompt. The settings paths
+/// are listed for the prompt only: `commit` deletes them through
+/// `config`.
+fn existing_data(layers: &[PathBuf], dir: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
+    let mut gone = Vec::new();
+    let mut listed = Vec::new();
     for layer in layers {
-        for path in [
-            layer.join("data").join(dir),
-            layer.join("config").join(format!("{dir}.json")),
-        ] {
-            if present(&path)? {
-                data.push(path);
-            }
+        let data_dir = layer.join("data").join(dir);
+        if present(&data_dir)? {
+            gone.push(data_dir.clone());
+            listed.push(data_dir);
+        }
+        let settings = layer.join("config").join(format!("{dir}.json"));
+        if present(&settings)? {
+            listed.push(settings);
         }
     }
-    Ok(data)
-}
-
-/// The data directories that exist for the extension directory `dir`:
-/// the half of [`existing_data`] `commit` deletes itself.
-fn existing_data_dirs(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
-    let mut dirs = Vec::new();
-    for layer in layers {
-        let path = layer.join("data").join(dir);
-        if present(&path)? {
-            dirs.push(path);
-        }
-    }
-    Ok(dirs)
+    Ok((gone, listed))
 }
 
 #[cfg(test)]

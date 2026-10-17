@@ -316,12 +316,12 @@ impl Config {
         }
     }
 
-    /// The value and source of `key` without merging every layer: the
-    /// highest layer holding `key` wins whole, as `merged` shows it,
-    /// when `key` merges holder-wins. `None` takes the old route through
-    /// `merged`: a union or entry-replaced row at `key`, above it or
-    /// below its fill, an object value, a key a higher layer hides, or
-    /// a layer whose per-model view is not an object.
+    /// The value and source of `key` without merging every layer. A
+    /// scalar reads whole from the highest layer holding it; an object
+    /// merges only its subtree, top-down over the layers holding it.
+    /// `None` reads through `merged`: a union or entry-replaced row at
+    /// `key`, above it or below its fill, a key a higher layer hides,
+    /// or a layer whose per-model view is not an object.
     fn fast_get(&self, key: &[String], model: Option<&str>) -> Option<Option<(Value, Source)>> {
         // Only a plain replace row merges holder-wins: a union row
         // holds every layer's names, and an entry-replaced row goes
@@ -342,8 +342,8 @@ impl Config {
         if keys::union_rows().any(|row| row.len() > key.len() && row.starts_with(key)) {
             return None;
         }
-        // A layer whose per-model view is not an object wipes the merge
-        // in a way no holder-wins read repeats: the old route.
+        // A layer whose per-model view is not an object wipes the merge,
+        // so it reads through `merged`.
         let views: Vec<Cow<'_, Value>> = self
             .layers
             .iter()
@@ -362,8 +362,20 @@ impl Config {
                     return Some(None);
                 }
                 if value.is_object() {
-                    // Objects merge key by key across layers.
-                    return None;
+                    // Objects merge key by key across the layers holding
+                    // them: merge only this subtree, top-down, as `lay`
+                    // merges it, union and entry-replaced rows included.
+                    let mut sub = Value::Object(Map::new());
+                    for (_, seen) in self.layers.iter().zip(&views) {
+                        if let Some(upper) = path::get(seen, key) {
+                            lay(&mut sub, upper, &mut key.to_vec());
+                        }
+                    }
+                    return Some(
+                        path::get(&sub, key)
+                            .cloned()
+                            .map(|found| (found, source.clone())),
+                    );
                 }
                 return Some(Some((value.clone(), source.clone())));
             }
@@ -374,7 +386,7 @@ impl Config {
                 hiding = true;
             }
         }
-        // No layer holds the key: the schema default, as the old route.
+        // No layer holds the key: the schema default.
         Some(match keys::leaf(key).and_then(|row| row.default) {
             Some(text) => serde_json::from_str(text)
                 .ok()
@@ -694,7 +706,7 @@ fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
 /// A layer with its `models."<model>"` laid over its top level. Borrows
 /// the layer when there is nothing to lay over it: no model, or no entry
 /// for the model. Any entry at `models.<model>`, an object or not, is
-/// merged over a clone, as before.
+/// merged over a clone.
 fn view<'a>(layer: &'a Value, model: Option<&str>) -> Cow<'a, Value> {
     match model.and_then(|model| layer.get("models").and_then(|models| models.get(model))) {
         None => Cow::Borrowed(layer),

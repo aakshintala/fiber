@@ -33,12 +33,12 @@ fn view_owns_a_layer_with_an_entry_for_the_model() {
     assert_eq!(seen["model"], json!("c/d"));
 }
 
-/// A `Config` loaded over empty directories, holding `layers` lowest
-/// first, past the file checks, so the table reaches shapes no file may
-/// hold (a scalar over an object, a scalar per-model entry).
 /// The layers lowest first.
 type Layers = Vec<(Source, Value)>;
 
+/// A `Config` loaded over empty directories, holding `layers`, past the
+/// file checks, so the table reaches shapes no file may hold (a scalar
+/// over an object, a scalar per-model entry).
 fn config_with(layers: Layers) -> Config {
     let root = fakes::TempDir::new("fiber-get-differential");
     let home = root.path().join("home");
@@ -78,8 +78,8 @@ fn default() -> (Source, Value) {
     (Source::Default, keys::defaults())
 }
 
-/// What `get_segments` answered before the fast path: the merged value
-/// with the highest layer holding the key, or the schema default.
+/// The `merged`-route answer for the table: the merged value with the
+/// highest layer holding the key, or the schema default.
 fn reference(config: &Config, key: &str, model: Option<&str>) -> Option<(Value, Source)> {
     let segments = path::parse(key).unwrap();
     let mut aliased = segments.clone();
@@ -152,7 +152,7 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         ),
         // An entry-replaced key in two layers, read at a leaf only
         // the lower layer's entry holds: the upper entry replaces
-        // whole, so it is gone, as before. Kills dropping the
+        // whole, so it is gone. Kills dropping the
         // entry-replace check.
         (
             vec![
@@ -214,6 +214,35 @@ fn get_equals_the_merged_value_for_every_key_shape() {
                 project(json!({"handoff": {}})),
             ],
             "handoff",
+            None,
+        ),
+        // An object in three layers, each naming its own leaves: the
+        // leaves merge, naming the highest. Kills returning the highest
+        // holder whole instead of merging the subtree.
+        (
+            vec![
+                default(),
+                repository(json!({"handoff": {"tokens": 1}})),
+                global(json!({"handoff": {"nudge": false}})),
+                project(json!({"handoff": {"tokens": 2}})),
+            ],
+            "handoff",
+            None,
+        ),
+        // An entry-replaced row under an object key: each entry goes
+        // whole, while sibling entries survive. Kills merging the
+        // subtree key by key past the entry row.
+        (
+            vec![
+                default(),
+                global(
+                    json!({"providers": {"acme": {"credentials": {"work": {"command": ["w"], "extra": 1}, "home": {"command": ["hh"]}}}}}),
+                ),
+                project(
+                    json!({"providers": {"acme": {"credentials": {"work": {"command": ["h"]}}}}}),
+                ),
+            ],
+            "providers",
             None,
         ),
         // A proper prefix of a union row: the union fill re-creates the

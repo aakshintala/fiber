@@ -450,7 +450,7 @@ fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
 
 /// Writes the scripted `config.json` whole into `path`, creating a
 /// missing parent directory. The bytes are the case's raw JSON, with no
-/// type check and no lock, as before: only the rename is atomic.
+/// type check and no lock: only the rename is atomic.
 fn write_config(path: &Path, config: &Value) -> Result<(), String> {
     let bytes =
         serde_json::to_vec(config).map_err(|error| format!("config: cannot encode: {error}"))?;
