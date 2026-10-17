@@ -461,17 +461,13 @@ fn walk(
                             // ignored with a notice.
                             if matches!(source, Source::Repository(_))
                                 && matches!(key.kind, Kind::Role)
-                                && let Value::Object(object) = &value
-                                && object.contains_key("credential")
+                                && value
+                                    .as_object()
+                                    .is_some_and(|object| object.contains_key("credential"))
                             {
-                                notices.push(Notice {
-                                    code: ErrorCode::ConfigKeyIgnored,
-                                    message: format!(
-                                        "{source}: ignored `roles.\"{name}\".credential`, \
-                                         which a repository's role may not set."
-                                    ),
-                                    extension: None,
-                                });
+                                path.push("credential".into());
+                                notices.push(ignored(path, "a repository's role may not set"));
+                                path.pop();
                             }
                             kept.insert(name, value);
                         } else {

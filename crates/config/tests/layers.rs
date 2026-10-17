@@ -376,7 +376,7 @@ fn a_repository_role_credential_is_a_notice_and_keeps_its_model() {
     assert_eq!(
         notice.message,
         format!(
-            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.",
+            "{}: ignored `roles.fast.credential`, which a repository's role may not set.",
             setup.repository().display()
         )
     );
@@ -401,6 +401,23 @@ fn a_credential_outside_a_repository_role_is_no_notice() {
     let config = setup.load(&[]).unwrap();
     assert!(config.notices().is_empty(), "{:?}", config.notices());
     assert_eq!(config.merged(None)["roles"]["fast"]["model"], json!("a/b"));
+}
+
+#[test]
+fn a_repository_role_without_a_credential_beside_other_keys_raises_no_notice() {
+    // The credential conjunction must stay a conjunction: a repository
+    // role object without a `credential`, beside other keys, raises no
+    // notice, while one with a `credential` raises exactly one.
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        r#"{"roles": {"plain": {"model": "c/d"}},
+            "model": "a/b",
+            "mcp": {"servers": {"gh": {"command": "gh", "env": {"TOKEN": "x"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(config.merged(None)["roles"]["plain"]["model"], json!("c/d"));
 }
 
 #[test]
