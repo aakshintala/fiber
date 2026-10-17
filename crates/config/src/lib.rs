@@ -15,6 +15,7 @@ mod extension;
 mod extension_settings;
 mod home;
 mod keys;
+mod layout;
 mod mcp_tokens;
 mod names;
 pub mod path;
@@ -53,6 +54,10 @@ pub use extension_settings::ExtensionSettings;
 pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
+};
+pub use layout::{
+    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
+    project_data_dir,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
