@@ -167,6 +167,11 @@ fn invalid_config_keeps_the_set_and_a_repaired_config_can_install() {
         &fixture.state.switching.reloadable().loader.extensions
     ));
     assert_eq!(fixture.replacements.lock().unwrap().len(), 1);
+    assert_eq!(
+        Arc::strong_count(&old),
+        1,
+        "only the test keeps the retired set alive"
+    );
 }
 
 #[test]

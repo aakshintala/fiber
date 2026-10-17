@@ -185,7 +185,6 @@ pub(crate) struct Switching {
     config: Config,
     remembered: Mutex<Remembered>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
-    loader: Loader,
     started: Arc<StartLock>,
     reads: Arc<Reads>,
     /// The session's diagnostic writer: a switch prepares observed
@@ -243,13 +242,12 @@ impl Switching {
                 caps: crate::settings::result_caps(&config),
                 backend: loader.extensions.search_backend(),
                 hosted_stands: false,
-                loader: loader.clone(),
+                loader,
             })),
             config,
             remembered: Mutex::new(remembered),
             started: Arc::new(StartLock::seeded(&loaded)),
             loaded: Mutex::new(loaded.into_iter().collect()),
-            loader,
             reads,
             diag: None,
         }
@@ -293,6 +291,10 @@ impl Switching {
 
     pub(crate) fn reloaded(&self, now: Reloadable) {
         *self.now.lock().unwrap_or_else(PoisonError::into_inner) = now;
+    }
+
+    pub(crate) fn loader(&self) -> Loader {
+        self.reloadable().loader
     }
 
     pub(crate) fn reloadable(&self) -> Reloadable {
@@ -446,7 +448,7 @@ impl Switching {
             )
         })?;
         let mut file = None;
-        let loader = self.reloadable().loader;
+        let loader = self.loader();
         let access = crate::scripted::access(data, || {
             let lua = match (want.lua, loader.owners.get(&want.name)) {
                 (Some(lua), _) => Some(lua),

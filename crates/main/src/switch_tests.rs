@@ -1545,10 +1545,11 @@ fn vm_runs(counter: &Path) -> usize {
 fn a_dead_start_lock_entry_restarts_the_provider() {
     let (fixture, counter, _) = lua_fixture("fiber-switch-dead-start");
     let switching = switching(&fixture, &[]);
-    let extension = switching.loader.owners.get("lp").unwrap();
+    let loader = switching.loader();
+    let extension = loader.owners.get("lp").unwrap();
     let lua = switching
         .started
-        .start(&switching.loader, &switching.config, "lp", extension)
+        .start(&loader, &switching.config, "lp", extension)
         .unwrap();
     assert!(lua.registers("credential").unwrap());
     let weak = Arc::downgrade(&lua);
@@ -1556,7 +1557,7 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
     assert!(weak.upgrade().is_none());
     let lua = switching
         .started
-        .start(&switching.loader, &switching.config, "lp", extension)
+        .start(&loader, &switching.config, "lp", extension)
         .unwrap();
     assert!(lua.registers("credential").unwrap());
     assert_eq!(
