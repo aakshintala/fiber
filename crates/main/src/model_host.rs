@@ -124,10 +124,6 @@ impl ModelHost {
     /// The model and retry policy arrive by reference: the session's later
     /// steps still own them (`Retry` has public fields and no `Clone`, so
     /// its fields are copied here).
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one construction from the session's parts, beside drive_to"
-    )]
     pub(crate) fn new(
         provider: Arc<dyn Provider>,
         model: &r#loop::Model,
@@ -135,10 +131,6 @@ impl ModelHost {
         retry: &r#loop::Retry,
         dir: PathBuf,
         id: SessionId,
-        // The session clock: the waits read the callback's clock, which
-        // names the same clock; this argument keeps the construction
-        // beside `drive_to` reading the session's parts together.
-        _clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             provider,

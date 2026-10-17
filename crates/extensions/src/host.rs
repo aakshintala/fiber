@@ -304,7 +304,7 @@ pub(crate) enum Request {
     /// `host.exec`: run a program in its own process group.
     Exec(exec::ExecRequest),
     /// `host.model`: one model request through the session's routing.
-    Model(model::ModelRequestSpec),
+    Model(contract::model::HostModelRequest),
     /// `host.oauth.callback`: serve one request on this localhost port,
     /// answering only `path` when set.
     Callback { port: u16, path: Option<String> },

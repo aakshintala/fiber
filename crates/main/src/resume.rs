@@ -543,7 +543,6 @@ fn resumed_session(
         &retry,
         dir.to_path_buf(),
         id.clone(),
-        Arc::clone(&clock),
     )));
     extensions.answerable(!one_turn);
     session.skills(r#loop::skills(&prompt_inputs, Path::new(&folded.workspace)));

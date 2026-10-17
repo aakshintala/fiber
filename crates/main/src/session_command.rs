@@ -479,7 +479,6 @@ pub(crate) fn run_new(
         &retry,
         dir.clone(),
         id.clone(),
-        Arc::clone(&clock),
     )));
     extensions.answerable(!one_turn);
     session.skills(r#loop::skills(&prompt_inputs, &workspace));

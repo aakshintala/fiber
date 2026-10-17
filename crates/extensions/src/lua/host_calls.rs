@@ -428,26 +428,7 @@ pub(super) fn admit<'a>(
                             let model_deliver = Deliver::clone(deliver);
                             let extension = name.to_owned();
                             let clock = hub.clock_handle();
-                            let request = contract::model::HostModelRequest {
-                                model: spec.model,
-                                system: spec.system,
-                                messages: spec
-                                    .messages
-                                    .into_iter()
-                                    .map(|message| contract::model::HostMessage {
-                                        role: match message.role {
-                                            host::model::Role::User => {
-                                                contract::model::HostRole::User
-                                            }
-                                            host::model::Role::Assistant => {
-                                                contract::model::HostRole::Assistant
-                                            }
-                                        },
-                                        content: message.content,
-                                    })
-                                    .collect(),
-                                max_tokens: spec.max_tokens,
-                            };
+                            let request = spec;
                             Admitted::Spawning {
                                 shared,
                                 spawn: Spawn {

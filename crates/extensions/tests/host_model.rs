@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use common::{Setup, install_lua};
 use config::{Config, ProjectKey, Sources};
+use contract::clock::Clock as _;
 use contract::events::{CallStatus, Event, UsageRecorded};
 use contract::extension::ExtensionDoor;
 use contract::hook::{AfterToolCall, BeforeModelCall, Hooks};
@@ -330,8 +331,6 @@ end, { timeout = 1000 })
     let session = load(&setup, clock.clone());
     let fake = Arc::new(Answer::new("ext-ok"));
     session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
-    let fake = Arc::new(Answer::new("ext-ok"));
-    session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let (inbox_tx, inbox_rx) = mpsc::channel();
     session.deliver_to(inbox_tx);
     let arguments = Map::new();
@@ -349,7 +348,15 @@ end, { timeout = 1000 })
         next_log(&inbox_rx, "the hook's model result"),
         "hook:ext-ok"
     );
-    clock.advance(Duration::from_millis(51));
+    // The scheduler parks at the timer's due before the clock moves: the
+    // advance then fires the timer, whose callback calls `host.model` once.
+    let due = clock.now() + Duration::from_millis(50);
+    let _mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     assert_eq!(
         next_log(&inbox_rx, "the timer's model result"),
         "timer:ext-ok"
@@ -371,8 +378,6 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     install_lua(&setup, "m", &json!({}), TIMEOUT_INIT);
     let clock = FakeClock::new();
     let session = load(&setup, clock.clone());
-    let fake = Arc::new(Answer::new("ext-ok"));
-    session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let fake = Arc::new(Block {
@@ -392,7 +397,12 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
         .expect("waited for the fake to enter the call");
     // Only once the fake is inside `call` does the clock pass the
     // callback's timeout: the callback ends `timeout`, and the door
-    // names the command in its notice.
+    // names the command in its notice. This stays a raw advance:
+    // two threads park here, the scheduler at the callback's deadline
+    // and the judge at deadline plus grace (`hub.rs`, the parked arm),
+    // so `advance_when_parked` cannot name one thread's park. The
+    // advance is still exact: a thread that parks later sees an instant
+    // at or before now and times the callback out without parking.
     clock.advance(Duration::from_millis(51));
     let noticed = Deadline::after(WAIT)
         .recv(&emitted)

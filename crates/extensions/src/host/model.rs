@@ -8,6 +8,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use contract::model::{HostMessage, HostModelRequest, HostRole};
 use contract::shapes::ContentPart;
 use mlua::{Lua, Table, Value as LuaValue};
 
@@ -93,43 +94,12 @@ pub(crate) fn install(
     ))
 }
 
-/// One `host.model` message, copied out of Lua so the worker can run it: its
-/// role and its content parts. A string content is one text part.
-pub(crate) struct SpecMessage {
-    /// Who sent it.
-    pub(crate) role: Role,
-    /// Its content parts.
-    pub(crate) content: Vec<ContentPart>,
-}
-
-/// Who sent a `host.model` message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Role {
-    /// A person's message.
-    User,
-    /// A model's reply.
-    Assistant,
-}
-
-/// One `host.model` call, copied out of Lua so the worker can run it. The
-/// Lua half checked the shapes; this reads them again, so a yield that did
-/// not pass through it still reads or fails as an error in the calling
-/// code.
-pub(crate) struct ModelRequestSpec {
-    /// The model reference, `provider/model`.
-    pub(crate) model: String,
-    /// The system text, when the caller passed one.
-    pub(crate) system: Option<String>,
-    /// The conversation.
-    pub(crate) messages: Vec<SpecMessage>,
-    /// The request's own output limit.
-    pub(crate) max_tokens: u64,
-}
-
 /// Reads a `host.model` yield: the model, system, messages and token limit.
 /// It cannot fail after the Lua half's checks passed; an `Err` is an error
-/// in the calling code, raised as the string.
-pub(crate) fn request(spec: &Table) -> mlua::Result<ModelRequestSpec> {
+/// in the calling code, raised as the string. It builds the contract's
+/// request directly, so the admit arm passes it to `HostModel::call`
+/// without a second mapping.
+pub(crate) fn request(spec: &Table) -> mlua::Result<HostModelRequest> {
     let fail = |message: &str| mlua::Error::RuntimeError(message.to_owned());
     let model: String = spec
         .get("model")
@@ -164,7 +134,7 @@ pub(crate) fn request(spec: &Table) -> mlua::Result<ModelRequestSpec> {
     if max_tokens == 0 {
         return Err(fail("host.model: `max_tokens` must be a positive integer"));
     }
-    Ok(ModelRequestSpec {
+    Ok(HostModelRequest {
         model,
         system,
         messages: read,
@@ -173,14 +143,14 @@ pub(crate) fn request(spec: &Table) -> mlua::Result<ModelRequestSpec> {
 }
 
 /// Reads one `{ role, content }` message table.
-fn message_from(message: &Table) -> mlua::Result<SpecMessage> {
+fn message_from(message: &Table) -> mlua::Result<HostMessage> {
     let fail = |message: &str| mlua::Error::RuntimeError(message.to_owned());
     let role: String = message
         .get("role")
         .map_err(|_| fail("host.model: a message `role` is `user` or `assistant`"))?;
     let role = match role.as_str() {
-        "user" => Role::User,
-        "assistant" => Role::Assistant,
+        "user" => HostRole::User,
+        "assistant" => HostRole::Assistant,
         _ => {
             return Err(fail(
                 "host.model: a message `role` is `user` or `assistant`",
@@ -217,7 +187,7 @@ fn message_from(message: &Table) -> mlua::Result<SpecMessage> {
             ));
         }
     };
-    Ok(SpecMessage { role, content })
+    Ok(HostMessage { role, content })
 }
 
 /// Reads one content part table, as `docs/events.md` names it. An unknown

@@ -241,14 +241,20 @@ fn request_from_reads_a_valid_spec() {
             assert_eq!(read.system.as_deref(), Some("terse"));
             assert_eq!(read.max_tokens, 16);
             assert_eq!(read.messages.len(), 2);
-            assert!(matches!(read.messages[0].role, super::Role::User));
+            assert!(matches!(
+                read.messages[0].role,
+                contract::model::HostRole::User
+            ));
             assert_eq!(
                 read.messages[0].content,
                 vec![ContentPart::Text {
                     text: "hi".to_owned()
                 }]
             );
-            assert!(matches!(read.messages[1].role, super::Role::Assistant));
+            assert!(matches!(
+                read.messages[1].role,
+                contract::model::HostRole::Assistant
+            ));
             assert_eq!(
                 read.messages[1].content,
                 vec![ContentPart::Text {

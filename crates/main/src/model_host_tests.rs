@@ -30,11 +30,14 @@ use contract::provider::{
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, SessionId};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Scripted, ScriptedProvider, TempDir};
+use fakes::{CancelToken, Deadline, Scripted, ScriptedProvider, TempDir};
 use r#loop::{Model, Retry};
 use serde_json::{Map, Value};
 
 use crate::model_host::ModelHost;
+
+/// How long the test waits for a parked retry wait before failing it.
+const WAIT: Duration = Duration::from_secs(5);
 
 /// A clock the test moves by hand; `now` starts at its origin.
 fn test_clock() -> Arc<FakeClock> {
@@ -43,15 +46,10 @@ fn test_clock() -> Arc<FakeClock> {
 
 /// The host under test, holding the session's provider, model, budget,
 /// retry policy, directory, id and clock.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one test host per case, mirroring ModelHost::new"
-)]
 fn test_host(
     provider: Arc<dyn Provider>,
     dir: PathBuf,
     id: &str,
-    clock: Arc<FakeClock>,
     budget: Option<f64>,
     retry: Retry,
 ) -> ModelHost {
@@ -67,7 +65,6 @@ fn test_host(
         &retry,
         dir,
         SessionId(id.to_owned()),
-        clock,
     )
 }
 
@@ -251,14 +248,7 @@ fn key_names_the_session_and_the_extension() {
     let clock = test_clock();
     let dir = seed(&sessions, "f_9x8y", &clock, &[]);
     let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "f_9x8y",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "f_9x8y", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let reply = ok(host.call(
         "reviewer",
@@ -304,14 +294,7 @@ fn budget_below_cap_sends_at_and_above_cap_fails() {
         let clock = test_clock();
         let dir = seed(&sessions, "s_1", &clock, &[("g_spent", spend)]);
         let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
-        let host = test_host(
-            provider.clone(),
-            dir,
-            "s_1",
-            Arc::clone(&clock),
-            Some(1.00),
-            immediate_retry(),
-        );
+        let host = test_host(provider.clone(), dir, "s_1", Some(1.00), immediate_retry());
         let held = Arc::new(Mutex::new(Vec::new()));
         let outcome = host.call("tag", request("scripted/s.json"), bound(clock, None, held));
         if sends {
@@ -343,14 +326,7 @@ fn repeated_generation_in_the_log_counts_once() {
         &[("g_same", 0.60), ("g_same", 0.60)],
     );
     let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        Some(1.00),
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", Some(1.00), immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     ok(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
     assert_eq!(provider.requests().len(), 1);
@@ -372,7 +348,6 @@ fn second_call_sees_the_first_lines_cost() {
         provider.clone(),
         dir.clone(),
         "s_1",
-        Arc::clone(&clock),
         Some(1.00),
         immediate_retry(),
     );
@@ -409,14 +384,7 @@ fn failed_attempts_each_pass_a_line_in_order() {
         Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_2")),
         Scripted::text("ok"),
     ]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let reply = ok(host.call(
         "tag",
@@ -450,14 +418,7 @@ fn three_retries_then_fail_sends_four_times() {
         Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_3")),
         Scripted::failed_after(fail(ErrorCode::RateLimited, None), seen("g_4")),
     ]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call(
         "tag",
@@ -480,14 +441,7 @@ fn paused_too_long_is_not_retried() {
         fail(ErrorCode::PausedTooLong, None),
         seen("g_1"),
     )]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call(
         "tag",
@@ -532,14 +486,7 @@ fn paused_reply_returns_its_text_without_resend() {
         }),
     };
     let provider = Arc::new(ScriptedProvider::new([paused]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let reply = ok(host.call(
         "tag",
@@ -564,29 +511,27 @@ fn retry_after_at_the_cap_retries_past_it_fails() {
         Scripted::failed_after(fail(ErrorCode::RateLimited, Some(60_000)), seen("g_1")),
         Scripted::text("ok"),
     ]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let thread_clock = Arc::clone(&clock);
-    let moved = std::thread::spawn({
+    let (moved_tx, moved_rx) = mpsc::channel();
+    std::thread::spawn({
         let held = Arc::clone(&held);
         move || {
-            host.call(
+            let _sent = moved_tx.send(host.call(
                 "tag",
                 request("scripted/s.json"),
                 bound(thread_clock, None, held),
-            )
+            ));
         }
     });
-    assert!(clock.await_parked(origin + Duration::from_secs(60), Duration::from_secs(5)));
-    clock.advance(Duration::from_secs(60));
-    let reply = ok(moved.join().unwrap());
+    let _mark = clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(WAIT),
+    );
+    let reply = ok(Deadline::after(WAIT).recv_or_fail(&moved_rx, "the retried call to answer"));
     assert_eq!(reply.text, "ok");
     assert_eq!(provider.requests().len(), 2);
 
@@ -598,14 +543,7 @@ fn retry_after_at_the_cap_retries_past_it_fails() {
         fail(ErrorCode::RateLimited, Some(60_001)),
         seen("g_1"),
     )]));
-    let host = test_host(
-        provider,
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider, dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
     assert_eq!(failure.code, ErrorCode::RateLimited);
@@ -624,14 +562,7 @@ fn retry_wait_past_the_deadline_fails_timeout() {
         fail(ErrorCode::RateLimited, Some(60_000)),
         seen("g_1"),
     )]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call(
         "tag",
@@ -656,7 +587,6 @@ fn unparseable_log_fails_log_corrupt() {
         provider.clone(),
         sessions.join("s_1"),
         "s_1",
-        Arc::clone(&clock),
         Some(1.00),
         immediate_retry(),
     );
@@ -679,7 +609,6 @@ fn missing_log_fails_not_found() {
         provider.clone(),
         sessions.join("s_absent"),
         "s_absent",
-        Arc::clone(&clock),
         Some(1.00),
         immediate_retry(),
     );
@@ -697,14 +626,7 @@ fn other_provider_fails_model_unconfigured() {
     let clock = test_clock();
     let dir = seed(&sessions, "s_1", &clock, &[]);
     let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
-    let host = test_host(
-        provider.clone(),
-        dir,
-        "s_1",
-        Arc::clone(&clock),
-        None,
-        immediate_retry(),
-    );
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call("tag", request("other/e.json"), bound(clock, None, held)));
     assert_eq!(failure.code, ErrorCode::ModelUnconfigured);
@@ -810,47 +732,52 @@ fn gate_holds_one_call_and_times_out_the_next() {
         provider.clone(),
         dir,
         "s_1",
-        Arc::clone(&clock),
         None,
         immediate_retry(),
     ));
     let first_lines = Arc::new(Mutex::new(Vec::new()));
     let a_clock = Arc::clone(&clock);
     let a_host = Arc::clone(&host);
-    let a = std::thread::spawn({
+    let (a_tx, a_rx) = mpsc::channel();
+    std::thread::spawn({
         let first_lines = Arc::clone(&first_lines);
         move || {
-            a_host.call(
+            let _sent = a_tx.send(a_host.call(
                 "a",
                 request("scripted/s.json"),
                 bound(a_clock, None, first_lines),
-            )
+            ));
         }
     });
     // Call A is inside `run` before B reaches the gate.
-    entered_rx.recv().unwrap();
+    Deadline::after(WAIT).recv_or_fail(&entered_rx, "call A to enter `run`");
     let second_lines = Arc::new(Mutex::new(Vec::new()));
     let deadline = origin + Duration::from_secs(5);
     let b_clock = Arc::clone(&clock);
     let b_host = Arc::clone(&host);
-    let b = std::thread::spawn({
+    let (b_tx, b_rx) = mpsc::channel();
+    std::thread::spawn({
         let second_lines = Arc::clone(&second_lines);
         move || {
-            b_host.call(
+            let _sent = b_tx.send(b_host.call(
                 "b",
                 request("scripted/s.json"),
                 bound(b_clock, Some(deadline), second_lines),
-            )
+            ));
         }
     });
-    assert!(clock.await_parked(deadline, Duration::from_secs(5)));
-    clock.advance(Duration::from_secs(6));
-    let failure = err(b.join().unwrap());
+    let _mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(5),
+        &Deadline::after(WAIT),
+    );
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&b_rx, "call B to end `timeout`"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.sends.load(Ordering::SeqCst), 1);
     assert!(second_lines.lock().unwrap().is_empty());
     release_tx.send(()).unwrap();
-    let reply = ok(a.join().unwrap());
+    let reply = ok(Deadline::after(WAIT).recv_or_fail(&a_rx, "call A to answer"));
     assert_eq!(reply.text, "slow");
     assert_eq!(first_lines.lock().unwrap().len(), 1);
 }
