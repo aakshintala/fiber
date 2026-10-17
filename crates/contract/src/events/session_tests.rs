@@ -15,7 +15,8 @@ fn rewind_input_round_trips() {
 
 #[test]
 fn rewound_summary_round_trips() {
-    let value = serde_json::json!({"new_session_id": "s_new", "seq": 7, "jobs": [], "summary": "s"});
+    let value =
+        serde_json::json!({"new_session_id": "s_new", "seq": 7, "jobs": [], "summary": "s"});
     let item: Rewound = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(item).unwrap(), value);
 }

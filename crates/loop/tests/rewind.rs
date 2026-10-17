@@ -87,7 +87,10 @@ fn run_a_with_tail(tail: Vec<Scripted>) -> Session {
             Scripted::text("one-done"),
             calls_reply("working", &[("write_file", paris()), ("run_cmd", paris())]),
             Scripted::text("two-done"),
-        ].into_iter().chain(tail).collect(),
+        ]
+        .into_iter()
+        .chain(tail)
+        .collect(),
         None,
         tools,
     );
@@ -393,23 +396,46 @@ fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
         let result = session.looped.as_mut().unwrap().turn();
         done.send((session, result)).unwrap();
     });
-    let (session, result) = Deadline::after(DEADLINE).recv(&finished).expect("the summary ended");
+    let (session, result) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the summary ended");
     assert_eq!(result.unwrap(), None);
     assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
     let lines = log::read(&session.dir).unwrap();
     let tail = &lines[before.len()..];
-    assert_eq!(kinds(tail), ["turn_started", "step_started", "assistant_message_started", "text_completed", "usage_recorded", "assistant_message_completed", "turn_completed", "rewound"]);
-    assert_eq!(tail[0].payload["input"], json!([{"type":"rewind","command_id":"c_rewind"}]));
+    assert_eq!(
+        kinds(tail),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "rewound"
+        ]
+    );
+    assert_eq!(
+        tail[0].payload["input"],
+        json!([{"type":"rewind","command_id":"c_rewind"}])
+    );
     assert_eq!(tail[6].payload["outcome"], "completed");
     assert_eq!(tail[7].payload["summary"], "Tried X.");
     let after = session.provider.requests();
     assert_eq!(after.len(), requests.len() + 1);
     let request = after.last().unwrap();
     let mut expected = last.conversation.clone();
-    expected.push(Input::Assistant { model: MODEL.into(), text: "two-done".into(), provider_item: None });
+    expected.push(Input::Assistant {
+        model: MODEL.into(),
+        text: "two-done".into(),
+        provider_item: None,
+    });
     assert_eq!(&request.conversation[..expected.len()], expected.as_slice());
     assert_eq!(request.conversation.len(), expected.len() + 1);
-    assert!(matches!(request.conversation.last().unwrap(), Input::User { text, .. } if text.contains("two")));
+    assert!(
+        matches!(request.conversation.last().unwrap(), Input::User { text, .. } if text.contains("two"))
+    );
     assert_eq!(request.system_prompt, last.system_prompt);
     assert_eq!(request.sent_tools, last.sent_tools);
     assert_eq!(request.cache_key, last.cache_key);
@@ -427,7 +453,10 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
     let (b, tx, provider, dir) = start_b_with_summary(
         &session,
         B_ID,
-        Point { session_id: SessionId("s_test".into()), seq: Seq(at) },
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
         note.clone(),
         None,
         vec![Scripted::text("three-done")],
@@ -440,29 +469,52 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
     let request = &provider.requests()[0];
     assert_eq!(&request.conversation[..k], &history[..k]);
     for (index, text) in [(k, "the summary"), (k + 1, note.as_str()), (k + 2, "three")] {
-        assert_eq!(request.conversation[index], Input::User { text: text.into(), images: vec![] });
+        assert_eq!(
+            request.conversation[index],
+            Input::User {
+                text: text.into(),
+                images: vec![]
+            }
+        );
     }
     drop(b);
     let home = dir.parent().unwrap().to_path_buf();
     let log = Arc::new(Log::open(&home, SessionId(B_ID.into()), session.clock.clone()).unwrap());
     let resumed_provider = Arc::new(ScriptedProvider::new(vec![Scripted::text("four-done")]));
     let (tx, rx) = mpsc::channel();
-    let b = Loop::resume(r#loop::Session {
-        log,
-        provider: resumed_provider.clone(),
-        model: Model { reference: MODEL.into(), cost: None, subscription: false },
-        prompt: PromptInputs::new(home, "/bin/sh".into(), dir.join("events.jsonl").display().to_string(), session.clock.clone(), fakes::CONTEXT_WINDOW),
-        inbox: rx,
-        tools: vec![],
-        permissions: Permissions {
-            workspace: session.workspace.display().to_string(),
-            credentials: session.credentials.clone(),
-            credential_files: vec![],
-            rules: session.rules.clone(),
+    let b = Loop::resume(
+        r#loop::Session {
+            log,
+            provider: resumed_provider.clone(),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                dir.join("events.jsonl").display().to_string(),
+                session.clock.clone(),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![],
+            permissions: Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: vec![],
+                rules: session.rules.clone(),
+            },
         },
-    }, r#loop::resumed(&dir).unwrap()).unwrap();
+        r#loop::resumed(&dir).unwrap(),
+    )
+    .unwrap();
     let _b = run_turn(b, &tx, "four");
-    assert_eq!(&resumed_provider.requests()[0].conversation[..request.conversation.len()], request.conversation.as_slice());
+    assert_eq!(
+        &resumed_provider.requests()[0].conversation[..request.conversation.len()],
+        request.conversation.as_slice()
+    );
 }
 
 #[test]
@@ -1210,6 +1262,250 @@ fn resume_b(
     (looped, tx, dir)
 }
 
+fn resume_existing(
+    session: &Session,
+    id: &str,
+    script: Vec<Scripted>,
+) -> (Loop, mpsc::Sender<Delivery>, Arc<ScriptedProvider>) {
+    let home = session.dir.parent().unwrap().to_path_buf();
+    let log = if id == "s_test" {
+        session.log.clone()
+    } else {
+        Arc::new(Log::open(&home, SessionId(id.into()), session.clock.clone()).unwrap())
+    };
+    let dir = log.dir().to_path_buf();
+    r#loop::fiber_started(&log, "0.0.1", true).unwrap();
+    let provider = Arc::new(ScriptedProvider::new(script));
+    let (tx, rx) = mpsc::channel();
+    let mut prompt = PromptInputs::new(
+        home,
+        "/bin/sh".into(),
+        dir.join("events.jsonl").display().to_string(),
+        session.clock.clone(),
+        fakes::CONTEXT_WINDOW,
+    );
+    prompt.credential = Some("work".into());
+    let looped = Loop::resume(
+        r#loop::Session {
+            log,
+            provider: provider.clone(),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: vec![
+                ("builtin".into(), write_tool()),
+                ("builtin".into(), exec_tool()),
+            ],
+            permissions: Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: vec![],
+                rules: session.rules.clone(),
+            },
+        },
+        r#loop::resumed(&dir).unwrap(),
+    )
+    .unwrap();
+    (looped, tx, provider)
+}
+
+#[test]
+fn an_ancestor_summary_keeps_the_entire_cut_path() {
+    let session = run_a();
+    let lines = log::read(&session.dir).unwrap();
+    let at = point(&lines);
+    let (b, tx, _, dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: lines.last().unwrap().seq.unwrap(),
+        },
+        "B's note".into(),
+        None,
+        vec![Scripted::text("B replied")],
+    );
+    drop(run_turn(b, &tx, "B prompt"));
+    let (b, tx, provider) = resume_existing(&session, B_ID, vec![Scripted::text("All the work.")]);
+    let (rw, answer) = rewind(args(Some("s_test"), Some(at), true, vec![]));
+    drop(drive(b, &tx, rw));
+    accepted(answer_of(answer));
+    let request = &provider.requests()[0];
+    let texts: Vec<&str> = request
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    for text in [
+        "one",
+        "one-done",
+        "two",
+        "two-done",
+        "B's note",
+        "B prompt",
+        "B replied",
+    ] {
+        assert!(
+            texts.contains(&text),
+            "the cut path contains {text}: {texts:?}"
+        );
+    }
+    assert!(texts.last().unwrap().contains("two"));
+    assert_eq!(
+        log::read(&dir).unwrap().last().unwrap().payload["summary"],
+        "All the work."
+    );
+}
+
+#[test]
+fn a_summary_reads_through_a_handoff_without_its_note_request() {
+    let session = run_a_handed();
+    let lines = log::read(&session.dir).unwrap();
+    let at = turn_start(&lines, 1) - 1;
+    let (b, tx, before, _) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        "the note".into(),
+        None,
+        vec![Scripted::text("B")],
+    );
+    drop(run_turn(b, &tx, "B prompt"));
+    let prefix = before.requests()[0].conversation.clone();
+    let (looped, tx, provider) = resume_existing(
+        &session,
+        "s_test",
+        vec![Scripted::text("Across the handoff.")],
+    );
+    let (rw, answer) = rewind(args(None, Some(at), true, vec![]));
+    drop(drive(looped, &tx, rw));
+    accepted(answer_of(answer));
+    let request = &provider.requests()[0];
+    assert_eq!(
+        &request.conversation[..prefix.len() - 2],
+        &prefix[..prefix.len() - 2]
+    );
+    let texts: Vec<&str> = request
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    for text in ["hi", "working", "Done.", "again", "Again."] {
+        assert!(texts.contains(&text), "{text}: {texts:?}");
+    }
+    assert!(!texts.contains(&"The note."));
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| text.contains("session log"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_summary_builds_the_preamble_in_a_resumed_process_before_its_turn() {
+    let session = run_a();
+    let before = log::read(&session.dir).unwrap().len();
+    let (looped, tx, provider) =
+        resume_existing(&session, "s_test", vec![Scripted::text("Resumed summary.")]);
+    let (rw, answer) = rewind(args(None, None, true, vec![]));
+    drop(drive(looped, &tx, rw));
+    accepted(answer_of(answer));
+    let lines = log::read(&session.dir).unwrap();
+    assert_eq!(
+        kinds(&lines[before..]),
+        [
+            "fiber_started",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "rewound"
+        ]
+    );
+    assert_eq!(provider.requests().len(), 1);
+}
+
+#[test]
+fn a_summary_after_an_idle_switch_uses_the_new_model_and_preamble() {
+    let mut session = run_a();
+    let provider = Arc::new(ScriptedProvider::new(vec![Scripted::text(
+        "Switched summary.",
+    )]));
+    let switched = provider.clone();
+    let prepare: r#loop::Prepare = Arc::new(move |_, _, chosen| {
+        Ok(r#loop::Prepared {
+            provider: switched.clone(),
+            model: Model {
+                reference: "fake/switched".into(),
+                cost: None,
+                subscription: false,
+            },
+            thinking: chosen,
+            chosen,
+            credential: Some("work".into()),
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            addendum: Some("switched addendum".into()),
+            handoff: r#loop::HandoffSettings::default(),
+            reviewer: Err(contract::shapes::Failure {
+                code: ErrorCode::NoModel,
+                message: "no reviewer".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            web_search: r#loop::Hosted::Keep,
+            notice: None,
+            applied: None,
+            credential_files: vec![],
+            observe: None,
+            reviewer_observe: None,
+        })
+    });
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .switcher(prepare, r#loop::Switchable { chosen: None });
+    session
+        .inbox
+        .send(support::model("fake/switched", None))
+        .unwrap();
+    let (rw, answer) = rewind(args(None, None, true, vec![]));
+    drop(drive(looped, &session.inbox, rw));
+    accepted(answer_of(answer));
+    assert_eq!(provider.requests().len(), 1);
+    assert!(
+        provider.requests()[0]
+            .system_prompt
+            .contains("switched addendum")
+    );
+    let lines = log::read(&session.dir).unwrap();
+    let built = lines
+        .iter()
+        .rfind(|line| line.kind == "preamble_built")
+        .unwrap();
+    assert_eq!(built.payload["model"], "fake/switched");
+}
+
 /// Jobs that list `running` as running and end nothing: what a `rewind`
 /// refusal reads.
 struct StillRunning(Vec<JobId>);
@@ -1249,6 +1545,7 @@ impl contract::jobs::Jobs for StillRunning {
 #[test]
 fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let mut session = run_a();
+    let calls = session.provider.requests().len();
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
     let (rw, answered) = rewind(args(None, None, false, vec![]));
@@ -1275,6 +1572,8 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let last = lines.last().unwrap();
     assert_eq!(last.payload["new_session_id"], json!(new.0));
     assert_eq!(last.payload["seq"], json!(at));
+    assert_eq!(session.provider.requests().len(), calls);
+    assert!(last.payload.get("summary").is_none());
     assert_eq!(last.payload["jobs"], json!([]));
     assert!(
         last.payload.get("from_session_id").is_none(),
@@ -1311,7 +1610,11 @@ fn a_message_after_rewound_is_refused() {
         probe_tx.send((done.is_some(), called)).unwrap();
         tx.send(answer).unwrap();
     }));
-    let rw = Delivery::Rewind(CommandId("c_rewind".into()), args(None, None, false, vec![]), ack);
+    let rw = Delivery::Rewind(
+        CommandId("c_rewind".into()),
+        args(None, None, false, vec![]),
+        ack,
+    );
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -1957,7 +2260,7 @@ fn the_default_point_under_a_bound_is_the_ancestor_turn_before_it() {
 }
 
 #[test]
-fn a_rewind_asking_for_a_summary_fails_before_any_point() {
+fn a_summary_checks_jobs_and_the_point_before_starting() {
     let (session, _, _, at) = run_chained_a();
     let (looped, tx, dir) = resume_b(
         &session,
@@ -1969,15 +2272,29 @@ fn a_rewind_asking_for_a_summary_fails_before_any_point() {
         None,
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(Some(A_ID), None, true, vec![]));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(u64::MAX), true, vec![]));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
-    let rejection = rejected(answer_of(answered));
-    assert_eq!(rejection.code, ErrorCode::SummaryFailed);
     assert_eq!(
-        rejection.message,
-        "Summaries are not built in this Fiber yet."
+        rejected(answer_of(answered)).code,
+        ErrorCode::NotStepBoundary
     );
+    assert_eq!(log_bytes(&dir), before);
+
+    let (looped, tx, dir) = resume_b(
+        &session,
+        "s_bbbbbbbbbbbbbbb3",
+        Some(Point {
+            session_id: SessionId(A_ID.into()),
+            seq: Seq(at),
+        }),
+        None,
+    );
+    let looped = looped.jobs(Arc::new(StillRunning(vec![JobId("j_1".into())])));
+    let before = log_bytes(&dir);
+    let (rw, answered) = rewind(args(Some(A_ID), None, true, vec![]));
+    drop(drive_closed(looped, tx, vec![rw]));
+    assert_eq!(rejected(answer_of(answered)).code, ErrorCode::Busy);
     assert_eq!(log_bytes(&dir), before);
 }
 
