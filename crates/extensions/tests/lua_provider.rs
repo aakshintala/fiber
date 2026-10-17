@@ -21,7 +21,7 @@ use config::{Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
-use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{Error, LuaExtension, LuaProvider, ModelsArg, REFRESH_BEFORE};
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use fakes::{ProviderServer, Response, fingerprint};
@@ -216,7 +216,7 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
     );
     let models = within({
         let provider = Arc::clone(&provider);
-        move || provider.models()
+        move || provider.models(&ModelsArg::default())
     })
     .unwrap();
     assert_eq!(ids(&models), ["m1", "m2"]);
@@ -235,7 +235,10 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
     assert_eq!(cached.as_deref(), Some(models.as_slice()));
 
     // Asked again, it serves what it has.
-    assert_eq!(ids(&provider.models().unwrap()), ["m1", "m2"]);
+    assert_eq!(
+        ids(&provider.models(&ModelsArg::default()).unwrap()),
+        ["m1", "m2"]
+    );
     assert_eq!(server.requests().len(), 1);
 }
 
@@ -250,13 +253,19 @@ fn a_cached_list_is_served_without_running_lua_until_the_refresh_returns() {
         &old.to_string(),
     );
 
-    assert_eq!(ids(&provider.models().unwrap()), ["old"]);
+    assert_eq!(
+        ids(&provider.models(&ModelsArg::default()).unwrap()),
+        ["old"]
+    );
     assert!(server.requests().is_empty(), "the cached copy is served");
 
-    let refresh = provider.refresh(None).unwrap();
+    let refresh = provider.refresh(None, ModelsArg::default()).unwrap();
     let refreshed = within(move || refresh.join().unwrap()).unwrap();
     assert_eq!(ids(&refreshed), ["new"]);
-    assert_eq!(ids(&provider.models().unwrap()), ["new"]);
+    assert_eq!(
+        ids(&provider.models(&ModelsArg::default()).unwrap()),
+        ["new"]
+    );
     let cached = config::read_model_cache(&setup.home(), "fixture")
         .unwrap()
         .unwrap();
@@ -272,7 +281,7 @@ fn a_models_call_that_fails_or_returns_no_model_list_caches_nothing() {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::status(200, reply)]).unwrap();
         let provider = fixture(&setup, &server);
-        let err = within(move || provider.models()).unwrap_err();
+        let err = within(move || provider.models(&ModelsArg::default())).unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
         assert_eq!(
             matches!(err, Error::BadReturn { .. }),
@@ -537,7 +546,7 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
         .with_secrets(vec!["fixture.url".into(), "fixture.api_key".into()]),
     );
     let provider = LuaProvider::new(extension, "fixture");
-    let refresh = provider.refresh(None).unwrap();
+    let refresh = provider.refresh(None, ModelsArg::default()).unwrap();
     assert!(
         server.await_requests(1, WAIT),
         "waited for models() to reach the server"
@@ -603,7 +612,11 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
         "{err:?}"
     );
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
-    assert!(within(move || provider.models()).unwrap().is_empty());
+    assert!(
+        within(move || provider.models(&ModelsArg::default()))
+            .unwrap()
+            .is_empty()
+    );
     let none = within(move || extension.provider_functions("nobody")).unwrap();
     assert!(none.is_empty());
 }

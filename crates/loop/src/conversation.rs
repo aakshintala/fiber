@@ -75,6 +75,29 @@ pub(crate) fn rebuild_and_sent(
     open: &HashSet<ActionId>,
     seed: Carry,
 ) -> Result<Rebuilt, Error> {
+    rebuild_with_cut(lines, model, open, seed, usize::MAX)
+}
+
+/// The cut path, keeping conversation across handoffs after `cut`.
+pub(crate) fn summary_conversation(
+    lines: &[Envelope],
+    cut: usize,
+    model: &str,
+    seed: Carry,
+) -> Result<(Vec<Input>, Option<usize>), Error> {
+    let (mut conversation, sent, mut held, _) =
+        rebuild_with_cut(lines, model, &HashSet::new(), seed, cut)?;
+    conversation.append(&mut held);
+    Ok((conversation, sent))
+}
+
+fn rebuild_with_cut(
+    lines: &[Envelope],
+    model: &str,
+    open: &HashSet<ActionId>,
+    seed: Carry,
+    cut: usize,
+) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
     // Live and rebuilt `Input`s carry the model in force at their line:
     // from the first `model_changed`'s `before`, each switch stamping
@@ -96,8 +119,15 @@ pub(crate) fn rebuild_and_sent(
         ..Rendered::default()
     };
     let mut sent = None;
-    for line in lines.iter().filter(|l| l.is_durable()) {
-        if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+    for (index, line) in lines.iter().enumerate().filter(|(_, l)| l.is_durable()) {
+        if let Some(mut event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+            if index >= cut {
+                if let Event::HandoffCompleted(done) = &mut event {
+                    done.outcome = Outcome::Failed;
+                } else if matches!(event, Event::OpeningMessage(_)) {
+                    continue;
+                }
+            }
             rendered.push(
                 &event,
                 line.action_id.as_ref(),
@@ -109,7 +139,7 @@ pub(crate) fn rebuild_and_sent(
             if let Event::ModelChanged(changed) = &event {
                 stamped = changed.after.model.clone();
             }
-            if matches!(event, Event::AssistantMessageStarted(_)) {
+            if matches!(event, Event::AssistantMessageStarted(_)) && !rendered.carry.in_summary() {
                 sent = Some(rendered.conversation.len());
             }
             // The context a completed handoff starts has had no request.
@@ -433,6 +463,10 @@ pub(crate) fn render(
     }
     match event {
         Event::TurnStarted(started) => {
+            if crate::reviewer::summary_turn(started) {
+                carry.open_summary(conversation.len());
+                return;
+            }
             carry.input.clear();
             for item in &started.input {
                 match item {
@@ -461,7 +495,7 @@ pub(crate) fn render(
                             });
                         }
                     }
-                    InputItem::Unknown => {}
+                    InputItem::Rewind { .. } | InputItem::Unknown => {}
                 }
             }
         }
@@ -488,6 +522,7 @@ pub(crate) fn render(
         // message, so a live start and a resume render it the same way.
         Event::SessionStarted(started) => {
             if let Some(rewind) = &started.rewind {
+                conversation.extend(crate::rewind::summary_input(rewind));
                 conversation.push(crate::rewind::note_input(rewind));
             }
         }
@@ -507,7 +542,11 @@ pub(crate) fn render(
         }
         // A new process, so a window left open was cut short by the death of
         // the old one.
-        Event::FiberStarted(_) => carry.close_window(conversation),
+        Event::FiberStarted(_) => {
+            carry.close_window(conversation);
+            carry.close_summary(conversation);
+        }
+        Event::TurnCompleted(_) => carry.close_summary(conversation),
         Event::ContextNudged(nudged) => {
             conversation.push(Input::User {
                 text: carry.nudge_text(nudged),
@@ -627,7 +666,11 @@ pub(crate) fn render(
             }
         }
         // A new reply starts a new step's calls.
-        Event::AssistantMessageStarted(_) => carry.step.clear(),
+        Event::AssistantMessageStarted(_) => {
+            if !carry.in_summary() {
+                carry.step.clear();
+            }
+        }
         // A reply's closing line sends nothing: its text parts were already
         // rendered, and a failed call sends nothing. Its retry is a new action.
         Event::AssistantMessageCompleted(_)
@@ -639,7 +682,6 @@ pub(crate) fn render(
         | Event::FiberExited(_)
         | Event::Rewound(_)
         | Event::StepStarted(_)
-        | Event::TurnCompleted(_)
         | Event::SteeringQueue(_)
         | Event::ShellCommand(_)
         | Event::SessionNamed(_)

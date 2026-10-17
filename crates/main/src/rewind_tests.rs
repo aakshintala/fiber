@@ -35,10 +35,13 @@ fn point_of_reads_the_old_session_and_its_seq() {
     let new = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     assert_eq!(
         point_of(Some(envelope("rewound", rewound(&new.0, None))), &new, &old).unwrap(),
-        Point {
-            session_id: old.clone(),
-            seq: contract::Seq(3),
-        }
+        (
+            Point {
+                session_id: old.clone(),
+                seq: contract::Seq(3),
+            },
+            None
+        )
     );
 }
 
@@ -54,10 +57,31 @@ fn point_of_reads_the_ancestor_an_ancestor_point_names() {
             &old
         )
         .unwrap(),
-        Point {
-            session_id: ancestor,
-            seq: contract::Seq(3),
-        }
+        (
+            Point {
+                session_id: ancestor,
+                seq: contract::Seq(3),
+            },
+            None
+        )
+    );
+}
+
+#[test]
+fn point_of_reads_the_summary_for_the_restarted_process() {
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let new = SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let mut payload = rewound(&new.0, None);
+    payload["summary"] = "Tried X.\nReverted it.".into();
+    assert_eq!(
+        point_of(Some(envelope("rewound", payload)), &new, &old).unwrap(),
+        (
+            Point {
+                session_id: old,
+                seq: contract::Seq(3)
+            },
+            Some("Tried X.\nReverted it.".into())
+        )
     );
 }
 

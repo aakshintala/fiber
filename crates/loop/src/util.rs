@@ -87,6 +87,7 @@ impl Transcript<'_> {
             {
                 self.carry.hold(seq, shell);
             }
+            let was_summary = self.carry.in_summary();
             crate::conversation::render(
                 self.conversation,
                 event,
@@ -95,7 +96,9 @@ impl Transcript<'_> {
                 self.had,
                 self.carry,
             );
-            crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq);
+            if !was_summary && !self.carry.in_summary() {
+                crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq);
+            }
         }
         Ok(())
     }

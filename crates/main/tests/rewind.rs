@@ -328,6 +328,156 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
 }
 
 #[test]
+fn a_summary_crosses_the_process_boundary_between_history_and_note() {
+    let setup = Setup::new();
+    let summary = "Tried the cache fix and reverted it.";
+    let reply = stream(&[
+        json!({"type":"response.output_item.done", "item":{"type":"message", "content":[{"type":"output_text", "text":summary}]}}),
+    ]);
+    let server = ProviderServer::start([hello(), hello(), reply, hello()]).unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("sum_start", "sum_sub", "one");
+    hubbed.prompt("sum_two", &old, "two");
+    let before = session_log(&setup, &old).len();
+    let client = hubbed.client();
+    client.send(&rewind("sum_rw", &old, json!({"summarise":true})));
+    let ack = until_ack(client, "the summary rewind acknowledgement", "sum_rw");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(client, "the summary session's extensions", |line| {
+        line["session_id"] == next && line["kind"] == "extensions_loaded"
+    });
+    let old_log = session_log(&setup, &old);
+    let tail = &old_log[before..];
+    let kinds: Vec<_> = tail
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "rewound"
+        ]
+    );
+    assert_eq!(
+        tail[0]["payload"]["input"],
+        json!([{"type":"rewind", "command_id":"sum_rw"}])
+    );
+    assert_eq!(tail[6]["payload"]["outcome"], "completed");
+    assert_eq!(tail[7]["payload"]["summary"], summary);
+    let new_log = session_log(&setup, &next);
+    assert_eq!(new_log[0]["payload"]["rewind"]["summary"], summary);
+    assert_eq!(
+        new_log
+            .iter()
+            .filter(|line| line["kind"] == "turn_started")
+            .count(),
+        0
+    );
+    hubbed.prompt("sum_three", &next, "three");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let next_request: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let before_input = second["input"].as_array().unwrap();
+    let input = next_request["input"].as_array().unwrap();
+    assert_eq!(input.len(), 6);
+    assert_eq!(&input[..3], &before_input[..3]);
+    assert_eq!(input[3], json!({"role":"user", "content":summary}));
+    let note = new_log[0]["payload"]["rewind"]["note"].as_str().unwrap();
+    assert_eq!(input[4], json!({"role":"user", "content":note}));
+    assert_eq!(input[5], json!({"role":"user", "content":"three"}));
+    hubbed.close("sum_close", &next);
+    hubbed.finish();
+}
+
+#[test]
+fn a_failed_summary_creates_no_session_and_the_old_conversation_continues() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        hello(),
+        hello(),
+        fakes::Response::status(404, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("fail_start", "fail_sub", "one");
+    hubbed.prompt("fail_two", &old, "two");
+    let before = session_log(&setup, &old).len();
+    let directory = session_log_path(&setup, &old)
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let sessions: Vec<_> = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    hubbed
+        .client()
+        .send(&rewind("fail_rw", &old, json!({"summarise":true})));
+    let rejected = until_rejected(hubbed.client(), "the failed summary", "fail_rw");
+    assert_eq!(rejected["payload"]["code"], "summary_failed");
+    assert!(
+        rejected["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("The summary could not be made: ")
+    );
+    assert_eq!(
+        fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        sessions
+    );
+    let old_log = session_log(&setup, &old);
+    let tail = &old_log[before..];
+    let kinds: Vec<_> = tail
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(tail[5]["payload"]["outcome"], "failed");
+    assert_eq!(tail[5]["payload"]["error"]["code"], "invalid_request");
+    assert!(old_log.iter().all(|line| line["kind"] != "rewound"));
+    hubbed.prompt("fail_three", &old, "three");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let next: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let mut expected = second["input"].as_array().unwrap().clone();
+    expected.push(json!({"type":"message", "content":[{"type":"output_text", "text":"Hello."}]}));
+    expected.push(json!({"role":"user", "content":"three"}));
+    assert_eq!(next["input"], json!(expected));
+    hubbed.close("fail_close", &old);
+    hubbed.finish();
+}
+
+#[test]
 fn refusals_leave_the_session_running_and_its_log_unchanged() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();

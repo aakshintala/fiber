@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        4686,
-        0xfe0f64ce889ef045,
+        5000,
+        0x711e179c8dff6351,
     );
 }
 
@@ -211,6 +211,8 @@ fn messages_md_holds_every_section_the_doc_names() {
         "extension-file",
         "budget-line",
         "rewind-note",
+        "rewind-summary",
+        "rewind-summary-point",
         "rewind-written",
         "rewind-ran",
         "rewind-unchanged",

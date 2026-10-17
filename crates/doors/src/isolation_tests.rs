@@ -899,6 +899,7 @@ fn rewound(next: &str) -> Event {
         new_session_id: SessionId(next.into()),
         seq: contract::Seq(1),
         from_session_id: None,
+        summary: None,
         jobs: Vec::new(),
     })
 }

@@ -23,7 +23,7 @@ use contract::diag::{DebugLog, ProviderRequest, Purpose, Timing};
 use fakes::clock::FakeClock;
 
 use super::SessionExtensions;
-use crate::{LuaExtension, Origin, Request, plan};
+use crate::{LuaExtension, ModelsArg, Origin, Request, plan};
 use fakes::FakeLock;
 
 /// A sink that keeps every request it is given.
@@ -1046,7 +1046,7 @@ fn worker_emits_only_after_the_guard_releases() {
     let provider = LuaProvider::new(Arc::clone(&ext), "rz");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = tx.send(provider.list_models());
+        let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     Deadline::after(WAIT)
         .recv(&arrived)
@@ -1189,7 +1189,7 @@ fn gated_park_holds_the_hub_guard() {
     let provider = LuaProvider::new(Arc::clone(&ext), "rg");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = tx.send(provider.list_models());
+        let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     assert!(
         server.await_requests(1, WAIT),
@@ -1470,7 +1470,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
     let observer = LuaProvider::new(Arc::clone(&ext), "p");
     let (models_tx, models_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = models_tx.send(observer.list_models());
+        let _sent = models_tx.send(observer.list_models(&ModelsArg::default()));
     });
     assert!(
         models_server.await_requests(1, WAIT),
