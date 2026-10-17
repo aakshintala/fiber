@@ -388,7 +388,7 @@ fn a_killed_session_is_crashed_until_dismissed() {
     fresh.send(
         &json!({"id": "c_dismiss", "command": "dismiss", "args": {"session": id}}).to_string(),
     );
-    let ack = recv(&fresh, "the dismissal");
+    let ack = recv_answer(&fresh, "c_dismiss", "the dismissal");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     let again = client(&setup);
     again.send(
