@@ -847,6 +847,9 @@ fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Er
         signing::Error::Unattended { message } => signing::Error::Unattended {
             message: redact(message),
         },
+        signing::Error::LoginTimedOut { message } => signing::Error::LoginTimedOut {
+            message: redact(message),
+        },
     }
 }
 

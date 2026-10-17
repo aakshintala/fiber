@@ -850,7 +850,7 @@ Ephemeral. The envelope's `action_id` is the failed assistant message.
 
 #### `notice`
 
-Ephemeral. A failure outside any action.
+Ephemeral. A failure outside any action, or a login a person must finish (`login_url`).
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|

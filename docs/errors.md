@@ -136,7 +136,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `connection_failed` | DNS, TLS, a refused or dropped connection, no address connecting within 15 seconds each, or a connection silent for 300 seconds (`docs/model-routing.md`, "When a model call fails"), or a client could not reach a listed hub | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
-| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, or a login with nobody attached | never |
+| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
@@ -262,7 +262,7 @@ the lines that carry it.
 | Code | Where | Meaning |
 |---|---|---|
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
-| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`), hub command | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed, or a listed hub refused the client's device token; or a hub login was cancelled before it started or at its store commit, with nothing stored, or the provider has no device-code form |
+| `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`), hub command | the provider rejected the credential, an OAuth refresh was rejected, a login was needed with nobody attached, or a login did not finish within `credential()`'s timeout, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed, or a listed hub refused the client's device token; or a hub login was cancelled before it started or at its store commit, with nothing stored, or the provider has no device-code form |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
@@ -296,6 +296,7 @@ the lines that carry it.
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
 | `io_failed` | exit, driver command, hub command, extension call, notice | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:`; or the hub could not start the worker thread for a file search or a device login, or the file search worker stopped; the message says which |
 | `log_corrupt` | exit, hub command, driver command (`rewind`) | a log line that cannot be encoded, or one read back that does not parse |
+| `login_url` | notice | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login; the message gives the URL to open, and the code to enter for a device-code login |
 | `malformed` | driver command, hub command, notice | a command line that is not a JSON object, has no string `id` or `command`, has `args` of the wrong type, or has a key no command line takes (`docs/invocation.md`, "Driver commands"), or a hub command's answer carried no code the terminal can read |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_prompt_failed` | driver command | Fiber could not get an MCP server's prompt: the server failed, did not answer in time, refused it, or returned content Fiber cannot send |
@@ -353,7 +354,7 @@ the lines that carry it.
 | `usage` | exit, driver command (`rewind`), hub command | the invocation or its environment is wrong, including an unknown `--hub` name; exits 2; or a hub configuration operation is refused by the configuration or credential writer |
 | `version_conflict` | exit, driver command (`rewind`) | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
-Notices, for a failure outside any action:
+Notices, for a failure outside any action or a login a person must finish:
 
 | Code | Meaning |
 |---|---|
@@ -364,6 +365,7 @@ Notices, for a failure outside any action:
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
+| `login_url` | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login, and a `full` client is attached; the message gives the URL to open, and the code to enter for a device-code login (`docs/extensions.md`, "Host calls") |
 | `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_unconfigured` | a model's base URL names a per-account host whose setting has no value or a value that is not a host, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
