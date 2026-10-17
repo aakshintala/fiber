@@ -2677,6 +2677,11 @@ fn grounding_goes_on_the_last_hosted_result_only() {
         }]
     );
     assert_eq!(second.completed.details, Some(grounded));
+    assert!(first.completed.hosts_surfaced.is_empty());
+    assert_eq!(
+        second.completed.hosts_surfaced,
+        ["https://a.example", "https://b.example"]
+    );
     // Grounding with no pair logs nothing.
     let mut alone = chunk(json!([{"text": "hi"}]), Some("STOP"));
     alone["candidates"][0]["groundingMetadata"] =
@@ -2722,6 +2727,7 @@ fn grounding_goes_on_the_last_hosted_result_only() {
         panic!("{:?}", reply.actions);
     };
     assert_eq!(pair.completed.status, CallStatus::Failed);
+    assert!(pair.completed.hosts_surfaced.is_empty());
     match pair.completed.content.as_slice() {
         [ContentPart::Text { text }] => {
             assert_eq!(text, "The provider's search failed: UNAVAILABLE.")

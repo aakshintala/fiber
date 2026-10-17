@@ -880,7 +880,7 @@ fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
     allowed.hosts = Some(vec!["https://allowed.test/".into()]);
     let mut surfaced = crate::completion::completed("https://page-only.test/".into(), None);
     surfaced.hosts_surfaced = vec!["https://surfaced.test/".into()];
-    let parent = vec![
+    let parent = [
         started("/w", None),
         named("https://person.test/"),
         Event::InstructionFile(InstructionFile {

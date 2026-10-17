@@ -1987,6 +1987,7 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
         }]
     );
 
+    assert_eq!(hosted.completed.hosts_surfaced, urls);
     let cited: Vec<&Value> = reply
         .actions
         .iter()

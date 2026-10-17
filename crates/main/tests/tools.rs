@@ -2916,3 +2916,90 @@ fn foreground_output_past_a_mebibyte_keeps_peak_rss_growth_bounded() {
         "peak RSS grew by more than 4 MiB: {before} KiB to {after} KiB"
     );
 }
+
+#[test]
+fn a_web_fetch_to_a_prompt_named_host_takes_the_fast_path() {
+    known_host_fetch(false);
+}
+
+#[test]
+fn a_web_fetch_to_a_different_host_is_denied_before_any_request() {
+    known_host_fetch(true);
+}
+
+fn known_host_fetch(different_host: bool) {
+    let setup = Setup::new_with_started_deadline();
+    let site = page("text/plain", "known host page");
+    let named = format!("{}/doc?q=1", site.url());
+    let target = if different_host {
+        named.replace("127.0.0.1", "localhost")
+    } else {
+        named.clone()
+    };
+    assert_ne!(named == target, different_host);
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_fetch",
+            "web_fetch",
+            &json!({"url":target}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    let run = setup.run(&["ask", &format!("read {named}")]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    if different_host {
+        expected.extend(["notice", "permission_resolved"]);
+    } else {
+        expected.push("tool_call_started");
+    }
+    expected.extend([
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), expected);
+    let completed = completed_call(&run);
+    if different_host {
+        let resolved = run
+            .lines
+            .iter()
+            .find(|line| line["kind"] == "permission_resolved")
+            .unwrap();
+        assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
+        assert_eq!(resolved["payload"]["decision"], "deny");
+        assert_eq!(completed["payload"]["status"], "denied");
+        assert!(site.requests().is_empty());
+    } else {
+        assert_eq!(completed["payload"]["status"], "completed");
+        assert!(
+            completed["payload"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("known host page")
+        );
+        assert_eq!(site.requests().len(), 1);
+        assert_eq!(site.requests()[0].path, "/doc?q=1");
+    }
+}

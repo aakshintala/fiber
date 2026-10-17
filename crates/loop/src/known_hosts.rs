@@ -73,43 +73,39 @@ impl KnownHosts {
                 if let InputItem::Message {
                     content, sender, ..
                 } = item
+                    && sender.origin == Origin::Driver
                 {
-                    if sender.origin == Origin::Driver {
-                        self.message(content);
-                    }
+                    self.message(content);
                 }
             }
         }
-        if let Event::SteeringApplied(steering) = event {
-            if steering.sender.origin == Origin::Driver {
-                self.message(&steering.content);
-            }
+        if let Event::SteeringApplied(steering) = event
+            && steering.sender.origin == Origin::Driver
+        {
+            self.message(&steering.content);
         }
         if let Event::OpeningMessage(opening) = event {
             for file in &opening.instruction_files {
                 self.hosts.extend(named_in(&file.content));
             }
         }
-        if let Event::InstructionFile(file) = event {
-            if file.extension.is_none() {
-                if let Some(content) = &file.content {
-                    self.hosts.extend(named_in(content));
-                }
-            }
+        if let Event::InstructionFile(file) = event
+            && file.extension.is_none()
+            && let Some(content) = &file.content
+        {
+            self.hosts.extend(named_in(content));
         }
         if let Event::ToolCallCompleted(result) = event {
             self.hosts
                 .extend(result.hosts_surfaced.iter().filter_map(|url| host_of(url)));
         }
-        if let Event::PermissionResolved(resolved) = event {
-            if resolved.decision == Decision::Allow
-                && matches!(resolved.decided_by, DecidedBy::Person | DecidedBy::Reviewer)
-            {
-                if let Some(hosts) = &resolved.hosts {
-                    self.hosts
-                        .extend(hosts.iter().filter_map(|url| host_of(url)));
-                }
-            }
+        if let Event::PermissionResolved(resolved) = event
+            && resolved.decision == Decision::Allow
+            && matches!(resolved.decided_by, DecidedBy::Person | DecidedBy::Reviewer)
+            && let Some(hosts) = &resolved.hosts
+        {
+            self.hosts
+                .extend(hosts.iter().filter_map(|url| host_of(url)));
         }
     }
 
