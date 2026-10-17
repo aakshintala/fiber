@@ -161,6 +161,8 @@ codes! {
     PairingFailed,
     /// A symbolic link changed between the permission decision and the write.
     PathChanged,
+    /// A reply was still paused after 5 continuations in a row.
+    PausedTooLong,
     /// The model's protocol is one this Fiber does not speak yet.
     ProtocolUnsupported,
     /// A provider server error or overload.

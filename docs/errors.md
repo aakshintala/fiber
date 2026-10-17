@@ -142,12 +142,13 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
+| `paused_too_long` | a reply was still paused (`pause_turn`) after 5 continuations in a row; the message carries `pause_turn` | never |
 
 Every stop or finish reason a protocol documents is mapped in its native
 module. An unknown one fails the call as `unknown_stop_reason`, whatever the
 protocol. `pause_turn` is not unknown: the loop continues it
 (`docs/loop.md`, "A reply paused by a hosted tool"). Only a reply still
-paused after the continuation bound fails the turn with `unknown_stop_reason`. A reason a vendor documents that Fiber has not mapped is a Fiber
+paused after the continuation bound fails the turn, with `paused_too_long`. A reason a vendor documents that Fiber has not mapped is a Fiber
 bug, and a release fixes it.
 
 The status alone cannot classify: OpenRouter sends an upstream's context
@@ -156,8 +157,7 @@ provider crate reads the body, per protocol and per upstream.
 
 The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
-model call fails"). It never overrides `quota_exceeded` or
-`unknown_stop_reason`, which are never retried.
+model call fails"). It never overrides `quota_exceeded`, `unknown_stop_reason` or `paused_too_long`, which are never retried.
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
 `retry_after_ms` set, so a person or a caller can decide.
@@ -249,6 +249,7 @@ result. `turn_completed` is `failed`, with `error` set to the cause, on:
   (`docs/permissions.md`, "Headless")
 - `output_truncated`: a second reply in a row cut off by the output-token limit
   (`docs/loop.md`, "A reply cut off by the output limit")
+- `paused_too_long`: a reply still paused after 5 continuations in a row (`docs/loop.md`, "A reply paused by a hosted tool")
 - `budget_exceeded`: the session reached `budget.usd`, or a `before_model_call`
   hook refused the request (`docs/loop.md`, "Spending budget")
 
@@ -318,6 +319,7 @@ the lines that carry it.
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
+| `paused_too_long` | turn | a reply was still paused (`pause_turn`) after 5 continuations in a row; send the request again or simplify it |
 | `protocol_unsupported` | exit, driver command (`rewind`) | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |

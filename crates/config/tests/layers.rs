@@ -10,7 +10,7 @@ use common::Setup;
 use config::{CredentialSource, ProjectKey, Source};
 use contract::ErrorCode;
 use fakes::Deadline;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn model_layers(setup: &Setup) {
     setup.write(
@@ -101,6 +101,94 @@ fn an_object_names_the_highest_layer_that_set_part_of_it() {
     let (value, source) = setup.load(&[]).unwrap().get("handoff", None).unwrap();
     assert_eq!(source, Source::Repository(setup.repository()));
     assert_eq!(value["tokens"], json!(1000));
+}
+
+#[test]
+fn get_and_get_segments_pin_the_value_and_source_across_layers() {
+    // One fixture holding every layering shape, read through both the
+    // dotted-key and the literal-segments spellings: whatever the fast
+    // path does, the value and its source never move.
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"model": "g/b", "handoff": {"tokens": 1},
+            "models": {"a/b": {"handoff": {"tokens": 9}}},
+            "skills": {"disabled": ["a"]},
+            "providers": {"acme": {"credentials": {"work": {"env": "G"}}}}}"#,
+    );
+    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    setup.write(
+        &setup.project(),
+        r#"{"model": "p/b", "skills": {"disabled": ["b", "a"]},
+            "providers": {"acme": {"credentials": {"work": {"file": "/k"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    // Each row: the dotted key, its segments, the model, and the value
+    // with its source. A scalar names the highest layer holding it; an
+    // object merges key by key under its highest holder; a per-model
+    // entry wins for its model only; a union key holds every layer's
+    // names; an entry-replaced row goes whole to one layer.
+    type Case<'a> = (&'a str, &'a [&'a str], Option<&'a str>, (Value, Source));
+    let cases: Vec<Case> = vec![
+        (
+            "model",
+            &["model"],
+            None,
+            (json!("p/b"), Source::Project(setup.project())),
+        ),
+        (
+            "handoff",
+            &["handoff"],
+            None,
+            (
+                json!({
+                    "enabled": true,
+                    "nudge": false,
+                    "tokens": 1,
+                    "window_fraction": 0.7,
+                }),
+                Source::Repository(setup.repository()),
+            ),
+        ),
+        (
+            "handoff.tokens",
+            &["handoff", "tokens"],
+            Some("a/b"),
+            (json!(9), Source::Global(setup.global())),
+        ),
+        (
+            "handoff.tokens",
+            &["handoff", "tokens"],
+            Some("c/d"),
+            (json!(1), Source::Global(setup.global())),
+        ),
+        (
+            "skills.disabled",
+            &["skills", "disabled"],
+            None,
+            (json!(["a", "b"]), Source::Project(setup.project())),
+        ),
+        (
+            "providers.acme.credentials.work",
+            &["providers", "acme", "credentials", "work"],
+            None,
+            (json!({"file": "/k"}), Source::Project(setup.project())),
+        ),
+    ];
+    for (dotted, parts, model, expected) in &cases {
+        let segments: Vec<String> = parts.iter().map(|segment| (*segment).to_owned()).collect();
+        assert_eq!(
+            config.get(dotted, *model),
+            Some(expected.clone()),
+            "get {dotted}"
+        );
+        assert_eq!(
+            config.get_segments(&segments, *model),
+            Some(expected.clone()),
+            "get_segments {dotted}"
+        );
+    }
 }
 
 #[test]
