@@ -465,9 +465,18 @@ fn walk(
                                     .as_object()
                                     .is_some_and(|object| object.contains_key("credential"))
                             {
-                                path.push("credential".into());
-                                notices.push(ignored(path, "a repository's role may not set"));
-                                path.pop();
+                                // The acceptance names `roles."<name>".credential`,
+                                // but `path::display` quotes a segment only when it
+                                // holds a dot, so the shared `ignored` closure would
+                                // print `roles.<name>.credential`: this one notice
+                                // hand-formats the key.
+                                notices.push(Notice {
+                                    code: ErrorCode::ConfigKeyIgnored,
+                                    message: format!(
+                                        "{source}: ignored `roles.\"{name}\".credential`, which a repository's role may not set."
+                                    ),
+                                    extension: None,
+                                });
                             }
                             kept.insert(name, value);
                         } else {

@@ -376,7 +376,7 @@ fn a_repository_role_credential_is_a_notice_and_keeps_its_model() {
     assert_eq!(
         notice.message,
         format!(
-            "{}: ignored `roles.fast.credential`, which a repository's role may not set.",
+            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.",
             setup.repository().display()
         )
     );

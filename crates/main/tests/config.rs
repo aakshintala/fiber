@@ -175,7 +175,7 @@ fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
     assert_eq!(
         get.stderr,
         format!(
-            "{}: ignored `roles.fast.credential`, which a repository's role may not set.\n",
+            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.\n",
             file.display()
         ),
         "{get:?}"
@@ -208,7 +208,7 @@ fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
         .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
         .expect("one config_key_ignored notice");
     let message = notice["payload"]["message"].as_str().unwrap();
-    assert!(message.contains("`roles.fast.credential`"), "{message}");
+    assert!(message.contains("`roles.\"fast\".credential`"), "{message}");
     assert!(message.contains(".fiber/config.json"), "{message}");
 }
 

@@ -1053,7 +1053,7 @@ fn a_repository_layer_role_credential_is_ignored() {
         assert!(
             notices.iter().any(|notice| notice
                 .message
-                .contains(&format!("roles.{name}.credential"))
+                .contains(&format!("roles.\"{name}\".credential"))
                 && notice.message.contains(&file.display().to_string())),
             "{notices:?}"
         );
