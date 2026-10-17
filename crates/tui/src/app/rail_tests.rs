@@ -54,9 +54,13 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
         .collect()
 }
 
-/// Links the app: the feed and recent ids.
+/// Links the app: the feed and recent ids. An open picker's listing
+/// goes out beside them.
 fn linked(app: &mut App) -> (String, String) {
-    let lines = commands(app.on_line(hello()));
+    let lines: Vec<Value> = commands(app.on_line(hello()))
+        .into_iter()
+        .filter(|line| line["command"] != "directories")
+        .collect();
     assert_eq!(lines.len(), 2);
     (
         lines[0]["id"]

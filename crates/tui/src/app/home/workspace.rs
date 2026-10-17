@@ -272,15 +272,7 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return Effect::None;
         };
-        let root = home.picker_root();
-        let mut typed = Typed::new();
-        // Each `/` typed queues its directory: only the root's own
-        // listing is asked, so the parents' asks are dropped unsent.
-        let (parents, last) = root.split_at(root.len().saturating_sub(1));
-        parents.chars().for_each(|c| typed.push(c));
-        typed.due(String::new);
-        typed.forget();
-        last.chars().for_each(|c| typed.push(c));
+        let typed = Typed::at(&home.picker_root());
         home.chooser.picker = Some(Picker {
             recents: home.picker_recents(),
             selected: 0,

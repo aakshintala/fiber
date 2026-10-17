@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 1118
+assertion_line: 1139
 expression: remote_picker_frame(false)
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
@@ -9,18 +9,18 @@ expression: remote_picker_frame(false)
 ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
 
-
-
                     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
                       Workspaces
 
+                      › ~/█
+                      › notes
+                        src
+                        work
+
                       ↑↓ move · Enter open
 
                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █? for shortcuts
 ▌

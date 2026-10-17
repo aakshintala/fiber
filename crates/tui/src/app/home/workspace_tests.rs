@@ -188,13 +188,17 @@ fn open(app: &mut App) {
     clear_open(app);
 }
 
-/// Clicks the workspace chip, then clears the typed row it opens on with
-/// Backspace, leaving the recents alone for a path typed from scratch.
+/// Clicks the workspace chip, then gives the picker a clean empty typed
+/// row, as Backspace past the root leaves it, for a path typed from
+/// scratch: the root's listing is forgotten, so no answer reaches it.
 fn clear_open(app: &mut App) {
     app.home_click(Spot::Workspace);
-    while typed_text(app).is_some() {
-        key(app, Key::Backspace);
-    }
+    let picker = app
+        .home
+        .as_mut()
+        .and_then(|home| home.chooser.picker.as_mut())
+        .unwrap_or_else(|| panic!("the picker is open"));
+    picker.typed = super::Typed::new();
 }
 
 /// The picker's recents.
@@ -1083,14 +1087,53 @@ fn launch_location_exposes_only_its_own_machine() {
 }
 
 #[test]
-fn local_picker_does_not_refill_when_rows_arrive() {
+fn the_picker_refills_its_recents_until_a_key_touches_it() {
     let mut app = home();
-    open(&mut app);
-    let before = recents(&app);
-    assert_eq!(before, vec!["/w"]);
+    linked(&mut app);
+    app.home_click(Spot::Workspace);
+    assert_eq!(recents(&app), ["/w"]);
     app.on_line(live("s_aaaaaaaaaaaaaaaa", "new", "/arrived"));
-    assert_eq!(app.home.as_ref().unwrap().sessions.all().len(), 1);
-    assert_eq!(recents(&app), before);
+    assert_eq!(recents(&app), ["/w", "/arrived"]);
+    key(&mut app, Key::Down);
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", "later", "/later"));
+    assert_eq!(recents(&app), ["/w", "/arrived"]);
+}
+
+#[test]
+fn local_and_remote_pickers_share_one_layout() {
+    let mut local = home();
+    let mut remote = remote();
+    let mut screens = Vec::new();
+    for (app, root) in [(&mut local, "/w/"), (&mut remote, "~/")] {
+        let sent = sent_directories(&app.on_line(hello()));
+        app.on_line(live("s_aaaaaaaaaaaaaaaa", "row", "/a"));
+        if !picker_open(app) {
+            let more = directories_of(&app.home_click(Spot::Workspace));
+            assert!(sent.is_empty());
+            answer(app, &more[0].0, &["x", "y"], "/listed");
+            assert_eq!(more[0].1, root);
+        } else {
+            answer(app, &sent[0].0, &["x", "y"], "/listed");
+            assert_eq!(sent[0].1, root);
+        }
+        let picker = app.home_screen().unwrap().picker.unwrap();
+        let typed = picker.typed.clone().unwrap();
+        assert_eq!(typed.text, root);
+        screens.push((picker, typed));
+    }
+    let (local, local_typed) = &screens[0];
+    let (remote, remote_typed) = &screens[1];
+    // The same rows: the typed row, its completions with the first
+    // focused, then the recents; only the root and the launch row differ.
+    assert_eq!(local_typed.completions, remote_typed.completions);
+    assert_eq!(local_typed.completions, ["x", "y"]);
+    assert_eq!(local.focus, Some(0));
+    assert_eq!(remote.focus, Some(0));
+    assert_eq!(local.recents, ["/w", "/a"]);
+    assert_eq!(remote.recents, ["/a"]);
+    // Esc closes only once a workspace is chosen: the remote has none.
+    assert!(local.escapes);
+    assert!(!remote.escapes);
 }
 
 /// Links a remote app, returning the id of its one home listing.
@@ -1193,12 +1236,13 @@ fn a_remote_reopening_lists_home_again_with_its_recents_below() {
     key(&mut app, Key::Down);
     key(&mut app, Key::Enter);
     assert!(!picker_open(&app));
+    // The root is now the last pick.
     let sent = directories_of(&app.home_click(Spot::Workspace));
     assert_eq!(
         sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
-        vec!["~/"]
+        vec!["/remote/w/"]
     );
-    assert_eq!(typed_text(&app), Some("~/".to_owned()));
+    assert_eq!(typed_text(&app), Some("/remote/w/".to_owned()));
     assert_eq!(recents(&app), ["/remote/w"]);
     assert!(app.home_screen().unwrap().picker.unwrap().escapes);
 }

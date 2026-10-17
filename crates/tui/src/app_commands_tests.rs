@@ -22,7 +22,11 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
             model,
             ..Default::default()
         });
-        assert_eq!(app.on_enter(), Effect::None);
+        // Enter sends only the open picker's home listing, never a start.
+        let asks = sent(app.on_enter());
+        assert_eq!(asks.len(), 1);
+        assert_eq!(asks[0]["command"], "directories");
+        assert_eq!(asks[0]["args"]["path"], "~/");
         assert_eq!(app.draft(), "keep this draft");
         assert!(app.home_screen().unwrap().picker.is_some());
         assert!(!app.model_picker_open());

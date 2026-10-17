@@ -556,7 +556,7 @@ fn the_picker_keeps_its_selection_drawn() {
             &format!("/repo{n}"),
         ));
     }
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     // Ten entries, fewer rows above the box: every selection draws,
     // scrolling the list around it. A picker row shares its row with
@@ -1091,7 +1091,11 @@ fn remote_picker_frame(recents: bool) -> String {
         thinking: Some("high".to_owned()),
         ..Default::default()
     });
-    app.on_line(hello());
+    // The picker opens on `~/` and asks for the hub's home listing.
+    let sent = directories(Effect::Send(app.on_line(hello())));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1, "~/");
+    answer(&mut app, &sent[0].0, &["notes", "src", "work"], "/hub");
     if recents {
         for (i, workspace) in [
             "/hub/work/fiber",
@@ -1145,7 +1149,7 @@ fn home_picker_open() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_listed(&mut app, &["crates", "docs", "research", "scripts"]);
     insta::assert_snapshot!("home_picker_open", screen(&app, 80, 24));
 }
 
@@ -2112,7 +2116,7 @@ fn only_the_selected_picker_row_sits_on_the_bar() {
     app.on_line(hello());
     app.on_line(status_in("s_aaaaaaaaaaaaaaaa", "first", "/alpha"));
     app.on_line(status_in("s_bbbbbbbbbbbbbbbb", "second", "/beta"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     assert_eq!(
         app.home_screen()
             .and_then(|screen| screen.picker.map(|picker| picker.focus)),
@@ -2330,12 +2334,26 @@ fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
 }
 
 /// An app on home at `width` by `height` with the workspace picker open
-/// over two recent workspaces.
+/// browsing the launch directory over two recent workspaces.
 fn picking(width: u16, height: u16) -> App {
     let mut app = home(width, height);
     app.on_line(hello());
     app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_listed(&mut app, &["crates", "docs", "research", "scripts"]);
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_some())
+    );
+    app
+}
+
+/// An app on home at `width` by `height` with the workspace picker
+/// showing its two recent workspaces alone.
+fn picking_recents(width: u16, height: u16) -> App {
+    let mut app = home(width, height);
+    app.on_line(hello());
+    app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
+    open_cleared(&mut app);
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_some())
@@ -2355,7 +2373,7 @@ fn home_picker_overlay_160x48() {
 /// legend footer, centred across and down home.
 #[test]
 fn the_picker_draws_centred_with_a_bar_and_a_legend() {
-    let app = picking(80, 24);
+    let app = picking_recents(80, 24);
     let buf = buffer(&app, 80, 24);
     let shown = screen(&app, 80, 24);
     // Cell columns, not byte indices: home's rows may hold a
@@ -2484,7 +2502,7 @@ fn short_picker_keeps_its_selection_barred() {
             &format!("/repo{n}"),
         ));
     }
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..9 {
         app.on_key(Key::Down, now);
@@ -2818,6 +2836,53 @@ fn type_path(app: &mut App, text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The `(id, path)` of every `directories` line `effect` sends.
+fn directories(effect: Effect) -> Vec<(String, String)> {
+    let Effect::Send(lines) = effect else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .filter_map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).ok()?;
+            (line["command"] == "directories").then(|| {
+                (
+                    line["id"].as_str().unwrap_or_default().to_owned(),
+                    line["args"]["path"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Whether the open picker shows its typed row.
+fn typed_open(app: &App) -> bool {
+    app.home_screen()
+        .and_then(|screen| screen.picker)
+        .is_some_and(|picker| picker.typed.is_some())
+}
+
+/// Clicks the workspace chip: the picker opens browsing its root.
+/// Answers the root's listing with `names`.
+fn open_listed(app: &mut App, names: &[&str]) {
+    let sent = directories(app.on_click(crate::mouse::TargetId::Home(Spot::Workspace)));
+    assert_eq!(sent.len(), 1, "the root's one listing");
+    answer(app, &sent[0].0, names, "/w");
+}
+
+/// Clicks the workspace chip, then presses Backspace past the root,
+/// leaving the recents alone. Returns the parent listings Backspace
+/// asked for on the way, in send order.
+fn open_cleared(app: &mut App) -> Vec<(String, String)> {
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let now = fakes::clock::FakeClock::new().now();
+    let mut sent = Vec::new();
+    while typed_open(app) {
+        sent.extend(directories(app.on_key(Key::Backspace, now)));
+    }
+    sent
+}
+
 /// Answers the `directories` request `id` with `names` at `path`.
 fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
     app.on_line(accepted(
@@ -2832,8 +2897,8 @@ fn typing(width: u16, height: u16, text: &str) -> (App, Vec<(String, String)>) {
     let mut app = home(width, height);
     app.on_line(hello());
     app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, text);
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, text));
     (app, sent)
 }
 
@@ -3141,8 +3206,8 @@ fn the_typed_body_beside_a_focused_recent_without_completions() {
 fn a_short_screen_keeps_the_focused_completion_drawn() {
     let mut app = home(80, 12);
     app.on_line(hello());
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, "/");
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, "/"));
     let mut all = Vec::new();
     for n in 0..30 {
         all.push(format!("c{n:02}"));
@@ -3176,8 +3241,8 @@ fn a_short_screen_keeps_the_focused_completion_drawn() {
 fn a_short_screen_keeps_the_focused_recent_drawn() {
     let mut app = home(80, 10);
     app.on_line(hello());
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, "/a");
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, "/a"));
     let mut all = Vec::new();
     for n in 0..30 {
         all.push(format!("a{n:02}"));
@@ -3218,7 +3283,7 @@ fn the_reconnect_banner_draws_over_home() {
 /// typed row open the terminal cursor hides.
 #[test]
 fn the_cursor_hides_while_typing_a_path() {
-    let mut app = picking(80, 24);
+    let mut app = picking_recents(80, 24);
     let area = Rect::new(0, 0, 80, 24);
     let screen = app.home_screen().expect("home draws");
     assert!(super::cursor(&app, &screen, area).is_some());

@@ -803,9 +803,12 @@ fn answer_recent(app: &mut App, recent: &str, sessions: &[(&str, &str)]) {
 }
 
 /// Links the app: the feed and recent ids, both waiting for their
-/// answers.
+/// answers. An open picker's listing goes out beside them.
 fn linked(app: &mut App) -> (String, String) {
-    let lines = commands(app.on_line(hello()));
+    let lines: Vec<Value> = commands(app.on_line(hello()))
+        .into_iter()
+        .filter(|line| line["command"] != "directories")
+        .collect();
     assert_eq!(lines.len(), 2);
     (
         lines[0]["id"]
@@ -2095,6 +2098,21 @@ fn chips(app: &App) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Clicks the workspace chip: the picker opens browsing the chip's
+/// workspace, asking for its one listing. Answers it with no
+/// subdirectories and moves down onto the first recent.
+fn open_on_recents(app: &mut App) {
+    let Effect::Send(lines) = app.home_click(Spot::Workspace) else {
+        panic!("the picker asks for its root's listing");
+    };
+    let asks = commands(lines);
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0]["command"], "directories");
+    let id = asks[0]["id"].as_str().unwrap_or_else(|| panic!("id"));
+    app.on_line(accepted(id, json!({"directories": [], "path": "/listed"})));
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+}
+
 /// The workspace picker home draws: its list and the selected index.
 fn picker(app: &App) -> Option<(Vec<String>, usize)> {
     app.home_screen().and_then(|screen| {
@@ -2156,7 +2174,7 @@ fn the_chip_defaults_to_the_launch_directory() {
 fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(
         picker(&app),
         Some((
@@ -2181,7 +2199,7 @@ fn the_picker_holds_at_most_ten() {
             json!({"state": "idle"}),
         ));
     }
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let (list, selected) = picker(&app).unwrap_or_else(|| panic!("the picker"));
     assert_eq!(selected, 0);
     assert_eq!(list.len(), 10);
@@ -2193,7 +2211,7 @@ fn the_picker_holds_at_most_ten() {
 fn picker_keys_move_choose_and_close() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(picker(&app).map(|(_, selected)| selected), Some(1));
@@ -2213,7 +2231,7 @@ fn picker_keys_move_choose_and_close() {
     assert_eq!(picker(&app), None);
     assert_eq!(chips(&app)[0], "[other]");
     // Esc closes the picker, keeping the workspace as it was.
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert!(picker(&app).is_some());
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(picker(&app), None);
@@ -2224,7 +2242,7 @@ fn picker_keys_move_choose_and_close() {
 fn other_keys_do_nothing_in_the_picker() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Char('x'), now), Effect::None);
     assert_eq!(app.on_key(Key::PageDown, now), Effect::None);
@@ -2237,7 +2255,7 @@ fn other_keys_do_nothing_in_the_picker() {
 fn ctrl_c_passes_through_the_picker() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_key(&Key::CtrlC), None);
     assert!(picker(&app).is_some());
 }
@@ -2302,7 +2320,7 @@ fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
 fn start_names_the_chosen_workspace() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
@@ -2322,7 +2340,7 @@ fn start_names_the_chosen_workspace() {
 fn a_click_on_a_picker_row_chooses_it() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(2)), Effect::None);
     assert_eq!(picker(&app), None);
     assert_eq!(chips(&app)[0], "[third]");
@@ -2332,7 +2350,7 @@ fn a_click_on_a_picker_row_chooses_it() {
 fn a_click_past_the_picker_list_does_nothing() {
     let mut app = home();
     three_workspaces(&mut app);
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(99)), Effect::None);
     assert!(picker(&app).is_some());
     assert_eq!(chips(&app)[0], "[w]");
@@ -2343,7 +2361,7 @@ fn the_file_listing_follows_the_picked_workspace() {
     let mut app = home();
     three_workspaces(&mut app);
     assert_eq!(app.workspace(), PathBuf::from("/w"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
     assert_eq!(app.workspace(), PathBuf::from("/other"));
 }
@@ -4005,7 +4023,7 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
     // and the choice turns the switch off.
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
     assert_eq!(chips(&app)[1], "[x] new worktree");
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
@@ -4014,7 +4032,7 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
     assert!(!shows_switch(&app));
     // Choosing the workspace with git shows the switch again, off: the
     // earlier choice turned it off.
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(chips(&app)[0], "[git-ws]");
@@ -4028,7 +4046,7 @@ fn choosing_the_launch_workspace_with_no_rows_keeps_the_switch() {
     let mut app = git_home();
     linked(&mut app);
     assert!(shows_switch(&app));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(chips(&app)[0], "[w]");
@@ -4042,7 +4060,7 @@ fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
     let mut app = git_home();
     linked(&mut app);
     app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
     assert_eq!(chips(&app)[0], "[git-ws]");
     assert!(shows_switch(&app));
@@ -4071,7 +4089,7 @@ fn outside_git_choosing_a_plain_workspace_hides_the_switch() {
         json!({"state": "idle"}),
     ));
     assert!(!shows_switch(&app));
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
@@ -4087,7 +4105,7 @@ fn clicking_a_picker_row_resets_the_switch_off() {
     app.on_line(git_live("s_aaaaaaaaaaaaaaaa", "git work", "/git-ws"));
     assert_eq!(app.home_click(Spot::Worktree), Effect::None);
     assert_eq!(chips(&app)[1], "[x] new worktree");
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    open_on_recents(&mut app);
     assert_eq!(app.home_click(Spot::Pick(1)), Effect::None);
     assert_eq!(chips(&app)[0], "[git-ws]");
     assert_eq!(chips(&app)[1], "[ ] new worktree");

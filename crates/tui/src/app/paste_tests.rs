@@ -586,7 +586,11 @@ fn ctrl_v_does_nothing_with_the_picker_open() {
         json!({"state": "idle"}),
     ));
     type_text(&mut app, "hi");
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    // The picker opens asking only for its root's listing.
+    assert!(matches!(
+        app.home_click(Spot::Workspace),
+        Effect::Send(lines) if lines.len() == 1 && lines[0].contains("\"directories\"")
+    ));
     assert!(app.home_screen().and_then(|screen| screen.picker).is_some());
     stays_shut(&mut app);
     assert!(app.home_screen().and_then(|screen| screen.picker).is_some());
