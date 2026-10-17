@@ -461,9 +461,8 @@ fn walk(
                             // ignored with a notice.
                             if matches!(source, Source::Repository(_))
                                 && matches!(key.kind, Kind::Role)
-                                && value
-                                    .as_object()
-                                    .is_some_and(|object| object.contains_key("credential"))
+                                && let Value::Object(object) = &value
+                                && object.contains_key("credential")
                             {
                                 // The acceptance names `roles."<name>".credential`,
                                 // but `path::display` quotes a segment only when it
