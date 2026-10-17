@@ -303,8 +303,9 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     // home from the conversation (#1903). Before Enter nothing is reopened:
     // the wait below must not be met by home, or `release_one` could run
     // before the reopened `subscribe` reaches the session.
-    let reopened_shown =
-        |screen: &Grid| shows(screen, "zebraflight") && !shows(screen, "Enter opens the focused session");
+    let reopened_shown = |screen: &Grid| {
+        shows(screen, "zebraflight") && !shows(screen, "Enter opens the focused session")
+    };
     let held = run.screen();
     assert!(
         shows(&held, "Enter opens the focused session") && !reopened_shown(&held),

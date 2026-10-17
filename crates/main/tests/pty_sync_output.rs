@@ -114,7 +114,9 @@ fn every_frame_is_wrapped_in_synchronized_output() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The footer's last word proves the last row drew before the resize.
-    run.wait_screen("the footer", |grid| grid.contents.contains("Enter opens the focused session"));
+    run.wait_screen("the footer", |grid| {
+        grid.contents.contains("Enter opens the focused session")
+    });
     let pre_resize = run.output().len();
     run.resize(40, 10);
     // The redrawn home at 40 by 10: the box moves to the bottom, with
@@ -126,7 +128,10 @@ fn every_frame_is_wrapped_in_synchronized_output() {
                 .rows
                 .get(5)
                 .is_some_and(|row| row.trim() == "› █? for shortcuts")
-            && grid.rows.get(9).is_some_and(|row| row.contains("Enter opens the focused session"))
+            && grid
+                .rows
+                .get(9)
+                .is_some_and(|row| row.contains("Enter opens the focused session"))
     });
     assert_eq!(grid.cursor, (5, 4));
     // The hub `fiber` started is up before the quit, so `wait` sees it
