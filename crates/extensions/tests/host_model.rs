@@ -93,6 +93,7 @@ struct Block {
 }
 
 impl HostModel for Block {
+    #[allow(clippy::panic, reason = "the test fails if the fake is never released")]
     fn call(
         &self,
         _extension: &str,
@@ -197,6 +198,7 @@ impl contract::emit::Emit for Recorder {
 }
 
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
 fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
@@ -273,7 +275,10 @@ fn a_command_calls_host_model_and_gets_text_and_usage() {
     let (inbox_tx, inbox_rx) = mpsc::channel();
     session.deliver_to(inbox_tx);
     run(&session, "go");
-    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ext-ok:10:2:nil");
+    assert_eq!(
+        next_log(&inbox_rx, "the model result"),
+        "result:ext-ok:10:2:nil"
+    );
     let seen = lock(&fake.seen);
     assert_eq!(seen.len(), 1, "one call reached the fake: {seen:?}");
     assert_eq!(seen[0].model, "scripted/e.json");
@@ -293,7 +298,10 @@ fn the_fake_sees_the_calling_extensions_name() {
     let (inbox_tx, inbox_rx) = mpsc::channel();
     session.deliver_to(inbox_tx);
     run(&session, "go");
-    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ok:10:2:nil");
+    assert_eq!(
+        next_log(&inbox_rx, "the model result"),
+        "result:ok:10:2:nil"
+    );
     assert_eq!(lock(&fake.seen)[0].extension, "fiber.test/m");
 }
 
@@ -315,11 +323,13 @@ host.after(50, function()
   local r = host.model({ model = "p/m",
     messages = { { role = "user", content = "hi" } }, max_tokens = 8 })
   host.log("timer:" .. r.text)
-end)
+end, { timeout = 1000 })
 "#,
     );
     let clock = FakeClock::new();
     let session = load(&setup, clock.clone());
+    let fake = Arc::new(Answer::new("ext-ok"));
+    session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let fake = Arc::new(Answer::new("ext-ok"));
     session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let (inbox_tx, inbox_rx) = mpsc::channel();
@@ -335,9 +345,15 @@ end)
         spilled: None,
     });
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
-    assert_eq!(next_log(&inbox_rx, "the hook's model result"), "hook:ext-ok");
+    assert_eq!(
+        next_log(&inbox_rx, "the hook's model result"),
+        "hook:ext-ok"
+    );
     clock.advance(Duration::from_millis(51));
-    assert_eq!(next_log(&inbox_rx, "the timer's model result"), "timer:ext-ok");
+    assert_eq!(
+        next_log(&inbox_rx, "the timer's model result"),
+        "timer:ext-ok"
+    );
     assert_eq!(lock(&fake.seen).len(), 2, "the hook and the timer called");
 }
 
@@ -355,6 +371,8 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     install_lua(&setup, "m", &json!({}), TIMEOUT_INIT);
     let clock = FakeClock::new();
     let session = load(&setup, clock.clone());
+    let fake = Arc::new(Answer::new("ext-ok"));
+    session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let fake = Arc::new(Block {
@@ -459,7 +477,7 @@ fn a_line_with_an_explicit_extension_reaches_the_inbox() {
     run(&session, "go");
     let spent = next_usage(&inbox_rx, "the tagged line");
     assert_eq!(spent.extension.as_deref(), Some("tag"));
-    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ok:10:2:nil");
+    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ok:1:1:nil");
 }
 
 #[test]
@@ -485,6 +503,5 @@ fn failed_attempt_lines_arrive_in_order_before_the_success() {
         .collect();
     assert_eq!(models, vec!["p/try1", "p/try2", "p/final"]);
     assert_eq!(*lock(&fake.seen), vec!["fiber.test/m".to_owned()]);
-    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ok:10:2:nil");
+    assert_eq!(next_log(&inbox_rx, "the model result"), "result:ok:1:1:nil");
 }
-

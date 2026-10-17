@@ -426,6 +426,7 @@ impl Shared {
                 }
                 self.cancelled.insert(id);
                 self.stop_exec(id);
+                self.end_model(id);
             }
             Some(Progress::Done(_) | Progress::Cancelled) | None => {}
         }

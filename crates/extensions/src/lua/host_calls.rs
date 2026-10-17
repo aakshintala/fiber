@@ -5,14 +5,16 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::Instant;
 
 use contract::RequestId;
+use contract::clock::Wake;
 use contract::events::ExtensionExec;
 use contract::inbox::Delivery;
 use contract::shapes::Process;
+use contract::tool::Cancel;
 
 use crate::host::{self, Reply, Request, exec};
 use crate::oauth::{self, Deliver, Holder};
@@ -21,6 +23,71 @@ use super::asks;
 use super::hub::{Hub, Shared};
 use super::schedule::Start;
 use super::{CredentialFor, Target};
+
+/// The end of one call's `host.model` run. The admission registers it;
+/// the worker holds it in `Bound::cancel`. Ending it wakes subscribers
+/// outside this signal's lock: a subscriber must never take the hub lock,
+/// because the hub ends it while holding that lock.
+#[derive(Default)]
+pub(super) struct ModelCancel {
+    state: Mutex<(bool, Vec<Weak<dyn Wake>>)>,
+}
+
+impl ModelCancel {
+    /// Sets the cancel: the callback ended, the call was cancelled, or the
+    /// hub stopped or sealed. Idempotent; wakes subscribers after the
+    /// flag is set, so a subscriber that arrives after it is never woken.
+    pub(super) fn end(&self) {
+        let subscribers = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if state.0 {
+                return;
+            }
+            state.0 = true;
+            std::mem::take(&mut state.1)
+        };
+        for subscriber in subscribers.into_iter().filter_map(|weak| weak.upgrade()) {
+            subscriber.wake();
+        }
+    }
+}
+
+impl Cancel for ModelCancel {
+    fn is_cancelled(&self) -> bool {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).0
+    }
+
+    fn subscribe(&self, wake: Weak<dyn Wake>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if !state.0 {
+            state.1.push(wake);
+        }
+    }
+}
+
+impl Shared {
+    /// Registers the `host.model` run of the call `id`, admitted by
+    /// [`Hub::admit`] under the same lock hold, and returns its cancel.
+    pub(super) fn register_model(&mut self, id: u64) -> Arc<ModelCancel> {
+        let cancel = Arc::new(ModelCancel::default());
+        self.models.insert(id, Arc::clone(&cancel));
+        cancel
+    }
+
+    /// Ends the `host.model` run of the call `id`, if it still holds one:
+    /// its callback ended, the call was cancelled, or the hub stopped.
+    pub(super) fn end_model(&mut self, id: u64) {
+        if let Some(cancel) = self.models.get(&id) {
+            cancel.end();
+        }
+    }
+
+    /// Drops the `host.model` registration of the call `id`: its worker
+    /// returned, so no later end may fire for it.
+    pub(super) fn finish_model(&mut self, id: u64) {
+        self.models.remove(&id);
+    }
+}
 
 /// The suspended call a host request belongs to.
 pub(super) struct Call<'t> {
@@ -78,6 +145,7 @@ pub(super) struct Spawn {
 /// suspends under a fresh one. Off-thread work starts only after its callback
 /// is suspended, so a reply arriving from work that answers in-process never
 /// lands on an unsuspended id.
+#[allow(clippy::too_many_arguments, reason = "one admit for every host call")]
 pub(super) fn admit<'a>(
     start: &Start,
     hub: &Arc<Hub>,
@@ -85,6 +153,7 @@ pub(super) fn admit<'a>(
     call: Call<'_>,
     request: Request,
     driver: Option<Arc<dyn contract::extension::Drive>>,
+    model: Option<Arc<dyn contract::model::HostModel>>,
     deliver: &Deliver,
 ) -> Admitted<'a> {
     let name = start.name.as_str();
@@ -339,26 +408,107 @@ pub(super) fn admit<'a>(
             }
         }
         Request::Model(spec) => {
-            // Task 3 replaces this arm with the real call; the stub reads
-            // each field so `dead_code` stays quiet until then.
-            let host::model::ModelRequestSpec {
-                model,
-                system,
-                messages,
-                max_tokens,
-            } = spec;
-            drop((model, system, max_tokens));
-            for message in messages {
-                drop((
-                    matches!(message.role, host::model::Role::User),
-                    message.content,
-                ));
+            // A command, tool, hook or timer callback may call the
+            // session's model; an effects function, a provider function or
+            // a search backend answers now, as the tool arm does for a
+            // target with no runner.
+            match target {
+                Target::Tool(_)
+                | Target::Command(_)
+                | Target::Hook { .. }
+                | Target::Timer { .. } => {
+                    match model {
+                        Some(model) => {
+                            // The registration stays in the hub, so the
+                            // end of the callback or the hub reaches the
+                            // worker without the Lua thread: the worker
+                            // drops it on its return.
+                            let cancel = shared.register_model(id);
+                            let worker = Arc::clone(hub);
+                            let model_deliver = Deliver::clone(deliver);
+                            let extension = name.to_owned();
+                            let clock = hub.clock_handle();
+                            let request = contract::model::HostModelRequest {
+                                model: spec.model,
+                                system: spec.system,
+                                messages: spec
+                                    .messages
+                                    .into_iter()
+                                    .map(|message| contract::model::HostMessage {
+                                        role: match message.role {
+                                            host::model::Role::User => {
+                                                contract::model::HostRole::User
+                                            }
+                                            host::model::Role::Assistant => {
+                                                contract::model::HostRole::Assistant
+                                            }
+                                        },
+                                        content: message.content,
+                                    })
+                                    .collect(),
+                                max_tokens: spec.max_tokens,
+                            };
+                            Admitted::Spawning {
+                                shared,
+                                spawn: Spawn {
+                                    builder: thread::Builder::new().name(format!("model {name}")),
+                                    work: Box::new(move || {
+                                        // One `usage_recorded` line per
+                                        // attempt, in order: the hub routes
+                                        // each unless it is sealed, and
+                                        // drops a sealed one with the hub,
+                                        // as `ExtensionExec` is dropped.
+                                        let lines = {
+                                            let worker = Arc::clone(&worker);
+                                            Arc::new(
+                                                move |recorded: contract::events::UsageRecorded| {
+                                                    worker.send(Delivery::ExtensionUsage(recorded));
+                                                },
+                                            )
+                                        };
+                                        let bound = contract::model::Bound {
+                                            deadline,
+                                            clock,
+                                            cancel,
+                                            lines,
+                                        };
+                                        let reply = match model.call(&extension, request, bound) {
+                                            Ok(answered) => Reply::Model(Ok(answered)),
+                                            Err(failed) => {
+                                                Reply::Model(Err((failed.code, failed.message)))
+                                            }
+                                        };
+                                        // The run is over: its registration
+                                        // goes before the late reply, so
+                                        // no late end may fire for it.
+                                        worker.lock().finish_model(id);
+                                        worker.notify();
+                                        model_deliver(reply);
+                                    }),
+                                    exec: false,
+                                },
+                            }
+                        }
+                        None => {
+                            // No model is injected: only a sealed hub
+                            // sees this; it answers `closing`, as
+                            // `host.drive` does.
+                            drop(shared);
+                            Admitted::Replied(Reply::Model(Err((
+                                contract::ErrorCode::Closing,
+                                "host.model: the session is closing".to_owned(),
+                            ))))
+                        }
+                    }
+                }
+                Target::Provider { .. } | Target::Search(_) | Target::Effects(_) => {
+                    drop(shared);
+                    Admitted::Replied(Reply::Model(Err((
+                        contract::ErrorCode::InvalidArguments,
+                        "host.model: not available here".to_owned(),
+                    ))))
+                }
             }
-            drop(shared);
-            Admitted::Replied(Reply::Model(Err((
-                contract::ErrorCode::Closing,
-                "host.model: not available here".to_owned(),
-            ))))
         }
         Request::Lock => {
             // A command, hook, timer or tool holds no provider credential: calling
