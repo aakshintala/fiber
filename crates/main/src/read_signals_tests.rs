@@ -885,7 +885,13 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
                     if is_dropped.try_recv().is_ok() {
                         break;
                     }
-                    drive_poll_park(&fake, &mut poll, &drop_by);
+                    // The await above names the settle's poll park, so the
+                    // advance below is for it even while the credential's
+                    // 30 s timeout park is held beside it; `advance` moves
+                    // past both, where `advance_when_parked` would mismatch
+                    // on the other thread's instant.
+                    fake.advance(GROUP_POLL);
+                    poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
                 }
                 if drop_by.left().is_zero() {
                     drop_by.recv_or_fail(&is_dropped, "the guard's drop");
@@ -916,7 +922,11 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
                     if is_dropped.try_recv().is_ok() {
                         break;
                     }
-                    drive_poll_park(&fake, &mut poll, &drive);
+                    // Same named-park advance as the held-reaper loop above:
+                    // the credential's 30 s timeout park may sit beside the
+                    // settle's poll park, so a plain advance survives it.
+                    fake.advance(GROUP_POLL);
+                    poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
                 }
                 if drive.left().is_zero() {
                     drive.recv_or_fail(&is_dropped, "the guard's drop");
