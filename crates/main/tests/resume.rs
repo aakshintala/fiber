@@ -16,7 +16,6 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
@@ -31,8 +30,8 @@ use contract::{ActionId, CommandId, SessionId, TurnId};
 use fakes::{ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, first_line, function_call, group_alive, hello_inline_completed as hello,
-    is_status, stream, text_reply,
+    Deadline, KillGroup, Setup, first_line, function_call, group_alive,
+    hello_inline_completed as hello, is_status, spawn_watched, stream, text_reply,
 };
 
 impl Setup {
@@ -136,26 +135,6 @@ impl Setup {
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group.
-fn spawn_watched(command: &mut Command) -> (std::process::Child, fakes::Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = fakes::Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
