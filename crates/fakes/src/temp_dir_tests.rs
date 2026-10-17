@@ -202,54 +202,8 @@ fn child_leaves_a_read_only_directory() {
 
 #[test]
 fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
-    let mut child = ChildGuard(Some(
-        Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", CHILD, "--nocapture"])
-            .env(CHILD_PREFIX, "fk")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    ));
-    let stdout = child.0.as_mut().unwrap().stdout.take().unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut lines = BufReader::new(stdout);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match lines.read_line(&mut line) {
-                Ok(0) => {
-                    send_line(&tx, None);
-                    break;
-                }
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with('/') {
-                        send_line(&tx, Some(trimmed.to_owned()));
-                        break;
-                    }
-                }
-                Err(_) => {
-                    send_line(&tx, None);
-                    break;
-                }
-            }
-        }
-    });
-    let printed = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to print its directory"));
-    let Some(printed) = printed else {
-        panic!("the child exited before printing its directory");
-    };
-    let leftover = PathBuf::from(printed);
-    assert!(
-        leftover.is_dir(),
-        "the child printed {}",
-        leftover.display()
-    );
+    let mut child = spawn_child();
+    let leftover = printed_dir(&mut child);
 
     if let Some(running) = child.0.as_mut() {
         match running.kill() {
@@ -281,6 +235,70 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
 /// Kills the child unless it was already reaped, so a failed wait does not
 /// leave it running.
 struct ChildGuard(Option<Child>);
+
+fn spawn_child() -> ChildGuard {
+    ChildGuard(Some(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", CHILD, "--nocapture"])
+            .env(CHILD_PREFIX, "fk")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ))
+}
+
+fn printed_dir(child: &mut ChildGuard) -> PathBuf {
+    let stdout = child.0.as_mut().unwrap().stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut lines = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match lines.read_line(&mut line) {
+                Ok(0) => {
+                    send_line(&tx, None);
+                    break;
+                }
+                Ok(_) => {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('/') {
+                        send_line(&tx, Some(trimmed.to_owned()));
+                        // Drain to EOF: the child's harness prints to stdout after
+                        // the test body, and a closed pipe would make it panic.
+                        loop {
+                            line.clear();
+                            match lines.read_line(&mut line) {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
+                        break;
+                    }
+                }
+                Err(_) => {
+                    send_line(&tx, None);
+                    break;
+                }
+            }
+        }
+    });
+    let printed = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to print its directory"));
+    let Some(printed) = printed else {
+        panic!("the child exited before printing its directory");
+    };
+    let leftover = PathBuf::from(printed);
+    assert!(
+        leftover.is_dir(),
+        "the child printed {}",
+        leftover.display()
+    );
+    leftover
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
