@@ -425,7 +425,11 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
 /// `marker`, so a start through it is told apart from any other binary.
 fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
     let line = exited_line("io_failed", marker).replace('\'', "'\\''");
-    fakes::script(root.path(), "fiber-stub", &format!("printf '%s\\n' '{line}'\n"))
+    fakes::script(
+        root.path(),
+        "fiber-stub",
+        &format!("printf '%s\\n' '{line}'\n"),
+    )
 }
 
 /// The failure a started session reports once it has exited.
