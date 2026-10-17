@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{Startup, startup};
+use super::{Checked, Startup, startup};
 use crate::doctor::fix_at;
-use config::{Secret, store_credential};
+use config::{Config, ModelData, Protocol, ProviderData, Secret, Sources, store_credential};
 use contract::ErrorCode;
 use contract::shapes::Failure;
 use serde_json::{Value, json};
@@ -676,6 +676,86 @@ fn a_model_with_no_window_is_unknown() {
     let (code, line) = setup.blocked(&[], &env_of(&[]));
     assert_eq!(code, ErrorCode::NoModel);
     assert!(line.contains("has no model `m`"), "{line}");
+}
+
+#[test]
+fn a_windowless_model_blocks_through_the_window_check() {
+    use extensions::{Model, Providers};
+
+    // The loader leaves windowless models out, so `startup` never reaches
+    // the window refusal through a fixture: pin the shared refusal through
+    // the check itself, for a missing window and a zero one.
+    let setup = Setup::new();
+    setup.fake();
+    setup.write_config(&json!({"model": "fake/m"}));
+    let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+    let config = Config::load(Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let (providers, _) = Providers::load(&setup.home()).unwrap();
+    let workspace = setup.workspace();
+    for window in [None, Some(0)] {
+        let provider = ProviderData {
+            name: "fake".to_owned(),
+            credential: None,
+            credential_name: None,
+            headers: Default::default(),
+            placeholders: Default::default(),
+            models: Vec::new(),
+            reviewer_model: None,
+            login: None,
+        };
+        let model_data = ModelData {
+            id: "m".to_owned(),
+            name: None,
+            protocol: Protocol::OpenaiResponses,
+            base_url: "http://127.0.0.1:1/v1".to_owned(),
+            compat: Default::default(),
+            deferred_tools: false,
+            extra_body: Default::default(),
+            context_window: window,
+            max_output_tokens: None,
+            input: Vec::new(),
+            cost: None,
+            subscription: false,
+            web_search: None,
+            thinking_levels: Vec::new(),
+            thinking_default: None,
+            prompt_addendum: None,
+        };
+        let model = Model {
+            provider: &provider,
+            model: &model_data,
+            thinking: None,
+        };
+        let mut checked = Checked {
+            lines: Vec::new(),
+            blocker: None,
+            chosen: None,
+            workspace: &workspace,
+            config: &config,
+            inventory: &providers,
+            enabled: &providers,
+            env: &|_: &str| None::<String>,
+            has_userinfo: &|_: &str| false,
+        };
+        checked.window(&model);
+        let blocker = checked
+            .blocker
+            .expect("a windowless model blocks with the shared refusal");
+        assert_eq!(blocker.code, ErrorCode::NoModel);
+        assert!(!blocker.key);
+        assert!(
+            blocker.line.contains("declares no `context_window`"),
+            "{}",
+            blocker.line
+        );
+        assert_eq!(checked.lines, [blocker.line.clone()]);
+    }
 }
 
 #[test]
