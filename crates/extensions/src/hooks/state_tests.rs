@@ -503,6 +503,7 @@ fn state_own_command_failure_drops_earlier_changes_not_other_writes() {
             control: None,
             changed_by: None,
             provider_item: None,
+            hosts_surfaced: Vec::new(),
         }));
         assert_eq!(
             deadline

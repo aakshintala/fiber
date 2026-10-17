@@ -125,7 +125,13 @@ pub(crate) fn run_with(
     // The model lists are read off the loop: taken out before home
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
-    app.set_configure(launch.configure.take());
+    let router = crate::remote::Router::new();
+    let seams = crate::remote::seams(&launch.location, launch.configure.take(), &router);
+    if let Some(remote) = seams.remote {
+        app.set_remote(remote);
+    } else {
+        app.set_configure(seams.seam);
+    }
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
@@ -220,7 +226,7 @@ pub(crate) fn run_with(
     }
     spawn_hub(
         connect,
-        Feed::new(tx.clone(), terminal.hub.credits()),
+        Feed::new(tx.clone(), terminal.hub.credits()).routed(Arc::clone(&router)),
         retry,
         Arc::clone(&terminal.clock),
     );

@@ -69,9 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot. It names the key map action's bound key,
-leaving the key out when the action is unbound; Ctrl+C cannot be
-rebound, so its hint stays fixed. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter and Delete name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it only when home was entered from a session; this build never shows it, since no back key exists yet (#2438 builds the key). Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -921,8 +919,8 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
 
 - **An edit** shows its diff in the diff format below.
 - **A read** shows the text read, with the line-number gutter starting at the
-  first line read, from `details`. **A write** shows the text written, its
-  `content` argument, numbered from 1.
+  first line read, from `details`. A write, a call whose arguments hold a
+  string `content`, shows that text, numbered from 1.
 - **A search** shows its matches grouped under each file's path, the path
   bold, line numbers in the gutter and the matched text on the `match`
   tint, from the built-in `grep`'s `details`. A search call without them,

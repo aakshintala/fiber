@@ -43,13 +43,16 @@ impl Tool for HostedSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(crate::tool_util::effects(
-            vec![Effect::Network],
-            true,
-            None,
-            Some(String::new()),
-            None,
-        ))
+        Ok(Effects {
+            hosts: Some(Vec::new()),
+            ..crate::tool_util::effects(
+                vec![Effect::Network],
+                true,
+                None,
+                Some(String::new()),
+                None,
+            )
+        })
     }
 
     fn run(
@@ -128,13 +131,16 @@ impl Tool for BackendSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(crate::tool_util::effects(
-            vec![Effect::Network],
-            true,
-            None,
-            Some(String::new()),
-            None,
-        ))
+        Ok(Effects {
+            hosts: Some(Vec::new()),
+            ..crate::tool_util::effects(
+                vec![Effect::Network],
+                true,
+                None,
+                Some(String::new()),
+                None,
+            )
+        })
     }
 
     /// Runs the backend on the query and the domain filter. Both domain
@@ -167,7 +173,10 @@ impl Tool for BackendSearch {
         };
         match self.backend.search(&args.query, &domains, cancel) {
             Ok(None) => Output::default(),
-            Ok(Some(results)) => text_output(render(&results)),
+            Ok(Some(results)) => Output {
+                hosts_surfaced: results.iter().map(|result| result.url.clone()).collect(),
+                ..text_output(render(&results))
+            },
             Err(failure) => failed(failure.code, failure.message),
         }
     }

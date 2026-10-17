@@ -225,6 +225,7 @@ fn static_effects_are_returned_without_starting_a_callback() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     );
     assert_eq!(command(&ext, "count"), "0");
@@ -253,6 +254,7 @@ fn an_effects_function_answers_each_call_from_its_arguments() {
                 subject: Some(String::new()),
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             })
         );
     }
@@ -316,13 +318,20 @@ fiber.tool("slow", {
     let tools = by_name(&ext);
     let slow = Arc::clone(&tools["slow"]);
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(slow.effects(&Map::new())));
+    let call = std::thread::spawn(move || {
+        let result = slow.effects(&Map::new());
+        tx.send(()).unwrap();
+        result
+    });
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the effects function to start");
     clock.advance(Duration::from_millis(100));
     assert_eq!(
-        Deadline::after(WAIT).recv(&rx).expect("waited for the effects call"),
+        {
+            Deadline::after(WAIT).recv(&rx).expect("waited for the effects call");
+            call.join().expect("effects thread panicked")
+        },
         Err(EffectsError::Tool(
             "the effects function of the tool `slow` failed: `fiber.test/fx`: `slow.effects` passed its 100 ms timeout and was stopped."
                 .to_owned()
@@ -1508,6 +1517,7 @@ impl contract::tool::InnerCalls for ScriptRunner {
             control: None,
             changed_by: None,
             provider_item: None,
+            hosts_surfaced: Vec::new(),
         }))
     }
 }

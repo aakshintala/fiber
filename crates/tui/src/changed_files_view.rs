@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use contract::events::CommandResult;
 
+use crate::diff::{DiffLine, diff_lines, gutter_prefix, gutter_width, ink_spans, safe_line};
 use crate::format;
-use crate::swapped::{Frame, Ink, List};
+use crate::swapped::{Frame, Ink, List, Spot};
 
 /// Every changed path, most lines changed first, ties by path ascending.
 pub(crate) fn ranked(changes: &BTreeMap<String, (u64, u64)>) -> Vec<(&str, u64, u64)> {
@@ -123,15 +124,19 @@ fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
             Vec::new(),
         ),
-        Diff::Lines { lines, cut } => (
-            lines
-                .iter()
-                .map(|line| vec![(line.clone(), None, Ink::Plain)])
-                .collect(),
-            cut.iter()
-                .map(|artifact| format!("Cut: the whole diff is in {artifact}"))
-                .collect(),
-        ),
+        Diff::Lines { lines, cut } => {
+            let drawn = diff_lines(&lines.join("\n"));
+            let gutter = gutter_width(drawn.iter().filter_map(|line| line.number));
+            (
+                drawn
+                    .into_iter()
+                    .map(|line| hunk_row(line, gutter))
+                    .collect(),
+                cut.iter()
+                    .map(|artifact| format!("Cut: the whole diff is in {artifact}"))
+                    .collect(),
+            )
+        }
         Diff::Empty => (
             vec![vec![(
                 "No changes against HEAD.".to_owned(),
@@ -169,18 +174,19 @@ fn totals(changes: &BTreeMap<String, (u64, u64)>) -> (u64, u64, u64) {
         })
 }
 
-/// Removes terminal controls from a line; tabs use four spaces so file
-/// content cannot send terminal escapes through the view.
-fn safe_line(line: &str) -> String {
-    let mut safe = String::with_capacity(line.len());
-    for ch in line.chars() {
-        if ch == '\t' {
-            safe.push_str("    ");
-        } else if !ch.is_control() {
-            safe.push(ch);
-        }
+/// One diff line as swapped cells: the dim gutter, then the text
+/// under its ink. The gutter fits the widest number in the diff.
+fn hunk_row(line: DiffLine, gutter: usize) -> Vec<(String, Option<Spot>, Ink)> {
+    let mut cells = Vec::new();
+    if let Some(prefix) = gutter_prefix(line.number, gutter) {
+        cells.push((prefix, None, Ink::Muted));
     }
-    safe
+    cells.extend(
+        ink_spans(&line)
+            .into_iter()
+            .map(|(text, ink)| (text, None, ink)),
+    );
+    cells
 }
 
 /// The standard unreadable-diff answer.

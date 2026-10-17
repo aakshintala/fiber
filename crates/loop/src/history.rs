@@ -20,6 +20,8 @@ use crate::reviewer::render_reviewed;
 /// read and its payload never parsed.
 const FOLDED: &[&str] = &[
     "session_started",
+    "instruction_file",
+    "tool_call_completed",
     "usage_recorded",
     "preamble_built",
     "model_changed",
@@ -69,6 +71,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         seed: Carry::default(),
         ledger: crate::usage::Ledger::default(),
         grants: Vec::new(),
+        known_hosts: crate::known_hosts::KnownHosts::default(),
         session_blocks: 0,
         // The reviewer's input follows the session's handoffs
         // (`docs/permissions.md`, "At a handoff").
@@ -170,6 +173,13 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     {
         return Ok(());
     }
+    // Results without host lists or file changes cannot affect known hosts.
+    if line.kind == "tool_call_completed"
+        && !line.payload.contains_key("hosts_surfaced")
+        && !line.payload.contains_key("changes")
+    {
+        return Ok(());
+    }
     let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
         return Ok(());
     };
@@ -185,6 +195,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             line.seq,
         );
     }
+    resumed.known_hosts.fold(&event);
     pass.orphans.fold(&event);
     resumed.offers.fold(&event);
     // The pin is the own log's alone: a rewound or forked session starts

@@ -1,0 +1,225 @@
+//! Validates hub answers before the configuration views consume them.
+
+use crate::configure::{
+    ConfigureError, Layer, LoginKind, LoginTarget, ReviewerModels, Revoked, RuleRow, RulesSection,
+    Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches,
+    WriteScope,
+};
+use contract::{ErrorCode, HubLine};
+use serde_json::Value;
+use std::path::PathBuf;
+
+pub(super) fn io_error(operation: &str) -> ConfigureError {
+    ConfigureError {
+        code: ErrorCode::IoFailed,
+        message: format!("The {operation} answer could not be read."),
+    }
+}
+pub(super) fn result(line: &HubLine, operation: &str) -> Result<Value, ConfigureError> {
+    if line.kind == "command_rejected" {
+        return Err(ConfigureError {
+            code: line
+                .payload
+                .get("code")
+                .cloned()
+                .and_then(|code| serde_json::from_value(code).ok())
+                .unwrap_or(ErrorCode::IoFailed),
+            message: line
+                .payload
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| io_error(operation))?
+                .into(),
+        });
+    }
+    if line.kind != "command_accepted" {
+        return Err(io_error(operation));
+    }
+    Ok(line.payload.get("result").cloned().unwrap_or(Value::Null))
+}
+macro_rules! read {
+    ($value:expr, $key:expr) => {
+        serde_json::from_value($value.get($key)?.clone()).ok()
+    };
+}
+// An optional field may be absent, but a present field must decode.
+macro_rules! optional {
+    ($value:expr, $key:expr) => {
+        $value
+            .get($key)
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .ok()
+    };
+}
+
+pub(super) fn text(value: &Value) -> Option<String> {
+    read!(value, "text")
+}
+pub(super) fn read_config(value: &Value) -> Option<(String, String)> {
+    Some((read!(value, "text")?, read!(value, "version")?))
+}
+pub(super) fn file(value: &Value) -> Option<PathBuf> {
+    read!(value, "file")
+}
+pub(super) fn saved(value: &Value) -> Option<Saved> {
+    Some(Saved {
+        file: file(value)?,
+        warnings: read!(value, "warnings")?,
+    })
+}
+fn layer(text: &str) -> Option<Layer> {
+    match text {
+        "global" => Some(Layer::Global),
+        "project" => Some(Layer::Project),
+        "repository" => Some(Layer::Repository),
+        _ => None,
+    }
+}
+pub(super) fn settings(value: &Value) -> Option<Vec<SettingRow>> {
+    value
+        .get("rows")?
+        .as_array()?
+        .iter()
+        .map(|row| {
+            let value = match row.get("shown")?.as_str()? {
+                "unset" => Shown::Unset,
+                "value" => Shown::Value(read!(row, "value")?),
+                "redacted" => Shown::Redacted(read!(row, "value")?),
+                "union" => {
+                    let own: Vec<(String, String)> = read!(row, "own")?;
+                    Shown::Union {
+                        names: read!(row, "names")?,
+                        own: own
+                            .into_iter()
+                            .map(|(name, text)| Some((layer(&name)?, text)))
+                            .collect::<Option<_>>()?,
+                    }
+                }
+                _ => return None,
+            };
+            let scope = match row.get("scope")?.as_str()? {
+                "any" => WriteScope::Any {
+                    repo: read!(row, "repo")?,
+                },
+                "global_only" => WriteScope::GlobalOnly,
+                "repo_only" => WriteScope::RepoOnly,
+                "person_files" => WriteScope::PersonFiles,
+                _ => return None,
+            };
+            Some(SettingRow {
+                key: read!(row, "key")?,
+                layer: read!(row, "layer")?,
+                file: optional!(row, "file")?,
+                value,
+                scope,
+            })
+        })
+        .collect()
+}
+
+fn section(value: &Value) -> Option<RulesSection> {
+    let rows = if let Some(error) = value.get("error") {
+        Err(error.as_str()?.to_owned())
+    } else {
+        Ok(value
+            .get("rows")?
+            .as_array()?
+            .iter()
+            .map(|row| {
+                Some(RuleRow {
+                    line: read!(row, "line")?,
+                    text: read!(row, "text")?,
+                    rule: read!(row, "rule")?,
+                })
+            })
+            .collect::<Option<_>>()?)
+    };
+    Some(RulesSection {
+        file: file(value)?,
+        rows,
+    })
+}
+pub(super) fn rules(value: &Value) -> Option<(RulesSection, RulesSection)> {
+    Some((
+        section(value.get("global")?)?,
+        section(value.get("project")?)?,
+    ))
+}
+pub(super) fn revoked(value: &Value) -> Option<Revoked> {
+    match value.get("revoked")?.as_str()? {
+        "removed" => Some(Revoked::Removed),
+        "stale" => Some(Revoked::Stale),
+        _ => None,
+    }
+}
+pub(super) fn targets(value: &Value) -> Option<Vec<LoginTarget>> {
+    value
+        .get("targets")?
+        .as_array()?
+        .iter()
+        .map(|target| {
+            Some(LoginTarget {
+                name: read!(target, "name")?,
+                kind: match target.get("kind")?.as_str()? {
+                    "key" => LoginKind::Key,
+                    "browser" => LoginKind::Browser,
+                    "secret" => LoginKind::Secret,
+                    _ => return None,
+                },
+            })
+        })
+        .collect()
+}
+pub(super) fn stored(value: &Value) -> Option<Stored> {
+    Some(Stored {
+        path: read!(value, "path")?,
+        replaced: read!(value, "replaced")?,
+    })
+}
+pub(super) fn reviewer(value: &Value) -> Option<ReviewerModels> {
+    Some(ReviewerModels {
+        models: read!(value, "models")?,
+        notices: read!(value, "notices")?,
+        selected: optional!(value, "selected")?,
+    })
+}
+fn lists(value: &Value) -> Option<ToolLists> {
+    Some(ToolLists {
+        enabled: optional!(value, "enabled")?,
+        disabled: read!(value, "disabled")?,
+    })
+}
+pub(super) fn tools(value: &Value) -> Option<Vec<ToolSwitches>> {
+    value
+        .get("groups")?
+        .as_array()?
+        .iter()
+        .map(|switch| {
+            let group = switch.get("group")?.as_object()?;
+            if group.len() != 1 {
+                return None;
+            }
+            let group = if let Some(name) = group.get("mcp") {
+                ToolGroup::Mcp(name.as_str()?.into())
+            } else {
+                ToolGroup::Extension(group.get("extension")?.as_str()?.into())
+            };
+            Some(ToolSwitches {
+                group,
+                project: lists(switch.get("project")?)?,
+                everywhere: lists(switch.get("everywhere")?)?,
+            })
+        })
+        .collect()
+}
+pub(super) fn disabled(value: &Value) -> Option<SkillsDisabled> {
+    Some(SkillsDisabled {
+        project: read!(value, "project")?,
+        everywhere: read!(value, "everywhere")?,
+    })
+}
+
+#[cfg(test)]
+#[path = "decode_tests.rs"]
+mod tests;

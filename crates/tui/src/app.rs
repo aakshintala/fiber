@@ -193,6 +193,8 @@ pub(crate) enum Target {
     Group(usize),
     /// A call's diff, output or error.
     Call(usize),
+    /// A call's whole view, opened from its more row.
+    CallView(usize),
     /// A thinking block's text.
     Thought(usize),
     /// The login a failed turn offers.

@@ -88,6 +88,8 @@ pub struct Resumed {
     pub(crate) ledger: crate::usage::Ledger,
     /// Every grant a `permission_resolved` recorded.
     pub(crate) grants: Vec<Grant>,
+    /// Known hosts folded over the complete history chain.
+    pub(crate) known_hosts: crate::known_hosts::KnownHosts,
     /// The reviewer's blocks this session.
     pub(crate) session_blocks: u64,
     /// What the reviewer is shown: the latest `reviewer_kept`'s messages,
@@ -296,6 +298,7 @@ impl Loop {
             seed: carry,
             ledger,
             grants,
+            known_hosts,
             session_blocks,
             reviewed,
             orphans,
@@ -369,6 +372,7 @@ impl Loop {
                 workspace,
                 credentials,
                 grants,
+                known_hosts,
                 reviewed,
                 session_blocks,
                 repository: crate::offer::State::resumed(offers),
@@ -647,22 +651,27 @@ impl Loop {
             drop(permission);
             return self.run_steps(&turn);
         };
-        let decision: Decided = match self.await_answer(&action, &turn, &call.name, request)? {
-            // The answer allows the prepared call: it runs with no second
-            // check.
-            Asked::Allow => allow,
-            Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
-            Asked::Cancelled => Err(self.cancelled_before_ran()),
-            Asked::Idle => {
-                self.pending.clear();
-                self.cancel.disarm();
-                return Ok(None);
-            }
-            // The close already denied the re-raised request by `cancel`:
-            // the call completes as one no person can answer
-            // (`docs/events.md`, `permission_resolved`).
-            Asked::Closed => Err(crate::calls::no_person()),
-        };
+        let hosts = allow
+            .as_ref()
+            .ok()
+            .and_then(|prepared| prepared.effects.hosts.clone());
+        let decision: Decided =
+            match self.await_answer(&action, &turn, &call.name, request, hosts)? {
+                // The answer allows the prepared call: it runs with no second
+                // check.
+                Asked::Allow => allow,
+                Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
+                Asked::Cancelled => Err(self.cancelled_before_ran()),
+                Asked::Idle => {
+                    self.pending.clear();
+                    self.cancel.disarm();
+                    return Ok(None);
+                }
+                // The close already denied the re-raised request by `cancel`:
+                // the call completes as one no person can answer
+                // (`docs/events.md`, `permission_resolved`).
+                Asked::Closed => Err(crate::calls::no_person()),
+            };
         // The resumed decision is in: the segment ends here, before the
         // batch runs and its workers start their own timers.
         drop(permission);

@@ -251,6 +251,7 @@ impl Tool for PathTool {
             subject: Some(path),
             prefix: None,
             always_reviewed: self.always_reviewed,
+            hosts: None,
         })
     }
 
@@ -1436,6 +1437,7 @@ impl Tool for AskTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

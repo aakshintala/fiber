@@ -163,6 +163,7 @@ impl Tool for Gated {
             subject: Some("npm publish".into()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -223,6 +224,7 @@ impl Tool for Asks {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

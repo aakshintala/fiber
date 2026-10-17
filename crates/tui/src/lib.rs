@@ -22,6 +22,7 @@ mod configure;
 #[cfg(test)]
 mod configure_fake;
 mod context_view;
+mod diff;
 mod editor;
 mod event_loop;
 pub mod files;
@@ -56,6 +57,7 @@ mod paste_image;
 #[cfg(test)]
 mod pty_watch;
 mod rebind;
+mod remote;
 #[cfg(test)]
 mod results_support;
 mod retry;

@@ -755,3 +755,277 @@ fn an_always_reviewed_call_reaches_the_reviewer_despite_a_project_allow() {
     assert_eq!(plain.ran().len(), 1);
     assert!(reviewer.requests().is_empty());
 }
+
+fn network_tool(name: &'static str, hosts: Option<&[&str]>) -> TestTool {
+    let mut tool = TestTool::declaring(name, "Fetched.", vec![Effect::Network], None);
+    tool.hosts = hosts.map(|hosts| hosts.iter().map(|host| (*host).into()).collect());
+    tool
+}
+
+#[test]
+fn known_hosts_prompt_fast_paths_but_unknown_missing_and_subdomain_hosts_are_reviewed() {
+    for (hosts, reviewed) in [
+        (Some(vec!["https://EXAMPLE.com/a?q=1"]), false),
+        (None, true),
+        (Some(vec!["https://api.example.com/"]), true),
+        (Some(vec!["https://other.test/"]), true),
+    ] {
+        let tool = Arc::new(network_tool("lookup", hosts.as_deref()));
+        let mut session = Session::with_tools(
+            vec![
+                calls_reply("", &[("lookup", paris())]),
+                Scripted::text("Done."),
+            ],
+            None,
+            vec![tool.clone()],
+        );
+        let reviewer = session.reviewer(vec![Scripted::text("allow")]);
+        session
+            .inbox
+            .send(delivery("Read https://example.com/"))
+            .unwrap();
+        assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+        let lines = session.lines();
+        let middle = if reviewed {
+            vec![
+                "usage_recorded",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ]
+        } else {
+            vec!["tool_call_started", "tool_call_completed"]
+        };
+        assert_eq!(kinds(&lines), kinds_with(&middle));
+        assert_eq!(reviewer.requests().len(), usize::from(reviewed));
+        assert_eq!(tool.ran().len(), 1);
+        assert_eq!(completed(&lines)[0].payload["status"], "completed");
+        if reviewed {
+            assert_eq!(
+                line(&lines, "permission_resolved").payload.get("hosts"),
+                tool.hosts
+                    .as_ref()
+                    .map(|h| serde_json::to_value(h).unwrap())
+                    .as_ref()
+            );
+        }
+    }
+}
+
+fn network_steps(middles: &[(usize, &[&str])]) -> Vec<String> {
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    for (calls, middle) in middles {
+        expected.extend([
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+        ]);
+        expected.extend(std::iter::repeat_n("tool_call_arguments_delta", *calls));
+        expected.extend(std::iter::repeat_n("tool_call_requested", *calls));
+        expected.extend(["usage_recorded", "assistant_message_completed"]);
+        expected.extend(*middle);
+    }
+    expected.extend([
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    expected.into_iter().map(str::to_owned).collect()
+}
+
+#[test]
+fn known_hosts_reviewer_allow_is_visible_to_the_next_call_in_the_step_and_next_step() {
+    for same_step in [false, true] {
+        let tool = Arc::new(network_tool("lookup", Some(&["https://example.com/"])));
+        let mut script = if same_step {
+            vec![calls_reply("", &[("lookup", paris()), ("lookup", paris())])]
+        } else {
+            vec![
+                calls_reply("", &[("lookup", paris())]),
+                calls_reply("", &[("lookup", paris())]),
+            ]
+        };
+        script.push(Scripted::text("Done."));
+        let mut session = Session::with_tools(script, None, vec![tool.clone()]);
+        let reviewer = session.reviewer(vec![Scripted::text("allow"), Scripted::text("allow")]);
+        let lines = go(&mut session);
+        let expected = if same_step {
+            network_steps(&[(
+                2,
+                &[
+                    "usage_recorded",
+                    "permission_resolved",
+                    "tool_call_started",
+                    "tool_call_started",
+                    "tool_call_completed",
+                    "tool_call_completed",
+                ],
+            )])
+        } else {
+            network_steps(&[
+                (
+                    1,
+                    &[
+                        "usage_recorded",
+                        "permission_resolved",
+                        "tool_call_started",
+                        "tool_call_completed",
+                    ],
+                ),
+                (1, &["tool_call_started", "tool_call_completed"]),
+            ])
+        };
+        assert_eq!(kinds(&lines), expected);
+        assert_eq!(reviewer.requests().len(), 1);
+        assert_eq!(
+            line(&lines, "permission_resolved").payload["hosts"],
+            json!(["https://example.com/"])
+        );
+        assert_eq!(tool.ran().len(), 2);
+    }
+}
+
+#[test]
+fn known_hosts_results_surface_hosts_but_page_content_never_does() {
+    for surfaced in [false, true] {
+        let mut source = TestTool::reads("discover", "Page names https://docs.rs/x");
+        if surfaced {
+            source.output.hosts_surfaced = vec!["https://docs.rs/x".into()];
+        }
+        let target = Arc::new(network_tool("lookup", Some(&["https://docs.rs/"])));
+        let mut session = Session::with_tools(
+            vec![
+                calls_reply("", &[("discover", paris())]),
+                calls_reply("", &[("lookup", paris())]),
+                Scripted::text("Done."),
+            ],
+            None,
+            vec![Arc::new(source), target.clone()],
+        );
+        let reviewer = session.reviewer(vec![Scripted::text("allow")]);
+        let lines = go(&mut session);
+        let middle = if surfaced {
+            vec!["tool_call_started", "tool_call_completed"]
+        } else {
+            vec![
+                "usage_recorded",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ]
+        };
+        assert_eq!(
+            kinds(&lines),
+            network_steps(&[
+                (1, &["tool_call_started", "tool_call_completed"]),
+                (1, &middle)
+            ])
+        );
+        assert_eq!(reviewer.requests().len(), usize::from(!surfaced));
+        assert_eq!(
+            completed(&lines)[0].payload.get("hosts_surfaced"),
+            surfaced.then(|| json!(["https://docs.rs/x"])).as_ref()
+        );
+        assert_eq!(target.ran().len(), 1);
+    }
+}
+
+#[test]
+fn known_hosts_standing_deny_precedes_the_network_fast_path() {
+    let tool = Arc::new(network_tool("lookup", Some(&["https://example.com/"])));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("lookup", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone()],
+    );
+    session.rules.set(standing(
+        vec![rule(RuleDecision::Deny, "lookup", "")],
+        vec![],
+    ));
+    let reviewer = session.reviewer(vec![]);
+    session
+        .inbox
+        .send(delivery("Read https://example.com/"))
+        .unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"])
+    );
+    assert_eq!(
+        line(&lines, "permission_resolved").payload["decided_by"],
+        "standing_rule"
+    );
+    assert_eq!(completed(&lines)[0].payload["status"], "denied");
+    assert!(tool.ran().is_empty());
+    assert!(reviewer.requests().is_empty());
+}
+
+#[test]
+fn known_hosts_person_allow_records_hosts_for_later_calls_without_a_standing_ask() {
+    let first = Arc::new(network_tool("ask_lookup", Some(&["https://example.com/"])));
+    let next = Arc::new(network_tool(
+        "next_lookup",
+        Some(&["https://example.com/?q=2"]),
+    ));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("ask_lookup", paris())]),
+            calls_reply("", &[("next_lookup", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![first.clone(), next.clone()],
+    );
+    session.rules.set(standing(
+        vec![rule(RuleDecision::Ask, "ask_lookup", "")],
+        vec![],
+    ));
+    let reviewer = session.reviewer(vec![]);
+    let (sent, received) = std::sync::mpsc::channel();
+    let _answer = on_request(&session, {
+        let inbox = session.inbox.clone();
+        move |id| {
+            inbox.send(reply_delivery(id, allow())).unwrap();
+            sent.send(()).unwrap();
+        }
+    });
+    let lines = go(&mut session);
+    fakes::Deadline::after(support::DEADLINE)
+        .recv_or_fail(&received, "the permission answer was sent");
+    assert_eq!(
+        kinds(&lines),
+        network_steps(&[
+            (
+                1,
+                &[
+                    "permission_requested",
+                    "permission_resolved",
+                    "tool_call_started",
+                    "tool_call_completed"
+                ]
+            ),
+            (1, &["tool_call_started", "tool_call_completed"])
+        ])
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["hosts"], json!(["https://example.com/"]));
+    assert_eq!(resolved.payload["decided_by"], "person");
+    assert_eq!(first.ran().len(), 1);
+    assert_eq!(next.ran().len(), 1);
+    assert!(reviewer.requests().is_empty());
+}

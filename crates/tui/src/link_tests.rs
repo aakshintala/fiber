@@ -8,6 +8,138 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[test]
+fn lends_allow_exactly_one_extra_queue_and_restore_the_cap() {
+    let credits = Credits::new(QUEUE);
+    let epoch = credits.epoch();
+    for _ in 0..QUEUE {
+        assert!(credits.take(epoch));
+    }
+    let lend = credits.lend();
+    for _ in 0..QUEUE {
+        assert!(credits.take(epoch));
+    }
+    assert!(!credits.take(epoch));
+    drop(lend);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = Arc::clone(&credits);
+    std::thread::spawn(move || {
+        tx.send(worker.take(epoch)).unwrap();
+    });
+    await_waiter(&credits, "restored cap");
+    for _ in 0..=QUEUE {
+        credits.received(&Input::Hub(Line::Hub(contract::HubLine {
+            kind: "ignored".into(),
+            ts: 0,
+            schema_version: 1,
+            payload: serde_json::Map::new(),
+        })));
+    }
+    assert!(Deadline::start().recv_or_fail(&rx, "take below restored cap"));
+}
+
+#[test]
+fn lend_wakes_a_reader_parked_at_the_cap() {
+    let credits = Credits::new(1);
+    let epoch = credits.epoch();
+    assert!(credits.take(epoch));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = Arc::clone(&credits);
+    std::thread::spawn(move || {
+        tx.send(worker.take(epoch)).unwrap();
+    });
+    await_waiter(&credits, "park before lend");
+    let _lend = credits.lend();
+    assert!(Deadline::start().recv_or_fail(&rx, "lend wakes reader"));
+}
+
+#[test]
+fn routed_feed_installs_the_stream_and_bypasses_line_credits() {
+    let deadline = Deadline::start();
+    let router = crate::remote::Router::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let feed = Feed::new(tx, Credits::new(0)).routed(Arc::clone(&router));
+    let (client, mut hub) = UnixStream::pair().unwrap();
+    let reader = client.try_clone().unwrap();
+    feed.send(Input::Connected(
+        client,
+        contract::HubLine {
+            kind: "hub_hello".into(),
+            ts: 0,
+            schema_version: 1,
+            payload: serde_json::Map::new(),
+        },
+    ))
+    .unwrap();
+    assert!(matches!(
+        deadline.recv_or_fail(&rx, "connected"),
+        Input::Connected(..)
+    ));
+    let pending = router
+        .send("configure", serde_json::json!({"operation":"settings"}))
+        .unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
+        let mut text = String::new();
+        BufReader::new(hub.try_clone().unwrap())
+            .read_line(&mut text)
+            .unwrap();
+        let line: serde_json::Value = serde_json::from_str(&text).unwrap();
+        writeln!(hub, "{}", serde_json::json!({"kind":"command_accepted","ts":0,"schema_version":1,"payload":{"command_id":line["id"],"result":{}}})).unwrap();
+        done.send(()).unwrap();
+    });
+    let (result, result_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        result.send(pending.wait()).unwrap();
+    });
+    std::thread::spawn(move || read_lines(reader, &feed));
+    assert!(deadline.recv_or_fail(&result_rx, "routed answer").is_ok());
+    deadline.recv_or_fail(&finished, "hub answer written");
+    assert!(matches!(
+        deadline.recv_or_fail(&rx, "disconnected"),
+        Input::Disconnected
+    ));
+    assert!(matches!(
+        router.send("configure", serde_json::json!({})),
+        Err(crate::remote::AskError::Detached)
+    ));
+}
+
+#[test]
+fn concurrent_large_writes_are_whole_lines() {
+    use std::io::{BufRead, BufReader};
+    let deadline = Deadline::start();
+    let (client, hub) = UnixStream::pair().unwrap();
+    let other = client.try_clone().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let lines: Vec<_> = BufReader::new(hub)
+            .lines()
+            .take(2)
+            .map(Result::unwrap)
+            .collect();
+        tx.send(lines).unwrap();
+    });
+    let (done, finished) = std::sync::mpsc::channel();
+    for (socket, byte) in [(client, 'a'), (other, 'b')] {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            write_line(&socket, &byte.to_string().repeat(65536)).unwrap();
+            done.send(()).unwrap();
+        });
+    }
+    let lines = deadline.recv_or_fail(&rx, "whole large lines");
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert_eq!(line.len(), 65536);
+        assert!(line.bytes().all(|byte| byte == line.as_bytes()[0]));
+    }
+    assert_ne!(lines[0].as_bytes()[0], lines[1].as_bytes()[0]);
+    deadline.recv_or_fail(&finished, "first writer");
+    deadline.recv_or_fail(&finished, "second writer");
+}
+
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 

@@ -301,6 +301,9 @@ pub struct ToolCallCompleted {
     /// When an `after_tool` hook rewrote the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<Vec<String>>,
+    /// Hosts surfaced by the result, each named by an HTTP(S) URL.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts_surfaced: Vec<String>,
     /// On a call the provider ran, its result block exactly as it arrived,
     /// sent back unchanged only to the model that produced it
     /// (`docs/tools.md`, "Hosted by the provider").
@@ -566,6 +569,10 @@ pub struct PermissionResolved {
     /// or the stage that failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ReviewerRef>,
+    /// Hosts declared by a call allowed by a person or reviewer, each
+    /// named by an HTTP(S) URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosts: Option<Vec<String>>,
     /// On a reviewed decision with no request_id (a reviewer denial, a no-reviewer denial and a reviewer allow), the call's declared effects and rewrite; absent otherwise.
     #[serde(flatten)]
     pub call: Option<ReviewedCall>,
