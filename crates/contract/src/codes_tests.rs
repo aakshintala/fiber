@@ -30,7 +30,7 @@ fn doc_codes() -> BTreeSet<&'static str> {
         "### Before a session exists",
         "## A failed model call",
         "## Registry",
-        "Notices, for a failure outside any action:",
+        "Notices, for a failure outside any action or a login a person must finish:",
     ] {
         let found = table_codes(heading);
         assert!(!found.is_empty(), "no codes under {heading}");

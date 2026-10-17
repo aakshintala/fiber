@@ -8,6 +8,9 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod attend;
+#[cfg(test)]
+mod attend_tests;
 mod commands;
 mod extension_tools;
 mod first_party;
@@ -21,6 +24,42 @@ mod lua;
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub use lua::observe_load;
+
+#[cfg(any(test, feature = "test-hooks"))]
+type LoginWaitObserver = (String, Box<dyn FnOnce(std::thread::ThreadId) + Send>);
+#[cfg(any(test, feature = "test-hooks"))]
+static LOGIN_WAIT_OBSERVERS: std::sync::Mutex<Vec<LoginWaitObserver>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Runs `notify` once with the VM thread's id when the extension records a login wait.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub fn observe_login_wait(
+    extension: String,
+    notify: Box<dyn FnOnce(std::thread::ThreadId) + Send>,
+) {
+    LOGIN_WAIT_OBSERVERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((extension, notify));
+}
+
+/// Fires one login-wait observer, holding no lock while it runs.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) fn login_wait_recorded(extension: &str) {
+    let notify = {
+        let mut observers = LOGIN_WAIT_OBSERVERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observers
+            .iter()
+            .position(|(name, _)| name == extension)
+            .map(|index| observers.remove(index).1)
+    };
+    if let Some(notify) = notify {
+        notify(std::thread::current().id());
+    }
+}
 mod lua_cost;
 mod lua_provider;
 mod manage;
@@ -373,6 +412,18 @@ pub enum Error {
         /// `open`, `callback` or `poll`.
         call: String,
     },
+    /// A credential still waiting on a callback or poll sleep when its timeout passed.
+    #[error(
+        "`{extension}`: `{callback}` waited {timeout_ms} ms for a login that did not finish, and was stopped. Log in again."
+    )]
+    LoginTimedOut {
+        /// The extension.
+        extension: String,
+        /// The credential callback.
+        callback: String,
+        /// The timeout it declared.
+        timeout_ms: u64,
+    },
     /// A callback ran past the timeout it declared, and was stopped.
     #[error("`{extension}`: `{callback}` passed its {timeout_ms} ms timeout and was stopped.")]
     Timeout {
@@ -507,7 +558,7 @@ impl Error {
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
-            Self::RefreshRejected { .. } | Self::Unattended { .. } => {
+            Self::RefreshRejected { .. } | Self::Unattended { .. } | Self::LoginTimedOut { .. } => {
                 ErrorCode::AuthenticationFailed
             }
             Self::RefreshUnreachable { .. } => ErrorCode::ConnectionFailed,
