@@ -41,7 +41,6 @@ struct StateCases {
     before: Option<BeforeToolOutcome>,
     check: Option<CheckOutcome>,
     after: Option<AfterToolOutcome>,
-    counts: std::collections::BTreeMap<&'static str, usize>,
     replacement_only: bool,
     reject_carried: bool,
     supersede_note: bool,
@@ -124,11 +123,37 @@ macro_rules! state_forward {
     };
 }
 
+macro_rules! state_context_forward {
+    ($method:ident, $argument:ident) => {
+        fn $method(&self, argument: &contract::hook::$argument<'_>) -> ContextAnswer {
+            self.called(stringify!($method));
+            let mut answer = self.inner.$method(argument);
+            if let ContextOutcome::Added(contexts) = &mut answer.outcome {
+                for context in contexts {
+                    context.state.push(carried_state(stringify!($method)));
+                }
+            }
+            answer.notices.push(state_notice());
+            answer
+        }
+    };
+}
+
 impl Hooks for StateHooks {
-    state_forward!(before_message, BeforeMessage, BeforeMessageAnswer);
-    state_forward!(session_start, SessionStart, ContextAnswer);
-    state_forward!(turn_start, TurnStart, ContextAnswer);
-    state_forward!(turn_end, TurnEnd, ContextAnswer);
+    fn before_message(&self, argument: &contract::hook::BeforeMessage<'_>) -> BeforeMessageAnswer {
+        self.called("before_message");
+        let mut answer = self.inner.before_message(argument);
+        if let BeforeMessageOutcome::Passed { context, .. } = &mut answer.outcome {
+            for added in context {
+                added.state.push(carried_state("before_message"));
+            }
+        }
+        answer.notices.push(state_notice());
+        answer
+    }
+    state_context_forward!(session_start, SessionStart);
+    state_context_forward!(turn_start, TurnStart);
+    state_context_forward!(turn_end, TurnEnd);
     state_forward!(before_model_call, BeforeModelCall, CheckAnswer);
     fn check_tool(&self, call: &BeforeToolCall<'_>) -> CheckAnswer {
         self.called("check_tool");
@@ -191,27 +216,13 @@ impl Hooks for StateHooks {
         let (point, taken) = pending.as_mut().expect("a hook returned");
         assert!(!*taken, "taken once");
         *taken = true;
-        let count = self.cases.counts.get(point).copied().unwrap_or(1);
-        (0..count)
-            .map(|index| {
-                let context = if self.cases.replacement_only && *point == "before_message" {
-                    None
-                } else {
-                    matches!(
-                        *point,
-                        "before_message" | "session_start" | "turn_start" | "turn_end"
-                    )
-                    .then_some(index)
-                };
-                contract::hook::StateLine {
-                    value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
-                    extension: "state".into(),
-                    key: (*point).into(),
-                    landing: 1,
-                    context,
-                }
-            })
-            .collect()
+        if matches!(*point, "session_start" | "turn_start" | "turn_end")
+            || (*point == "before_message" && !self.cases.replacement_only)
+        {
+            Vec::new()
+        } else {
+            vec![carried_state(point)]
+        }
     }
     fn take_state_lines(&self) -> Vec<contract::events::Event> {
         self.flush();
@@ -239,6 +250,15 @@ impl Hooks for StateHooks {
                 .map(|line| line.into_event())
                 .collect()
         }
+    }
+}
+
+fn carried_state(key: &str) -> contract::hook::StateLine {
+    contract::hook::StateLine {
+        value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
+        extension: "state".into(),
+        key: key.into(),
+        landing: 1,
     }
 }
 
@@ -355,32 +375,6 @@ fn state_lines_take_follows_every_hook_call() {
     }
 }
 
-#[test]
-fn state_lines_split_context_edges_keep_every_line() {
-    for count in 0..=2 {
-        for index in 0..=2 {
-            let mut line = contract::hook::StateLine {
-                value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
-                extension: "state".into(),
-                key: "context".into(),
-                landing: 1,
-                context: Some(index),
-            };
-            let (other, grouped) = crate::hooks::split_state(vec![line.clone()], count);
-            if count == 0 {
-                assert_eq!(other, vec![line.clone()]);
-            } else {
-                assert_eq!(grouped[index.min(count - 1)], vec![line.clone()]);
-                assert!(other.is_empty());
-            }
-            line.context = None;
-            let (other, grouped) = crate::hooks::split_state(vec![line.clone()], count);
-            assert_eq!(other, vec![line]);
-            assert!(grouped.iter().all(Vec::is_empty));
-        }
-    }
-}
-
 fn state_written(world: &World, key: &str) -> Vec<Envelope> {
     lines(world)
         .into_iter()
@@ -418,6 +412,7 @@ fn state_lines_prompt_replacements_and_contexts_write_at_their_own_lines() {
                     }),
                     context: (0..count)
                         .map(|i| Context {
+                            state: Vec::new(),
                             extension: "state".into(),
                             text: format!("context-{i}"),
                         })
@@ -427,11 +422,10 @@ fn state_lines_prompt_replacements_and_contexts_write_at_their_own_lines() {
             });
         }
         let mut world = started(vec![fakes::Scripted::text("done")], None);
-        let mut cases = StateCases {
+        let cases = StateCases {
             replacement_only: count == 0,
             ..Default::default()
         };
-        cases.counts.insert("before_message", count.max(1));
         state_attached(&mut world, inner, cases);
         for id in ["a", "b"] {
             let (ack, _) = capture();
@@ -551,33 +545,31 @@ fn state_lines_cancelled_hook_answers_still_drain_other_writes() {
 }
 
 #[test]
-fn turn_end_context_lines_index_past_the_contexts_already_held() {
+fn state_lines_turn_end_contexts_keep_their_own_writes_after_held_contexts() {
     let inner = Arc::new(FakeHooks::new());
     inner.answer_turn_end(added(vec![("state", "end")]));
     let mut world = started(Vec::new(), None);
-    let cases = StateCases {
-        counts: std::collections::BTreeMap::from([("turn_end", 2)]),
-        ..StateCases::default()
-    };
-    state_attached(&mut world, inner, cases);
+    state_attached(&mut world, inner, StateCases::default());
     let mut looped = world.looped.take().unwrap();
     for text in ["held-a", "held-b"] {
         looped.lifecycle.continued.push(Context {
+            state: Vec::new(),
             extension: "state".into(),
             text: text.into(),
         });
     }
     let turn = TurnId("turn_end_index".into());
     assert!(looped.replied(&turn, "reply").unwrap().is_none());
-    // Two lines, each indexed from 0 by the hook, move past the two held
-    // contexts: index plus count, not index times or minus count.
-    let indices: Vec<_> = looped
-        .lifecycle
-        .continued_state
-        .iter()
-        .map(|line| line.context)
-        .collect();
-    assert_eq!(indices, [Some(2), Some(3)]);
+    let held = &looped.lifecycle.continued;
+    assert_eq!(
+        held.iter()
+            .map(|context| context.text.as_str())
+            .collect::<Vec<_>>(),
+        ["held-a", "held-b", "end"]
+    );
+    assert!(held[0].state.is_empty());
+    assert!(held[1].state.is_empty());
+    assert_eq!(held[2].state, vec![carried_state("turn_end")]);
 }
 
 #[test]
@@ -600,23 +592,13 @@ fn state_lines_held_contexts_and_continuations_share_their_commits() {
                     extension: "state".into(),
                     key: key.into(),
                     landing: 1,
-                    context: Some(0),
                 }],
             ));
             looped.lifecycle.continued.push(Context {
+                state: vec![carried_state(&format!("end-{key}"))],
                 extension: "state".into(),
                 text: key.into(),
             });
-            looped
-                .lifecycle
-                .continued_state
-                .push(contract::hook::StateLine {
-                    value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
-                    extension: "state".into(),
-                    key: format!("end-{key}"),
-                    landing: 1,
-                    context: Some(looped.lifecycle.continued.len() - 1),
-                });
         }
         if refuse {
             looped.cancel.shutdown(143);
@@ -628,7 +610,6 @@ fn state_lines_held_contexts_and_continuations_share_their_commits() {
             assert!(state_written(&world, "end-a").is_empty());
         } else {
             assert!(looped.lifecycle.start_contexts.is_empty());
-            assert!(looped.lifecycle.continued_state.is_empty());
             for key in ["a", "b"] {
                 state_adjacent(&world, key, "context_added");
                 state_adjacent(&world, &format!("end-{key}"), "steering_applied");
@@ -663,9 +644,7 @@ fn state_lines_handoff_note_and_contexts_follow_the_completion_decision() {
             *inner.shutdown_after_handoff_check.lock().unwrap() =
                 Some(world.looped.as_ref().unwrap().cancel.clone());
         }
-        let mut cases = StateCases::default();
-        cases.counts.insert("session_start", 2);
-        state_attached(&mut world, inner, cases);
+        state_attached(&mut world, inner, StateCases::default());
         world.looped = Some(
             world
                 .looped
@@ -1132,7 +1111,6 @@ fn state_lines_shutdown_between_held_context_commits_keeps_the_second_pair() {
                 extension: "state".into(),
                 key: key.into(),
                 landing: 1,
-                context: Some(0),
             }],
         ));
     }
@@ -1162,25 +1140,15 @@ fn state_lines_refused_continuation_commit_drops_its_carried_lines() {
     state_attached(&mut world, inner, StateCases::default());
     let mut looped = world.looped.take().unwrap();
     looped.lifecycle.continued.push(Context {
+        state: vec![carried_state("end")],
         extension: "state".into(),
         text: "continue".into(),
     });
-    looped
-        .lifecycle
-        .continued_state
-        .push(contract::hook::StateLine {
-            value: Some((serde_json::json!(true), contract::events::OnFork::AtPoint)),
-            extension: "state".into(),
-            key: "end".into(),
-            landing: 1,
-            context: Some(0),
-        });
     let cancel = looped.cancel.clone();
     super::BEFORE_HELD_WRITE
         .with(|hook| *hook.borrow_mut() = Some(Box::new(move || cancel.shutdown(143))));
     looped.write_held(&TurnId("held".into())).unwrap();
     assert!(looped.lifecycle.continued.is_empty());
-    assert!(looped.lifecycle.continued_state.is_empty());
     assert!(state_written(&world, "end").is_empty());
 }
 
@@ -1462,6 +1430,7 @@ fn passed_message_with_context(context: Vec<(&str, &str)>) -> BeforeMessageAnswe
             context: context
                 .into_iter()
                 .map(|(extension, text)| Context {
+                    state: Vec::new(),
                     extension: extension.to_owned(),
                     text: text.to_owned(),
                 })
@@ -1477,6 +1446,7 @@ fn added(texts: Vec<(&str, &str)>) -> ContextAnswer {
             texts
                 .into_iter()
                 .map(|(extension, text)| Context {
+                    state: Vec::new(),
                     extension: extension.to_owned(),
                     text: text.to_owned(),
                 })

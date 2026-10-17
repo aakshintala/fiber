@@ -441,7 +441,6 @@ impl ExtensionState {
             key: key.into(),
             value: value.clone().map(|value| (value, rule)),
             landing,
-            context: None,
         };
         let write = Write {
             value,

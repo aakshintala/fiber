@@ -178,6 +178,8 @@ pub struct Replaced {
 /// at `turn_end` the texts are messages that continue the turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Context {
+    /// State writes owned by this context, written immediately before it.
+    pub state: Vec<StateLine>,
     /// The extension whose hook returned it.
     pub extension: String,
     /// The context to add.
@@ -279,8 +281,6 @@ pub struct StateLine {
     pub value: Option<(Value, OnFork)>,
     /// The write's position in the session's state view.
     pub landing: u64,
-    /// The first context this hook added, or none for its other change.
-    pub context: Option<usize>,
 }
 
 impl StateLine {
@@ -315,7 +315,7 @@ pub trait Hooks: Send + Sync {
         lines.into_iter().map(StateLine::into_event).collect()
     }
 
-    /// Takes the state lines of the answer the last hook call returned.
+    /// Takes the last hook answer's state lines that belong to no context.
     // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
     #[cfg_attr(false, mutants::skip)]
     fn take_change_state(&self) -> Vec<StateLine> {

@@ -2280,6 +2280,7 @@ impl StartHooks {
 pub(crate) fn start_added(extension: &str, text: &str) -> contract::hook::ContextAnswer {
     contract::hook::ContextAnswer {
         outcome: contract::hook::ContextOutcome::Added(vec![contract::hook::Context {
+            state: Vec::new(),
             extension: extension.to_owned(),
             text: text.to_owned(),
         }]),

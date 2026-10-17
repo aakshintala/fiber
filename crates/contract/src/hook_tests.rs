@@ -81,7 +81,6 @@ fn state_line(key: &str, landing: u64) -> StateLine {
         extension: "goal".into(),
         key: key.into(),
         landing,
-        context: None,
     }
 }
 

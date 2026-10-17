@@ -314,6 +314,7 @@ fn a_replacement_is_seen_by_the_next_hook_and_a_context_only_hook_is_unnamed() {
     assert_eq!(
         context,
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/b".into(),
             text: "ctx".into(),
         }]
@@ -347,10 +348,12 @@ fn contexts_are_collected_in_order_with_their_extensions() {
         context,
         vec![
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/a".into(),
                 text: "A".into(),
             },
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/b".into(),
                 text: "B".into(),
             },
@@ -443,6 +446,7 @@ fn a_non_blocking_message_error_drops_its_change_and_the_chain_goes_on() {
     assert_eq!(
         context,
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/b".into(),
             text: "late".into(),
         }]

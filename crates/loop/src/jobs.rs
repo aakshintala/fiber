@@ -234,7 +234,7 @@ impl Loop {
         pieces: Vec<Queued>,
     ) -> (
         Vec<InputItem>,
-        Vec<ContextAdded>,
+        Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
         Vec<contract::hook::StateLine>,
     ) {
         let mut input: Vec<InputItem> = Vec::new();
@@ -243,16 +243,11 @@ impl Loop {
         for seq in self.handoff.carry.pending() {
             input.push(InputItem::ShellCommand { seq: Seq(seq) });
         }
-        let mut contexts: Vec<ContextAdded> = Vec::new();
+        let mut contexts = Vec::new();
         let mut state = Vec::new();
         for piece in pieces {
             match piece {
-                Queued::Steer(message, mut hooked) => {
-                    for line in &mut hooked.state {
-                        if let Some(index) = line.context.as_mut() {
-                            *index += contexts.len();
-                        }
-                    }
+                Queued::Steer(message, hooked) => {
                     state.extend(hooked.state);
                     contexts.extend(hooked.context);
                     input.push(InputItem::Message {
@@ -315,9 +310,7 @@ impl Loop {
             let event = match piece {
                 Queued::Steer(message, hooked) => {
                     steered = true;
-                    let (state, contexts) =
-                        crate::hooks::split_state(hooked.state, hooked.context.len());
-                    self.write_carried(state, Some(turn))?;
+                    self.write_carried(hooked.state, Some(turn))?;
                     self.append(
                         &Event::SteeringApplied(contract::events::SteeringApplied {
                             content: message.content,
@@ -327,7 +320,7 @@ impl Loop {
                         turn,
                         None,
                     )?;
-                    for (added, state) in hooked.context.into_iter().zip(contexts) {
+                    for (added, state) in hooked.context {
                         self.write_carried(state, Some(turn))?;
                         self.append(&Event::ContextAdded(added), turn, None)?;
                     }

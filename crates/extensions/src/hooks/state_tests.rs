@@ -31,7 +31,7 @@ fn state_after_tool_each_changed_field_carries_its_writes() {
 }
 
 #[test]
-fn state_multiple_extensions_keep_chain_order_and_context_indices() {
+fn state_multiple_extensions_keep_chain_order_and_context_ownership() {
     for point in [
         "after_tool",
         "before_message",
@@ -56,22 +56,30 @@ fn state_multiple_extensions_keep_chain_order_and_context_indices() {
             );
         }
         let session = home.load(&[]);
-        run(&session, point);
-        let lines = session.take_change_state();
+        let contexts = run(&session, point);
+        let unowned = session.take_change_state();
+        if point == "after_tool" {
+            assert!(contexts.is_empty());
+            assert_eq!(unowned.len(), 2);
+        } else {
+            assert!(unowned.is_empty());
+            assert_eq!(contexts.len(), 2);
+            for context in &contexts {
+                assert_eq!(context.state.len(), 1);
+                assert_eq!(context.state[0].extension, context.extension);
+                assert_eq!(context.text, "context");
+            }
+        }
+        let lines: Vec<_> = unowned
+            .into_iter()
+            .chain(contexts.into_iter().flat_map(|context| context.state))
+            .collect();
         assert_eq!(
             lines
                 .iter()
                 .map(|line| line.extension.as_str())
                 .collect::<Vec<_>>(),
             ["fiber.test/a", "fiber.test/b"]
-        );
-        assert_eq!(
-            lines.iter().map(|line| line.context).collect::<Vec<_>>(),
-            if point == "after_tool" {
-                vec![None, None]
-            } else {
-                vec![Some(0), Some(1)]
-            }
         );
         assert!(session.take_state_lines().is_empty());
     }
@@ -81,6 +89,60 @@ fn state_multiple_extensions_keep_chain_order_and_context_indices() {
     assert!(session.has_extensions());
     assert!(!session.has_hooks());
     assert!(session.take_state_lines().is_empty());
+}
+
+#[test]
+fn state_before_message_contexts_own_writes_even_when_the_hook_also_rewrites() {
+    let home = Home::new();
+    home.install(
+        "goal",
+        &(hook(
+            "before_message",
+            "state.set('rewrite',1); return {content={{type='text',text='first'}}}",
+            "blocking",
+        ) + &hook(
+            "before_message",
+            "state.set('both',2); state.set('extra',3); return {content={{type='text',text='second'}},context='both'}",
+            "blocking",
+        ) + &hook(
+            "before_message",
+            "state.set('context',4); return {context='last'}",
+            "blocking",
+        )),
+    );
+    let session = home.load(&[]);
+    let contexts = run(&session, "before_message");
+    let unowned = session.take_change_state();
+    assert_eq!(
+        unowned
+            .iter()
+            .map(|line| line.key.as_str())
+            .collect::<Vec<_>>(),
+        ["rewrite"]
+    );
+    assert_eq!(unowned[0].value, Some((json!(1), OnFork::AtPoint)));
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[0].text, "both");
+    assert_eq!(
+        contexts[0]
+            .state
+            .iter()
+            .map(|line| (line.key.as_str(), line.value.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("both", Some((json!(2), OnFork::AtPoint))),
+            ("extra", Some((json!(3), OnFork::AtPoint)))
+        ]
+    );
+    assert_eq!(contexts[1].text, "last");
+    assert_eq!(contexts[1].state.len(), 1);
+    assert_eq!(contexts[1].state[0].key, "context");
+    assert_eq!(
+        contexts[1].state[0].value,
+        Some((json!(4), OnFork::AtPoint))
+    );
+    assert!(session.take_state_lines().is_empty());
+    assert!(session.take_change_state().is_empty());
 }
 
 #[test]
@@ -236,7 +298,7 @@ fn state_own_command_failure_drops_earlier_changes_not_other_writes() {
     }
 }
 
-fn dispatch(session: &SessionExtensions, point: &str) {
+fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
     let cancel = fakes::CancelToken::new();
     let arguments = Map::new();
     let call = BeforeToolCall {
@@ -267,27 +329,31 @@ fn dispatch(session: &SessionExtensions, point: &str) {
             session.check_tool(&call);
         }
         "before_message" => {
-            session.before_message(&BeforeMessage { content: &[] });
+            let answer = session.before_message(&BeforeMessage { content: &[] });
+            return match answer.outcome {
+                BeforeMessageOutcome::Passed { context, .. } => context,
+                BeforeMessageOutcome::Refused(_) | BeforeMessageOutcome::Failed(_) => Vec::new(),
+            };
         }
         "session_start" => {
-            session.session_start(&SessionStart {
+            return contexts(session.session_start(&SessionStart {
                 reason: StartReason::Resume,
                 session_id: &contract::SessionId("s".into()),
                 workspace: "/work",
                 cancel: &cancel,
-            });
+            }));
         }
         "turn_start" => {
-            session.turn_start(&TurnStart {
+            return contexts(session.turn_start(&TurnStart {
                 input: &[],
                 cancel: &cancel,
-            });
+            }));
         }
         "turn_end" => {
-            session.turn_end(&TurnEnd {
+            return contexts(session.turn_end(&TurnEnd {
                 reply: "reply",
                 cancel: &cancel,
-            });
+            }));
         }
         "before_model_call" => {
             session.before_model_call(&BeforeModelCall {
@@ -306,11 +372,25 @@ fn dispatch(session: &SessionExtensions, point: &str) {
         }
         _ => panic!("unknown point"),
     }
+    Vec::new()
 }
 
-fn run(session: &Arc<SessionExtensions>, point: &'static str) {
+fn contexts(answer: ContextAnswer) -> Vec<Context> {
+    match answer.outcome {
+        ContextOutcome::Added(contexts) => contexts,
+        ContextOutcome::Failed(_) => Vec::new(),
+    }
+}
+
+fn run(session: &Arc<SessionExtensions>, point: &'static str) -> Vec<Context> {
     let session = session.clone();
-    bounded(move || dispatch(&session, point));
+    bounded(move || dispatch(&session, point))
+}
+
+fn take_lines(session: &SessionExtensions, contexts: Vec<Context>) -> Vec<StateLine> {
+    let mut lines = session.take_change_state();
+    lines.extend(contexts.into_iter().flat_map(|context| context.state));
+    lines
 }
 
 fn hook(point: &str, body: &str, blocking: &str) -> String {
@@ -346,10 +426,12 @@ fn state_seed_reaches_session_start_before_the_first_call() {
     )]);
     let session = home.load_seeded(&[], seed);
     assert!(session.take_state_lines().is_empty());
-    run(&session, "session_start");
-    let lines = session.take_change_state();
+    let contexts = run(&session, "session_start");
+    assert!(session.take_change_state().is_empty());
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].text, "start");
+    let lines = &contexts[0].state;
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].context, Some(0));
     let Event::ExtensionStateSet(set) = lines[0].clone().into_event() else {
         panic!("set")
     };
@@ -380,12 +462,12 @@ fn state_changed_hooks_carry_and_no_change_hooks_drain_once() {
                 ),
             );
             let session = home.load(&[]);
-            run(&session, point);
+            let contexts = run(&session, point);
             assert_eq!(
                 session.state.store("fiber.test/goal").get("k"),
                 Some(json!(1))
             );
-            let lines = session.take_change_state();
+            let lines = take_lines(&session, contexts);
             assert_eq!(lines.len(), usize::from(changed), "{point}");
             assert_eq!(
                 session.take_state_lines().len(),
@@ -447,9 +529,9 @@ fn state_later_chain_failures_drop_carried_lines_but_keep_the_taken_view() {
             ) + &hook(point, "state.set('k',2); error('later failure')", policy);
             home.install("goal", &init);
             let session = home.load(&[]);
-            run(&session, point);
+            let contexts = run(&session, point);
             assert_eq!(
-                session.take_change_state().len(),
+                take_lines(&session, contexts).len(),
                 usize::from(policy == "non-blocking"),
                 "{point}/{policy}"
             );
@@ -645,8 +727,8 @@ fn state_take_between_hook_calls_passes() {
     );
     let session = home.load(&[]);
     for point in ["before_tool", "before_message"] {
-        run(&session, point);
-        assert_eq!(session.take_change_state().len(), 1);
+        let contexts = run(&session, point);
+        assert_eq!(take_lines(&session, contexts).len(), 1);
         assert!(session.take_change_state().is_empty());
     }
 }

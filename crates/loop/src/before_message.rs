@@ -31,7 +31,7 @@ pub(crate) struct Hooked {
     /// once; `Some` exactly when the message's content is a hook's.
     pub(crate) changed_by: Option<Vec<String>>,
     /// The contexts the hooks added, in run order.
-    pub(crate) context: Vec<ContextAdded>,
+    pub(crate) context: Vec<(ContextAdded, Vec<StateLine>)>,
 }
 
 impl Loop {
@@ -85,10 +85,15 @@ impl Loop {
                     changed_by,
                     context: context
                         .into_iter()
-                        .map(|added| ContextAdded {
-                            text: added.text,
-                            extension: added.extension,
-                            hook: "before_message".to_owned(),
+                        .map(|added| {
+                            (
+                                ContextAdded {
+                                    text: added.text,
+                                    extension: added.extension,
+                                    hook: "before_message".to_owned(),
+                                },
+                                added.state,
+                            )
                         })
                         .collect(),
                 };

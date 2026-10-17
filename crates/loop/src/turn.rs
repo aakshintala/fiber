@@ -70,7 +70,6 @@ impl Loop {
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         let (input, contexts, state) = self.turn_input(started.pieces);
-        let (state, context_state) = crate::hooks::split_state(state, contexts.len());
         let person = input
             .iter()
             .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
@@ -90,8 +89,8 @@ impl Loop {
             }
             self.write_carried(state, Some(&turn))?;
             self.append(&event, &turn, None)?;
-            for (added, state) in contexts.iter().zip(context_state) {
-                self.write_carried(state, Some(&turn))?;
+            for (added, state) in &contexts {
+                self.write_carried(state.clone(), Some(&turn))?;
                 self.append(&Event::ContextAdded(added.clone()), &turn, None)?;
             }
             Ok(())

@@ -187,22 +187,17 @@ pub(super) fn before_message(
                 let changed = matches!(&change, MessageReturn::Change { .. });
                 Ok((change, changed))
             })
-            .map(|(change, mut lines, changed)| {
+            .map(|(change, lines, changed)| {
                 if changed {
-                    if matches!(&change, MessageReturn::Change { text: Some(_), .. }) {
-                        for line in &mut lines {
-                            line.context = Some(context.len());
-                        }
-                    }
-                    pending.extend(lines);
+                    (change, lines)
                 } else {
                     session.state.queue(lines);
+                    (change, Vec::new())
                 }
-                change
             });
         match returned {
-            Ok(MessageReturn::Nothing) => {}
-            Ok(MessageReturn::Change { replace, text }) => {
+            Ok((MessageReturn::Nothing, _)) => {}
+            Ok((MessageReturn::Change { replace, text }, lines)) => {
                 if let Some(parts) = replace {
                     content = Some(parts);
                     name_once(&mut changed_by, name);
@@ -211,10 +206,13 @@ pub(super) fn before_message(
                     context.push(Context {
                         extension: name.to_owned(),
                         text,
+                        state: lines,
                     });
+                } else {
+                    pending.extend(lines);
                 }
             }
-            Ok(MessageReturn::Refuse(reason)) => {
+            Ok((MessageReturn::Refuse(reason), _)) => {
                 return BeforeMessageAnswer {
                     outcome: BeforeMessageOutcome::Refused(Refusal {
                         extension: name.to_owned(),

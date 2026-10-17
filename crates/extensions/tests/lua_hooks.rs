@@ -400,6 +400,7 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped() {
     assert_eq!(
         context,
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/b".into(),
             text: "early".into(),
         }]

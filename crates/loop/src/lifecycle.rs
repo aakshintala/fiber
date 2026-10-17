@@ -84,7 +84,6 @@ pub(crate) fn pause_after_handoff_start(paused: Box<dyn FnOnce()>) {
 pub(crate) struct State {
     /// Messages `turn_end` hooks continued the turn with, oldest first.
     pub(crate) continued: Vec<contract::hook::Context>,
-    pub(crate) continued_state: Vec<StateLine>,
     /// Why this process's first turn runs `session_start`: `start` on a
     /// new session, `resume` on a resumed one, `rewind` once the rewound
     /// loop adopts it. A handoff always tells the hook `handoff`.
@@ -102,7 +101,6 @@ impl Default for State {
     fn default() -> Self {
         Self {
             continued: Vec::new(),
-            continued_state: Vec::new(),
             reason: StartReason::Start,
             session: SessionId(String::new()),
             ran: false,
@@ -149,17 +147,6 @@ pub(crate) enum Flow {
     Stop,
 }
 
-fn pair_state(
-    contexts: Vec<ContextAdded>,
-    state: Vec<StateLine>,
-) -> Vec<(ContextAdded, Vec<StateLine>)> {
-    let (other, mut grouped) = crate::hooks::split_state(state, contexts.len());
-    if let Some(last) = grouped.last_mut() {
-        last.extend(other);
-    }
-    contexts.into_iter().zip(grouped).collect()
-}
-
 impl Loop {
     /// Runs the session's `session_start` hooks for `reason`, and writes
     /// the chain's notices at once (`docs/extensions.md`, "When a hook
@@ -188,7 +175,7 @@ impl Loop {
             workspace: &self.workspace_label,
             cancel: &*self.cancel,
         });
-        let state = hooks.take_change_state();
+        let _state = hooks.take_change_state();
         self.drain_state(&hooks, turn)?;
         let ContextAnswer { outcome, notices } = answer;
         for notice in notices {
@@ -202,17 +189,21 @@ impl Loop {
         match outcome {
             // A failure drops the chain's earlier contexts with it: the
             // thing the start guarded does not happen.
-            ContextOutcome::Added(contexts) => Ok(Started::Contexts(pair_state(
+            ContextOutcome::Added(contexts) => Ok(Started::Contexts(
                 contexts
                     .into_iter()
-                    .map(|added| ContextAdded {
-                        text: added.text,
-                        extension: added.extension,
-                        hook: "session_start".to_owned(),
+                    .map(|added| {
+                        (
+                            ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "session_start".to_owned(),
+                            },
+                            added.state,
+                        )
                     })
                     .collect(),
-                state,
-            ))),
+            )),
             ContextOutcome::Failed(failure) => Ok(Started::Failed(Failure {
                 code: ErrorCode::HookFailed,
                 message: format!(
@@ -314,7 +305,7 @@ impl Loop {
             input: &shown,
             cancel: &*self.cancel,
         });
-        let state = hooks.take_change_state();
+        let _state = hooks.take_change_state();
         self.drain_state(&hooks, Some(turn))?;
         let contract::hook::ContextAnswer { outcome, notices } = answer;
         for notice in notices {
@@ -327,17 +318,19 @@ impl Loop {
         }
         match outcome {
             ContextOutcome::Added(contexts) => {
-                let contexts = pair_state(
-                    contexts
-                        .into_iter()
-                        .map(|added| ContextAdded {
-                            text: added.text,
-                            extension: added.extension,
-                            hook: "turn_start".into(),
-                        })
-                        .collect(),
-                    state,
-                );
+                let contexts: Vec<_> = contexts
+                    .into_iter()
+                    .map(|added| {
+                        (
+                            ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "turn_start".into(),
+                            },
+                            added.state,
+                        )
+                    })
+                    .collect();
                 // Guarded with `Commit::Step` so a shutdown lands before
                 // the writes or after them: no context is applied on a
                 // shutdown (`docs/extensions.md`, "Hooks").
@@ -465,7 +458,7 @@ impl Loop {
             reply,
             cancel: &*self.cancel,
         });
-        let mut state = hooks.take_change_state();
+        let _state = hooks.take_change_state();
         self.drain_state(&hooks, Some(turn))?;
         let ContextAnswer { outcome, notices } = answer;
         for notice in notices {
@@ -484,12 +477,6 @@ impl Loop {
                 if contexts.is_empty() {
                     return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
                 }
-                for line in &mut state {
-                    if let Some(index) = line.context.as_mut() {
-                        *index += self.lifecycle.continued.len();
-                    }
-                }
-                self.lifecycle.continued_state.extend(state);
                 self.lifecycle.continued.extend(contexts);
                 Ok(None)
             }
@@ -497,7 +484,6 @@ impl Loop {
             // thing the turn guarded does not happen.
             ContextOutcome::Failed(failure) => {
                 self.lifecycle.continued.clear();
-                self.lifecycle.continued_state.clear();
                 Ok(Some(crate::ended(
                     TurnOutcome::Failed,
                     Some(Failure {
@@ -551,15 +537,10 @@ impl Loop {
         #[cfg(test)]
         pause_before_held_write();
         let held = std::mem::take(&mut self.lifecycle.continued);
-        let state = std::mem::take(&mut self.lifecycle.continued_state);
-        let (other, mut grouped) = crate::hooks::split_state(state, held.len());
-        if let Some(first) = grouped.first_mut() {
-            first.extend(other);
-        }
         let cancel = Arc::clone(&self.cancel);
         let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
-            for (item, state) in held.iter().zip(grouped) {
-                self.write_carried(state, Some(turn))?;
+            for item in &held {
+                self.write_carried(item.state.clone(), Some(turn))?;
                 self.append(
                     &Event::SteeringApplied(SteeringApplied {
                         content: vec![ContentPart::Text {

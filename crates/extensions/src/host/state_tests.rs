@@ -22,7 +22,6 @@ fn store_landings_count_only_accepted_writes_and_admission_is_monotone() {
             extension: "goal".into(),
             key: "k".into(),
             landing,
-            context: None,
         };
         let expected_event = line.clone().into_event();
         assert_eq!(registry.admit(vec![line]), vec![expected_event]);

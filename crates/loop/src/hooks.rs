@@ -55,24 +55,6 @@ pub(crate) struct Shaped {
     pub(crate) error: Option<contract::shapes::Failure>,
 }
 
-pub(crate) fn split_state(
-    state: Vec<StateLine>,
-    count: usize,
-) -> (Vec<StateLine>, Vec<Vec<StateLine>>) {
-    let mut other = Vec::new();
-    let mut contexts = vec![Vec::new(); count];
-    for line in state {
-        if let Some(index) = line.context
-            && let Some(lines) = contexts.get_mut(index.min(count.saturating_sub(1)))
-        {
-            lines.push(line);
-        } else {
-            other.push(line);
-        }
-    }
-    (other, contexts)
-}
-
 impl Loop {
     pub(crate) fn drain_state(
         &mut self,
