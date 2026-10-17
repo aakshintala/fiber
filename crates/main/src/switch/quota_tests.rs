@@ -506,8 +506,12 @@ fn read_to_end(lua: Arc<extensions::LuaProvider>, pair: CredentialPair) -> Quota
 }
 
 fn pair_of(label: &str) -> CredentialPair {
+    pair_in("qp", label)
+}
+
+fn pair_in(credential: &str, label: &str) -> CredentialPair {
     CredentialPair {
-        credential: "qp".to_owned(),
+        credential: credential.to_owned(),
         label: label.to_owned(),
     }
 }
@@ -583,7 +587,7 @@ fn the_model_view_lists_a_no_quota_provider_and_an_unreachable_label_with_no_las
     }
     let zq = store.held_instance("zq");
     assert_eq!(
-        read_to_end(zq, pair_of("work")),
+        read_to_end(zq, pair_in("zq", "work")),
         QuotaEntry::Reported(weekly.clone())
     );
     let QuotaView::Loaded(view) = store.entries() else {
@@ -711,8 +715,8 @@ fn a_failed_provider_read_through_load_lists_unreachable_and_still_loads() {
     store.note_loaded(done);
     assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
-    // The reads that did run land at once, so the view after them is
-    // deterministic.
+    // The read below waits for zq's held label's own flight, so the view
+    // after it is deterministic.
     let zq = store.held_instance("zq");
     let weekly = Quota::Windows(vec![Window {
         name: "weekly".to_owned(),
@@ -722,7 +726,7 @@ fn a_failed_provider_read_through_load_lists_unreachable_and_still_loads() {
         },
     }]);
     assert_eq!(
-        read_to_end(zq, pair_of("work")),
+        read_to_end(zq, pair_in("zq", "work")),
         QuotaEntry::Reported(weekly.clone()),
     );
     // The failed provider's labels show unreachable with no last value
