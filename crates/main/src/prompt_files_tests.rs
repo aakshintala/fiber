@@ -1,4 +1,4 @@
-//! Tests for `prompt_files`: precedence of the person's system prompt files.
+//! Tests for `prompt_files`: wiring to `config` and `agents_home`.
 
 #![allow(
     clippy::unwrap_used,
@@ -22,9 +22,8 @@ fn write(path: &std::path::Path, text: &str) {
 }
 
 #[test]
-fn project_file_wins_and_files_are_not_combined() {
+fn a_project_file_reaches_system() {
     let (home, project) = home();
-    write(&home.path().join("SYSTEM.md"), "global");
     write(
         &home.path().join("projects").join("proj").join("SYSTEM.md"),
         "project",
@@ -33,51 +32,17 @@ fn project_file_wins_and_files_are_not_combined() {
 }
 
 #[test]
-fn global_file_applies_without_a_project_file() {
+fn a_project_file_reaches_append() {
     let (home, project) = home();
-    write(&home.path().join("APPEND_SYSTEM.md"), "global appendix");
-    assert_eq!(
-        append(home.path(), &project).as_deref(),
-        Some("global appendix")
-    );
-}
-
-#[test]
-fn empty_file_is_absent() {
-    let (home, project) = home();
-    write(&home.path().join("SYSTEM.md"), "   \n");
-    assert_eq!(system(home.path(), &project), None);
-}
-
-#[test]
-fn empty_project_file_falls_back_to_the_global_one() {
-    let (home, project) = home();
-    write(&home.path().join("SYSTEM.md"), "global");
-    write(
-        &home.path().join("projects").join("proj").join("SYSTEM.md"),
-        "  \n",
-    );
-    assert_eq!(system(home.path(), &project).as_deref(), Some("global"));
-    write(&home.path().join("APPEND_SYSTEM.md"), "global appendix");
     write(
         &home
             .path()
             .join("projects")
             .join("proj")
             .join("APPEND_SYSTEM.md"),
-        "\n",
+        "appendix",
     );
-    assert_eq!(
-        append(home.path(), &project).as_deref(),
-        Some("global appendix")
-    );
-}
-
-#[test]
-fn missing_files_are_absent() {
-    let (home, project) = home();
-    assert_eq!(system(home.path(), &project), None);
-    assert_eq!(append(home.path(), &project), None);
+    assert_eq!(append(home.path(), &project).as_deref(), Some("appendix"));
 }
 
 #[test]
