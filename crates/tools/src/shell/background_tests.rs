@@ -339,12 +339,12 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     assert_eq!(nonzero.process.unwrap().exit_code, Some(3));
 
     let signaled = end(
-        finished(Some(status_of("kill -SEGV $$")), None, false, false, false),
+        finished(Some(status_of("kill -USR1 $$")), None, false, false, false),
         1,
     );
     assert_eq!(signaled.status, Outcome::Failed);
     assert_eq!(signaled.error.unwrap().code, ErrorCode::Signal);
-    assert_eq!(signaled.process.unwrap().signal.as_deref(), Some("SIGSEGV"));
+    assert_eq!(signaled.process.unwrap().signal.as_deref(), Some("SIGUSR1"));
 
     let timeout = end(
         finished(None, Some(StopKind::Timeout), false, true, false),

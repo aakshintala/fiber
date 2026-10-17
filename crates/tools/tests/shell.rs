@@ -240,16 +240,16 @@ fn a_nonzero_exit_is_nonzero_exit() {
 
 #[test]
 fn a_signal_fiber_did_not_send_is_signal() {
-    let dir = fakes::TempDir::new("fiber-shell-segv");
-    let output = run(dir.path(), "kill -SEGV $$");
+    let dir = fakes::TempDir::new("fiber-shell-usr1");
+    let output = run(dir.path(), "kill -USR1 $$");
     assert_eq!(code(&output), Some(ErrorCode::Signal));
     assert!(
-        text(&output).contains("Killed by SIGSEGV."),
+        text(&output).contains("Killed by SIGUSR1."),
         "{}",
         text(&output)
     );
     let process = output.process.unwrap();
-    assert_eq!(process.signal.as_deref(), Some("SIGSEGV"));
+    assert_eq!(process.signal.as_deref(), Some("SIGUSR1"));
     assert!(!process.timed_out);
     assert!(process.exit_code.is_none());
 }
