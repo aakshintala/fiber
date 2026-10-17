@@ -533,13 +533,12 @@ fn a_shutdown_in_the_park_gap_ends_the_wait() {
                 Ok(()) | Err(_) => {}
             }
         });
-        match Deadline::after(OP).recv(&stop_rx) {
-            // Shutdown returned while the waiter was held: it notified
-            // without the wake mutex, so the notify missed the waiter.
-            Ok(joined) => assert!(joined, "shutdown stops the server"),
-            // Shutdown blocks on the wake mutex the held waiter owns:
-            // its notify lands after the waiter parks.
-            Err(_) => {}
+        // Shutdown either returned while the waiter was held, proving
+        // it notified without the wake mutex and missed the waiter, or
+        // is still blocked on the wake mutex the held waiter owns, so
+        // its notify lands after the waiter parks.
+        if let Ok(joined) = Deadline::after(OP).recv(&stop_rx) {
+            assert!(joined, "shutdown stops the server");
         }
         release_tx
             .send(())
