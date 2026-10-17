@@ -407,13 +407,13 @@ fn a_rewind_stops_two_running_jobs_before_rewound() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = rewind_checked(&dir);
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send((outcome, ())).unwrap();
     });
-    inbox.send(rw).unwrap();
     // Both jobs receive a stop.
     let mut stopped: Vec<String> = Vec::new();
     for _ in 0..2 {
@@ -455,13 +455,13 @@ fn a_job_ending_indeterminate_is_written_verbatim_before_rewound() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     for _ in 0..2 {
         Deadline::after(DEADLINE)
             .recv(&stops)
@@ -514,13 +514,13 @@ fn a_job_that_never_ends_waits_out_the_bound_then_rewinds() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
@@ -573,13 +573,13 @@ fn a_job_ending_while_parked_on_the_bound_is_written_then_rewound() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
@@ -618,18 +618,19 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
     // A prompt, a second rewind and a close are each refused closing; a
-    // job notice whose claim does not hold writes no line.
+    // job notice whose claim does not hold writes no line. They arrive
+    // during the stop wait, past the drain that took the rewind.
     let (prompt_ack, prompt_answered) = asked();
     inbox
         .send(Delivery::Prompt(message("later"), prompt_ack))
@@ -681,16 +682,18 @@ fn a_monitor_batch_during_the_stop_wait_is_dropped() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
+    // The batch arrives during the stop wait, past the drain that took
+    // the rewind, so the wait drops it instead of writing it.
     inbox
         .send(Delivery::JobLine(contract::events::JobLine {
             job_id: JobId("j_1".into()),
@@ -727,13 +730,13 @@ fn a_rewind_to_an_ancestor_point_stops_the_jobs_in_the_old_log() {
     let (jobs, stops) = FakeJobs::new(&["j_1"]);
     let looped = looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(Some(A_ID), Some(first - 1), false));
+    tx.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    tx.send(rw).unwrap();
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
@@ -795,38 +798,10 @@ fn refusals_send_no_stop_with_jobs_running() {
 }
 
 #[test]
-fn a_job_that_ended_just_before_the_rewind_is_written_first() {
-    let mut session = run_a_with_id(A_ID);
-    let dir = session.dir.clone();
-    let (jobs, _stops) = FakeJobs::new(&["j_1"]);
-    let looped = session
-        .looped
-        .take()
-        .unwrap()
-        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    // The end is already waiting in the inbox while `running` is empty.
-    jobs.end(&session.inbox, "j_1", Outcome::Cancelled, None);
-    let (rw, answered) = support::rewind(args(None, None, false));
-    let (_looped, outcome) = drive(looped, &session.inbox, rw);
-    accepted(answer_of(answered));
-    assert_eq!(outcome, None);
-    let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed"]);
-    assert_eq!(lines[lines.len() - 2].payload["job_id"], json!("j_1"));
-}
-
-#[test]
-fn a_person_stopped_end_in_the_rewind_batch_is_not_listed_as_stopped() {
-    // The person's own stop of j_0 lands its cancelled end in the same
-    // admit batch as the rewind, while j_1 still runs. The Grant 2 batch
-    // writes j_0 before the stop wait; the note lists only j_1, which the
-    // stop wait stopped.
+fn a_job_end_admitted_with_the_rewind_refuses_busy() {
+    // Queued job news is refused busy as before: the rewind is refused
+    // without stopping a job or writing `rewound`. The admitted end
+    // still starts its own turn afterwards.
     let mut session = run_a_with_id(A_ID);
     let dir = session.dir.clone();
     let (jobs, stops) = FakeJobs::new(&["j_1"]);
@@ -835,36 +810,32 @@ fn a_person_stopped_end_in_the_rewind_batch_is_not_listed_as_stopped() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    jobs.end(&session.inbox, "j_0", Outcome::Cancelled, None);
+    let inbox = take_inbox(&mut session);
+    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
     let (rw, answered) = support::rewind(args(None, None, false));
-    let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
-    Deadline::after(DEADLINE)
-        .recv(&stops)
-        .expect("the running job is stopped");
-    jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
+    drop(inbox);
     let outcome = Deadline::after(DEADLINE)
         .recv(&finished)
-        .expect("the rewind ended in time");
-    assert_eq!(outcome, None);
-    accepted(answer_of(answered));
-    let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
-    let note = rewind_note_with_jobs(&dir, &dir, Seq(0)).unwrap();
-    assert!(note.contains("- j_1"), "{note}");
-    assert!(!note.contains("j_0"), "{note}");
+        .expect("the wait ended in time");
+    let rejection = rejected(answer_of(answered));
+    assert_eq!(rejection.code, ErrorCode::Busy);
+    assert_eq!(rejection.message, "A turn is running; rewind once it ends.");
+    assert!(outcome.is_some(), "the admitted end still starts its turn");
+    assert!(
+        log::read(&dir)
+            .unwrap()
+            .iter()
+            .all(|line| line.kind != "rewound"),
+        "nothing is rewound"
+    );
+    assert!(stops.try_recv().is_err(), "no stop was sent");
 }
 
 #[test]
@@ -942,13 +913,13 @@ fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
     let (rw, answered) = support::rewind(args(None, None, false));
     let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut looped = looped;
         let outcome = looped.turn().unwrap();
         done.send(outcome).unwrap();
     });
-    inbox.send(rw).unwrap();
     for _ in 0..2 {
         Deadline::after(DEADLINE)
             .recv(&stops)

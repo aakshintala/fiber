@@ -568,7 +568,7 @@ impl Loop {
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
             Delivery::Rewind(args, ack) => {
-                self.take_rewind(args, ack, &mut *input)?;
+                self.take_rewind(args, ack, input)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),

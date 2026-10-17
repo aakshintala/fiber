@@ -6,12 +6,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use contract::commands::RewindArgs;
-use contract::events::{CommandResult, DelegateFinished, Event, JobCompleted, Rewound};
+use contract::events::{CommandResult, Event, Rewound};
 use contract::inbox::{Ack, Delivery, Rejection};
-use contract::{ActionId, Envelope, ErrorCode, Seq, SessionId, TurnId};
+use contract::{ActionId, Envelope, ErrorCode, Seq, SessionId};
 
 use crate::inbox::{TurnInput, reject};
-use crate::jobs::Queued;
 use crate::{Error, Loop};
 
 /// `rewind` refused while a turn runs or one is about to start: rewind
@@ -59,10 +58,7 @@ impl Loop {
     /// in order, then the stop, then `rewound` as the last line, naming the
     /// minted new session and the point, and the new session's id as the
     /// answer. Every refusal leaves the log byte for byte as it was, mints
-    /// nothing, starts nothing, and stops no job. Job news admitted ahead
-    /// of the `rewind` — a job's end, a monitor batch — starts no turn of
-    /// its own, so it is no refusal: the stop below writes it before
-    /// `rewound`. On success the loop stops
+    /// nothing, starts nothing, and stops no job. On success the loop stops
     /// late-cost lookups and writes what settled, closes admission, stops
     /// every running job and writes each end that arrives, mints the new
     /// session, appends `rewound`, sets `rewound`, and only then accepts, so
@@ -71,19 +67,15 @@ impl Loop {
         &mut self,
         args: RewindArgs,
         ack: Ack,
-        input: &mut TurnInput,
+        input: &TurnInput,
     ) -> Result<(), Error> {
         if self.closing {
             reject(ack, ErrorCode::Closing, crate::inbox::CLOSING);
             return Ok(());
         }
         // A turn about to start: the drain already admitted a prompt or a
-        // steer. Job news starts no turn, so it is no refusal.
-        if input
-            .pieces
-            .iter()
-            .any(|piece| !matches!(piece, Queued::Job(..) | Queued::Line(_)))
-        {
+        // steer.
+        if !input.pieces.is_empty() {
             reject(ack, ErrorCode::Busy, TURN_RUNNING);
             return Ok(());
         }
@@ -127,31 +119,6 @@ impl Loop {
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
         self.close_admission();
-        // Job news admitted ahead of the `rewind` belongs to the stop:
-        // the busy check above kept every other piece out, so what is
-        // left starts no turn and is written before `rewound`. An admitted
-        // end is not one the stop wait stopped, so it carries a minted
-        // marker turn: the note's trailing-run reader skips a
-        // `job_completed` with a turn, listing only the stop wait's own
-        // ends, which carry none. In-turn ends never reach that run: every
-        // turn closes with `turn_completed` before an idle `rewind`.
-        let admitted = TurnId(crate::mint("t_"));
-        for piece in std::mem::take(&mut input.pieces) {
-            match piece {
-                Queued::Job(ahead, completed, delegate) => {
-                    self.write_admitted_end(ahead, completed, delegate, &admitted)?;
-                }
-                Queued::Line(line) => {
-                    self.write(&Event::JobLine(line), None, None)?;
-                }
-                Queued::Steer(..)
-                | Queued::Notice(..)
-                | Queued::Handoff(..)
-                | Queued::Pending(..) => {
-                    unreachable!("the busy check kept every other piece out");
-                }
-            }
-        }
         self.stop_jobs_for_rewind()?;
         let new_session_id = SessionId(crate::mint("s_"));
         // `rewound` names the point's session only for an ancestor point:
@@ -168,35 +135,6 @@ impl Loop {
         )?;
         self.rewound = true;
         (ack.0)(Ok(Some(CommandResult::Rewind { new_session_id })));
-        Ok(())
-    }
-
-    /// One job end admitted ahead of the `rewind`: the queued records
-    /// taken ahead, then the delegate's finish, then `job_completed`, as
-    /// [`Loop::write_job_end`] writes them, but under the marker turn
-    /// `admitted`. The person stopped this job, not the rewind's stop
-    /// wait, so the note's trailing-run reader skips its end there. Taken
-    /// records keep their own action's turn, as they do under every other
-    /// writer; only a `Started` or a `DelegateStarted` carries one, and
-    /// the reader lists no start.
-    fn write_admitted_end(
-        &mut self,
-        ahead: Vec<contract::jobs::Taken>,
-        completed: JobCompleted,
-        delegate: Option<DelegateFinished>,
-        admitted: &TurnId,
-    ) -> Result<(), Error> {
-        for taken in ahead {
-            self.write_taken(taken, Some(admitted), None)?;
-        }
-        if let Some(finished) = delegate {
-            let event = crate::calls::job_event(
-                &self.log,
-                contract::jobs::JobRecord::DelegateFinished(finished),
-            );
-            self.write(&event, Some(admitted), None)?;
-        }
-        self.write(&Event::JobCompleted(completed), Some(admitted), None)?;
         Ok(())
     }
 
