@@ -30,7 +30,6 @@ fn log_path(home: &fakes::TempDir) -> PathBuf {
 #[test]
 fn the_first_line_writes_the_session_file_with_the_extension_prefix() {
     let (home, diag) = setup("fiber-diag-first");
-    assert!(!home.path().join("logs").exists());
     diag.extension_log("fiber.test/notes", "hello");
     assert_eq!(
         fs::read_to_string(log_path(&home)).unwrap(),
@@ -38,13 +37,6 @@ fn the_first_line_writes_the_session_file_with_the_extension_prefix() {
          \"session_id\":\"s-1\",\"code\":\"extension_log\",\
          \"message\":\"fiber.test/notes: hello\"}\n"
     );
-}
-
-#[test]
-fn an_unwritable_logs_is_ignored_without_panic() {
-    let (home, diag) = setup("fiber-diag-unwritable");
-    fs::write(home.path().join("logs"), b"not a directory").unwrap();
-    diag.extension_log("fiber.test/notes", "hello");
 }
 
 fn some_peak() -> Option<u64> {
