@@ -74,6 +74,10 @@ fn allow_rule(tool: &str) -> Rule {
 /// Session A after two turns: turn 1 answers "one-done", turn 2 calls both
 /// tools, then answers "two-done".
 fn run_a() -> Session {
+    run_a_with_tail(vec![])
+}
+
+fn run_a_with_tail(tail: Vec<Scripted>) -> Session {
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::clone(&write_tool()) as Arc<dyn Tool>,
         Arc::clone(&exec_tool()) as Arc<dyn Tool>,
@@ -83,7 +87,7 @@ fn run_a() -> Session {
             Scripted::text("one-done"),
             calls_reply("working", &[("write_file", paris()), ("run_cmd", paris())]),
             Scripted::text("two-done"),
-        ],
+        ].into_iter().chain(tail).collect(),
         None,
         tools,
     );
@@ -373,6 +377,43 @@ fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
             .iter()
             .all(|line| line.kind != "preamble_built" && line.kind != "opening_message")
     );
+}
+
+#[test]
+fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
+    let session = run_a_with_tail(vec![Scripted::text("Tried X.")]);
+    let before = log::read(&session.dir).unwrap();
+    let requests = session.provider.requests();
+    let last = requests.last().unwrap();
+    let (command, answer) = rewind(args(None, None, true, vec![]));
+    session.inbox.send(command).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut session = session;
+        let result = session.looped.as_mut().unwrap().turn();
+        done.send((session, result)).unwrap();
+    });
+    let (session, result) = Deadline::after(DEADLINE).recv(&finished).expect("the summary ended");
+    assert_eq!(result.unwrap(), None);
+    assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
+    let lines = log::read(&session.dir).unwrap();
+    let tail = &lines[before.len()..];
+    assert_eq!(kinds(tail), ["turn_started", "step_started", "assistant_message_started", "text_completed", "usage_recorded", "assistant_message_completed", "turn_completed", "rewound"]);
+    assert_eq!(tail[0].payload["input"], json!([{"type":"rewind","command_id":"c_rewind"}]));
+    assert_eq!(tail[6].payload["outcome"], "completed");
+    assert_eq!(tail[7].payload["summary"], "Tried X.");
+    let after = session.provider.requests();
+    assert_eq!(after.len(), requests.len() + 1);
+    let request = after.last().unwrap();
+    let mut expected = last.conversation.clone();
+    expected.push(Input::Assistant { model: MODEL.into(), text: "two-done".into(), provider_item: None });
+    assert_eq!(&request.conversation[..expected.len()], expected.as_slice());
+    assert_eq!(request.conversation.len(), expected.len() + 1);
+    assert!(matches!(request.conversation.last().unwrap(), Input::User { text, .. } if text.contains("two")));
+    assert_eq!(request.system_prompt, last.system_prompt);
+    assert_eq!(request.sent_tools, last.sent_tools);
+    assert_eq!(request.cache_key, last.cache_key);
+    assert_eq!(request.max_output_tokens, None);
 }
 
 #[test]
