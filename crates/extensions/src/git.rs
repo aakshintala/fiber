@@ -20,7 +20,7 @@ pub(crate) const GIT_DEADLINE: Duration = Duration::from_secs(300);
 
 /// Whether `typed` names a directory rather than an extension.
 pub fn is_path(typed: &str) -> bool {
-    typed.starts_with(['.', '/', '~']) || Path::new(typed).join("extension.json").is_file()
+    typed.starts_with(['.', '/', '~']) || config::has_manifest(Path::new(typed))
 }
 
 /// A name as its repository and the directory inside it

@@ -182,20 +182,9 @@ impl tui::Configure for Seam {
         key: &str,
         text: &str,
     ) -> Result<Saved, ConfigureError> {
-        let warnings = ::cli::config_set_text(&self.home, workspace, layer_to(layer), key, text)
-            .map_err(from_failure)?;
-        let file = match layer {
-            Layer::Global => self.global_file(),
-            Layer::Project => {
-                let (_, project) =
-                    ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
-                self.home
-                    .join("projects")
-                    .join(project.as_str())
-                    .join("config.json")
-            }
-            Layer::Repository => workspace.join(".fiber").join("config.json"),
-        };
+        let (warnings, file) =
+            ::cli::config_set_text(&self.home, workspace, layer_to(layer), key, text)
+                .map_err(from_failure)?;
         Ok(Saved { file, warnings })
     }
 
