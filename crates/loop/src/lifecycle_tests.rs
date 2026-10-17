@@ -1206,6 +1206,7 @@ fn state_lines_slash_rejection_drops_the_prompt_and_its_carried_state() {
         .unwrap()
         .server_prompts(crate::ServerPrompts {
             rows: vec![contract::events::CommandInfo {
+                extension: false,
                 name: "broken".into(),
                 description: String::new(),
                 argument_hint: None,

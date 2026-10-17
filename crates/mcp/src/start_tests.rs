@@ -823,12 +823,14 @@ fn rows_list_each_servers_prompts_tagged_with_its_name_in_server_name_order() {
         started.prompts.commands(),
         [
             CommandInfo {
+                extension: false,
                 name: "alpha".to_owned(),
                 description: "First by server.".to_owned(),
                 argument_hint: None,
                 tag: "aa".to_owned(),
             },
             CommandInfo {
+                extension: false,
                 name: "zeta".to_owned(),
                 description: "Last by server.".to_owned(),
                 argument_hint: Some("<who> [tone]".to_owned()),

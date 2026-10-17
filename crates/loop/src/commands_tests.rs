@@ -73,6 +73,7 @@ fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
 
 fn row(name: &str, description: &str, hint: Option<&str>, tag: &str) -> CommandInfo {
     CommandInfo {
+        extension: false,
         name: name.into(),
         description: description.into(),
         argument_hint: hint.map(str::to_owned),

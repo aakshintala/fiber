@@ -952,6 +952,7 @@ fn only_the_first_text_part_expands_and_the_rest_is_kept() {
 
 fn row(name: &str, description: &str, hint: Option<&str>, tag: &str) -> CommandInfo {
     CommandInfo {
+        extension: false,
         name: name.into(),
         description: description.into(),
         argument_hint: hint.map(str::to_owned),

@@ -10,6 +10,7 @@ fn skill(name: &str) -> CommandInfo {
         description: format!("The {name} skill."),
         argument_hint: None,
         tag: "skill".to_owned(),
+        extension: false,
     }
 }
 
@@ -106,9 +107,11 @@ fn an_answer_row_keeps_its_hint_and_tag() {
         description: "Review a diff.".to_owned(),
         argument_hint: Some("[base]".to_owned()),
         tag: "template".to_owned(),
+        extension: false,
     };
     let from_extension = CommandInfo {
         tag: "acme".to_owned(),
+        extension: true,
         ..skill("deploy")
     };
     let all = rows(&[template, from_extension]);
