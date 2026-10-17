@@ -184,17 +184,6 @@ fn commit_again(deadline: Deadline, repo: &Path, name: &str) -> String {
     git(deadline, repo, &["rev-parse", "HEAD"])
 }
 
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// An `openai-responses` stream that calls `write` on the relative path.
 fn write_call(path: &str, content: &str) -> Response {
     stream(&[function_call(
