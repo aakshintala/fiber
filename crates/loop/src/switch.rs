@@ -307,7 +307,7 @@ impl Loop {
 /// actually read, so it joins as given: resolving it again could follow
 /// a symlink swapped in after the read and protect a file never read
 /// instead. The deny only grows.
-fn deny_also(denied: &mut Vec<PathBuf>, read: Vec<PathBuf>) {
+pub(crate) fn deny_also(denied: &mut Vec<PathBuf>, read: Vec<PathBuf>) {
     for path in read {
         if !denied.contains(&path) {
             denied.push(path);

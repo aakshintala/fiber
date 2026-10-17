@@ -161,6 +161,7 @@ impl Loop {
             | Delivery::SteerDrop(..)
             | Delivery::Message(_)
             | Delivery::Model(..)
+            | Delivery::Reload(..)
             | Delivery::Credential(..)
             | Delivery::Name(..)
             | Delivery::Rewind(..)

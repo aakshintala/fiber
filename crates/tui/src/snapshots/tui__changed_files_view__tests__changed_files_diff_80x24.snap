@@ -1,13 +1,12 @@
 ---
 source: crates/tui/src/changed_files_view_tests.rs
-assertion_line: 381
 expression: screen(&app_with_diff())
 ---
  Changed files › src/a.rs · diff against HEAD  diff against HEAD     Esc returns
-diff --git a/src/a.rs b/src/a.rs
-@@ -1 +1 @@
--old
-+new
+  @@ -1 +1 @@
+1 -old
+1 +new
+
 
 
 

@@ -50,7 +50,7 @@ pub use attach::attach;
 pub use isolation::{
     Isolation, RecreateError, Recreated, Shared, WorktreeOpener, isolate, recreate, share,
 };
-pub use session::{Declare, Session};
+pub use session::{Declare, Replacement, Session};
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
 pub use steer::{Steered, steer};
 pub use watch::{Watched, watch, watch_after};

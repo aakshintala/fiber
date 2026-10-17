@@ -1081,16 +1081,19 @@ fn an_edited_file_row_colours_its_counts() {
         .find(|span| span.content.starts_with("src/a.rs"))
         .unwrap_or_else(|| panic!("the target in {edited:?}"));
     assert_eq!(target_span.style.fg, None);
-    // Its opened diff: a removed line, then an added one.
+    // Its opened diff has no hunk, so it draws plain and uncoloured.
     app.open(target(
         &app,
         "     2 ✓ edit     src/a.rs                           +3 −1",
     ));
-    let removed = styled(&app, "         -old");
-    let added = styled(&app, "         +new");
-    assert_eq!(removed.style.fg, Some(Role::Removed.color()));
-    assert_eq!(added.style.fg, Some(Role::Added.color()));
-    assert!(dim(&removed) && dim(&added));
+    for row in ["         -old", "         +new"] {
+        let line = styled(&app, row);
+        assert!(!dim(&line), "{row}");
+        assert!(
+            line.spans.iter().all(|span| span.style.fg.is_none()),
+            "{row} uncoloured"
+        );
+    }
 }
 
 #[test]
@@ -1113,7 +1116,7 @@ fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
     ));
     for row in ["         +one", "         -two"] {
         let line = styled(&app, row);
-        assert!(dim(&line), "{row}: {:?}", texts(&app));
+        assert!(!dim(&line), "{row}: {:?}", texts(&app));
         assert_eq!(line.style.fg, None, "{row}");
     }
 }
@@ -1122,26 +1125,31 @@ fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
 fn opening_a_call_shows_its_error_reason_diff_or_output() {
     let mut app = ledger_app();
     app.open(group(&app));
-    for (row, shown) in [
+    for (row, shown, lit) in [
         (
             "     2 ✓ edit     src/a.rs                           +3 −1",
             vec!["         -old", "         +new"],
+            false,
         ),
         (
             "       ✗ shell    cargo t           nonzero_exit: exit 101",
-            vec!["         nonzero_exit: exit 101"],
+            vec!["         nonzero_exit: exit 101", "         out"],
+            true,
         ),
         (
             "       ✗ other    u                                 denied",
             vec!["         not allowed"],
+            true,
         ),
         (
             "       ⊘ other                                   cancelled",
             vec!["         x"],
+            false,
         ),
         (
             "       ✓ read     a.rs                              1 line",
             vec!["         ok"],
+            false,
         ),
     ] {
         let call = target(&app, row);
@@ -1158,10 +1166,11 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
             Some(shown.iter().map(|s| (*s).to_owned()).collect()),
             "{row}"
         );
-        assert!(dim(&styled(
-            &app,
-            shown.first().copied().unwrap_or_default()
-        )));
+        assert_eq!(
+            dim(&styled(&app, shown.first().copied().unwrap_or_default())),
+            lit,
+            "{row}"
+        );
         app.open(call);
     }
     // A thought opened in the ledger shows its text eight columns in.
@@ -2309,4 +2318,100 @@ fn a_finished_group_line_is_not_marked() {
     end(&mut app, "completed", 0);
     assert!(texts(&app).iter().any(|line| line.starts_with(" ● ")));
     assert_eq!(app.shown(0, usize::MAX).spins, Vec::new());
+}
+
+#[test]
+fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
+    use contract::events::{CallStatus, ToolCallCompleted, ToolCallRequested};
+    use contract::shapes::{ContentPart, Process};
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    turn.call_requested(
+        "a_1",
+        ToolCallRequested {
+            name: "shell".to_owned(),
+            arguments: json!({"command": "cargo t"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+        0,
+        &mut fold,
+    );
+    assert!(turn.call_completed(
+        "a_1",
+        &ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: Some(Process {
+                exit_code: Some(3),
+                signal: Some("SIGKILL".to_owned()),
+                timed_out: false,
+            }),
+            content: vec![ContentPart::Text {
+                text: "x\ny".to_owned(),
+            }],
+            details: Some(json!({"command": "cargo t", "exit_code": 3})),
+            artifact: Some("artifacts/out.txt".to_owned()),
+            kept: Some(vec![[0, 2]]),
+            changes: None,
+            control: None,
+            changed_by: None,
+            provider_item: None,
+        },
+        0,
+    ));
+    let call = turn
+        .groups()
+        .flat_map(|group| group.calls())
+        .next()
+        .expect("the completed call");
+    let result = call
+        .result
+        .as_deref()
+        .expect("a completed call has a result");
+    assert_eq!(
+        result
+            .details
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok()),
+        Some(json!({"command": "cargo t", "exit_code": 3}))
+    );
+    assert_eq!(result.artifact.as_deref(), Some("artifacts/out.txt"));
+    assert_eq!(result.kept, Some(vec![[0, 2]]));
+    assert_eq!(result.signal.as_deref(), Some("SIGKILL"));
+    assert_eq!(call.exit, Some(3));
+    assert_eq!(call.headline(), "");
+    assert_eq!(call.content(), "x\ny");
+    assert_eq!(call.lines, 2);
+}
+
+#[test]
+fn toggle_of_a_call_view_changes_nothing() {
+    use contract::events::ToolCallRequested;
+    let mut fold = super::Fold::default();
+    let mut turn = super::Turn::new(Vec::new(), 0);
+    turn.call_requested(
+        "a_1",
+        ToolCallRequested {
+            name: "read".to_owned(),
+            arguments: json!({"path": "a.rs"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+        0,
+        &mut fold,
+    );
+    let id = super::target_id("a_1");
+    assert_eq!(turn.toggle(Target::CallView(id)), None);
+    assert!(
+        turn.groups()
+            .flat_map(|group| group.calls())
+            .next()
+            .is_none_or(|call| !call.open)
+    );
 }

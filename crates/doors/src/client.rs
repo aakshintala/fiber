@@ -370,7 +370,11 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             answer(conn, id, moving, NO_CALL);
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
-        Command::Reload | Command::Unknown => unknown(conn, id, name),
+        Command::Reload => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Reload(ack));
+        }
+        Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
 }

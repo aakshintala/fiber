@@ -483,6 +483,7 @@ impl Loop {
             | Delivery::Message(_)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
+            | Delivery::Reload(..)
             | Delivery::Credential(..)
             | Delivery::Reply(..)
             | Delivery::Rewind(..)
@@ -559,6 +560,7 @@ impl Loop {
             Delivery::Credential(args, ack) => {
                 self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
+            Delivery::Reload(ack) => self.take_reload(ack)?,
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
@@ -711,6 +713,17 @@ impl Loop {
                     self.deferred.push_back(Delivery::Credential(args, ack));
                 } else {
                     self.take_switch(crate::switch::Asked::Credential(args), ack, false)?;
+                }
+            }
+            Delivery::Reload(ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(
+                        ack,
+                        ErrorCode::Busy,
+                        "A turn is running; reload once it ends.",
+                    );
                 }
             }
             // The person's name starts no turn, so it is taken after
