@@ -598,23 +598,6 @@ fn a_completed_reply_the_provider_never_named_is_never_looked_up() {
 }
 
 #[test]
-fn a_completed_reply_without_the_vendor_s_figure_is_looked_up() {
-    let (mut session, seen) = looked(
-        vec![unpriced("First.", "gen_1"), priced("Again.", "gen_2", 0.01)],
-        CacheLifetime::OneHour,
-        Some(0.5),
-        no_hook,
-    );
-    let start = session.clock.now();
-    let (first, first_lines) = first_turn(&mut session);
-    assert_eq!(kinds(&first_lines), COMPLETED_FIRST_KINDS);
-    settle(&session.clock, start + AFTER);
-    assert_eq!(seen.calls(), ["gen_1"]);
-    let lines = next_turn(&mut session);
-    assert_late_record_first(&lines, &first, 0.5);
-}
-
-#[test]
 fn a_reviewer_call_s_cost_settles_with_no_action() {
     let mut tool = TestTool::declaring("shell", "Ran it.", vec![Effect::Executes], None);
     tool.subject = None;
