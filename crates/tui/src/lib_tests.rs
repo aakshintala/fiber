@@ -691,7 +691,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         &pair.main,
         vec![
             b"refused" as &[u8],
-            b"\x1b[10;1H\x1b[39;49m\xE2\x86\x91" as &[u8],
+            b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter" as &[u8],
         ],
     );
     let (done, finished) = mpsc::channel();
@@ -731,12 +731,12 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
     // The resized foot hint starts at column 1 of the new last row; wait
-    // for its cursor move, colour reset and first character together.
+    // for its cursor move, bold, colour reset and first word together.
     let wait = Deadline::after(DEADLINE);
     let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        foot.ends_with(b"\x1b[10;1H\x1b[39;49m\xE2\x86\x91"),
-        "the foot starts with its cursor move and first character: {foot:?}"
+        foot.ends_with(b"\x1b[10;1H\x1b[1m\x1b[39;49mEnter"),
+        "the foot starts with its cursor move, bold and first word: {foot:?}"
     );
     pair.main
         .write_all(&[0x03, 0x03])
@@ -1842,14 +1842,15 @@ const RESTORE: &[u8] =
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
-/// watched pty chunks.
+/// watched pty chunks. The pty is 160 columns wide so the whole foot
+/// hint shows, naming the rebound key.
 #[track_caller]
 fn spawn_run_with_launch(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
     started: super::Launch,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    spawn_run_with_launch_at_height(hub, markers, started, 12)
+    spawn_run_with_launch_at_height(hub, markers, started, 160, 12)
 }
 
 /// Runs the terminal at a height that leaves its home rows visible.
@@ -1858,9 +1859,10 @@ fn spawn_run_with_launch_at_height(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
     started: super::Launch,
+    width: u16,
     height: u16,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    let pair = open_at(60, height);
+    let pair = open_at(width, height);
     let frames = watch(&pair.main, markers);
     let slave = pair
         .slave
@@ -1930,8 +1932,13 @@ fn run_home_names_the_key_maps_bound_key() {
 fn run_prints_a_resume_line_per_live_session_after_restoring() {
     let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished, frames) =
-        spawn_run_with_launch_at_height(hub, vec![b"parser" as &[u8], line as &[u8]], launch(), 14);
+    let (mut pair, finished, frames) = spawn_run_with_launch_at_height(
+        hub,
+        vec![b"parser" as &[u8], line as &[u8]],
+        launch(),
+        60,
+        14,
+    );
     crate::link::write_line(&held, &hub_status("s_aaaaaaaaaaaaaaaa", "idle"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The test waits for the session's name on screen before quitting.
@@ -1982,6 +1989,7 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
         hub,
         vec![b"parser" as &[u8], b"ENDMARK" as &[u8]],
         launch(),
+        60,
         14,
     );
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
@@ -2065,6 +2073,7 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
         hub,
         vec![b"parser" as &[u8], b"lost" as &[u8], line as &[u8]],
         launch(),
+        60,
         14,
     );
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))

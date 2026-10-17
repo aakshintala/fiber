@@ -582,8 +582,10 @@ fn resize_redraws_the_grid_at_the_new_size() {
     let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
-    // The footer's last word proves the last row drew before the resize.
-    run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
+    // The footer's first words prove the last row drew before the resize.
+    run.wait_screen("the footer", |grid| {
+        grid.contents.contains("Enter opens the focused session")
+    });
     run.resize(40, 10);
     // The redrawn home at 40 by 10: the box moves to the bottom, with
     // the input line on row 5 and the footer hint on row 9. Only a redraw
@@ -594,7 +596,10 @@ fn resize_redraws_the_grid_at_the_new_size() {
                 .rows
                 .get(5)
                 .is_some_and(|row| row.trim() == "› █? for shortcuts")
-            && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
+            && grid
+                .rows
+                .get(9)
+                .is_some_and(|row| row.contains("Enter opens the focused session"))
     });
     assert_eq!(grid.cursor, (5, 4));
     // The hub `fiber` started is up before the quit, so `wait` sees it

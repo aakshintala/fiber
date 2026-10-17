@@ -793,30 +793,13 @@ pub(super) fn render(
     // The foot hint sits on the last row, centred, cut to the width.
     let foot = &screen.foot;
     if placed.foot >= area.y {
-        if width(foot) <= usize::from(area.width) {
-            let at = area
-                .x
-                .saturating_add(area.width.saturating_sub(super::to_u16(width(foot))) / 2);
-            put(
-                buf,
-                area,
-                at,
-                placed.foot,
-                foot,
-                area.width,
-                Style::default(),
-            );
+        let at = if foot.width() <= usize::from(area.width) {
+            area.x
+                .saturating_add(area.width.saturating_sub(super::to_u16(foot.width())) / 2)
         } else {
-            put(
-                buf,
-                area,
-                area.x,
-                placed.foot,
-                foot,
-                area.width,
-                Style::default(),
-            );
-        }
+            area.x
+        };
+        buf.set_line(at, placed.foot, foot, area.width);
     }
     let rows = Rect::new(
         area.x,

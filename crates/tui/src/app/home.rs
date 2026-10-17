@@ -4,6 +4,9 @@
 
 use serde_json::{Value, json};
 
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
+
 use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
@@ -96,6 +99,50 @@ impl Home {
             })
             .map(str::to_owned)
     }
+}
+
+/// One bold key with its dim label, joined by dim ` · `.
+fn hint_key(spans: &mut Vec<Span<'static>>, key: &str, label: &str) {
+    if !spans.is_empty() {
+        spans.push(Span::styled(
+            " · ",
+            Style::new().add_modifier(Modifier::DIM),
+        ));
+    }
+    spans.push(Span::styled(
+        key.to_owned(),
+        Style::new().add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        format!(" {label}"),
+        Style::new().add_modifier(Modifier::DIM),
+    ));
+}
+
+/// The foot hint with its keys bold: each action by its first bound
+/// key, leaving an unbound action's part out with its joiner.
+fn home_foot(
+    open: Option<String>,
+    delete: Option<String>,
+    key_map: Option<String>,
+) -> ratatui::text::Line<'static> {
+    let mut spans = Vec::new();
+    if let Some(label) = open {
+        hint_key(
+            &mut spans,
+            &label,
+            "opens the focused session, or starts one from the box",
+        );
+    }
+    hint_key(&mut spans, "↑↓", "move");
+    if let Some(label) = delete {
+        hint_key(&mut spans, &label, "deletes an exited one");
+    }
+    if let Some(label) = key_map {
+        hint_key(&mut spans, &label, "the key map");
+    }
+    hint_key(&mut spans, "Ctrl+C", "twice to quit");
+    ratatui::text::Line::from(spans)
 }
 
 impl App {
@@ -202,9 +249,10 @@ impl App {
             // every frame.
             Some(Prompt::Quit) | None => (None, 0),
         };
-        // The foot names the key map's bound key, leaving it out
-        // when the action is unbound; Ctrl+C cannot be rebound, so its
-        // hint stays fixed.
+        // The foot names each action by its first bound key, leaving
+        // an unbound action's part out with its joiner; Ctrl+C cannot
+        // be rebound, so its hint stays fixed. The quit hint replaces
+        // the foot while Ctrl+C is armed.
         let sections = home.sessions.sections(home.launch_project());
         let (mut waiting_count, mut working, mut retrying, mut crashed, mut ready) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
@@ -315,14 +363,13 @@ impl App {
             spend: (live_count > 0).then(|| format!("{} live", crate::format::money(spend))),
         };
         let foot = if self.hint() {
-            self.hint_text()
+            ratatui::text::Line::from(self.hint_text())
         } else {
-            match self.keys().first_label("key_map") {
-                Some(label) => {
-                    format!("↑ sessions · ↓ chips · {label} the key map · Ctrl+C twice to quit")
-                }
-                None => "↑ sessions · ↓ chips · Ctrl+C twice to quit".to_owned(),
-            }
+            home_foot(
+                self.keys().first_label("open_focused"),
+                self.keys().first_label("delete_session"),
+                self.keys().first_label("key_map"),
+            )
         };
         Some(HomeScreen {
             header,
