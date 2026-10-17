@@ -34,6 +34,16 @@ The terminal is 120 by 32 unless a test picks the size its layout needs
 `xterm-256color` and answers the binary's capability queries for a fixed
 dark terminal.
 
+`scripts/look-diff` compares one look test's final screen to a prototype
+capture: it runs the named look test with a switch that dumps the output
+through the last grid wait the test completes, replays the dump through the same `vt100`
+parser into a grid, and compares the grid to the capture row by row with
+trailing spaces trimmed, plus each cell's colours and attributes when
+the `.ansi` capture is given. It prints one verdict line: `look: match
+<test>`, `look: differs <test> rows=<n> cells=<m> diff=<path>`, or
+`look: error <test> <reason>` for a missing capture, a failing test or
+a size mismatch.
+
 Bytes that never reach the cells, such as the window title, the OSC 9
 desktop notification, a bell and the mode-enable sequences, are waited
 for on the raw output instead. Such a wait searches from an offset the
