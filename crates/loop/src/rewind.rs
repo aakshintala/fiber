@@ -143,12 +143,11 @@ pub(crate) fn note_input(rewind: &Rewind) -> Input {
     }
 }
 
-/// Builds the note for the point `point` in the log in `dir`: the files
-/// the session's tools wrote after the point and the shell calls after it
-/// that may have changed files, from the effects on each
-/// The files written and shell calls after the point: the paths, then the
-/// calls, each in first-seen order. The text comes only from logged
-/// fields, so it is the same bytes whenever it is rendered.
+/// Collects what the session did after the point `point` in the log in
+/// `dir`: the paths its tools wrote and the shell calls that may have
+/// changed files, each in first-seen order, from the effects each
+/// `tool_call_started` declares. The text comes only from logged fields,
+/// so it is the same bytes whenever it is rendered.
 fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> {
     let lines = log::read(dir)?;
     let mut requested: HashMap<ActionId, ToolCallRequested> = HashMap::new();
@@ -213,9 +212,10 @@ fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> 
     Ok((paths, calls))
 }
 
-/// `tool_call_started` after the point (`docs/events.md`, "Rewind"). The
-/// text comes only from logged fields, so it is the same bytes whenever it
-/// is rendered.
+/// Builds the note for the point `point` in the log in `dir`: the files
+/// written and the shell calls run after the point, from [`changes`]
+/// (`docs/events.md`, "Rewind"). The text comes only from logged fields,
+/// so it is the same bytes whenever it is rendered.
 pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
     let (paths, calls) = changes(dir, point)?;
     Ok(note(&paths, &calls, &[]))
@@ -266,7 +266,7 @@ fn note(paths: &[String], calls: &[String], jobs: &[String]) -> String {
     } else {
         format!(
             "{noted}\n\n{}",
-            fill(message("rewind-jobs"), &[("jobs", &jobs.join("\n"))])
+            fill(message("rewind-jobs"), &[("stopped", &jobs.join("\n"))])
         )
     }
 }

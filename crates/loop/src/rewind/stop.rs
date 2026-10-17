@@ -17,8 +17,11 @@ use crate::{Error, Loop};
 #[path = "stop_tests.rs"]
 mod tests;
 
-/// How long a rewind waits for running jobs to end: the shutdown's
-/// per-process bound.
+/// How long a rewind waits for running jobs to end: 5 s on the loop's
+/// injected clock, the shutdown's per-process bound (`docs/invocation.md`,
+/// "Shutdown"). A stopped delegate's parent waits up to the bound for it
+/// to exit, so a shorter wait would cut it off while it writes its own
+/// `fiber_exited`.
 pub(crate) const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One job the note lists as stopped (`docs/events.md`, "Rewind"): its
@@ -119,10 +122,7 @@ impl Loop {
         loop {
             let running = self.running();
             if running.is_empty() {
-                let deliveries = self.inbox.try_iter().collect::<Vec<_>>();
-                for delivery in deliveries {
-                    self.stop_one(delivery)?;
-                }
+                self.drain_waiting()?;
                 return Ok(());
             }
             self.stop_jobs(&running);
@@ -137,15 +137,23 @@ impl Loop {
             match self.recv_bounded(Some(until)) {
                 Ok(delivery) => self.stop_one(delivery)?,
                 Err(RecvTimeoutError::Timeout) => {
-                    let deliveries = self.inbox.try_iter().collect::<Vec<_>>();
-                    for delivery in deliveries {
-                        self.stop_one(delivery)?;
-                    }
+                    self.drain_waiting()?;
                     return Ok(());
                 }
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
         }
+    }
+
+    /// One drain of the deliveries already waiting in the inbox: each is
+    /// stopped, a job's end written and anything else refused as after
+    /// `rewound`.
+    fn drain_waiting(&mut self) -> Result<(), Error> {
+        let deliveries = self.inbox.try_iter().collect::<Vec<_>>();
+        for delivery in deliveries {
+            self.stop_one(delivery)?;
+        }
+        Ok(())
     }
 
     /// One delivery during the stop wait: a job's end is written under its

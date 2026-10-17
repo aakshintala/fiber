@@ -200,7 +200,7 @@ No file was written and no command was run after this point.
 ## rewind-jobs
 
 Jobs that were running when this conversation was rewound were stopped:
-{jobs}
+{stopped}
 Start any of them again if you still need it.
 
 ## skill-added

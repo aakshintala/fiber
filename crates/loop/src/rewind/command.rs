@@ -79,11 +79,10 @@ impl Loop {
         }
         // A turn about to start: the drain already admitted a prompt or a
         // steer. Job news starts no turn, so it is no refusal.
-        if !input.pieces.is_empty()
-            && input
-                .pieces
-                .iter()
-                .any(|piece| !matches!(piece, Queued::Job(..) | Queued::Line(_)))
+        if input
+            .pieces
+            .iter()
+            .any(|piece| !matches!(piece, Queued::Job(..) | Queued::Line(_)))
         {
             reject(ack, ErrorCode::Busy, TURN_RUNNING);
             return Ok(());
