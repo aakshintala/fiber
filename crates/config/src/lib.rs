@@ -24,6 +24,7 @@ mod prompt_files;
 mod rules;
 mod secret;
 mod settings;
+mod startup_check;
 mod themes;
 mod write;
 
@@ -73,6 +74,10 @@ pub use secret::{
     valid_env_key,
 };
 pub use settings::{SettingInfo, SettingValue};
+pub use startup_check::{
+    McpRefusal, McpRefusalKind, McpServer, McpServers, McpTransport, ScriptRead, mcp_server_key,
+    mcp_servers, quoted_segment, read_script,
+};
 pub use themes::{theme_names, theme_text};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,

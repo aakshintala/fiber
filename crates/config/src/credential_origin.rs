@@ -154,7 +154,7 @@ impl Credentials {
                         // opening or reading it.
                         Err(OpenFail::IsDir) => Err(ConfigError::Io {
                             file: file.clone(),
-                            source: is_directory(),
+                            source: is_directory_error(),
                         }),
                         // A FIFO or any other non-regular file is never
                         // opened for reading: unlike a session, doctor
@@ -223,7 +223,7 @@ fn vanished(home: &Path, provider: &ProviderData, label: &str) -> ConfigError {
 
 /// An I/O error of kind `IsADirectory`, without opening or reading
 /// anything: the session's `fs::read` fails the same way on a directory.
-fn is_directory() -> io::Error {
+pub(crate) fn is_directory_error() -> io::Error {
     io::Error::from_raw_os_error(rustix::io::Errno::ISDIR.raw_os_error())
 }
 
@@ -241,13 +241,15 @@ pub(crate) enum OpenFail {
     Other(io::Error),
 }
 
-/// The text of the regular file at `path`, read only after a descriptor
-/// for it proved regular. With `nofollow` the open refuses symbolic links,
-/// as stored credentials do; without it the open follows them, as a
-/// session's configured file source does. No bytes are read before the
-/// descriptor check, and a FIFO is never opened for reading, so no call
-/// waits for a writer however the path changes under it.
-pub(crate) fn read_validated(path: &Path, nofollow: bool) -> Result<String, OpenFail> {
+/// A descriptor for the regular file at `path`, opened for a
+/// non-blocking read: the shared half of a validated read, so the script
+/// read and the credential read prove the same thing. With `nofollow`
+/// the open refuses symbolic links, as stored credentials do; without it
+/// the open follows them, as a session's configured file source does. No
+/// bytes are read before the descriptor check, and a FIFO is never opened
+/// for reading, so no call waits for a writer however the path changes
+/// under it.
+pub(crate) fn open_validated(path: &Path, nofollow: bool) -> Result<std::fs::File, OpenFail> {
     // The metadata check first, so a directory or FIFO seen there is never
     // opened; the descriptor check after the open decides, so a swap in
     // between cannot move the read.
@@ -294,8 +296,18 @@ pub(crate) fn read_validated(path: &Path, nofollow: bool) -> Result<String, Open
         | rustix::fs::FileType::BlockDevice
         | rustix::fs::FileType::Unknown => return Err(OpenFail::NotRegular),
     }
+    Ok(std::fs::File::from(fd))
+}
+
+/// The text of the regular file at `path`, read only after a descriptor
+/// for it proved regular. With `nofollow` the open refuses symbolic links,
+/// as stored credentials do; without it the open follows them, as a
+/// session's configured file source does. No bytes are read before the
+/// descriptor check, and a FIFO is never opened for reading, so no call
+/// waits for a writer however the path changes under it.
+pub(crate) fn read_validated(path: &Path, nofollow: bool) -> Result<String, OpenFail> {
+    let mut file = open_validated(path, nofollow)?;
     seam::note_read(path);
-    let mut file = std::fs::File::from(fd);
     let mut text = String::new();
     std::io::Read::read_to_string(&mut file, &mut text).map_err(OpenFail::Other)?;
     Ok(text)
@@ -410,7 +422,7 @@ pub(crate) mod seam {
 }
 
 #[cfg(not(test))]
-mod seam {
+pub(crate) mod seam {
     //! Production seams: both compile to nothing.
 
     use std::path::Path;
