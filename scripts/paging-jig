@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# PROBE (see #2360; dropped before merge): builds the tui crate's paging
-# jig (docs/testing.md, "Jigs") in the release profile for the target that
-# ships, x86_64-unknown-linux-musl, AND for x86_64-unknown-linux-gnu, so the
-# release job can report the scale-16 re-count growth on both and tell a
-# musl-allocator effect apart from the head's own cost. The remarks below
-# describe the musl paths the benchmark job uses; the gnu paths are the
-# probe's and go away with it.
+# Builds the tui crate's paging jig (docs/testing.md, "Jigs") in the release
+# profile for the target that ships, x86_64-unknown-linux-musl, so the
+# benchmark job's paging rows (docs/performance.md) measure the shipped
+# allocator and code generation. The checkout's HEAD is the head.
 #
 # Usage: scripts/paging-jig
 # When scripts/release-size left $RUNNER_TEMP/release/base/commit (a pull
@@ -17,9 +14,7 @@
 # fails the script.
 #
 # Outputs: $RUNNER_TEMP/release/head/paging, and $RUNNER_TEMP/release/base/paging
-# when the base has a jig that builds. Runs on Linux. PROBE: also
-# $RUNNER_TEMP/release/head/paging-gnu and $RUNNER_TEMP/release/base/paging-gnu
-# (dropped before merge).
+# when the base has a jig that builds. Runs on Linux.
 set -euo pipefail
 shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
 # Shared release mechanics, sibling to this script: the checkout this
@@ -30,8 +25,6 @@ shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
 cd "$(git rev-parse --show-toplevel)"
 
 readonly source=crates/tui/examples/paging.rs
-# PROBE (see #2360; dropped before merge): the second target the probe builds.
-readonly gnu=x86_64-unknown-linux-gnu
 out="${RUNNER_TEMP:?}/release"
 base_commit=
 if [ -f "$out/base/commit" ]; then
@@ -49,28 +42,9 @@ build_paging() {
     cp "$top/target/$target/release/examples/paging" "$1"
 }
 
-# Builds the jig of the checkout in the current directory for $1 (a target
-# triple) into the shared target directory and copies it to $2. Each step is
-# chained, so a failed build fails the function even where errexit does not
-# apply, and never copies a jig an earlier build left in target/. The
-# release-size test's stub cargo ignores --target and always writes the musl
-# path, so a missing triple path falls back to it there; a real build always
-# takes the triple path. PROBE (see #2360; dropped before merge).
-build_paging_target() {
-  CARGO_TARGET_DIR="$top/target" cargo build --release --locked --target "$1" -p tui --example paging &&
-    mkdir -p "${2%/*}" &&
-    if [ -f "$top/target/$1/release/examples/paging" ]; then
-      cp "$top/target/$1/release/examples/paging" "$2"
-    else
-      cp "$top/target/$target/release/examples/paging" "$2"
-    fi
-}
-
 # The head is copied out of target/ before any base build overwrites it.
-# PROBE (see #2360; dropped before merge): the gnu jig alongside the musl one.
 build_paging "$out/head/paging"
-build_paging_target "$gnu" "$out/head/paging-gnu"
-echo "paging-jig: head $(git rev-parse --short HEAD) musl and gnu jigs built"
+echo "paging-jig: head $(git rev-parse --short HEAD) jig built"
 
 if [ -n "$base_commit" ]; then
   base_sha=$(git rev-parse --short "$base_commit")
@@ -82,12 +56,12 @@ if [ -n "$base_commit" ]; then
   trap 'git -C "$top" worktree remove --force "$worktree"' EXIT
   base_worktree "$base_commit" "$worktree"
   # The base may pin another toolchain; each command reads its
-  # rust-toolchain.toml. PROBE (see #2360; dropped before merge): both targets.
-  if (cd "$worktree" && rustup toolchain install && rustup target add "$target" && rustup target add "$gnu" &&
-    build_paging "$out/base/paging" && build_paging_target "$gnu" "$out/base/paging-gnu"); then
-    echo "paging-jig: base $base_sha musl and gnu jigs built"
+  # rust-toolchain.toml.
+  if (cd "$worktree" && rustup toolchain install && rustup target add "$target" &&
+    build_paging "$out/base/paging"); then
+    echo "paging-jig: base $base_sha jig built"
   else
-    rm -f "$out/base/paging" "$out/base/paging-gnu"
+    rm -f "$out/base/paging"
     echo "paging-jig: the base $base_sha jig did not build; its paging timings are unavailable"
   fi
 fi
