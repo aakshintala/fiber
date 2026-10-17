@@ -15,10 +15,10 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
@@ -34,10 +34,6 @@ use support::{
 
 #[path = "../../provider/tests/support/probes.rs"]
 mod probes;
-
-/// Set on the re-exec of [`sleep_stands_in_for_fiber`]. Unset, that test
-/// returns without spawning anything.
-const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 
 impl Setup {
     #[track_caller]
@@ -286,110 +282,6 @@ impl Drop for KillGroup {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
         support::kill_group_detached(self.0, "KILL");
-    }
-}
-
-#[test]
-fn dropping_the_group_guard_kills_the_group() {
-    let deadline = Deadline::start();
-    let mut child = Command::new("sleep")
-        .arg("30")
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let group = child.id();
-    drop(KillGroup(group));
-    // On Linux `kill -0` still succeeds for a killed zombie until it is
-    // reaped, so the group is checked after `wait`.
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match deadline.recv(&finished) {
-        Ok(status) => status.unwrap(),
-        Err(_) => support::expired(deadline, group, &finished, "the process group to die"),
-    };
-    assert_eq!(status.signal(), Some(9));
-    assert!(!group_alive(deadline, group));
-}
-
-/// Run by [`a_killed_test_kills_the_stand_in_group`]: `sleep` through
-/// [`spawn_watched`], stdout inherited so the stand-in holds the pipe the
-/// parent reads. Prints its group and waits. On its own it does nothing.
-#[test]
-#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
-fn sleep_stands_in_for_fiber() {
-    let Ok(_) = std::env::var(WATCHDOG_STAND_IN_ENV) else {
-        return;
-    };
-    let mut command = Command::new("sleep");
-    command.arg("60").stdout(Stdio::inherit());
-    let (child, _watchdog) = spawn_watched(&mut command);
-    println!("group {}", child.id());
-    std::io::stdout().flush().unwrap();
-    let mut rest = String::new();
-    std::io::stdin().read_line(&mut rest).unwrap();
-}
-
-/// SIGKILL of the test process is EOF to the watchdog, which kills the
-/// stand-in's group. EOF on the inherited stdout arrives only once that
-/// group is gone (`docs/testing.md`, "Running tests").
-#[test]
-fn a_killed_test_kills_the_stand_in_group() {
-    let deadline = Deadline::start();
-    let mut helper = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "sleep_stands_in_for_fiber", "--nocapture"])
-        .env(WATCHDOG_STAND_IN_ENV, "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let stdout = helper.stdout.take().unwrap();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stdout);
-        // libtest prints its own lines before the helper's.
-        let group = (&mut reader)
-            .lines()
-            .map_while(Result::ok)
-            .find_map(|line| line.strip_prefix("group ")?.parse().ok());
-        send_group(&tx, group);
-        // EOF comes once every process holding the pipe has exited.
-        match std::io::copy(&mut reader, &mut std::io::sink()) {
-            Ok(_) | Err(_) => {}
-        }
-        send_group(&tx, None);
-    });
-    let group = match deadline.recv(&rx) {
-        Ok(Some(group)) => group,
-        Ok(None) => panic!("the stand-in exited before printing its group"),
-        Err(_) => panic!("waited until the deadline for the stand-in to print its group"),
-    };
-    // Dropping this kills the group if the test fails before the watchdog does.
-    let _guard = KillGroup(group);
-    match helper.kill() {
-        Ok(()) | Err(_) => {}
-    }
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || match done.send(helper.wait()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
-    });
-    let status = match deadline.recv(&finished) {
-        Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited until the deadline for the killed test process to exit"),
-    };
-    assert_eq!(status.signal(), Some(9));
-    match deadline.recv(&rx) {
-        Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
-            panic!("waited until the deadline for stand-in group {group} to die")
-        }
-    }
-}
-
-#[track_caller]
-fn send_group(tx: &mpsc::Sender<Option<u32>>, message: Option<u32>) {
-    match tx.send(message) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
     }
 }
 

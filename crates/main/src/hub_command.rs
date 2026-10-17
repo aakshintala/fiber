@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use contract::shapes::Failure;
@@ -321,19 +321,22 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn hub::S
     // that never starts leaves the child behind, so it is killed and
     // reaped here.
     let child = command.spawn()?;
-    let state = Arc::new(Mutex::new(State {
-        exited: false,
-        failure: None,
-    }));
+    let shared: Arc<(Mutex<State>, Condvar)> = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+        }),
+        Condvar::new(),
+    ));
     let child = Arc::new(Mutex::new(child));
-    let watch = Arc::clone(&state);
+    let watch = Arc::clone(&shared);
     match thread::Builder::new().name("hub-drain".to_owned()).spawn({
         let child = Arc::clone(&child);
         move || drain(&child, &watch)
     }) {
         Ok(_) => Ok(Box::new(Spawned {
             id: id.clone(),
-            state,
+            state: shared,
         })),
         Err(error) => {
             let mut child = lock(&child);
@@ -356,7 +359,8 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn hub::S
 /// the drain; the session keeps running.
 struct Spawned {
     id: SessionId,
-    state: Arc<Mutex<State>>,
+    /// `drain` notifies the `Condvar` once it sets `State::exited`.
+    state: Arc<(Mutex<State>, Condvar)>,
 }
 
 struct State {
@@ -367,7 +371,7 @@ struct State {
 
 impl hub::Started for Spawned {
     fn exited(&self) -> Option<Failure> {
-        let state = lock(&self.state);
+        let state = lock(&self.state.0);
         if !state.exited {
             return None;
         }
@@ -378,11 +382,24 @@ impl hub::Started for Spawned {
             provider: None,
         }))
     }
+
+    fn wait_exited(&self) -> Option<Failure> {
+        let mut state = lock(&self.state.0);
+        while !state.exited {
+            state = self
+                .state
+                .1
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(state);
+        self.exited()
+    }
 }
 
 /// Reads the session's stdout to EOF, keeping the `fiber_exited` line
 /// printed last, then reaps the child.
-fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
+fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
     let mut child = lock(child);
     if let Some(stdout) = child.stdout.take() {
         let mut read = BufReader::new(stdout);
@@ -393,7 +410,7 @@ fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
                     if let Some(failure) = fiber_exited_error(&buf) {
-                        lock(state).failure = Some(failure);
+                        lock(&shared.0).failure = Some(failure);
                     }
                 }
             }
@@ -402,7 +419,8 @@ fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
     match child.wait() {
         Ok(_) | Err(_) => {}
     }
-    lock(state).exited = true;
+    lock(&shared.0).exited = true;
+    shared.1.notify_all();
 }
 
 /// The `code` and `message` of a `fiber_exited` line's `payload.error`.
