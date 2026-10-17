@@ -268,6 +268,58 @@ fn cancellation_discards_a_label_read_in_flight() {
 }
 
 #[test]
+fn reload_refreshes_notice_threshold_for_an_existing_quota_store() {
+    let fixture = fixture(false, false, &["quota.notice_at=0.25"]);
+    let store = fixture.switching.quota_store();
+    assert_eq!(store.answer_with_spawn(|_| Ok(())).1, 0.25);
+    let mut now = fixture.switching.reloadable();
+    now.config = Arc::new(crate::test_support::load(
+        &fixture._root.path().join("home"),
+        &fixture._root.path().join("workspace"),
+        "test",
+        ["quota.notice_at=0.75"],
+    ));
+    fixture.switching.reloaded(now);
+    assert_eq!(store.answer_with_spawn(|_| Ok(())).1, 0.75);
+}
+
+#[test]
+fn quota_load_uses_the_reloaded_set_and_startup_credential_labels() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    let config = crate::test_support::load(
+        &fixture._root.path().join("home"),
+        &fixture._root.path().join("workspace"),
+        "test",
+        ["extensions.qp.enabled=false"],
+    );
+    let mut now = fixture.switching.reloadable();
+    let extensions = now.loader.extensions.reload(
+        &fixture._root.path().join("home"),
+        &config,
+        now.loader.clock.clone(),
+        now.loader.locks.clone(),
+    );
+    assert!(!extensions.has_extensions());
+    now.loader.extensions = Arc::new(extensions);
+    now.config = Arc::new(config);
+    fixture.switching.reloaded(now);
+    let held = store.clone();
+    fakes::within(
+        "quota loading from the current set",
+        MUST_SUCCEED_WITHIN,
+        move || held.load(),
+    );
+    let rows = store.answer_with_spawn(|_| Ok(())).0;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.provider.as_str(), row.credential.as_str()))
+            .collect::<Vec<_>>(),
+        [("qp", "broken"), ("qp", "home"), ("qp", "work")]
+    );
+}
+
+#[test]
 fn provider_start_and_registration_failures_are_unreachable_for_every_label() {
     for start_failure in [true, false] {
         let fixture = fixture(false, false, &[]);

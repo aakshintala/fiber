@@ -507,8 +507,11 @@ pub(crate) fn run_new(
         .iter()
         .map(|(_, tool)| tool.definition().name)
         .collect();
-    let base_tools = tools[..tools.len() - extensions.tools().len()]
+    let base_tools = tools
         .iter()
+        .rev()
+        .skip(extensions.tools().len())
+        .rev()
         .filter(|(owner, tool)| !(owner == "builtin" && tool.definition().name == "web_search"))
         .cloned()
         .collect();

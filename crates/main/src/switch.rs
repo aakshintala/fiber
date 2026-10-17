@@ -269,10 +269,6 @@ impl Switching {
 
     /// The `Loop::switcher` closure: `prepare` over the shared `Switching`,
     /// publishing to `door` when a switch applies.
-    pub(crate) fn closure(self, door: Door) -> r#loop::Prepare {
-        self.split(door).0
-    }
-
     pub(crate) fn split(self, door: Door) -> (r#loop::Prepare, Arc<Self>) {
         {
             let mut now = self.now.lock().unwrap_or_else(PoisonError::into_inner);
@@ -283,7 +279,13 @@ impl Switching {
         let prepare = shared.clone();
         (
             Arc::new(move |args, label, chosen| {
-                crate::switch::prepare(&prepare, &door, args, label, chosen)
+                let now = prepare.reloadable();
+                let current_door = Door {
+                    declare: door.declare.clone(),
+                    backend: now.backend,
+                    hosted_stands: now.hosted_stands,
+                };
+                crate::switch::prepare(&prepare, &current_door, args, label, chosen)
             }),
             shared,
         )
@@ -760,12 +762,12 @@ fn hosted(
     kind: Option<&str>,
 ) -> Result<(r#loop::Hosted, Option<Applied>), Rejection> {
     let now = switching.reloadable();
-    if now.hosted_stands {
+    if door.hosted_stands {
         return Ok((r#loop::Hosted::Keep, None));
     }
     let declare = Arc::clone(&door.declare);
     let Some((tool, info)) =
-        crate::builtin::web_search(kind, now.backend.as_ref()).map_err(rejection)?
+        crate::builtin::web_search(kind, door.backend.as_ref()).map_err(rejection)?
     else {
         let applied = Box::new(move || declare("web_search", None));
         return Ok((
