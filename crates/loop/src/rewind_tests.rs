@@ -1210,3 +1210,95 @@ fn a_handoff_with_another_outcome_does_not_apply() {
         "no note reaches the fork: {conversation:?}"
     );
 }
+
+const HC: &str = "s_cccccccccccccccc";
+
+/// A chain A -> B -> C with the handoff in the middle segment B: the fold
+/// of C to its first line, and the window's rendered conversation. B is
+/// forked from A at 1; C is forked from B at `at`.
+fn folded_chain(
+    sessions: &Path,
+    at: u64,
+) -> (crate::resume::Resumed, Vec<contract::provider::Input>) {
+    write_chain(
+        sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_a1"), None, &handoff_turn("a-one")),
+        ],
+    );
+    write_chain(
+        sessions,
+        HB,
+        &[
+            handoff_envelope(HB, 0, None, None, &handoff_session_started(Some((HA, 1)))),
+            handoff_envelope(HB, 1, Some("t_b1"), None, &handoff_turn("b-one")),
+            handoff_envelope(HB, 2, Some("t_b1"), None, &handoff_step()),
+            handoff_envelope(HB, 3, Some("t_b2"), None, &handoff_turn("b-two")),
+            handoff_envelope(HB, 4, Some("t_b2"), None, &handoff_begun()),
+            handoff_envelope(
+                HB,
+                5,
+                Some("t_b2"),
+                Some("a_mid"),
+                &handoff_note_text("the middle note"),
+            ),
+            handoff_envelope(
+                HB,
+                6,
+                Some("t_b2"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_mid")),
+            ),
+            handoff_envelope(HB, 7, None, None, &handoff_opening()),
+            handoff_envelope(HB, 8, Some("t_b2"), None, &handoff_step()),
+            handoff_envelope(HB, 9, Some("t_b3"), None, &handoff_turn("b-three")),
+        ],
+    );
+    write_chain(
+        sessions,
+        HC,
+        &[handoff_envelope(
+            HC,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HB, at))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HC), Seq(0)).unwrap();
+    let log = log::Log::open(
+        sessions,
+        SessionId(HC.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    (folded, conversation)
+}
+
+#[test]
+fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
+    let home = fakes::TempDir::new("loop-handoff-middle");
+    let sessions = home.path().join("sessions");
+    // C continues B past the handoff: the window names B's segment and the
+    // handoff turn's start there.
+    let (folded, conversation) = folded_chain(&sessions, 8);
+    assert_eq!(folded.window, (1, 3));
+    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("b-two"));
+    assert_eq!(conversation[2], user_input("the middle note"));
+    // C continued before the handoff instead: the handoff is after the
+    // point, so the window stays at the chain's start.
+    let (earlier, before) = folded_chain(&sessions, 2);
+    assert_eq!(earlier.window, (0, 0));
+    assert_eq!(earlier.seed, Carry::default());
+    assert_eq!(before, [user_input("a-one"), user_input("b-one")]);
+}
