@@ -1,6 +1,6 @@
 //! A rewind stops every running job before `rewound`
-//! (`docs/events.md`, "Rewind"): the stops, the 5 s bound on the injected
-//! clock, and what the wait refuses or drops.
+//! (`docs/events.md`, "Rewind"): the stops, the wait with no extra
+//! deadline, and what the wait refuses or drops.
 
 #![allow(
     clippy::unwrap_used,
@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock as _;
 use contract::commands::RewindArgs;
 use contract::events::{
     CommandResult, Event, JobCompleted, JobStarted, Outcome, Parent, SessionStarted, TurnOutcome,
@@ -41,10 +40,6 @@ use support::{DEADLINE, MODEL, Session, TestTool, calls_reply, delivery, message
 
 const A_ID: &str = "s_aaaaaaaaaaaaaaaa";
 const B_ID2: &str = "s_bbbbbbbbbbbbbbbb";
-
-/// The stop wait's bound: the shutdown's per-process bound is 5 seconds, so
-/// a parked stop wait names `origin + 5 s` as its instant.
-const BOUND: Duration = Duration::from_secs(5);
 
 /// The refusal a delivery refused after `rewound` carries: the session takes
 /// no more commands.
@@ -502,10 +497,9 @@ fn a_job_ending_indeterminate_is_written_verbatim_before_rewound() {
 }
 
 #[test]
-fn a_job_that_never_ends_waits_out_the_bound_then_rewinds() {
+fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
     let mut session = run_a_with_id(A_ID);
     let dir = session.dir.clone();
-    let origin = session.clock.now();
     let (jobs, stops) = FakeJobs::new(&["j_1"]);
     let looped = session
         .looped
@@ -524,70 +518,24 @@ fn a_job_that_never_ends_waits_out_the_bound_then_rewinds() {
     Deadline::after(DEADLINE)
         .recv(&stops)
         .expect("the job is stopped");
-    // The loop parks on the bound: advancing to it is the only way the
-    // wait ends without a job end.
-    session.clock.advance_when_parked(
-        Some(origin + BOUND),
-        None,
-        BOUND,
-        &fakes::Deadline::after(DEADLINE),
+    // The wait parks with no deadline of its own.
+    assert!(
+        session.clock.await_parked_unbounded(DEADLINE),
+        "the stop wait parked with no deadline"
     );
+    // Moving the clock past the shutdown's per-process bound changes
+    // nothing: with no job end the wait does not return and nothing is
+    // rewound.
+    session.clock.advance(Duration::from_secs(30));
+    assert!(finished.try_recv().is_err(), "the wait is still open");
     assert!(
         log::read(&dir)
             .unwrap()
             .iter()
             .all(|line| line.kind != "rewound"),
-        "no rewound is written before the bound"
+        "no rewound is written while the job runs"
     );
-    // A clock move alone never wakes the inbox wait: a wake makes it look
-    // again, find the bound passed, and end the wait.
-    inbox.send(Delivery::Cancelled).unwrap();
-    let outcome = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("the rewind ended in time");
-    assert_eq!(outcome, None);
-    accepted(answer_of(answered));
-    let lines = log::read(&dir).unwrap();
-    assert_eq!(lines.last().unwrap().kind, "rewound");
-    assert!(
-        lines.iter().all(|line| line
-            .payload
-            .get("job_id")
-            .map(|id| id != "j_1")
-            .unwrap_or(true)
-            || line.kind != "job_completed"),
-        "no job end is written for the job that never ended"
-    );
-}
-
-#[test]
-fn a_job_ending_while_parked_on_the_bound_is_written_then_rewound() {
-    let mut session = run_a_with_id(A_ID);
-    let dir = session.dir.clone();
-    let origin = session.clock.now();
-    let (jobs, stops) = FakeJobs::new(&["j_1"]);
-    let looped = session
-        .looped
-        .take()
-        .unwrap()
-        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let (rw, answered) = support::rewind(args(None, None, false));
-    let inbox = session.inbox.clone();
-    inbox.send(rw).unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut looped = looped;
-        let outcome = looped.turn().unwrap();
-        done.send(outcome).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&stops)
-        .expect("the job is stopped");
-    assert!(
-        session.clock.await_parked(origin + BOUND, DEADLINE),
-        "the stop wait parked on the bound"
-    );
-    // The end arrives while parked, before any advance: it is still read.
+    // Once its end arrives the wait returns and the rewind completes.
     jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
     let outcome = Deadline::after(DEADLINE)
         .recv(&finished)

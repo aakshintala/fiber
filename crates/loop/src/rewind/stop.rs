@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::mpsc::RecvTimeoutError;
 
 use contract::events::{Event, JobCompleted, Outcome};
 use contract::inbox::Delivery;
@@ -16,13 +15,6 @@ use crate::{Error, Loop};
 #[cfg(test)]
 #[path = "stop_tests.rs"]
 mod tests;
-
-/// How long a rewind waits for running jobs to end: 5 s on the loop's
-/// injected clock, the shutdown's per-process bound (`docs/invocation.md`,
-/// "Shutdown"). A stopped delegate's parent waits up to the bound for it
-/// to exit, so a shorter wait would cut it off while it writes its own
-/// `fiber_exited`.
-pub(crate) const STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One job the note lists as stopped (`docs/events.md`, "Rewind"): its
 /// id, and its `job_started` description when the old log holds one.
@@ -107,18 +99,18 @@ impl Loop {
     /// `running` reads empty it still runs one `try_iter` drain of
     /// already-waiting deliveries, as `settle` does at its empty branch,
     /// then returns. Otherwise it sends `stop` for every running job, again
-    /// on every pass, and reads with `recv_bounded` against one deadline
-    /// computed only once a job is running. Every delivery except a job's
+    /// on every pass, and reads with no extra deadline of its own: the
+    /// bound on a job's stop is the normal job stop's
+    /// (`docs/events.md`, "Rewind"). Every delivery except a job's
     /// end goes through `refuse_after_rewound`, which answers an
-    /// acknowledgement `closing` and drops the rest. `Timeout` and
-    /// `Disconnected` both end the wait: a closed inbox with a job still
-    /// running returns at once instead of spinning, and the final inbox
-    /// drain always runs, even when no job is running.
+    /// acknowledgement `closing` and drops the rest. Only a closed inbox
+    /// ends the wait early: `Disconnected` returns at once instead of
+    /// spinning, and the final inbox drain always runs, even when no job
+    /// is running.
     pub(crate) fn stop_jobs_for_rewind(&mut self) -> Result<(), Error> {
         if !self.has_jobs() {
             return Ok(());
         }
-        let mut deadline = None;
         loop {
             let running = self.running();
             if running.is_empty() {
@@ -126,21 +118,11 @@ impl Loop {
                 return Ok(());
             }
             self.stop_jobs(&running);
-            let until = match deadline {
-                Some(until) => until,
-                None => {
-                    let computed = self.log.clock().now() + STOP_BOUND;
-                    deadline = Some(computed);
-                    computed
-                }
-            };
-            match self.recv_bounded(Some(until)) {
+            match self.recv_bounded(None) {
                 Ok(delivery) => self.stop_one(delivery)?,
-                Err(RecvTimeoutError::Timeout) => {
-                    self.drain_waiting()?;
-                    return Ok(());
-                }
-                Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                // With no deadline the wait never times out: only a
+                // closed inbox ends it.
+                Err(_) => return Ok(()),
             }
         }
     }
