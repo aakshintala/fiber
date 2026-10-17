@@ -363,7 +363,8 @@ pub enum ReplyAction {
 }
 
 /// A call the provider ran itself, such as a hosted web search, with its
-/// result; both carry their raw blocks as `provider_item`.
+/// result; both carry their raw blocks as `provider_item`. A call with no
+/// `provider_item` stands for a result whose call came in an earlier reply.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostedCall {
     /// The call, as `tool_call_requested`.
@@ -373,13 +374,20 @@ pub struct HostedCall {
 }
 
 /// Why a reply ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Finish {
     /// The model finished.
     Completed,
     /// The request's output-token limit cut it off (`docs/loop.md`, "A reply
     /// cut off by the output limit").
     OutputLimit,
+    /// A hosted tool's loop paused (`docs/loop.md`, "A reply paused by a
+    /// hosted tool"): `content` is the provider's blocks in order,
+    /// unmodified except the streamed fields filled in, never empty.
+    Paused {
+        /// The provider's content blocks in order, as sent.
+        content: Vec<Value>,
+    },
 }
 
 /// A model's prices, in US dollars per million tokens
