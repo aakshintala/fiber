@@ -654,27 +654,41 @@ jobs:
           fi
           perf --version || true
           sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
-          # PROBE round-3 retry: round 3 recorded nothing because tracefs
-          # denied the event read (run 38989579413). The perf hint first,
-          # the chmod fallback second; the log says which one ran.
-          if sudo mount -o remount,mode=755 /sys/kernel/tracing 2>/dev/null; then
-            echo "probe-mmap: tracefs fix ran: remount mode=755 /sys/kernel/tracing"
+          # PROBE retry 2: round 4 showed the remount alone only opens
+          # the tracefs root; the events subtree keeps its owner-only
+          # bits. Run BOTH the remount and the chmod, logging each exit
+          # code.
+          rc_remount=0
+          sudo mount -o remount,mode=755 /sys/kernel/tracing 2>/dev/null || rc_remount=$?
+          echo "probe-mmap: tracefs fix: remount mode=755 /sys/kernel/tracing rc=$rc_remount"
+          rc_chmod=0
+          sudo chmod -R a+rX /sys/kernel/tracing 2>/dev/null || rc_chmod=$?
+          echo "probe-mmap: tracefs fix: chmod -R a+rX /sys/kernel/tracing rc=$rc_chmod"
+          if [ -d /sys/kernel/debug/tracing ]; then
+            rc_chmod_dbg=0
+            sudo chmod -R a+rX /sys/kernel/debug/tracing 2>/dev/null || rc_chmod_dbg=$?
+            echo "probe-mmap: tracefs fix: chmod -R a+rX /sys/kernel/debug/tracing rc=$rc_chmod_dbg"
           else
-            sudo chmod -R a+rX /sys/kernel/tracing /sys/kernel/debug/tracing 2>/dev/null || true
-            echo "probe-mmap: tracefs fix ran: chmod fallback (remount failed)"
+            echo "probe-mmap: tracefs fix: no debugfs tracing dir; skipped"
           fi
           # Prove the event is readable before any recording or probe
-          # build. Either line working proves readability; both failing
-          # stops the probe step cleanly without failing the job.
+          # build. The id read is logged in full; on failure the error
+          # text and the permission chain are logged, then the probe step
+          # stops cleanly without failing the job.
           perf list 'syscalls:sys_enter_mmap' 2>&1 | sed "s/^/probe-mmap: perf list: /" || true
-          mmap_id=$(cat /sys/kernel/tracing/events/syscalls/sys_enter_mmap/id 2>/dev/null || true)
-          if [ -n "$mmap_id" ]; then
-            echo "probe-mmap: tracefs event id: syscalls:sys_enter_mmap id=$mmap_id"
-          else
-            echo "probe-mmap: tracefs unreadable after fix"
-            echo "probe-mmap: done (tracefs unreadable; probe stopped cleanly)"
-            exit 0
-          fi
+          mmap_id_text=$(cat /sys/kernel/tracing/events/syscalls/sys_enter_mmap/id 2>&1 || true)
+          echo "probe-mmap: tracefs id read: ${mmap_id_text:-<empty>}"
+          case "$mmap_id_text" in
+            ''|*[!0-9]*)
+              echo "probe-mmap: tracefs unreadable after fix"
+              ls -ld /sys/kernel/tracing /sys/kernel/tracing/events /sys/kernel/tracing/events/syscalls /sys/kernel/tracing/events/syscalls/sys_enter_mmap 2>&1 | sed "s/^/probe-mmap: tracefs perms: /" || true
+              echo "probe-mmap: done (tracefs unreadable; probe stopped cleanly)"
+              exit 0
+              ;;
+            *)
+              echo "probe-mmap: tracefs event id: syscalls:sys_enter_mmap id=$mmap_id_text"
+              ;;
+          esac
           echo "probe-mmap: sampler is perf record -e syscalls:sys_enter_mmap -c <c> --call-graph dwarf,16384; no frame pointers (musl static libc has none); build flag CARGO_PROFILE_RELEASE_DEBUG=line-tables-only on the probe builds only; the release profile files stay unchanged"
           # perf script summarizer, read from the script output: one TOTAL
           # line, one SITE line per call site, one LEN line per site and
