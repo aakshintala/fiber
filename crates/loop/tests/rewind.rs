@@ -1903,6 +1903,71 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     );
 }
 
+#[test]
+fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
+    let mut failed = summary_failure("try again");
+    failed.code = ErrorCode::RateLimited;
+    let mut session = run_a_with_tail(vec![
+        Scripted::failed_after(failed, fakes::call_usage("summary-first")),
+        Scripted::text("Tried X."),
+    ]);
+    let before = log::read(&session.dir).unwrap().len();
+    let clock = session.clock.clone();
+    let until = contract::clock::Clock::now(clock.as_ref()) + std::time::Duration::from_secs(2);
+    let mut looped = session.looped.take().unwrap();
+    let (rw, answer) = rewind(args(None, None, true, vec![]));
+    session.inbox.send(rw).unwrap();
+    let (done, finished) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let result = looped.turn();
+        done.send(result).unwrap();
+    });
+    clock.advance_when_parked(
+        Some(until),
+        Some(worker.thread().id()),
+        std::time::Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the retried summary ended")
+            .unwrap(),
+        None
+    );
+    accepted(answer_of(answer));
+    let lines = log::read(&session.dir).unwrap();
+    let tail = &lines[before..];
+    assert_eq!(
+        kinds(tail),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "rewound"
+        ]
+    );
+    assert_eq!(
+        tail[0].payload["input"],
+        json!([{"type":"rewind", "command_id":"c_rewind"}])
+    );
+    assert_eq!(tail[5].payload["delay_ms"], 2000);
+    assert_eq!(tail[11].payload["summary"], "Tried X.");
+    assert_eq!(session.provider.requests().len(), 5);
+    assert_eq!(
+        session.provider.requests()[3],
+        session.provider.requests()[4]
+    );
+}
+
 struct SummaryRepository;
 
 impl contract::repository::RepositoryCode for SummaryRepository {
