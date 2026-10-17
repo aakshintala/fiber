@@ -353,6 +353,7 @@ impl Loop {
                 | Delivery::Message(_)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Reload(..)
                 | Delivery::Credential(..)
                 | Delivery::Rewind(..)
                 | Delivery::Job(_)
