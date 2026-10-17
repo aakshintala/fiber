@@ -12,9 +12,9 @@ use std::fs;
 use std::path::Path;
 
 use contract::events::{
-    ContextAdded, Empty, Environment, Event, FiberStarted, HandoffCompleted, HandoffStarted,
-    HandoffTrigger, InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested,
-    ToolCallStarted, TurnStarted, Variables, VariablesSource,
+    Empty, Environment, Event, FiberStarted, HandoffCompleted, HandoffStarted, HandoffTrigger,
+    InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested, ToolCallStarted,
+    TurnStarted, Variables, VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
@@ -803,7 +803,7 @@ fn latest_name_is_none_when_the_log_cannot_be_read() {
     assert!(latest_name(&file).is_none());
 }
 
-use super::command::{Target, point_for};
+use super::command::Target;
 use crate::handoff::Carry;
 /// Fold tests for a handoff inherited by position (`docs/events.md`,
 /// "Rewind"): a handoff completed in the old session at or before the
@@ -1080,5 +1080,133 @@ fn the_command_door_refuses_the_handoffs_completion_line() {
     assert_eq!(
         super::command::point_for(&lines, &target, Some(Seq(2))).unwrap(),
         2
+    );
+}
+
+#[test]
+fn a_handoff_started_with_no_completion_does_not_apply() {
+    // The process died mid-handoff: `handoff_started` and the note's text
+    // are logged, then a new process's `fiber_started`, and the turn went
+    // on. With no `handoff_completed` before the point, the handoff did
+    // not take effect.
+    let home = fakes::TempDir::new("loop-handoff-unfinished");
+    let sessions = home.path().join("sessions");
+    let died = Event::FiberStarted(FiberStarted {
+        version: "0.0.1".to_owned(),
+        resumed: false,
+    });
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_note"),
+                &handoff_note_text("the lost note"),
+            ),
+            handoff_envelope(HA, 6, None, None, &died),
+            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 0));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    // The open window closes at the new process: the note lines never
+    // stay, and the context is what it was before the handoff.
+    assert_eq!(
+        conversation,
+        [user_input("one"), user_input("two"), user_input("three")]
+    );
+}
+
+#[test]
+fn a_handoff_with_another_outcome_does_not_apply() {
+    // The handoff failed: its completion names the note's action, but the
+    // outcome is not `completed`, so the fork keeps the earlier context.
+    let home = fakes::TempDir::new("loop-handoff-failed");
+    let sessions = home.path().join("sessions");
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_note"),
+                &handoff_note_text("the failed note"),
+            ),
+            handoff_envelope(
+                HA,
+                6,
+                Some("t_2"),
+                None,
+                &handoff_done(Outcome::Failed, Some("a_note")),
+            ),
+            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 0));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(
+        conversation,
+        [user_input("one"), user_input("two"), user_input("three")]
+    );
+    assert!(
+        conversation.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the failed note"))),
+        "no note reaches the fork: {conversation:?}"
     );
 }
