@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use contract::events::CommandResult;
 
-use crate::diff::{DiffLine, diff_lines, gutter_text, gutter_width, ink_spans, safe_line};
+use crate::diff::{DiffLine, diff_lines, gutter_prefix, gutter_width, ink_spans, safe_line};
 use crate::format;
 use crate::swapped::{Frame, Ink, List, Spot};
 
@@ -178,8 +178,8 @@ fn totals(changes: &BTreeMap<String, (u64, u64)>) -> (u64, u64, u64) {
 /// under its ink. The gutter fits the widest number in the diff.
 fn hunk_row(line: DiffLine, gutter: usize) -> Vec<(String, Option<Spot>, Ink)> {
     let mut cells = Vec::new();
-    if gutter > 0 {
-        cells.push((gutter_text(line.number, gutter), None, Ink::Muted));
+    if let Some(prefix) = gutter_prefix(line.number, gutter) {
+        cells.push((prefix, None, Ink::Muted));
     }
     cells.extend(
         ink_spans(&line)

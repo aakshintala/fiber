@@ -1,6 +1,6 @@
 //! Tests for the shared diff renderer.
 
-use super::{DiffKind, diff_lines, gutter_width};
+use super::{DiffKind, diff_lines, gutter_prefix, gutter_width};
 
 fn kinds(diff: &str) -> Vec<(Option<u64>, DiffKind, String)> {
     diff_lines(diff)
@@ -195,6 +195,13 @@ fn a_hunk_number_past_u64_draws_unnumbered_lines() {
     assert_eq!(drawn[1].number, None);
     assert_eq!(drawn[2].kind, DiffKind::Added);
     assert_eq!(drawn[2].number, None);
+}
+
+#[test]
+fn gutter_prefix_is_none_without_a_gutter_and_blanks_without_a_number() {
+    assert_eq!(gutter_prefix(Some(7), 0), None);
+    assert_eq!(gutter_prefix(Some(7), 2), Some(" 7 ".to_owned()));
+    assert_eq!(gutter_prefix(None, 2), Some("   ".to_owned()));
 }
 
 #[test]

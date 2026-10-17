@@ -62,9 +62,8 @@ pub(crate) struct Call {
     /// How it ended; `None` while it runs.
     pub(crate) status: Option<CallStatus>,
     pub(crate) changes: Vec<FileChange>,
-    /// What only an opened call reads, boxed so the row the paging
-    /// and the re-count walk stays one pointer over base; `None`
-    /// while it runs.
+    /// What only an opened call reads, boxed so the `Call` the paging
+    /// and the re-count walk stays one pointer; `None` while it runs.
     pub(crate) result: Option<Box<CallResult>>,
     /// The process's exit code, when it ran one
     /// (`tool_call_completed`'s `process.exit_code`).
@@ -98,16 +97,20 @@ pub(crate) struct CallResult {
     /// returned text for it; kept, never drawn inline.
     #[allow(
         dead_code,
-        reason = "kept for the call's whole view; pinned by turn_tests"
+        reason = "read by the call's whole view in #2386; pinned by turn_tests"
     )]
     pub(crate) artifact: Option<String>,
     /// On a cut result, ordered byte ranges of the full output held in
     /// `content`; kept, never drawn inline.
+    #[allow(
+        dead_code,
+        reason = "read by the call's whole view in #2386; pinned by turn_tests"
+    )]
     pub(crate) kept: Option<Vec<[u64; 2]>>,
     /// The signal's name when a signal ended the call's process.
     #[allow(
         dead_code,
-        reason = "kept for the call's whole view; pinned by turn_tests"
+        reason = "read by the call's whole view in #2386; pinned by turn_tests"
     )]
     pub(crate) signal: Option<String>,
     /// A failed call's "<code>: <message>" or a denial's reason, else
@@ -123,13 +126,6 @@ impl Call {
         self.result
             .as_deref()
             .and_then(|result| result.details.as_deref())
-    }
-
-    /// The kept byte ranges, when the result was cut.
-    pub(crate) fn kept(&self) -> Option<&Vec<[u64; 2]>> {
-        self.result
-            .as_deref()
-            .and_then(|result| result.kept.as_ref())
     }
 
     /// A failed call's headline, else empty.

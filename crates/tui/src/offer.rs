@@ -12,7 +12,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{read, session_command};
-use crate::diff::{diff_lines, gutter_text, gutter_width, styled_spans};
+use crate::diff::{diff_lines, gutter_prefix, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
 use crate::markdown::{Role, style};
 use crate::swapped::Ink;
@@ -642,11 +642,11 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
     }
 }
 
-/// A changed item's diff through the shared renderer, indented as
-/// before: the dim gutter, `@@` lines dim, `-` lines in `removed` and
-/// `+` lines in `added`, the words that differ in reverse video when
-/// one removed line pairs with one added line, as "Changed files"
-/// draws a hunk (`docs/tui.md`, "Swapped views").
+/// A changed item's diff through the shared renderer, each row
+/// indented four columns: the dim gutter, `@@` lines dim, `-` lines
+/// in `removed` and `+` lines in `added`, the words that differ in
+/// reverse video when one removed line pairs with one added line, as
+/// "Changed files" draws a hunk (`docs/tui.md`, "Swapped views").
 fn diff_rows(diff: &str) -> Vec<Row> {
     let drawn = diff_lines(diff);
     let gutter = gutter_width(drawn.iter().filter_map(|line| line.number));
@@ -654,11 +654,8 @@ fn diff_rows(diff: &str) -> Vec<Row> {
         .into_iter()
         .map(|line| {
             let mut spans = vec![Span::raw("    ")];
-            if gutter > 0 {
-                spans.push(Span::styled(
-                    gutter_text(line.number, gutter),
-                    Ink::Muted.style(),
-                ));
+            if let Some(prefix) = gutter_prefix(line.number, gutter) {
+                spans.push(Span::styled(prefix, Ink::Muted.style()));
             }
             spans.extend(styled_spans(&line));
             Row::text(Line::from(spans))

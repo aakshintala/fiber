@@ -937,19 +937,6 @@ fn held_open_without_closing_keeps_both_rows() {
     );
 }
 
-/// A closed call with no details builds no view: one dim row, never
-/// wrapped even past the width, opening nothing.
-#[test]
-fn a_closed_call_without_details_draws_main_rows_unwrapped() {
-    let call = made_call(None, "", &"x".repeat(200));
-    let parts = drawn(&call, 76);
-    assert_eq!(parts.0.len(), 1);
-    let (line, target) = &parts.0[0];
-    assert_eq!(target, &None);
-    assert!(line.style.add_modifier.contains(Modifier::DIM));
-    assert_eq!(line.to_string(), format!("        {}", "x".repeat(200)));
-}
-
 /// A failed call without details still shows its headline, then its
 /// content: the headline keeps it on the full view.
 #[test]
@@ -972,23 +959,6 @@ fn a_closed_call_without_details_and_content_reads_no_output() {
     let parts = drawn(&call, 76);
     assert_eq!(lines(&parts), vec!["        no output"]);
     assert!(parts.0[0].0.style.add_modifier.contains(Modifier::DIM));
-}
-
-/// A closed call without details caps at twenty legacy lines, then the
-/// legacy more row with no view to open.
-#[test]
-fn a_closed_call_without_details_caps_at_twenty_legacy_lines() {
-    let text = (1..=25)
-        .map(|n| format!("L{n}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let call = made_call(None, "", &text);
-    let parts = drawn(&call, 76);
-    let texts = lines(&parts);
-    assert_eq!(texts.len(), 21);
-    assert_eq!(texts[19], "        L20");
-    assert_eq!(texts[20], "        … 5 more lines");
-    assert!(parts.0[20].1.is_none());
 }
 
 /// Kept ranges keep the call on the full view: its long line wraps.

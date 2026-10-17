@@ -321,9 +321,19 @@ pub(crate) fn safe_line(line: &str) -> String {
     safe
 }
 
-/// The gutter prefix for a diff line: its number right-aligned in
-/// `width` and one space, or blanks of that width where it has no
-/// number. The caller draws it dim.
+/// The gutter prefix for a drawn line: its number right-aligned in
+/// `gutter` and one space, or blanks where it has no number; nothing
+/// at all when no gutter fits a number. The caller draws it dim.
+pub(crate) fn gutter_prefix(number: Option<u64>, gutter: usize) -> Option<String> {
+    if gutter == 0 {
+        return None;
+    }
+    Some(gutter_text(number, gutter))
+}
+
+/// The gutter prefix text: its number right-aligned in `width` and
+/// one space, or blanks of that width where it has no number. The
+/// caller draws it dim.
 pub(crate) fn gutter_text(number: Option<u64>, width: usize) -> String {
     match number {
         Some(number) => format!("{number:>width$} "),

@@ -1,5 +1,5 @@
-//! An opened call's rows under its ledger row, and the diff renderer the
-//! changed-files view and the offer share (`docs/tui.md`, "Tool groups and
+//! An opened call's rows under its ledger row, diffs drawn through the
+//! shared renderer in [`crate::diff`] (`docs/tui.md`, "Tool groups and
 //! the ledger").
 
 use ratatui::style::{Modifier, Style};
@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 use super::group::{Call, dim_span, fit};
 use crate::app::Target;
-use crate::diff::{diff_lines, gutter_text, gutter_width, safe_line, styled_spans};
+use crate::diff::{diff_lines, gutter_prefix, gutter_width, safe_line, styled_spans};
 use crate::format::{count, dim};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
@@ -70,14 +70,6 @@ struct Body {
 pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
     let max = usize::from(width);
     if max == 0 {
-        return;
-    }
-    // A call with nothing to open draws exactly what main drew for it,
-    // with no view build and no wrap: the search redraw at a new width
-    // renders every closed call, and the full path costs several
-    // allocations per row there.
-    if fast_path(call) {
-        legacy_rows(call.content(), out);
         return;
     }
     let room = width.saturating_sub(8);
@@ -153,60 +145,6 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
             first_piece = false;
             out.push_text((piece, piece_target), text);
         }
-    }
-}
-
-/// Whether the call draws main's rows: no `details`, no headline, no
-/// kept ranges, never opened, no string `content` argument, and content
-/// that is not JSON. Only the search redraw reaches such a call
-/// unopened; an opened call always takes the full view.
-fn fast_path(call: &Call) -> bool {
-    call.details_text().is_none()
-        && call.headline().is_empty()
-        && call.kept().is_none()
-        && !call.open
-        && call
-            .arguments
-            .get("content")
-            .and_then(Value::as_str)
-            .is_none()
-        && !starts_json(call.content())
-}
-
-/// Whether `text` parses to an object or array: its first
-/// non-whitespace character opens one. Anything else draws verbatim.
-fn starts_json(text: &str) -> bool {
-    text.chars()
-        .find(|ch| !ch.is_whitespace())
-        .is_some_and(|ch| ch == '{' || ch == '[')
-}
-
-/// Main's opened rows for content with no view: each line dim under the
-/// indent, at most twenty, then the legacy more row, or dim no output
-/// when empty (`docs/tui.md`, "Tool groups and the ledger" as main drew
-/// it). Nothing wraps and no row carries a target.
-fn legacy_rows(content: &str, out: &mut Rows) {
-    const INDENT: &str = "        ";
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
-        out.push((dim(format!("{INDENT}no output")), None));
-        return;
-    }
-    for line in lines.iter().take(OPENED_LINES) {
-        // Sanitised like every other view: control-free content draws
-        // exactly what main drew.
-        out.push((dim(format!("{INDENT}{}", safe_line(line))), None));
-    }
-    let more = lines.len().saturating_sub(OPENED_LINES);
-    if more > 0 {
-        let more = u64::try_from(more).unwrap_or(u64::MAX);
-        out.push((
-            dim(format!(
-                "{INDENT}… {}",
-                count(more, "more line", "more lines")
-            )),
-            None,
-        ));
     }
 }
 
@@ -519,10 +457,13 @@ fn push_plain(text: &str, bodies: &mut Vec<Body>) {
 /// width and one space, dim, or blanks where it has no number. No
 /// gutter at all fits no number.
 fn with_gutter(body: Body, gutter: usize) -> Line<'static> {
-    if !body.gutter || gutter == 0 {
+    if !body.gutter {
         return body.line;
     }
-    let mut spans = vec![dim_span(gutter_text(body.number, gutter))];
+    let Some(prefix) = gutter_prefix(body.number, gutter) else {
+        return body.line;
+    };
+    let mut spans = vec![dim_span(prefix)];
     spans.extend(body.line.spans);
     Line::from(spans)
 }
