@@ -38,7 +38,7 @@ pub(crate) fn decode_tracked(
 }
 
 /// Reads one reply stream; `keep_orphans` keeps a hosted result whose call
-/// came in an earlier reply as a stub for the loop to resolve, while the
+/// came in an earlier reply as a `HostedResult` for the loop to resolve, while the
 /// public entry point leaves it out.
 #[allow(
     clippy::result_large_err,
@@ -116,7 +116,7 @@ struct Decoder {
     /// The closed blocks in order, as `finish` sends a paused reply back.
     content: BTreeMap<u64, Value>,
     /// Whether a hosted result whose call is not in this reply is kept as
-    /// a stub for the loop to resolve, rather than left out.
+    /// a `HostedResult` for the loop to resolve, rather than left out.
     keep_orphans: bool,
     /// Each tool-use block's position among tool calls, by its index.
     call_order: BTreeMap<u64, u32>,
@@ -328,22 +328,12 @@ impl Decoder {
                         .push(ReplyAction::Hosted(HostedCall { call, completed }));
                 } else if self.keep_orphans {
                     // The call came in an earlier reply, split by a pause:
-                    // the loop joins it against the paused content. A stub
-                    // carries no `provider_item` on its call, which marks it.
+                    // the loop joins it against the paused content by its id.
                     let completed = hosted_completion(&block);
-                    self.actions.push(ReplyAction::Hosted(HostedCall {
-                        call: ToolCallRequested {
-                            name: String::new(),
-                            arguments: Value::Object(Map::new()),
-                            provider_id: Some(ProviderCallId(
-                                str_at(&block, "tool_use_id").to_owned(),
-                            )),
-                            repair: None,
-                            ran_by: None,
-                            provider_item: None,
-                        },
+                    self.actions.push(ReplyAction::HostedResult {
+                        provider_id: ProviderCallId(str_at(&block, "tool_use_id").to_owned()),
                         completed,
-                    }));
+                    });
                 }
             }
             Some(Block::Thinking {

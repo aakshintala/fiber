@@ -14,7 +14,7 @@ use crate::events::{
     ToolCallCompleted, ToolCallRequested,
 };
 use crate::shapes::{Failure, Tokens};
-use crate::{ActionId, GenerationId, ThinkingLevel};
+use crate::{ActionId, GenerationId, ProviderCallId, ThinkingLevel};
 
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
@@ -336,9 +336,10 @@ impl Reply {
             .iter()
             .filter_map(|action| match action {
                 ReplyAction::Text(part) => Some(part.text.as_str()),
-                ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => {
-                    None
-                }
+                ReplyAction::Reasoning(_)
+                | ReplyAction::ToolCall(_)
+                | ReplyAction::Hosted(_)
+                | ReplyAction::HostedResult { .. } => None,
             })
             .collect()
     }
@@ -360,11 +361,18 @@ pub enum ReplyAction {
     /// A call the provider ran itself, such as a hosted web search, with its
     /// result.
     Hosted(HostedCall),
+    /// A hosted result whose call came in an earlier reply, split by a pause:
+    /// the loop joins it against the paused blocks by its id, or drops it.
+    HostedResult {
+        /// The call's id in the earlier reply.
+        provider_id: ProviderCallId,
+        /// The result, as `tool_call_completed`.
+        completed: ToolCallCompleted,
+    },
 }
 
 /// A call the provider ran itself, such as a hosted web search, with its
-/// result; both carry their raw blocks as `provider_item`. A call with no
-/// `provider_item` stands for a result whose call came in an earlier reply.
+/// result; both carry their raw blocks as `provider_item`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostedCall {
     /// The call, as `tool_call_requested`.

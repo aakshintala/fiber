@@ -13,10 +13,8 @@
 mod support;
 
 use contract::ProviderCallId;
-use contract::events::{
-    CallStatus, TextCompleted, ToolCallCompleted, ToolCallRequested, TurnOutcome,
-};
-use contract::provider::{Finish, HostedCall, Input, ReplyAction};
+use contract::events::{CallStatus, TextCompleted, ToolCallCompleted, TurnOutcome};
+use contract::provider::{Finish, Input, ReplyAction};
 use fakes::{Scripted, call_usage};
 use serde_json::{Value, json};
 
@@ -55,15 +53,8 @@ fn resent(block: Value) -> Input {
 /// A hosted result whose call is not in its reply: the loop joins it
 /// against the paused blocks by its id, or drops it.
 fn stub(id: &str, result: Value) -> ReplyAction {
-    ReplyAction::Hosted(HostedCall {
-        call: ToolCallRequested {
-            name: String::new(),
-            arguments: json!({}),
-            provider_id: Some(ProviderCallId(id.into())),
-            repair: None,
-            ran_by: None,
-            provider_item: None,
-        },
+    ReplyAction::HostedResult {
+        provider_id: ProviderCallId(id.into()),
         completed: ToolCallCompleted {
             status: CallStatus::Completed,
             reason: None,
@@ -78,7 +69,7 @@ fn stub(id: &str, result: Value) -> ReplyAction {
             changed_by: None,
             provider_item: Some(result),
         },
-    })
+    }
 }
 
 fn text_count(lines: &[contract::Envelope], text: &str) -> usize {

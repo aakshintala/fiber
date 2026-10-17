@@ -93,6 +93,14 @@ fn show(bytes: &[u8]) {
                         serde_json::to_value(&h.call).unwrap_or_default(),
                         serde_json::to_value(&h.completed).unwrap_or_default()
                     ),
+                    ReplyAction::HostedResult {
+                        provider_id,
+                        completed,
+                    } => println!(
+                        "hosted_result {} {}",
+                        provider_id.0,
+                        serde_json::to_value(completed).unwrap_or_default()
+                    ),
                 }
             }
             println!(

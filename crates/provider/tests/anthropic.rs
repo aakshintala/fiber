@@ -208,9 +208,10 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
-                        None
-                    }
+                    ReplyAction::Reasoning(_)
+                    | ReplyAction::Text(_)
+                    | ReplyAction::Hosted(_)
+                    | ReplyAction::HostedResult { .. } => None,
                 })
                 .collect();
             let streamed = deltas
@@ -1983,7 +1984,7 @@ fn a_one_shot_pause_equals_its_streamed_form_and_keeps_a_null_citations() {
 }
 
 #[test]
-fn a_result_with_no_call_is_a_stub_on_the_call_path_and_nothing_on_decode() {
+fn a_result_with_no_call_is_a_hosted_result_on_the_call_path_and_nothing_on_decode() {
     let block = json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_99",
         "content": two_results()});
     let bytes = hosted_stream(vec![search_result(0, "srvtoolu_99", two_results())]);
@@ -1994,17 +1995,17 @@ fn a_result_with_no_call_is_a_stub_on_the_call_path_and_nothing_on_decode() {
         Messages::new(endpoint(&server)).request(&request()),
     ));
     let reply = reply.unwrap();
-    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+    let [
+        ReplyAction::HostedResult {
+            provider_id,
+            completed,
+        },
+    ] = reply.actions.as_slice()
+    else {
         panic!("{:?}", reply.actions);
     };
-    assert_eq!(hosted.call.name, "");
-    assert_eq!(hosted.call.arguments, json!({}));
-    assert_eq!(
-        hosted.call.provider_id,
-        Some(ProviderCallId("srvtoolu_99".into()))
-    );
-    assert_eq!(hosted.call.provider_item, None);
-    assert_eq!(hosted.completed.provider_item, Some(block));
+    assert_eq!(provider_id, &ProviderCallId("srvtoolu_99".into()));
+    assert_eq!(completed.provider_item, Some(block));
     assert_eq!(reply.finish, Finish::Completed);
 }
 
@@ -2219,7 +2220,10 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
         .iter()
         .filter_map(|action| match action {
             ReplyAction::Hosted(hosted) => Some(hosted),
-            ReplyAction::Text(_) | ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) => None,
+            ReplyAction::Text(_)
+            | ReplyAction::Reasoning(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect();
     let [hosted] = hosted.as_slice() else {
@@ -2261,7 +2265,10 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
         .iter()
         .filter_map(|action| match action {
             ReplyAction::Text(part) => part.provider_item.as_ref(),
-            ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+            ReplyAction::Reasoning(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect();
     assert!(!cited.is_empty(), "the answer cites the search");
