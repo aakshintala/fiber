@@ -225,9 +225,10 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
-                        None
-                    }
+                    ReplyAction::Reasoning(_)
+                    | ReplyAction::Text(_)
+                    | ReplyAction::Hosted(_)
+                    | ReplyAction::HostedResult { .. } => None,
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -266,7 +267,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                     let item = match action {
                         ReplyAction::Text(part) => part.provider_item.as_ref(),
                         ReplyAction::Reasoning(reasoning) => reasoning.provider_item.as_ref(),
-                        ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+                        ReplyAction::ToolCall(_)
+                        | ReplyAction::Hosted(_)
+                        | ReplyAction::HostedResult { .. } => None,
                     };
                     item.is_some_and(|item| item.get("thoughtSignature").is_some())
                 })
@@ -564,6 +567,15 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
                     });
                 }
             }
+            ReplyAction::HostedResult { completed, .. } => {
+                // No test decodes one here; rendered as its result's block,
+                // as `conversation.rs` renders a completed call's block.
+                conversation.push(Input::Assistant {
+                    model: model.into(),
+                    text: String::new(),
+                    provider_item: completed.provider_item.clone(),
+                });
+            }
         }
     }
     for (n, action) in reply.actions.iter().enumerate() {
@@ -677,7 +689,10 @@ fn a_function_call_without_an_id_is_logged_without_one_and_sent_back_without_one
         .iter()
         .filter_map(|a| match a {
             ReplyAction::ToolCall(c) => Some(c),
-            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => None,
+            ReplyAction::Reasoning(_)
+            | ReplyAction::Text(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect();
     assert_eq!(calls.len(), 2);
@@ -776,7 +791,10 @@ fn each_signed_thought_part_is_its_own_item_with_its_own_signature() {
         .into_iter()
         .filter_map(|action| match action {
             ReplyAction::Reasoning(item) => Some((item.text, item.provider_item)),
-            ReplyAction::Text(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+            ReplyAction::Text(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect();
     assert_eq!(
@@ -1156,7 +1174,9 @@ fn consecutive_replies_each_keep_their_own_text() {
                     text: r.text.clone(),
                     provider_item: r.provider_item.clone(),
                 }),
-                ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => {}
+                ReplyAction::ToolCall(_)
+                | ReplyAction::Hosted(_)
+                | ReplyAction::HostedResult { .. } => {}
             }
         }
     }
@@ -2160,7 +2180,10 @@ fn hosted_actions(reply: &Reply) -> Vec<&HostedCall> {
         .iter()
         .filter_map(|action| match action {
             ReplyAction::Hosted(hosted) => Some(hosted),
-            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+            ReplyAction::Reasoning(_)
+            | ReplyAction::Text(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect()
 }
@@ -2355,6 +2378,10 @@ fn shapes(reply: &Reply) -> Vec<(String, Value)> {
             ),
             ReplyAction::Text(text) => ("text".to_owned(), json!(text.text)),
             ReplyAction::ToolCall(_) => ("toolcall".to_owned(), Value::Null),
+            ReplyAction::HostedResult { completed, .. } => (
+                "hosted_result".to_owned(),
+                completed.provider_item.clone().unwrap_or(Value::Null),
+            ),
         })
         .collect()
 }

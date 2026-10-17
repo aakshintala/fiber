@@ -575,6 +575,7 @@ impl DelegateMessage {
             | ErrorCode::OutputTruncated
             | ErrorCode::PairingFailed
             | ErrorCode::PathChanged
+            | ErrorCode::PausedTooLong
             | ErrorCode::ProtocolUnsupported
             | ErrorCode::ProviderUnavailable
             | ErrorCode::QuotaExceeded

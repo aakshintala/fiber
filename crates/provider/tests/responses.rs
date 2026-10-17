@@ -243,9 +243,10 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
-                        None
-                    }
+                    ReplyAction::Reasoning(_)
+                    | ReplyAction::Text(_)
+                    | ReplyAction::Hosted(_)
+                    | ReplyAction::HostedResult { .. } => None,
                 })
                 .collect();
             let streamed = deltas
@@ -1613,7 +1614,10 @@ fn hosted_calls(reply: &Reply) -> Vec<&contract::provider::HostedCall> {
         .iter()
         .filter_map(|action| match action {
             ReplyAction::Hosted(hosted) => Some(hosted),
-            ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+            ReplyAction::Reasoning(_)
+            | ReplyAction::Text(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect()
 }
@@ -1941,6 +1945,11 @@ fn the_recorded_searches_run_through_the_seam_and_replay_their_items() {
                     }
                 }
                 ReplyAction::ToolCall(call) => panic!("{name}: a tool call: {call:?}"),
+                ReplyAction::HostedResult { completed, .. } => {
+                    if let Some(item) = completed.provider_item.clone() {
+                        conversation.push(hosted_assistant(HOSTED_REFERENCE, item));
+                    }
+                }
             }
         }
         let next = ModelRequest {

@@ -241,9 +241,10 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
-                        None
-                    }
+                    ReplyAction::Reasoning(_)
+                    | ReplyAction::Text(_)
+                    | ReplyAction::Hosted(_)
+                    | ReplyAction::HostedResult { .. } => None,
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -275,9 +276,10 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::Reasoning(r) => Some(r),
-                    ReplyAction::ToolCall(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
-                        None
-                    }
+                    ReplyAction::ToolCall(_)
+                    | ReplyAction::Text(_)
+                    | ReplyAction::Hosted(_)
+                    | ReplyAction::HostedResult { .. } => None,
                 })
                 .collect();
             if want.reasoning.is_empty() {
