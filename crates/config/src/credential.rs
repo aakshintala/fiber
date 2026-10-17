@@ -14,13 +14,14 @@ use std::time::Duration;
 use contract::Secret;
 use serde_json::{Map, Value};
 
+use crate::credential_origin::Located;
 use crate::error::ConfigError;
 use crate::extension::ProviderData;
 use crate::secret::{CredentialSource, credential_labels, read_credential, read_secret};
 
 /// The label of the source a provider's data declares, and of the key
 /// `fiber login` stores without a label.
-const DEFAULT_LABEL: &str = "default";
+pub(crate) const DEFAULT_LABEL: &str = "default";
 
 /// A key that was read, and the file it was read from.
 #[derive(Debug)]
@@ -96,6 +97,29 @@ impl Credentials {
         }
     }
 
+    /// Fiber home, for the sibling origin module's descriptor-checked
+    /// reads. The merged `providers` subtree itself stays here: the
+    /// sibling takes only this and the lookup below, never the raw
+    /// subtree.
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
+    /// The source `providers."<name>".credentials."<label>"` configures,
+    /// if any, for the sibling origin module's precedence. The provider's
+    /// own source stays with the provider's data; `locate` adds it for
+    /// `default` itself.
+    pub(crate) fn configured_source(
+        &self,
+        provider: &str,
+        label: &str,
+    ) -> Option<CredentialSource> {
+        sources_in(&self.providers, provider)
+            .into_iter()
+            .find(|(configured, _)| configured == label)
+            .map(|(_, source)| source)
+    }
+
     /// Reads `credentials/<name>` (`docs/configuration.md`, "Secrets").
     /// `None` when there is no such file; a name that is not one file
     /// name, or a symbolic link there, is an error, as [`read_secret`] says.
@@ -156,7 +180,23 @@ impl Credentials {
             provider: name.clone(),
             why,
         };
-        if let Some(secret) = read_credential(&self.home, stored, label)? {
+        // The one precedence, shared with `credential_origins` and
+        // `key_presence`: the stored credential owns the label, else the
+        // configured source, else the provider's own for `default`. What
+        // each arm reads below is unchanged: the stored file through its
+        // path guards, a configured file through canonicalization, a
+        // command through its once-per-process run.
+        let stored_first = match self.locate(provider, label)? {
+            Located::Stored => true,
+            Located::Source(_) => false,
+            Located::Nothing => {
+                let listed = Self::listed(&self.labels(provider));
+                return Err(missing(format!(
+                    "nothing is stored in credentials/{stored}/{label}, and no source is configured for it. The labels for `{name}` are: {listed}"
+                )));
+            }
+        };
+        if stored_first && let Some(secret) = read_credential(&self.home, stored, label)? {
             return usable(secret.expose())
                 .map(|secret| Read { secret, file: None })
                 .ok_or_else(|| ConfigError::CredentialFailed {

@@ -11,8 +11,8 @@
 use std::path::{Path, PathBuf};
 
 use config::{
-    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
-    project_data_dir,
+    crashes_dir, docs_dir, extension_data_dir, extensions_dir, images_cache_dir, logs_dir,
+    mcp_cache_dir, project_data_dir,
 };
 
 fn root() -> PathBuf {
@@ -62,4 +62,23 @@ fn images_cache_dir_is_cache_images() {
 #[test]
 fn crashes_dir_is_crashes_under_home() {
     assert_eq!(crashes_dir(&root()), Path::new("/h/crashes"));
+}
+
+#[test]
+fn logs_dir_is_logs_under_home() {
+    assert_eq!(logs_dir(&root()), Path::new("/h/logs"));
+}
+
+#[test]
+fn docs_dir_is_docs_under_home() {
+    assert_eq!(docs_dir(&root()), Path::new("/h/docs"));
+}
+
+#[test]
+fn layout_accessors_create_nothing() {
+    let missing = Path::new("/h/no-such-home");
+    assert_eq!(logs_dir(missing), Path::new("/h/no-such-home/logs"));
+    assert_eq!(docs_dir(missing), Path::new("/h/no-such-home/docs"));
+    assert_eq!(crashes_dir(missing), Path::new("/h/no-such-home/crashes"));
+    assert!(!missing.exists());
 }

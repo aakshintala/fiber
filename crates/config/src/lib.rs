@@ -9,6 +9,7 @@
 mod cache;
 mod credential;
 mod credential_file;
+mod credential_origin;
 mod editable;
 mod error;
 mod extension;
@@ -46,6 +47,7 @@ pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
 pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
+pub use credential_origin::{Origin, Presence};
 pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
@@ -58,8 +60,8 @@ pub use home::{
     fiber_home_path_from_env,
 };
 pub use layout::{
-    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
-    project_data_dir,
+    crashes_dir, docs_dir, extension_data_dir, extensions_dir, images_cache_dir, logs_dir,
+    mcp_cache_dir, project_data_dir,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
