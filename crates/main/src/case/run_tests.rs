@@ -688,7 +688,7 @@ fn the_case_config_is_written_whole_into_a_missing_home() {
 }
 
 #[test]
-fn an_unwritable_home_names_the_file() {
+fn an_unwritable_home_names_the_home() {
     let root = fakes::TempDir::new("fiber-case-config-unwritable");
     let home = root.path().join("home");
     fs::write(&home, "in the way").unwrap();

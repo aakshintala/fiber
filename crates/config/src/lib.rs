@@ -152,6 +152,14 @@ impl fmt::Debug for Config {
     }
 }
 
+/// What the fast path reads without merging every layer.
+enum Fast {
+    /// The answer: `get_segments` returns it directly.
+    Answer(Option<(Value, Source)>),
+    /// The key needs the whole merge: `get_segments` reads `merged`.
+    Merge,
+}
+
 impl Config {
     /// Reads every layer. An unknown key, or a key a repository may not set,
     /// becomes a notice; invalid JSON or a wrongly typed value is an error.
@@ -296,8 +304,8 @@ impl Config {
         {
             *name = full_name(name);
         }
-        if let Some(fast) = self.fast_get(&key, model) {
-            return fast;
+        if let Fast::Answer(found) = self.fast_get(&key, model) {
+            return found;
         }
         let from = self
             .layers
@@ -319,28 +327,27 @@ impl Config {
     /// The value and source of `key` without merging every layer. A
     /// scalar reads whole from the highest layer holding it; an object
     /// merges only its subtree, top-down over the layers holding it.
-    /// `None` reads through `merged`: a union or entry-replaced row at
-    /// `key`, above it or below its fill, a key a higher layer hides,
-    /// or a layer whose per-model view is not an object.
-    fn fast_get(&self, key: &[String], model: Option<&str>) -> Option<Option<(Value, Source)>> {
+    /// `Fast::Merge` reads through `merged`: a union or entry-replaced
+    /// row at `key`, above it or below its fill, a key a higher layer
+    /// hides, or a layer whose per-model view is not an object.
+    fn fast_get(&self, key: &[String], model: Option<&str>) -> Fast {
         // Only a plain replace row merges holder-wins: a union row
         // holds every layer's names, and an entry-replaced row goes
         // whole to one layer, neither what the highest layer holds.
         if keys::leaf(key).is_some_and(|row| row.merge != keys::Merge::Replace) {
-            return None;
+            return Fast::Merge;
         }
-        for len in 0..key.len() {
-            let Some(prefix) = key.get(..len) else {
-                continue;
-            };
-            if keys::leaf(prefix).is_some_and(|row| row.merge != keys::Merge::Replace) {
-                return None;
-            }
+        if (0..key.len()).any(|len| {
+            key.get(..len).is_some_and(|prefix| {
+                keys::leaf(prefix).is_some_and(|row| row.merge != keys::Merge::Replace)
+            })
+        }) {
+            return Fast::Merge;
         }
         // Below a union row's fill the merge re-creates the object, so
         // a proper prefix of one reads what no single layer holds.
         if keys::union_rows().any(|row| row.len() > key.len() && row.starts_with(key)) {
-            return None;
+            return Fast::Merge;
         }
         // A layer whose per-model view is not an object wipes the merge,
         // so it reads through `merged`.
@@ -350,7 +357,7 @@ impl Config {
             .map(|(_, layer)| view(layer, model))
             .collect();
         if views.iter().any(|seen| !seen.is_object()) {
-            return None;
+            return Fast::Merge;
         }
         // Top-down: the first layer holding the key is the highest,
         // unless a higher layer holds a scalar over its path, hiding it
@@ -359,7 +366,7 @@ impl Config {
         for ((source, _), seen) in self.layers.iter().zip(&views).rev() {
             if let Some(value) = path::get(seen, key) {
                 if hiding {
-                    return Some(None);
+                    return Fast::Answer(None);
                 }
                 if value.is_object() {
                     // Objects merge key by key across the layers holding
@@ -371,13 +378,13 @@ impl Config {
                             lay(&mut sub, upper, &mut key.to_vec());
                         }
                     }
-                    return Some(
+                    return Fast::Answer(
                         path::get(&sub, key)
                             .cloned()
                             .map(|found| (found, source.clone())),
                     );
                 }
-                return Some(Some((value.clone(), source.clone())));
+                return Fast::Answer(Some((value.clone(), source.clone())));
             }
             if (1..key.len()).any(|len| {
                 key.get(..len)
@@ -387,12 +394,12 @@ impl Config {
             }
         }
         // No layer holds the key: the schema default.
-        Some(match keys::leaf(key).and_then(|row| row.default) {
-            Some(text) => serde_json::from_str(text)
-                .ok()
+        Fast::Answer(
+            keys::leaf(key)
+                .and_then(|row| row.default)
+                .and_then(|text| serde_json::from_str(text).ok())
                 .map(|default| (default, Source::Default)),
-            None => None,
-        })
+        )
     }
 
     /// The effective value of `key` as a whole number of zero or more:
