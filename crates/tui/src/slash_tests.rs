@@ -1,7 +1,8 @@
 //! Tests for the `/` list.
 
-use super::{BUILT_INS, Row, SHOWN, filter, is_built_in, rows, window_start};
+use super::{BUILT_INS, Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
 use contract::events::CommandInfo;
+use contract::commands::BUILT_IN_COMMANDS;
 
 /// A `commands` answer row for the skill `name`, with no hint.
 fn skill(name: &str) -> CommandInfo {
@@ -12,6 +13,54 @@ fn skill(name: &str) -> CommandInfo {
         tag: "skill".to_owned(),
         extension: false,
     }
+}
+
+fn extension_row(name: &str) -> CommandInfo {
+    CommandInfo {
+        name: name.to_owned(),
+        description: format!("The {name} extension."),
+        argument_hint: Some("[args]".to_owned()),
+        tag: "acme".to_owned(),
+        extension: true,
+    }
+}
+
+fn mcp_row(name: &str) -> CommandInfo {
+    CommandInfo {
+        name: name.to_owned(),
+        description: format!("The {name} prompt."),
+        argument_hint: None,
+        tag: "server".to_owned(),
+        extension: false,
+    }
+}
+
+fn template_row(name: &str) -> CommandInfo {
+    CommandInfo {
+        name: name.to_owned(),
+        description: format!("The {name} template."),
+        argument_hint: None,
+        tag: "template".to_owned(),
+        extension: false,
+    }
+}
+
+#[test]
+fn built_ins_are_drawn_built_ins_plus_credential_and_rewind() {
+    for (name, _, _) in BUILT_INS {
+        assert!(
+            BUILT_IN_COMMANDS.contains(name),
+            "{name} drawn but not in the contract list"
+        );
+    }
+    let extra: Vec<&&str> = BUILT_IN_COMMANDS
+        .iter()
+        .filter(|name| !BUILT_INS.iter().any(|(built_in, _, _)| built_in == *name))
+        .collect();
+    assert_eq!(extra, [&"credential", &"rewind"]);
+    assert!(is_built_in("credential"));
+    assert!(is_built_in("rewind"));
+    assert!(!is_built_in("tdd"));
 }
 
 fn names(rows: &[&Row]) -> Vec<String> {
@@ -46,13 +95,60 @@ fn built_ins_come_in_table_order_then_the_answer_rows() {
 }
 
 #[test]
-fn an_answer_row_named_like_a_built_in_shows_once_as_the_built_in() {
-    let all = rows(&[skill("reload"), skill("tdd")]);
-    let reloads: Vec<&Row> = all.iter().filter(|row| row.name == "reload").collect();
-    assert_eq!(reloads.len(), 1);
-    assert_eq!(reloads.first().map(|row| row.tag.as_str()), Some("command"));
+fn a_skill_named_like_a_built_in_is_left_out() {
+    for answer in [
+        skill("reload"),
+        template_row("reload"),
+        mcp_row("reload"),
+        CommandInfo {
+            tag: "acme".to_owned(),
+            ..skill("reload")
+        },
+    ] {
+        let all = rows(&[answer, skill("tdd")]);
+        let reloads: Vec<&Row> = all.iter().filter(|row| row.name == "reload").collect();
+        assert_eq!(reloads.len(), 1);
+        assert_eq!(reloads.first().map(|row| row.tag.as_str()), Some("command"));
+    }
     assert!(is_built_in("reload"));
     assert!(!is_built_in("tdd"));
+}
+
+#[test]
+fn an_extension_row_takes_its_built_in_slot() {
+    let mut model = extension_row("model");
+    model.description = "Picks a fast model.".to_owned();
+    model.argument_hint = Some("[speed]".to_owned());
+    let all = rows(&[model, skill("tdd")]);
+    let models: Vec<&Row> = all.iter().filter(|row| row.name == "model").collect();
+    assert_eq!(models.len(), 1);
+    let table_names: Vec<&str> = BUILT_INS.iter().map(|(name, _, _)| *name).collect();
+    let at = table_names.iter().position(|name| *name == "model").unwrap();
+    assert_eq!(all[at].name, "model");
+    assert_eq!(all[at].tag, "acme");
+    assert_eq!(
+        all[at].line(),
+        "/model [speed]  Picks a fast model.  acme"
+    );
+}
+
+#[test]
+fn an_extension_row_for_an_undrawn_built_in_stays_in_answer_order() {
+    let all = rows(&[skill("tdd"), extension_row("rewind")]);
+    let rewinds: Vec<&Row> = all.iter().filter(|row| row.name == "rewind").collect();
+    assert_eq!(rewinds.len(), 1);
+    assert_eq!(rewinds[0].tag, "acme");
+    let built_ins = rows(&[]).len();
+    let (_, answered) = all.split_at(built_ins);
+    let answered: Vec<&Row> = answered.iter().collect();
+    assert_eq!(names(&answered), ["tdd", "rewind"]);
+}
+
+#[test]
+fn extensions_lists_only_extension_rows_in_answer_order() {
+    let answer = vec![skill("tdd"), extension_row("deploy"), mcp_row("greet"), extension_row("model")];
+    assert_eq!(extensions(&answer), ["deploy", "model"]);
+    assert!(extensions(&[]).is_empty());
 }
 
 #[test]
