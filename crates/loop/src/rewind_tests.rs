@@ -1302,3 +1302,92 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
     assert_eq!(earlier.seed, Carry::default());
     assert_eq!(before, [user_input("a-one"), user_input("b-one")]);
 }
+
+#[test]
+fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
+    // Two completed handoffs with the fork between them: the first moves
+    // the window, the second is past the point and changes nothing.
+    let home = fakes::TempDir::new("loop-two-handoffs");
+    let sessions = home.path().join("sessions");
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_first"),
+                &handoff_note_text("the first note"),
+            ),
+            handoff_envelope(
+                HA,
+                6,
+                Some("t_2"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_first")),
+            ),
+            handoff_envelope(HA, 7, None, None, &handoff_opening()),
+            handoff_envelope(HA, 8, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 9, Some("t_3"), None, &handoff_turn("three")),
+            handoff_envelope(HA, 10, Some("t_3"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                11,
+                Some("t_3"),
+                Some("a_second"),
+                &handoff_note_text("the second note"),
+            ),
+            handoff_envelope(
+                HA,
+                12,
+                Some("t_3"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_second")),
+            ),
+            handoff_envelope(HA, 13, None, None, &handoff_opening()),
+            handoff_envelope(HA, 14, Some("t_3"), None, &handoff_step()),
+            handoff_envelope(HA, 15, Some("t_4"), None, &handoff_turn("four")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    // The first handoff's context only: its opening, the carried input
+    // and its note, with no line of the second.
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the first opening renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("two"));
+    assert_eq!(conversation[2], user_input("the first note"));
+    assert!(
+        conversation.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the second note") || text.contains("three"))),
+        "nothing past the point reaches the fork: {conversation:?}"
+    );
+}
