@@ -630,14 +630,15 @@ jobs:
             --paging "$RUNNER_TEMP/release/head/paging" \
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
-      # PROBE (see #2360; dropped before merge): samples the musl jigs'
-      # scale-16 re-count mmap calls with DWARF unwinding, one in 32, for
-      # head then base in sequence, and prints, per side, the sampled
-      # total, the top 15 call sites with their request-size distributions,
-      # and the head-minus-base table. No frame pointers: musl's static
-      # libc has none, so the call graph is dwarf,16384. No cap to the
-      # first N events. It only reports, never fails; a missing jig or a
-      # perf refusal reports unavailable.
+      # PROBE (see #2360; dropped before merge): records the musl jigs'
+      # scale-16 re-count mmap calls at -c 32 with DWARF unwinding, head
+      # then base in sequence, and parses each stopped recording once for
+      # the top 15 call sites, their request-size distributions, and the
+      # head-minus-base table. No frame pointers: musl's static libc has
+      # none, so the call graph is dwarf,16384. No mid-run parse (a live
+      # perf.data reads zero), no -c escalation: a zero count or a parse
+      # error prints PARSE FAILED and fails the probe loudly. A missing
+      # jig or refused perf reports unavailable.
       - name: Probe the paging re-count mmap call sites
         if: always()
         run: |
@@ -887,34 +888,24 @@ jobs:
           echo "probe-mmap: head jig src=$head_src"
           echo "probe-mmap: base jig src=$base_src"
           df -h "$tmp" || true
-          # The one sampling period both sides share: head resolves it
-          # first, base starts there and only moves it up. The ruling starts
-          # at 32, then 128, then 256; past 256 the probe stops, says so,
-          # and never falls back to the counting allocator.
-          C_USED=32
-          C_HEAD=0
-          C_BASE=0
-          HEAD_OK=0
-          BASE_OK=0
-          LADDER_C=0
-          # Records the jig at $1 for side $2 at sampling period $3 under a
+          # Option 1 (see #2360): one fixed sampling period, no ladder, no
+          # escalation. A zero count never raises -c; the single parse
+          # after the recorder exits fails loudly instead.
+          FIXED_C=32
+          # Records the jig at $1 for side $2 at the fixed period under a
           # hard timeout 1200 (the exact command is logged). One minute
-          # after recording starts it logs the event count and the
-          # perf.data size so far without waiting for the run to finish:
-          # the count is default perf script over a snapshot copy (the
-          # same stream the summary parses), the size is stat. The first
-          # 20 lines of -F trace and default output are logged for layout
-          # checking. It projects both
-          # linearly to the timeout (x20) and either lets the recording
-          # finish or stops it for a -c escalation. Returns 0 with the
-          # counts summarized, 1 when the side is unavailable, 2 when the
-          # projection (or a 124 timeout) says to raise -c and re-run.
+          # after recording starts it logs the perf.data byte size only
+          # (stat; the live file is never parsed) and projects it linearly
+          # to the timeout for information; nothing is stopped or
+          # escalated. After the recorder exits it returns 0 (the single
+          # parse follows, whatever the record status) or 1 when the side
+          # is unavailable.
           record_side() {
             jig=$1
             side=$2
-            c=$3
+            c=$FIXED_C
             data="$tmp/$side-perf.data"
-            rm -f "$data" "$tmp/$side-perf.data.snap" || true
+            rm -f "$data" || true
             echo "probe-mmap: $side record cmd: timeout 1200 perf record -e syscalls:sys_enter_mmap -c $c --call-graph dwarf,16384 -o <data> -- <jig> 16 160 48"
             if [ ! -x "$jig" ]; then
               echo "probe-mmap: $side no jig; unavailable"
@@ -938,115 +929,55 @@ jobs:
             date -u +"probe-mmap: $side one-minute mark at %Y-%m-%dT%H:%M:%SZ (recorder $state)" || true
             size=""
             free=""
-            events=""
             free=$(df --output=avail -B1 "$tmp" | sed -n '2p' || true)
             if [ -f "$data" ]; then
               size=$(stat -c %s "$data" 2>/dev/null || true)
-              if cp "$data" "$tmp/$side-perf.data.snap" 2>/dev/null; then
-                snap_size=$(stat -c %s "$tmp/$side-perf.data.snap" 2>/dev/null || true)
-                echo "probe-mmap: $side sample source: perf script -F trace (first 20 lines, stderr included)"
-                timeout 60 perf script -i "$tmp/$side-perf.data.snap" -F trace 2>&1 | sed -n '1,20p' | sed "s/^/probe-mmap: sample head: [$side] /" || true
-                echo "probe-mmap: $side sample source: default perf script (first 20 lines, stderr included)"
-                timeout 60 perf script -i "$tmp/$side-perf.data.snap" 2>&1 | sed -n '1,20p' | sed "s/^/probe-mmap: sample default: [$side] /" || true
-                events=$(timeout 55 perf script -i "$tmp/$side-perf.data.snap" 2>"$tmp/$side-script-count.err" | grep -c sys_enter_mmap || true)
-                sed -n '1,5p' "$tmp/$side-script-count.err" 2>/dev/null | sed "s/^/probe-mmap: $side count err: /" || true
-                echo "probe-mmap: $side one-minute mark: state=$state c=$c perf.data bytes=${size:-unknown} snap bytes=${snap_size:-unknown} free bytes=${free:-unknown} mmap samples=${events:-unknown}"
-              else
-                echo "probe-mmap: $side one-minute mark: state=$state c=$c perf.data bytes=${size:-unknown} (snapshot copy failed; count skipped)"
-              fi
-            else
-              echo "probe-mmap: $side one-minute mark: state=$state c=$c no perf.data yet"
             fi
-            rm -f "$tmp/$side-perf.data.snap" || true
-            verdict=run
-            if [ "$state" = running ]; then
-              case "$events" in
-                ''|*[!0-9]*)
-                  echo "probe-mmap: $side projection: no sample count at c=$c; letting the recording run to its timeout"
-                  ;;
-                *)
-                  proj_samples=$((events * 20))
-                  case "$size" in
-                    ''|*[!0-9]*) proj_size=unknown ;;
-                    *) proj_size=$((size * 20)) ;;
-                  esac
-                  echo "probe-mmap: $side projection at c=$c: samples~$proj_samples data~${proj_size} bytes at 1200 s (linear from the 60 s mark)"
-                  if [ "$proj_samples" -gt 50000 ]; then
-                    echo "probe-mmap: $side projection: over 50000 samples; perf script could not summarize that in job time"
-                    verdict=escalate
-                  else
-                    if [ "$proj_size" != unknown ] && [ "$proj_size" -gt 2147483648 ]; then
-                      echo "probe-mmap: $side projection: over 2 GiB of perf.data"
-                      verdict=escalate
-                    fi
-                    if [ "$verdict" = run ] && [ "$proj_size" != unknown ]; then
-                      case "$free" in
-                        ''|*[!0-9]*) ;;
-                        *)
-                          if [ "$proj_size" -ge "$free" ]; then
-                            echo "probe-mmap: $side projection: perf.data would fill the disk"
-                            verdict=escalate
-                          fi
-                          ;;
-                      esac
-                    fi
-                  fi
-                  ;;
-              esac
-            else
-              echo "probe-mmap: $side finished within the first minute at c=$c; no projection needed"
-            fi
-            if [ "$verdict" = escalate ]; then
-              echo "probe-mmap: $side stopping the c=$c recording for a -c escalation"
-              kill -TERM "$rec" 2>/dev/null || true
-              sleep 2
-              kill -KILL "$rec" 2>/dev/null || true
-              wait "$rec" 2>/dev/null || true
-              pkill -f 'perf record -e syscalls:sys_enter_mmap' 2>/dev/null || true
-              rm -f "$data" || true
-              df -h "$tmp" || true
-              return 2
-            fi
+            case "$size" in
+              ''|*[!0-9]*) proj=unknown ;;
+              *) proj=$((size * 20)) ;;
+            esac
+            echo "probe-mmap: $side one-minute mark: state=$state c=$c perf.data bytes=${size:-unknown} free bytes=${free:-unknown} projected bytes=${proj} at 1200 s (linear from the 60 s mark; informational, no escalation)"
             rc=0
             wait "$rec" || rc=$?
             elapsed=$((SECONDS - start))
-            if [ "$rc" = 124 ]; then
-              echo "probe-mmap: $side hit the 1200 s timeout at c=$c after ${elapsed} s; raising -c and re-running"
-              rm -f "$data" || true
-              return 2
-            fi
-            if [ "$rc" != 0 ]; then
-              echo "probe-mmap: $side perf record failed (rc=$rc) after ${elapsed} s; unavailable"
+            echo "probe-mmap: $side recorder exited rc=$rc after ${elapsed} s"
+            if [ "$rc" != 0 ] && [ "$rc" != 124 ]; then
+              echo "probe-mmap: $side perf record failed (rc=$rc); the single parse that follows decides loudly"
               sed -n '1,20p' "$tmp/$side-perf.err" 2>/dev/null | sed "s/^/probe-mmap: $side perf err: /" || true
-              return 1
             fi
-            echo "probe-mmap: $side record finished at c=$c after ${elapsed} s"
             grep '^slowest re-count at a new width:' "$tmp/$side-jig.log" | sed "s/^/probe-mmap: $side re-count: /" || true
-            summarize_side "$jig" "$side" "$c" || true
             df -h "$tmp" || true
             return 0
           }
-          # Summarizes a finished recording: streams default perf script
-          # straight into the counts (no giant intermediate),
-          # then prints the required side lines. Counts are raw samples;
-          # est multiplies by the side's -c. At a shared -c the sample
-          # order is the est order.
-          summarize_side() {
+          # Parses the STOPPED recording once with default perf script and
+          # summarizes it. stderr stays visible (first 20 lines logged).
+          # A nonzero script status or a zero mmap count prints PARSE
+          # FAILED and exits nonzero: the probe fails loudly instead of
+          # escalating on nothing. Counts are raw samples; est multiplies
+          # by the fixed -c.
+          parse_side() {
             jig=$1
             side=$2
-            c=$3
+            c=$FIXED_C
             data="$tmp/$side-perf.data"
             echo "$c" > "$tmp/$side-c.txt" || true
             jigbase=$(basename "$jig")
+            rc_script=0
             perf script -i "$data" 2>"$tmp/$side-script.err" | \
-              awk -v JIG="$jigbase" -v JIGPATH="$jig" -v SAMPLE="$tmp/$side-script-sample.txt" "$perfawk" > "$tmp/$side-counts.txt" 2>/dev/null || true
-            sed -n '1,5p' "$tmp/$side-script.err" 2>/dev/null | sed "s/^/probe-mmap: $side script err: /" || true
+              awk -v JIG="$jigbase" -v JIGPATH="$jig" -v SAMPLE="$tmp/$side-script-sample.txt" "$perfawk" > "$tmp/$side-counts.txt" 2>/dev/null || rc_script=$?
+            echo "probe-mmap: $side script stderr, first lines (parsed once, after the recorder exited)"
+            sed -n '1,20p' "$tmp/$side-script.err" 2>/dev/null | sed "s/^/probe-mmap: $side script err: /" || true
             echo "probe-mmap: $side script sample, first lines for format checking"
             sed -n '1,30p' "$tmp/$side-script-sample.txt" 2>/dev/null | sed "s/^/probe-mmap: $side raw: /" || true
             total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$side-counts.txt" 2>/dev/null | sed -n '1p' || true)
             case "$total" in
               ''|*[!0-9]*) total=0 ;;
             esac
+            if [ "$rc_script" != 0 ] || [ "$total" = 0 ]; then
+              echo "probe-mmap: PARSE FAILED $side c=$c events=$total rc=$rc_script"
+              exit 1
+            fi
             echo "probe-mmap: $side c=$c events=$total total_est=$((total * c))"
             awk -F'@@@' '$1=="SITE" {printf "%012d@@@%s\n", $2, $3}' "$tmp/$side-counts.txt" 2>/dev/null | sort -r | sed -n '1,15p' > "$tmp/$side-top.txt" || true
             rank=0
@@ -1060,77 +991,23 @@ jobs:
             done < "$tmp/$side-top.txt" || true
             return 0
           }
-          # Walks the period ladder for side $1 (jig $2) from $C_USED up,
-          # logging every -c change. Sets LADDER_C to the winning period.
-          # Returns 0 with the counts summarized, 1 when the side is
-          # unavailable, 2 when even -c 256 does not fit.
-          ladder() {
-            side=$1
-            jig=$2
-            for c in 32 128 256; do
-              if [ "$c" -lt "$C_USED" ]; then
-                continue
-              fi
-              rc=0
-              record_side "$jig" "$side" "$c" || rc=$?
-              if [ "$rc" = 0 ]; then
-                LADDER_C=$c
-                return 0
-              fi
-              if [ "$rc" != 2 ]; then
-                return 1
-              fi
-              if [ "$c" = 256 ]; then
-                echo "probe-mmap: -c 256 still does not fit for $side; stopping with no counting-allocator fallback (see #2360)"
-                return 2
-              fi
-              if [ "$c" = 32 ]; then
-                next=128
-              else
-                next=256
-              fi
-              echo "probe-mmap: c-change $c -> $next ($side did not fit)"
-              C_USED=$next
-            done
-            return 2
-          }
-          # Head first, base second, sequentially, never in parallel. Both
-          # sides share the one -c the ladder settles on.
+          # Head first, base second, sequentially, never in parallel, at
+          # the one fixed period. Each side is parsed once, after its own
+          # recorder exits; a PARSE FAILED exits the step nonzero.
+          echo "probe-mmap: sampling period fixed at c=$FIXED_C (no escalation; see #2360)"
           echo "probe-mmap: head runs first; base waits (sequential, never in parallel)"
-          HRC=0
-          ladder head "$tmp/probe-head-paging" || HRC=$?
-          if [ "$HRC" = 0 ]; then
-            C_HEAD=$LADDER_C
-            C_USED=$C_HEAD
-            HEAD_OK=1
-            echo "probe-mmap: head settled at c=$C_HEAD"
-          elif [ "$HRC" = 2 ]; then
-            echo "probe-mmap: head has no usable -c; base still runs on its own"
+          if record_side "$tmp/probe-head-paging" head; then
+            parse_side "$tmp/probe-head-paging" head
+            echo "probe-mmap: head done at c=$FIXED_C"
           else
             echo "probe-mmap: head unavailable"
           fi
           echo "probe-mmap: base runs next; head is idle (sequential, never in parallel)"
-          BRC=0
-          ladder base "$tmp/probe-base-paging" || BRC=$?
-          if [ "$BRC" = 0 ]; then
-            C_BASE=$LADDER_C
-            BASE_OK=1
-            echo "probe-mmap: base settled at c=$C_BASE"
-          elif [ "$BRC" = 2 ]; then
-            echo "probe-mmap: base has no usable -c"
+          if record_side "$tmp/probe-base-paging" base; then
+            parse_side "$tmp/probe-base-paging" base
+            echo "probe-mmap: base done at c=$FIXED_C"
           else
             echo "probe-mmap: base unavailable"
-          fi
-          if [ "$HEAD_OK" = 1 ] && [ "$BASE_OK" = 1 ] && [ "$C_BASE" != "$C_HEAD" ]; then
-            echo "probe-mmap: c-change $C_HEAD -> $C_BASE (base needed a higher -c; re-running head so both sides share one -c)"
-            RRC=0
-            record_side "$tmp/probe-head-paging" head "$C_BASE" || RRC=$?
-            if [ "$RRC" = 0 ]; then
-              C_HEAD=$C_BASE
-              echo "probe-mmap: head re-run settled at c=$C_HEAD"
-            else
-              echo "probe-mmap: head re-run at c=$C_BASE did not finish; the sides keep different -c values and the est values below stay comparable as samples times each side's own -c"
-            fi
           fi
           # The head-minus-base table over the union of both top-15 sets,
           # in estimated events (samples times each side's own -c).
