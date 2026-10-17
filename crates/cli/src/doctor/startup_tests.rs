@@ -754,7 +754,7 @@ fn a_windowless_model_blocks_through_the_window_check() {
             "{}",
             blocker.line
         );
-        assert_eq!(checked.lines, [blocker.line.clone()]);
+        assert_eq!(checked.lines, [blocker.line]);
     }
 }
 

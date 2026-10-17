@@ -224,7 +224,7 @@ fn newest_error_holds_the_open_time_length_past_ten_mib() {
     // A window-sized file plus one error: the window starts past byte 0,
     // so the remaining count and the length-plus-start sum differ.
     let mut big = error(1_699_000_000_000, "open", "open-time").into_bytes();
-    big.extend(std::iter::repeat_n(b'p', WINDOW as usize));
+    big.extend(std::iter::repeat_n(b'p', usize::try_from(WINDOW).unwrap()));
     big.extend_from_slice(b"\n");
     big.extend_from_slice(error(1_699_000_000_005, "late", "in window").as_bytes());
     setup.write("logs/growbig.log", &big);
@@ -251,7 +251,11 @@ fn newest_error_holds_the_open_time_length_past_ten_mib() {
     assert_eq!((found.2.as_str(), found.3.as_str()), ("late", "in window"));
     let chunks = seam::take_chunks_for("growbig.log");
     let read: usize = chunks.iter().map(|(_, len)| len).sum();
-    assert_eq!(read, WINDOW as usize, "never past the open-time length");
+    assert_eq!(
+        u64::try_from(read).unwrap(),
+        WINDOW,
+        "never past the open-time length"
+    );
     assert!(
         chunks.iter().all(|(_, len)| *len == CHUNK),
         "one 64 KiB read at a time: {chunks:?}"
