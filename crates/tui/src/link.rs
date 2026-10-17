@@ -230,14 +230,12 @@ impl Feed {
     )]
     pub(crate) fn send(&self, input: Input) -> Result<(), SendError<Input>> {
         if let Some(router) = &self.router {
-            match &input {
-                Input::Connected(stream, _) => {
-                    if let Ok(stream) = stream.try_clone() {
-                        router.attach(stream);
-                    }
+            if let Input::Connected(stream, _) = &input {
+                if let Ok(stream) = stream.try_clone() {
+                    router.attach(stream);
                 }
-                Input::Disconnected => router.detach(),
-                _ => {}
+            } else if matches!(input, Input::Disconnected) {
+                router.detach();
             }
         }
         self.tx.send(input)

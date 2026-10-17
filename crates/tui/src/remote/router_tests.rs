@@ -32,7 +32,7 @@ fn read(stream: UnixStream) -> mpsc::Receiver<Value> {
 fn wait(pending: Pending) -> mpsc::Receiver<Result<contract::HubLine, AskError>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(pending.wait());
+        tx.send(pending.wait()).unwrap_or(());
     });
     rx
 }
@@ -142,7 +142,7 @@ fn detach_under_an_outer_lock_returns_before_retrying_outside_it() {
         let lock = Mutex::new(());
         let guard = support::lock(&lock);
         held.send(()).unwrap();
-        let _ = resume.recv();
+        resume.recv().unwrap_or(());
         sent.send(worker.send("configure", json!({})).err())
             .unwrap();
         drop(guard);

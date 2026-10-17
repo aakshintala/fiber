@@ -24,6 +24,7 @@ enum Answer {
 struct State {
     stream: Option<UnixStream>,
     epoch: u64,
+    global_file: Option<std::path::PathBuf>,
     requests: HashMap<String, Answer>,
     feed: Option<(Sender<Input>, Arc<link::Credits>)>,
     #[cfg(test)]
@@ -101,15 +102,26 @@ impl Router {
         let mut state = support::lock(&self.state);
         state.epoch += 1;
         state.stream = Some(stream);
+        state.global_file = None;
         self.changed.notify_all();
     }
     pub(crate) fn detach(&self) {
         let requests = {
             let mut state = support::lock(&self.state);
             state.stream = None;
+            state.global_file = None;
             std::mem::take(&mut state.requests)
         };
         drop(requests);
+    }
+    pub(super) fn cached_global(&self) -> Option<std::path::PathBuf> {
+        support::lock(&self.state).global_file.clone()
+    }
+    pub(super) fn cache_global(&self, epoch: u64, path: std::path::PathBuf) {
+        let mut state = support::lock(&self.state);
+        if state.epoch == epoch && state.stream.is_some() {
+            state.global_file = Some(path);
+        }
     }
     pub(crate) fn wake(&self) {
         let _state = support::lock(&self.state);
@@ -143,11 +155,14 @@ impl Router {
             state.requests.insert(id.clone(), answer);
             (id, stream, state.epoch)
         };
-        let mut line = json!({"id":id,"command":command});
+        let mut line = serde_json::Map::from_iter([
+            ("id".into(), json!(id)),
+            ("command".into(), json!(command)),
+        ]);
         if args != json!({}) {
-            line["args"] = args;
+            drop(line.insert("args".into(), args));
         }
-        if link::write_line(&stream, &line.to_string()).is_err() {
+        if link::write_line(&stream, &Value::Object(line).to_string()).is_err() {
             support::lock(&self.state).requests.remove(&id);
             return Err(AskError::Lost);
         }
@@ -213,8 +228,8 @@ impl Router {
                         if let Some((arrived, release)) =
                             support::lock(&self.pause_before_send).take()
                         {
-                            let _ = arrived.send(());
-                            let _ = release.recv();
+                            arrived.send(()).unwrap_or(());
+                            release.recv().unwrap_or(());
                         }
                     }
                     result => return result?.wait(),
@@ -245,13 +260,11 @@ impl Router {
         };
         match answer {
             Some(Answer::Wait(tx)) => {
-                let _ = tx.send(line.clone());
+                tx.send(line.clone()).unwrap_or(());
             }
             Some(Answer::Map(map)) => {
-                if let Some(input) = map(line) {
-                    if let Some(tx) = feed {
-                        let _ = tx.send(input);
-                    }
+                if let (Some(input), Some(tx)) = (map(line), feed) {
+                    tx.send(input).unwrap_or(());
                 }
             }
             None => return false,
