@@ -4,10 +4,11 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 
-use config::ConfigError;
+use config::{ConfigError, Placeholder};
 
-use super::{Filled, Source, fill, host};
+use super::{Filled, Source, fill, host, hosts};
 
 /// A lookup that serves `value` from the setting for `name` and nothing
 /// for anything else.
@@ -172,6 +173,87 @@ fn the_first_placeholder_with_no_value_is_reported_and_an_error_passes_on() {
         Filled::Missing("b".to_owned())
     );
     let err = fill("{a}", &|_name| {
+        Err::<Option<(String, Source)>, ConfigError>(ConfigError::Override { arg: "bad".into() })
+    })
+    .unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::Usage);
+}
+
+/// Declared placeholders with the environment variable `env`, if any.
+fn declared(names: &[(&str, Option<&str>)]) -> BTreeMap<String, Placeholder> {
+    names
+        .iter()
+        .map(|(name, env)| {
+            (
+                (*name).to_owned(),
+                Placeholder {
+                    env: env.map(str::to_owned),
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn hosts_with_no_declared_names_reads_nothing_and_returns_empty() {
+    let called = Cell::new(false);
+    assert_eq!(
+        hosts(&BTreeMap::new(), &|_name| {
+            called.set(true);
+            Ok(None)
+        })
+        .unwrap(),
+        Some(BTreeMap::new())
+    );
+    assert!(!called.get());
+}
+
+#[test]
+fn hosts_reads_each_declared_name_and_strips_it_as_a_host() {
+    let one = declared(&[("workspace", None)]);
+    for (value, want) in [
+        ("h.example", "h.example"),
+        ("https://h.example/", "h.example"),
+        ("127.0.0.1:8080", "127.0.0.1:8080"),
+    ] {
+        assert_eq!(
+            hosts(&one, &lookup_of("workspace", value)).unwrap(),
+            Some(BTreeMap::from([("workspace".to_owned(), want.to_owned())])),
+            "{value}"
+        );
+    }
+    // Two declared names: both hosts come back, in name order.
+    let two = declared(&[("other", None), ("workspace", None)]);
+    let lookup = |name: &str| match name {
+        "workspace" => Ok(Some(("h.example".to_owned(), Source::Setting))),
+        _ => Ok(Some(("o.example".to_owned(), Source::Setting))),
+    };
+    assert_eq!(
+        hosts(&two, &lookup).unwrap(),
+        Some(BTreeMap::from([
+            ("other".to_owned(), "o.example".to_owned()),
+            ("workspace".to_owned(), "h.example".to_owned()),
+        ]))
+    );
+}
+
+#[test]
+fn hosts_returns_none_when_a_name_has_no_value_or_is_not_a_host() {
+    // Two declared, one with no value: no `models()` argument.
+    let two = declared(&[("other", None), ("workspace", None)]);
+    assert_eq!(
+        hosts(&two, &lookup_of("workspace", "h.example")).unwrap(),
+        None
+    );
+    // A value that is not a host reads the same: nothing is built.
+    let one = declared(&[("workspace", None)]);
+    assert_eq!(hosts(&one, &lookup_of("workspace", "a/b")).unwrap(), None);
+}
+
+#[test]
+fn hosts_passes_a_lookup_error_on() {
+    let one = declared(&[("workspace", None)]);
+    let err = hosts(&one, &|_name| {
         Err::<Option<(String, Source)>, ConfigError>(ConfigError::Override { arg: "bad".into() })
     })
     .unwrap_err();

@@ -1,0 +1,167 @@
+{
+  "call": {
+    "provider": "databricks",
+    "function": "models",
+    "arg": {
+      "key": "dapi-test",
+      "placeholders": {
+        "workspace": "adb-1.azuredatabricks.net"
+      }
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://adb-1.azuredatabricks.net/api/2.1/unity-catalog/model-services?parent=schemas%2Fsystem.ai&page_size=100",
+          "headers": {
+            "authorization": "Bearer dapi-test",
+            "Databricks-Ai-Gateway-Request-Tags": "{\"source\":\"fiber\"}"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.alpha-one\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.system.ai.beta-two\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.databricks-gamma-three\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.fw-delta-four\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.meta-epsilon-five\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.us.zeta-six\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.anthropic.eta-seven\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.theta/acme-eight\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.iota__nine\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.kappa-ten-preview\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.nu-thirteen-\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]}]}"
+        }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://adb-1.azuredatabricks.net/api/ai-gateway/v2/external-provider-models?page_size=1000",
+          "headers": {
+            "authorization": "Bearer dapi-test",
+            "Databricks-Ai-Gateway-Request-Tags": "{\"source\":\"fiber\"}"
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"models\":[{\"model_name\":\"alpha-one\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":1000,\"max_output\":100}},{\"model_name\":\"beta-two\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":2000,\"max_output\":100}},{\"model_name\":\"gamma-three\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":3000,\"max_output\":100}},{\"model_name\":\"delta-four\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":4000,\"max_output\":100}},{\"model_name\":\"epsilon-five\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":5000,\"max_output\":100}},{\"model_name\":\"zeta-six\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":6000,\"max_output\":100}},{\"model_name\":\"eta-seven\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":7000,\"max_output\":100}},{\"model_name\":\"acme-eight\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":8000,\"max_output\":100}},{\"model_name\":\"iota-nine\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":9000,\"max_output\":100}},{\"model_name\":\"kappa-ten\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":10000,\"max_output\":100}},{\"model_name\":\"nu-thirteen\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":11000,\"max_output\":100}}]}"
+        }
+      }
+    ]
+  },
+  "returns": [
+    {
+      "id": "databricks-alpha-one",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 1000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-anthropic.eta-seven",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 7000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-databricks-gamma-three",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 3000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-fw-delta-four",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 4000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-iota__nine",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 9000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-kappa-ten-preview",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 10000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-meta-epsilon-five",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 5000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-nu-thirteen-",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 11000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-system.ai.beta-two",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 2000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-theta/acme-eight",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 8000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    },
+    {
+      "id": "databricks-us.zeta-six",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "context_window": 6000,
+      "max_output_tokens": 100,
+      "input": [
+        "text"
+      ],
+      "cost": null
+    }
+  ]
+}

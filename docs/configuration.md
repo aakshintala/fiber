@@ -550,14 +550,14 @@ declares") lists:
   "name": "databricks",
   "credential": { "env": "DATABRICKS_TOKEN" },
   "placeholders": { "workspace": { "env": "DATABRICKS_HOST" } },
-  "headers": { "x-databricks-client": "fiber" },
+  "headers": { "Databricks-Ai-Gateway-Request-Tags": "{\"source\":\"fiber\"}" },
   "models": [
     {
       "id": "databricks-claude-opus-5",
       "name": "Claude Opus 5 (Databricks)",
       "protocol": "anthropic-messages",
-      "base_url": "https://{workspace}/ai-gateway/anthropic",
-      "compat": { "store": false },
+      "base_url": "https://{workspace}/ai-gateway/anthropic/v1",
+      "compat": { "bearer": true },
       "deferred_tools": true,
       "extra_body": {},
       "context_window": 1000000,
@@ -590,6 +590,7 @@ declares") lists:
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
+  | `bearer` | boolean | `anthropic-messages` | the key goes in `authorization: Bearer`; absent, it goes in `x-api-key` |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,

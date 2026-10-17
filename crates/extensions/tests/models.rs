@@ -10,10 +10,10 @@ mod common;
 
 use common::write_record;
 use common::{Setup, config, install, lua_named, manifest, provider, write};
-use config::{ModelData, write_model_cache};
+use config::{ModelData, Secret, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use extensions::{Error, Providers, leave_out_invalid};
+use extensions::{Error, ModelsArg, Providers, leave_out_invalid};
 use fakes::{Deadline, NoLock};
 use serde_json::json;
 
@@ -149,9 +149,12 @@ fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
     std::thread::spawn(move || {
         assert!(
             providers
-                .add_session(&session, &configuration, &|_, _| unreachable!(
-                    "no credential source runs"
-                ))
+                .add_session(
+                    &session,
+                    &configuration,
+                    &|_, _| unreachable!("no credential source runs"),
+                    &|_| None
+                )
                 .is_empty()
         );
         assert!(
@@ -164,11 +167,15 @@ fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
                 &providers,
                 &configuration,
                 Some(Duration::from_secs(60)),
-                &|_, _| unreachable!("no credential source runs")
+                &|_, _| unreachable!("no credential source runs"),
+                &|_| None
             )
             .is_empty()
         );
-        assert!(lua.refresh(Some(Duration::from_secs(60))).is_none());
+        assert!(
+            lua.refresh(Some(Duration::from_secs(60)), ModelsArg::default())
+                .is_none()
+        );
         tx.send(providers.resolve("p/cached").unwrap().reference())
             .unwrap();
         drop(home);
@@ -771,6 +778,7 @@ fn add_lua_without_a_data_file_creates_the_provider() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/m").is_ok());
@@ -795,6 +803,7 @@ fn add_lua_with_a_data_file_replaces_only_models() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/new").is_ok());
@@ -836,6 +845,7 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
@@ -878,6 +888,7 @@ fn add_lua_filters_a_cached_list_without_running_lua() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
@@ -904,6 +915,7 @@ fn a_failing_models_leaves_no_models_with_the_errors_code() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert_eq!(providers.names().count(), 0);
     assert_eq!(notices.len(), 1, "{notices:?}");
@@ -926,6 +938,7 @@ fn a_failing_models_keeps_the_data_files_models() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(notices.len(), 1, "{notices:?}");
@@ -956,6 +969,7 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.lua("acme").is_some());
     assert!(providers.lua("nobody").is_none());
@@ -975,7 +989,8 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
                 "broke-ext",
                 &bad,
                 &config(&setup2, &[]),
-                &fakes::children::grouped_output
+                &fakes::children::grouped_output,
+                &|_| None
             )
             .len(),
         1
@@ -1093,6 +1108,7 @@ fn add_lua_reads_the_addendum_against_the_lua_extensions_directory() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(notices.is_empty(), "{notices:?}");
     let model = providers.resolve("acme/m").unwrap();
@@ -1122,6 +1138,7 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/old").is_err());
@@ -1145,6 +1162,7 @@ fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert_eq!(providers.names().count(), 0);
     assert!(providers.lua("acme").is_some());
@@ -1168,6 +1186,7 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(
@@ -1234,7 +1253,7 @@ fn a_fresh_list_is_not_refreshed_and_lua_never_runs() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall());
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     assert_eq!(cached_ids(&home, "acme"), ["old"]);
 }
 
@@ -1243,7 +1262,7 @@ fn a_provider_with_no_cached_list_is_not_refreshed_at_start() {
     let setup = Setup::new();
     let home = setup.home();
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     assert!(config::read_model_cache(&home, "acme").unwrap().is_none());
 }
 
@@ -1255,7 +1274,7 @@ fn a_list_exactly_as_old_as_the_maximum_is_not_stale() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall() - DAY);
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     assert_eq!(cached_ids(&home, "acme"), ["old"]);
 }
 
@@ -1271,7 +1290,13 @@ fn a_stale_list_refreshes_once_and_the_cache_is_replaced() {
         clock.wall() - DAY - std::time::Duration::from_secs(1),
     );
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    let models = within(move || lua.refresh(Some(DAY)).unwrap().join().unwrap()).unwrap();
+    let models = within(move || {
+        lua.refresh(Some(DAY), ModelsArg::default())
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+    .unwrap();
     assert_eq!(
         models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
         ["new"]
@@ -1287,7 +1312,13 @@ fn without_a_maximum_even_a_fresh_list_refreshes() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall());
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    within(move || lua.refresh(None).unwrap().join().unwrap()).unwrap();
+    within(move || {
+        lua.refresh(None, ModelsArg::default())
+            .unwrap()
+            .join()
+            .unwrap()
+    })
+    .unwrap();
     assert_eq!(cached_ids(&home, "acme"), ["new"]);
 }
 
@@ -1305,8 +1336,8 @@ fn two_providers_over_one_stale_list_refresh_it_once() {
     // Two extensions, two VMs, one home: the second sees the first's lock.
     let first = lua_named(&setup, "one", "acme", &lua_list(&["new"]));
     let second = lua_named(&setup, "two", "acme", &lua_list(&["new"]));
-    let a = first.refresh(Some(DAY));
-    let b = second.refresh(Some(DAY));
+    let a = first.refresh(Some(DAY), ModelsArg::default());
+    let b = second.refresh(Some(DAY), ModelsArg::default());
     assert!(a.is_some(), "the first refresh starts");
     assert!(b.is_none(), "the second sees the first's lock");
     within(move || a.unwrap().join().unwrap()).unwrap();
@@ -1334,8 +1365,8 @@ fn a_lock_held_elsewhere_is_not_started_again() {
         .unwrap();
     held.try_lock().unwrap();
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    assert!(lua.refresh(Some(DAY)).is_none());
-    assert!(lua.refresh(None).is_none());
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
+    assert!(lua.refresh(None, ModelsArg::default()).is_none());
     drop(held);
     assert_eq!(cached_ids(&home, "acme"), ["old"]);
 }
@@ -1381,6 +1412,7 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
         &config,
         Some(DAY),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert_eq!(started.len(), 1);
     let names: Vec<&str> = started.iter().map(|(name, _)| name.as_str()).collect();
@@ -1403,8 +1435,8 @@ fn refresh_skips_a_provider_that_did_not_register_models() {
     let lua = lua_no_models(&setup, "ext", "nomodels");
     // A credential is there, and the list is stale, yet nothing starts:
     // no lock, no thread, no `models()` call.
-    assert!(lua.refresh(None).is_none());
-    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(lua.refresh(None, ModelsArg::default()).is_none());
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     let config = config(&setup, &[]);
     let started = extensions::refresh_lists(
         &[lua],
@@ -1412,6 +1444,7 @@ fn refresh_skips_a_provider_that_did_not_register_models() {
         &config,
         None,
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(started.is_empty());
     assert_eq!(cached_ids(&home, "nomodels"), ["old"]);
@@ -1426,7 +1459,13 @@ fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
     // variable: `models()` would fail the test if it ran.
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let config = config(&setup, &[]);
-    let notices = providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/a").is_ok());
     assert!(
@@ -1522,7 +1561,13 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
         providers.get("acme").unwrap(),
         &fakes::children::grouped_output
     ));
-    let notices = providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
+    let notices = providers.add_lua(
+        "acme-ext",
+        &lua,
+        &config,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/a").is_ok());
     assert!(
@@ -1549,6 +1594,7 @@ fn forget_lua_drops_every_handle_and_keeps_the_models() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(notices.is_empty(), "{notices:?}");
     let weak = std::sync::Arc::downgrade(&lua);
@@ -1874,6 +1920,7 @@ fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
         &lua,
         &config(&setup, &[]),
         &fakes::children::grouped_output,
+        &|_| None,
     );
     assert!(providers.resolve("acme/listed").is_ok());
     assert!(providers.resolve("acme/rogue").is_err());
@@ -2026,8 +2073,519 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
     let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
     let extensions = SessionExtensions::load(&setup.home(), &config, clock, locks, None);
     assert_eq!(extensions.rejected(), ["c-ext"]);
-    let notices = providers.add_session(&extensions, &config, &fakes::children::grouped_output);
+    let notices = providers.add_session(
+        &extensions,
+        &config,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.get("c").is_none());
     assert!(providers.resolve("d/m").is_ok());
+}
+
+/// Installs extension `ext` with provider `provider`: the data file holds
+/// `models` and `placeholders`, and the manifest declares `templates` for
+/// the provider, which discovered models must match byte for byte.
+fn installed_placeholders(
+    setup: &Setup,
+    ext: &str,
+    provider: &str,
+    templates: &[&str],
+    placeholders: &serde_json::Value,
+    models: &serde_json::Value,
+) -> Providers {
+    let mut declared = manifest(ext);
+    let mut entries = serde_json::Map::new();
+    entries.insert(provider.to_owned(), json!(templates));
+    declared
+        .as_object_mut()
+        .unwrap()
+        .insert("providers".to_owned(), serde_json::Value::Object(entries));
+    let data = json!({
+        "name": provider,
+        "credential": { "env": "FIBER_TEST_UNSET_KEY" },
+        "models": models,
+        "placeholders": placeholders,
+    });
+    let source = setup.source("src", &declared, &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    providers
+}
+
+/// A `models()` returning one discovered model whose id joins `left` and
+/// `right` around `@`, at `base_url`: what `models()` receives is read as
+/// `arg`.
+fn lua_join(left: &str, right: &str, base_url: &str) -> String {
+    format!(
+        "{{ {{ id = {left} .. \"@\" .. {right}, protocol = \"openai-responses\", \
+         base_url = \"{base_url}\", context_window = 1000 }} }}"
+    )
+}
+
+/// A Lua provider with no `credential` function whose `models()` is
+/// `models_run`, which reads its argument as `arg`.
+fn lua_bare_arg(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+    models_run: &str,
+) -> std::sync::Arc<extensions::LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("providers").join(format!("{provider}.lua")),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             models = {{ timeout = 1000, run = function(arg) return {models_run} end }} }})\n"
+        ),
+    );
+    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
+    extensions::LuaProvider::new(extension, provider)
+}
+
+/// A Lua provider with a `credential` function whose `models()` is
+/// `models_run`, which reads its argument as `arg`.
+fn lua_named_arg(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+    models_run: &str,
+) -> std::sync::Arc<extensions::LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("providers").join(format!("{provider}.lua")),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             credential = {{ timeout = 1000, run = function() \
+             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
+             models = {{ timeout = 1000, run = function(arg) return {models_run} end }} }})\n"
+        ),
+    );
+    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
+    extensions::LuaProvider::new(extension, provider)
+}
+
+/// No environment variable: every lookup is empty.
+fn env_empty(_name: &str) -> Option<String> {
+    None
+}
+
+/// The workspace variable serves a host with a scheme and slash to strip.
+fn env_workspace(name: &str) -> Option<String> {
+    (name == "FIBER_TEST_WORKSPACE").then(|| "https://e.example/".to_owned())
+}
+
+#[test]
+fn models_receives_the_session_key_beside_the_workspace_host() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &json!([]),
+    );
+    config::store_credential(&setup.home(), "acme", "default", &Secret::new("k1".into())).unwrap();
+    let config = config(
+        &setup,
+        &["extensions.\"acme-ext\".settings.workspace=h.example"],
+    );
+    let lua = lua_bare_arg(
+        &setup,
+        "ext",
+        "acme",
+        &lua_join(
+            "arg.key",
+            "arg.placeholders.workspace",
+            "https://{workspace}/v1",
+        ),
+    );
+    let home = setup.home();
+    let (notices, cached) = within(move || {
+        let mut providers = providers;
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        );
+        let cached = cached_ids(&home, "acme");
+        (notices, cached)
+    });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(cached, ["k1@h.example"]);
+}
+
+#[test]
+fn the_workspace_host_falls_back_to_the_environment() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &json!([]),
+    );
+    config::store_credential(&setup.home(), "acme", "default", &Secret::new("k1".into())).unwrap();
+    let config = config(&setup, &[]);
+    let lua = lua_bare_arg(
+        &setup,
+        "ext",
+        "acme",
+        &lua_join(
+            "arg.key",
+            "arg.placeholders.workspace",
+            "https://{workspace}/v1",
+        ),
+    );
+    let home = setup.home();
+    let (notices, cached) = within(move || {
+        let mut providers = providers;
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_workspace,
+        );
+        let cached = cached_ids(&home, "acme");
+        (notices, cached)
+    });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(cached, ["k1@e.example"]);
+}
+
+#[test]
+fn models_receives_no_key_for_a_provider_that_registers_credential() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://h.example/v1"],
+        &json!({}),
+        &json!([]),
+    );
+    // A stored key must not reach `models()`: the provider registers
+    // `credential()`, so its argument carries no key.
+    config::store_credential(&setup.home(), "acme", "default", &Secret::new("k1".into())).unwrap();
+    let lua = lua_named_arg(
+        &setup,
+        "ext",
+        "acme",
+        &lua_join("tostring(arg.key)", "\"static\"", "https://h.example/v1"),
+    );
+    let config = config(&setup, &[]);
+    let home = setup.home();
+    let (notices, cached) = within(move || {
+        let mut providers = providers;
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        );
+        let cached = cached_ids(&home, "acme");
+        (notices, cached)
+    });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(cached, ["nil@static"]);
+}
+
+#[test]
+fn models_is_not_called_while_the_workspace_has_no_value() {
+    let setup = Setup::new();
+    let models = json!([{ "id": "m", "protocol": "openai-responses",
+        "base_url": "https://{workspace}/v1", "context_window": 1000 }]);
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &models,
+    );
+    let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
+    let home = setup.home();
+    let (mut providers, notices, config) = within(move || {
+        let mut providers = providers;
+        let config = config(&setup, &[]);
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        );
+        (providers, notices, config)
+    });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(
+        config::read_model_cache(&home, "acme").unwrap().is_none(),
+        "no discovery ran, so no copy was written"
+    );
+    let notices = providers.fill_placeholders(&config, &env_empty).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
+    assert!(providers.resolve("acme/m").is_err());
+}
+
+#[test]
+fn models_is_not_called_while_the_workspace_is_not_a_host() {
+    let setup = Setup::new();
+    let models = json!([{ "id": "m", "protocol": "openai-responses",
+        "base_url": "https://{workspace}/v1", "context_window": 1000 }]);
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &models,
+    );
+    let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
+    let home = setup.home();
+    let (mut providers, notices, config) = within(move || {
+        let mut providers = providers;
+        let config = config(&setup, &["extensions.\"acme-ext\".settings.workspace=a/b"]);
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        );
+        (providers, notices, config)
+    });
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(
+        config::read_model_cache(&home, "acme").unwrap().is_none(),
+        "no discovery ran, so no copy was written"
+    );
+    let notices = providers.fill_placeholders(&config, &env_empty).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelUnconfigured);
+    assert!(
+        !notices[0].message.contains("a/b"),
+        "the notice never repeats the value: {}",
+        notices[0].message
+    );
+    assert!(providers.resolve("acme/m").is_err());
+}
+
+#[test]
+fn refresh_lists_passes_the_key_and_host_to_the_thread() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &json!([]),
+    );
+    stale(&setup.home(), "acme", &["old"]);
+    config::store_credential(&setup.home(), "acme", "default", &Secret::new("k1".into())).unwrap();
+    let config = config(
+        &setup,
+        &["extensions.\"acme-ext\".settings.workspace=h.example"],
+    );
+    let lua = lua_bare_arg(
+        &setup,
+        "ext",
+        "acme",
+        &lua_join(
+            "arg.key",
+            "arg.placeholders.workspace",
+            "https://{workspace}/v1",
+        ),
+    );
+    let started = within(move || {
+        extensions::refresh_lists(
+            &[lua],
+            &providers,
+            &config,
+            Some(DAY),
+            &fakes::children::grouped_output,
+            &env_empty,
+        )
+    });
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].0, "acme");
+    for (_, handle) in started {
+        within(move || handle.join().unwrap()).unwrap();
+    }
+    assert_eq!(cached_ids(&setup.home(), "acme"), ["k1@h.example"]);
+}
+
+#[test]
+fn refresh_lists_starts_nothing_while_the_workspace_has_no_value() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://{workspace}/v1"],
+        &json!({"workspace": {"env": "FIBER_TEST_WORKSPACE"}}),
+        &json!([]),
+    );
+    stale(&setup.home(), "acme", &["old"]);
+    config::store_credential(&setup.home(), "acme", "default", &Secret::new("k1".into())).unwrap();
+    let config = config(&setup, &[]);
+    let lua = lua_bare_arg(
+        &setup,
+        "ext",
+        "acme",
+        &lua_join(
+            "arg.key",
+            "arg.placeholders.workspace",
+            "https://{workspace}/v1",
+        ),
+    );
+    let started = within(move || {
+        extensions::refresh_lists(
+            &[lua],
+            &providers,
+            &config,
+            Some(DAY),
+            &fakes::children::grouped_output,
+            &env_empty,
+        )
+    });
+    assert!(started.is_empty());
+    assert_eq!(cached_ids(&setup.home(), "acme"), ["old"]);
+}
+
+#[test]
+fn models_arg_debug_never_prints_the_key() {
+    let arg = ModelsArg {
+        key: Some(Secret::new("k1".into())),
+        placeholders: [("workspace".to_owned(), "h.example".to_owned())]
+            .into_iter()
+            .collect(),
+    };
+    let printed = format!("{arg:?}");
+    assert!(!printed.contains("k1"), "{printed}");
+}
+
+#[test]
+fn a_models_failure_redacts_the_key() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://h.example/v1"],
+        &json!({}),
+        &json!([]),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &Secret::new("dapi-secret".into()),
+    )
+    .unwrap();
+    let lua = lua_bare_arg(&setup, "ext", "acme", "error(\"saw \" .. arg.key)");
+    let arg = ModelsArg {
+        key: Some(Secret::new("dapi-secret".into())),
+        placeholders: std::collections::BTreeMap::new(),
+    };
+    let err = within(move || lua.list_models(&arg)).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("[redacted]"), "{text}");
+    assert!(!text.contains("dapi-secret"), "{text}");
+    let lua = lua_bare_arg(&setup, "ext", "acme", "error(\"saw \" .. arg.key)");
+    let config = config(&setup, &[]);
+    let notices = within(move || {
+        let mut providers = providers;
+        providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        )
+    });
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert!(
+        notices[0].message.contains("[redacted]"),
+        "{}",
+        notices[0].message
+    );
+    assert!(
+        !notices[0].message.contains("dapi-secret"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn a_models_non_list_return_redacts_the_key() {
+    let setup = Setup::new();
+    let providers = installed_placeholders(
+        &setup,
+        "acme-ext",
+        "acme",
+        &["https://h.example/v1"],
+        &json!({}),
+        &json!([]),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &Secret::new("dapi-secret".into()),
+    )
+    .unwrap();
+    let lua = lua_bare_arg(&setup, "ext", "acme", "arg.key");
+    let arg = ModelsArg {
+        key: Some(Secret::new("dapi-secret".into())),
+        placeholders: std::collections::BTreeMap::new(),
+    };
+    let err = within(move || lua.list_models(&arg)).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("[redacted]"), "{text}");
+    assert!(!text.contains("dapi-secret"), "{text}");
+    let lua = lua_bare_arg(&setup, "ext", "acme", "arg.key");
+    let config = config(&setup, &[]);
+    let notices = within(move || {
+        let mut providers = providers;
+        providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &env_empty,
+        )
+    });
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert!(
+        notices[0].message.contains("[redacted]"),
+        "{}",
+        notices[0].message
+    );
+    assert!(
+        !notices[0].message.contains("dapi-secret"),
+        "{}",
+        notices[0].message
+    );
 }

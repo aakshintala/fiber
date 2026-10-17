@@ -1,9 +1,12 @@
 //! Fills a per-account host placeholder in a model's `base_url`
 //! (`docs/model-routing.md`, "A per-account host").
 
-use config::ConfigError;
+use std::collections::BTreeMap;
+
+use config::{Config, ConfigError, Placeholder};
 use contract::ErrorCode;
 use contract::events::Notice;
+use serde_json::Value;
 
 #[cfg(test)]
 #[path = "placeholders_tests.rs"]
@@ -16,6 +19,65 @@ pub(super) enum Source {
     Setting,
     /// The named environment variable, read when the setting is unset.
     Env(String),
+}
+
+/// A placeholder's value, read as [`Providers::fill_placeholders`] reads
+/// it: the extension's own setting when present and non-empty, else the
+/// environment variable `placeholders.<name>.env` names, read through
+/// `env` (`docs/model-routing.md`, "A per-account host"). Nothing while
+/// no value is set; an extension settings file that cannot be read is
+/// `ConfigError`. A present value of any other type is never a host, so
+/// it fills as `Source::Setting` with a stand-in: the value never reaches
+/// a URL or a notice.
+pub(super) fn value(
+    config: &Config,
+    extension: &str,
+    declared: &BTreeMap<String, Placeholder>,
+    name: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<(String, Source)>, ConfigError> {
+    match config.extensions().get(extension, &[], name)? {
+        Some(Value::String(value)) if !value.is_empty() => Ok(Some((value, Source::Setting))),
+        // Absent, JSON null, or an empty string leaves the
+        // environment fallback in play. Any other present value is the
+        // setting's: it is never a host, so it fills as `Source::Setting`
+        // without consulting the environment. The stand-in never reaches
+        // a URL or a notice: `fill` reports it as not-a-host, and that
+        // notice never repeats the value.
+        Some(Value::String(_)) | Some(Value::Null) | None => {
+            if let Some(variable) = declared
+                .get(name)
+                .and_then(|placeholder| placeholder.env.as_deref())
+                && let Some(value) = env(variable)
+                && !value.is_empty()
+            {
+                return Ok(Some((value, Source::Env(variable.to_owned()))));
+            }
+            Ok(None)
+        }
+        Some(_) => Ok(Some((" ".to_owned(), Source::Setting))),
+    }
+}
+
+/// Each declared placeholder's host, read through `lookup`: `None` when a
+/// declared name has no value or a value that is not a host, so `models()`
+/// is not called while a placeholder the person must set has none
+/// (`docs/model-routing.md`, "A per-account host").
+pub(super) fn hosts(
+    declared: &BTreeMap<String, Placeholder>,
+    lookup: &Lookup<'_>,
+) -> Result<Option<BTreeMap<String, String>>, ConfigError> {
+    let mut out = BTreeMap::new();
+    for name in declared.keys() {
+        let Some((value, _)) = lookup(name)? else {
+            return Ok(None);
+        };
+        let Some(filled) = host(&value) else {
+            return Ok(None);
+        };
+        out.insert(name.clone(), filled.to_owned());
+    }
+    Ok(Some(out))
 }
 
 /// A `base_url` filled, or the name of its first placeholder with no value

@@ -164,6 +164,10 @@ pub struct Compat {
     /// `thinking: {type: "enabled", budget_tokens}`, not in
     /// `thinking: {type: "adaptive"}` and `output_config: {effort}`.
     pub thinking_budget: bool,
+    /// `anthropic-messages`: the key goes in `authorization: Bearer`, not
+    /// `x-api-key`, as the Databricks gateway's Anthropic route takes it
+    /// (`docs/configuration.md`, "A provider's data").
+    pub bearer: bool,
 }
 
 impl Compat {
@@ -181,6 +185,7 @@ impl Compat {
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             thinking_budget: flag("thinking_budget").unwrap_or(false),
+            bearer: flag("bearer").unwrap_or(false),
         }
     }
 }

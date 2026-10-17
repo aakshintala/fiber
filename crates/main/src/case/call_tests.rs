@@ -25,7 +25,7 @@ fn cost_and_models_dispatch_and_anything_else_names_both() {
         function: "models".to_owned(),
         arg: json!({}),
     };
-    assert!(matches!(super::ready(&models), Ok(super::Ready::Models)));
+    assert!(matches!(super::ready(&models), Ok(super::Ready::Models(_))));
 
     let usage = super::Call {
         provider: "p".to_owned(),
@@ -89,9 +89,30 @@ fn quota_takes_an_optional_label_and_key() {
 }
 
 #[test]
-fn models_takes_exactly_an_empty_object() {
-    assert!(super::models_args(&json!({})).is_ok());
+fn models_takes_an_optional_key_and_placeholders() {
+    for (arg, key, placeholders) in [
+        (json!({}), None, json!({})),
+        (json!({"key": "k"}), Some("k"), json!({})),
+        (json!({"key": null}), None, json!({})),
+        (
+            json!({"placeholders": {"workspace": "h"}}),
+            None,
+            json!({"workspace": "h"}),
+        ),
+        (
+            json!({"key": "k", "placeholders": {"workspace": "h"}}),
+            Some("k"),
+            json!({"workspace": "h"}),
+        ),
+    ] {
+        let built = super::models_args(&arg).unwrap();
+        assert_eq!(built.key.as_ref().map(|key| key.expose()), key, "{arg}");
+        assert_eq!(json!(built.placeholders), placeholders, "{arg}");
+    }
     for arg in [
+        json!({"key": 1}),
+        json!({"placeholders": []}),
+        json!({"placeholders": {"w": 1}}),
         json!({"generation_id": "gen-abc"}),
         json!([]),
         json!(null),

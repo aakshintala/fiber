@@ -14,7 +14,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use crate::{
-    CredentialPair, LuaExtension,
+    CredentialPair, LuaExtension, ModelsArg,
     lua_provider::{LuaProvider, LuaSigner, UsedState, parse_credential_headers, redact_values},
 };
 
@@ -255,7 +255,7 @@ fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
     let (home, provider) = models_provider(&root, &run);
     let (models, returned) = within({
         let provider = Arc::clone(&provider);
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .unwrap();
     assert_eq!(
@@ -276,7 +276,7 @@ fn list_models_with_a_non_list_return_is_bad_return() {
     let (_home, provider) = models_provider(&root, "\"x\"");
     let err = within({
         let provider = Arc::clone(&provider);
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .unwrap_err();
     let crate::Error::BadReturn { callback, .. } = &err else {

@@ -1,0 +1,14 @@
+{
+  "name": "github.com/aakshintala/fiber/providers/databricks",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "memory_mib": 16,
+  "providers": {
+    "databricks": [
+      "https://{workspace}/ai-gateway/anthropic/v1",
+      "https://{workspace}/ai-gateway/codex/v1",
+      "https://{workspace}/ai-gateway/mlflow/v1"
+    ]
+  }
+}
