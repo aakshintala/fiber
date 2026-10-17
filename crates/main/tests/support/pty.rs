@@ -457,7 +457,7 @@ impl Shared {
         if !self.sync_open {
             self.grid = Grid::of(&self.parser);
             if let Some(path) = std::env::var_os("LOOK_DIFF_GRID") {
-                let _ = std::fs::write(path, &self.output);
+                drop(std::fs::write(path, &self.output));
             }
         }
     }
