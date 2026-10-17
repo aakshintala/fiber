@@ -31,14 +31,13 @@ pub(crate) struct LabelQuota {
 }
 
 /// The model-facing quota snapshot: loading until the loader has checked
-/// every provider, then one row per credential label. The labels are
-/// ignored while loading is true.
+/// every provider, then one row per credential label.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct QuotaView {
+pub(crate) enum QuotaView {
     /// The loader has not checked every provider yet.
-    pub loading: bool,
+    Loading,
     /// One row per credential label, sorted by provider then credential.
-    pub labels: Vec<LabelQuota>,
+    Loaded(Vec<LabelQuota>),
 }
 
 #[derive(Clone)]
@@ -92,6 +91,10 @@ struct Store {
     between_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     #[cfg(test)]
     loaded_note: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Forces one provider's loader pass to fail its read: the
+    /// non-closing `reads.run` error test's seam. Never set outside tests.
+    #[cfg(test)]
+    fail_reads: Mutex<Option<String>>,
 }
 
 impl Switching {
@@ -144,6 +147,8 @@ impl Switching {
             between_pause: Mutex::default(),
             #[cfg(test)]
             loaded_note: Mutex::default(),
+            #[cfg(test)]
+            fail_reads: Mutex::default(),
         })
     }
 }
@@ -171,10 +176,7 @@ impl Store {
                 .map(|_| ())
         });
         if !checked {
-            return QuotaView {
-                loading: true,
-                labels: Vec::new(),
-            };
+            return QuotaView::Loading;
         }
         let mut rows: Vec<LabelQuota> = Vec::new();
         for label in &labels {
@@ -205,11 +207,7 @@ impl Store {
                 pending: false,
             });
         }
-        rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
-        QuotaView {
-            loading: false,
-            labels: rows,
-        }
+        QuotaView::Loaded(rows)
     }
 
     /// Snapshots the cached rows, starting the loader once when it has not
@@ -271,7 +269,11 @@ impl Store {
             let this = Arc::clone(self);
             let extension = extension.clone();
             let data = data.clone();
-            let outcome = self.reads.run(move || {
+            // The non-closing `reads.run` error test's flag: read before
+            // the read closure moves the provider's name away.
+            #[cfg(test)]
+            let fail = self.fail_reads.lock().unwrap().as_deref() == Some(data.name.as_str());
+            let read = move || {
                 let Some(started) = this.started.upgrade() else {
                     return (Vec::new(), Vec::new(), Vec::new());
                 };
@@ -319,7 +321,18 @@ impl Store {
                     }
                 }
                 (held, failures, Vec::new())
-            });
+            };
+            // A forced failure stands in for the `reads.run` spawn error
+            // no test can produce on purpose: the loader still records
+            // that provider's labels as failed and checks the rest.
+            #[cfg(test)]
+            let outcome = if fail {
+                Err(doors::failure(ErrorCode::IoFailed, "the read failed"))
+            } else {
+                self.reads.run(read)
+            };
+            #[cfg(not(test))]
+            let outcome = self.reads.run(read);
             let (keep_going, held) = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 apply_outcome(&mut state, &provider, &names, outcome)
@@ -343,11 +356,15 @@ impl Store {
 
     #[cfg(test)]
     fn pause_before_register(&self) {
-        let pause = self.register_pause.lock().unwrap().take();
-        if let Some((entered, release)) = pause {
-            let _sent = entered.send(());
-            let _released = release.recv();
-        }
+        Self::wait_on(&self.register_pause);
+    }
+
+    /// Fails one provider's next loader pass with a non-closing read
+    /// error: the loader records that provider's labels as failed and
+    /// checks the rest.
+    #[cfg(test)]
+    fn fail_reads_for(&self, provider: &str) {
+        *self.fail_reads.lock().unwrap() = Some(provider.to_owned());
     }
 
     #[cfg(test)]
@@ -356,7 +373,7 @@ impl Store {
         entered: std::sync::mpsc::Sender<()>,
         release: std::sync::mpsc::Receiver<()>,
     ) {
-        *self.register_pause.lock().unwrap() = Some((entered, release));
+        Self::hold_on(&self.register_pause, entered, release);
     }
 
     #[cfg(test)]
@@ -365,16 +382,35 @@ impl Store {
         entered: std::sync::mpsc::Sender<()>,
         release: std::sync::mpsc::Receiver<()>,
     ) {
-        *self.between_pause.lock().unwrap() = Some((entered, release));
+        Self::hold_on(&self.between_pause, entered, release);
     }
 
     #[cfg(test)]
     fn wait_between_reads(&self) {
-        let pause = self.between_pause.lock().unwrap().take();
+        Self::wait_on(&self.between_pause);
+    }
+
+    /// One test hold over a pause channel: the loader signals it reached
+    /// the hold and blocks until the test releases it.
+    #[cfg(test)]
+    fn wait_on(
+        pause: &Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    ) {
+        let pause = pause.lock().unwrap().take();
         if let Some((entered, release)) = pause {
             let _sent = entered.send(());
             let _released = release.recv();
         }
+    }
+
+    /// Arms one test hold over a pause channel.
+    #[cfg(test)]
+    fn hold_on(
+        pause: &Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) {
+        *pause.lock().unwrap() = Some((entered, release));
     }
 
     #[cfg(test)]

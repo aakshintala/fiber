@@ -519,13 +519,14 @@ fn a_label_whose_first_fetch_is_held_open_is_pending() {
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
-    assert!(store.entries().loading);
+    assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
     // The fetch is still held open: no last value, still pending.
-    let held = store.entries();
-    assert!(!held.loading);
+    let QuotaView::Loaded(held) = store.entries() else {
+        panic!("the held fetch still lists its label");
+    };
     assert_eq!(
-        held.labels,
+        held,
         [LabelQuota {
             provider: "qp".to_owned(),
             credential: "work".to_owned(),
@@ -541,10 +542,11 @@ fn a_label_whose_first_fetch_is_held_open_is_pending() {
         read_to_end(Arc::clone(&lua), pair_of("work")),
         QuotaEntry::Unreachable { last: None }
     );
-    let failed = store.entries();
-    assert!(!failed.loading);
+    let QuotaView::Loaded(failed) = store.entries() else {
+        panic!("the failed fetch still lists unreachable");
+    };
     assert_eq!(
-        failed.labels,
+        failed,
         [LabelQuota {
             provider: "qp".to_owned(),
             credential: "work".to_owned(),
@@ -560,7 +562,7 @@ fn the_model_view_lists_a_no_quota_provider_and_an_unreachable_label_with_no_las
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
-    assert!(store.entries().loading);
+    assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
     // The fetches land at once: the reads below wait for each held label's
     // own flight, so the view after them is deterministic.
@@ -584,8 +586,12 @@ fn the_model_view_lists_a_no_quota_provider_and_an_unreachable_label_with_no_las
         read_to_end(zq, pair_of("work")),
         QuotaEntry::Reported(weekly.clone())
     );
-    let view = store.entries();
-    assert!(!view.loading);
+    let QuotaView::Loaded(view) = store.entries() else {
+        panic!("the loaded view lists every label");
+    };
+    // The render sorts the rows; the view only owes the row set.
+    let mut rows = view;
+    rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
     let reported = |label: &str| LabelQuota {
         provider: "qp".to_owned(),
         credential: label.to_owned(),
@@ -593,7 +599,7 @@ fn the_model_view_lists_a_no_quota_provider_and_an_unreachable_label_with_no_las
         pending: false,
     };
     assert_eq!(
-        view.labels,
+        rows,
         [
             LabelQuota {
                 provider: "nq".to_owned(),
@@ -626,7 +632,7 @@ fn a_label_whose_fetch_lands_between_the_two_reads_shows_its_value() {
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
-    assert!(store.entries().loading);
+    assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
     // Hold the view between its `quota_pending` read and its `quota_now`
     // read, so the fetch landing there is deterministic.
@@ -645,9 +651,11 @@ fn a_label_whose_fetch_lands_between_the_two_reads_shows_its_value() {
     );
     release.send(()).unwrap();
     let view = receive(&got, "the view past its second read");
-    assert!(!view.loading);
+    let QuotaView::Loaded(view) = view else {
+        panic!("the fetch landing between the reads shows its value");
+    };
     assert_eq!(
-        view.labels,
+        view,
         [LabelQuota {
             provider: "qp".to_owned(),
             credential: "work".to_owned(),
@@ -695,26 +703,80 @@ fn a_failed_provider_read_keeps_the_other_providers_labels() {
 }
 
 #[test]
+fn a_failed_provider_read_through_load_lists_unreachable_and_still_loads() {
+    let fixture = fixture(true, false, &[]);
+    let store = fixture.switching.quota_store();
+    store.fail_reads_for("qp");
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    // The reads that did run land at once, so the view after them is
+    // deterministic.
+    let zq = store.held_instance("zq");
+    let weekly = Quota::Windows(vec![Window {
+        name: "weekly".to_owned(),
+        used: WindowUse::Percent {
+            used: 35.0,
+            resets_at: None,
+        },
+    }]);
+    assert_eq!(
+        read_to_end(zq, pair_of("work")),
+        QuotaEntry::Reported(weekly.clone()),
+    );
+    // The failed provider's labels show unreachable with no last value
+    // and no pending flag, while the other providers still list.
+    let QuotaView::Loaded(view) = store.entries() else {
+        panic!("a non-closing read error still leaves loading false");
+    };
+    for label in ["work", "home", "broken"] {
+        assert!(
+            view.iter().any(|row| row.provider == "qp"
+                && row.credential == label
+                && row.entry == QuotaEntry::Unreachable { last: None }
+                && !row.pending),
+            "the failed provider's labels are unreachable: {view:?}",
+        );
+    }
+    assert!(
+        view.iter().any(|row| row.provider == "zq"
+            && row.credential == "work"
+            && row.entry == QuotaEntry::Reported(weekly.clone())
+            && !row.pending),
+        "the other providers still list: {view:?}",
+    );
+    assert!(
+        view.iter().any(|row| row.provider == "nq"
+            && row.credential == "work"
+            && row.entry == QuotaEntry::NoQuota
+            && !row.pending),
+        "the provider without quota still lists: {view:?}",
+    );
+}
+
+#[test]
 fn the_model_view_never_reads_a_key_for_a_provider_without_quota() {
     let fixture = fixture(true, false, &[]);
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
-    assert!(store.entries().loading);
+    assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
     assert!(
         !fixture.marker.exists(),
         "listing labels read a key for the provider without quota"
     );
-    let view = store.entries();
-    assert!(!view.loading);
+    let QuotaView::Loaded(view) = store.entries() else {
+        panic!("the loaded view lists every label");
+    };
     assert!(
-        view.labels.iter().any(|row| row.provider == "nq"
+        view.iter().any(|row| row.provider == "nq"
             && row.credential == "work"
             && row.entry == QuotaEntry::NoQuota
             && !row.pending),
         "the silent label is listed without a key read: {:?}",
-        view.labels
+        view
     );
 }
 
@@ -734,8 +796,7 @@ fn the_model_view_is_loading_until_the_loader_has_checked_every_provider() {
     // already returned, without waiting for it.
     receive(&at_register, "the loader before the quota check");
     let first = receive(&got, "the model view while loading");
-    assert!(first.loading);
-    assert!(first.labels.is_empty());
+    assert!(matches!(first, QuotaView::Loading));
     release.send(()).unwrap();
     receive(&ended, "the loader's end");
     let lua = store.held_instance("qp");
@@ -753,33 +814,18 @@ fn the_model_view_is_loading_until_the_loader_has_checked_every_provider() {
             "{label}"
         );
     }
-    let second = store.entries();
-    assert!(!second.loading);
-    assert_eq!(second.labels.len(), 3);
+    let QuotaView::Loaded(second) = store.entries() else {
+        panic!("the released loader lists the label's entry");
+    };
+    assert_eq!(second.len(), 3);
     assert!(
-        second.labels.iter().any(|row| row.provider == "qp"
+        second.iter().any(|row| row.provider == "qp"
             && row.credential == "work"
             && row.entry == QuotaEntry::Reported(weekly.clone())
             && !row.pending),
         "the loaded view lists the label's entry: {:?}",
-        second.labels
+        second
     );
-}
-
-/// Reads the model view until the loader has checked every provider,
-/// failing at the suite's deadline instead of spinning past it.
-fn read_loaded(model: &ModelQuotaRead) -> QuotaView {
-    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
-    loop {
-        let view = model();
-        if !view.loading {
-            return view;
-        }
-        assert!(
-            !deadline.left().is_zero(),
-            "the loader never checked every provider"
-        );
-    }
 }
 
 #[test]
@@ -795,7 +841,7 @@ fn both_readers_share_one_loader() {
     store.pause_at_labels(entered, released);
     let reader = store.clone();
     let model = move || reader.entries();
-    assert!(model().loading);
+    assert!(matches!(model(), QuotaView::Loading));
     receive(&at_labels, "the loader before label reads");
     let starts = std::sync::atomic::AtomicUsize::new(0);
     let second = store.clone();
@@ -816,12 +862,27 @@ fn both_readers_share_one_loader() {
     );
     release.send(()).unwrap();
     receive(&ended, "the loader's end");
-    // `quota_readers` hands out the same pair: its model reader loads the
-    // session's labels, and its doors reader lists them once the shared
-    // fetches land.
-    let (doors, model) = fixture.switching.quota_readers();
-    let view = read_loaded(&model);
-    assert_eq!(view.labels.len(), 3);
+    // Both readers over one store: the model reader loads the session's
+    // labels, and the doors reader lists them once the shared fetches
+    // land. The store behind them carries the test's loaded note, so the
+    // test waits on the loader's end instead of spinning on the view.
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    let doors = {
+        let shared = Arc::clone(&store);
+        move || shared.answer()
+    };
+    let model = {
+        let shared = Arc::clone(&store);
+        move || shared.entries()
+    };
+    assert!(matches!(model(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let QuotaView::Loaded(view) = model() else {
+        panic!("the shared loader lists the session's labels");
+    };
+    assert_eq!(view.len(), 3);
     let lua = fixture.switching.started.started.lock().unwrap()["qp"]
         .upgrade()
         .unwrap();
@@ -851,8 +912,7 @@ fn a_model_reader_outliving_switching_starts_nothing() {
     // The loader thread runs, finds no session and ends it: no provider
     // ever starts, so the view stays loading and the counter never moves.
     let view = model();
-    assert!(view.loading);
-    assert!(view.labels.is_empty());
+    assert!(matches!(view, QuotaView::Loading));
     assert_eq!(std::fs::read_to_string(&fixture.counter).unwrap(), before);
 }
 
@@ -866,7 +926,7 @@ fn a_failed_loader_spawn_is_retried_by_the_model_reader() {
     store.note_loaded(done);
     // The model reader retries the failed spawn with a real loader, which
     // runs to its end.
-    assert!(store.entries().loading);
+    assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the retried loader's end");
     assert!(store.state.lock().unwrap().started);
 }

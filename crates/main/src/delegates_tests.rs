@@ -1124,65 +1124,51 @@ fn window(name: &str, used: f64, resets_at: Option<u64>) -> Window {
 
 #[test]
 fn quota_text_of_a_loading_view_is_quota_loading() {
-    let view = QuotaView {
-        loading: true,
-        labels: vec![quota_row(
-            "p",
-            "c",
-            QuotaEntry::Reported(Quota::Windows(vec![window("w", 1.0, None)])),
-            false,
-        )],
-    };
+    let view = QuotaView::Loading;
     // The loading state renders before any per-label entry.
     assert_eq!(quota_text(&view), "Quota: loading");
 }
 
 #[test]
 fn quota_text_of_nothing_loaded_is_quota_none() {
-    let view = QuotaView {
-        loading: false,
-        labels: Vec::new(),
-    };
+    let view = QuotaView::Loaded(Vec::new());
     assert_eq!(quota_text(&view), "Quota: none");
 }
 
 #[test]
 fn a_windows_row_prints_percent_used_and_a_reset_window_prints_reset() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![
-            quota_row(
-                "p",
-                "a",
-                QuotaEntry::Reported(Quota::Windows(vec![
-                    window("alpha", 42.4, None),
-                    Window {
-                        name: "beta".to_owned(),
-                        used: WindowUse::Reset,
-                    },
-                ])),
-                false,
-            ),
-            quota_row(
-                "p",
-                "b",
-                QuotaEntry::Reported(Quota::Windows(vec![window("w", 42.5, None)])),
-                false,
-            ),
-            quota_row(
-                "p",
-                "c",
-                QuotaEntry::Reported(Quota::Windows(vec![window("zero", 0.0, None)])),
-                false,
-            ),
-            quota_row(
-                "p",
-                "d",
-                QuotaEntry::Reported(Quota::Windows(vec![window("full", 100.0, None)])),
-                false,
-            ),
-        ],
-    };
+    let view = QuotaView::Loaded(vec![
+        quota_row(
+            "p",
+            "a",
+            QuotaEntry::Reported(Quota::Windows(vec![
+                window("alpha", 42.4, None),
+                Window {
+                    name: "beta".to_owned(),
+                    used: WindowUse::Reset,
+                },
+            ])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "b",
+            QuotaEntry::Reported(Quota::Windows(vec![window("w", 42.5, None)])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "c",
+            QuotaEntry::Reported(Quota::Windows(vec![window("zero", 0.0, None)])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "d",
+            QuotaEntry::Reported(Quota::Windows(vec![window("full", 100.0, None)])),
+            false,
+        ),
+    ]);
     assert_eq!(
         quota_text(&view),
         "Quota:\np/a: alpha 42% used, beta reset\np/b: w 43% used\np/c: zero 0% used\np/d: full 100% used"
@@ -1191,18 +1177,15 @@ fn a_windows_row_prints_percent_used_and_a_reset_window_prints_reset() {
 
 #[test]
 fn a_window_with_a_reset_time_prints_it_in_utc() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![quota_row(
-            "p",
-            "a",
-            QuotaEntry::Reported(Quota::Windows(vec![
-                window("w", 10.0, Some(90_061)),
-                window("plain", 5.0, None),
-            ])),
-            false,
-        )],
-    };
+    let view = QuotaView::Loaded(vec![quota_row(
+        "p",
+        "a",
+        QuotaEntry::Reported(Quota::Windows(vec![
+            window("w", 10.0, Some(90_061)),
+            window("plain", 5.0, None),
+        ])),
+        false,
+    )]);
     assert_eq!(
         quota_text(&view),
         "Quota:\np/a: w 10% used (resets 1970-01-02T01:01:01Z), plain 5% used"
@@ -1211,29 +1194,26 @@ fn a_window_with_a_reset_time_prints_it_in_utc() {
 
 #[test]
 fn a_credit_row_prints_remaining_and_limit_or_remaining_alone() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![
-            quota_row(
-                "p",
-                "a",
-                QuotaEntry::Reported(Quota::Credit {
-                    remaining: 4.2,
-                    limit: Some(10.0),
-                }),
-                false,
-            ),
-            quota_row(
-                "p",
-                "b",
-                QuotaEntry::Reported(Quota::Credit {
-                    remaining: 4.2,
-                    limit: None,
-                }),
-                false,
-            ),
-        ],
-    };
+    let view = QuotaView::Loaded(vec![
+        quota_row(
+            "p",
+            "a",
+            QuotaEntry::Reported(Quota::Credit {
+                remaining: 4.2,
+                limit: Some(10.0),
+            }),
+            false,
+        ),
+        quota_row(
+            "p",
+            "b",
+            QuotaEntry::Reported(Quota::Credit {
+                remaining: 4.2,
+                limit: None,
+            }),
+            false,
+        ),
+    ]);
     assert_eq!(
         quota_text(&view),
         "Quota:\np/a: credit 4.2 remaining of 10\np/b: credit 4.2 remaining"
@@ -1242,24 +1222,18 @@ fn a_credit_row_prints_remaining_and_limit_or_remaining_alone() {
 
 #[test]
 fn a_no_quota_row_prints_no_quota_reported() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![quota_row("p", "a", QuotaEntry::NoQuota, false)],
-    };
+    let view = QuotaView::Loaded(vec![quota_row("p", "a", QuotaEntry::NoQuota, false)]);
     assert_eq!(quota_text(&view), "Quota:\np/a: no quota reported");
 }
 
 #[test]
 fn an_empty_windows_report_prints_no_quota_reported() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![quota_row(
-            "p",
-            "a",
-            QuotaEntry::Reported(Quota::Windows(Vec::new())),
-            false,
-        )],
-    };
+    let view = QuotaView::Loaded(vec![quota_row(
+        "p",
+        "a",
+        QuotaEntry::Reported(Quota::Windows(Vec::new())),
+        false,
+    )]);
     assert_eq!(quota_text(&view), "Quota:\np/a: no quota reported");
 }
 
@@ -1268,18 +1242,15 @@ fn an_unreachable_row_prints_last_value_and_age_or_nothing() {
     let last = |age: Duration| QuotaEntry::Unreachable {
         last: Some((Quota::Windows(vec![window("primary", 80.0, None)]), age)),
     };
-    let view = QuotaView {
-        loading: false,
-        labels: vec![
-            quota_row("p", "a", last(Duration::from_secs(59)), false),
-            quota_row("p", "b", last(Duration::from_secs(60)), false),
-            quota_row("p", "c", last(Duration::from_secs(3599)), false),
-            quota_row("p", "d", last(Duration::from_secs(3600)), false),
-            quota_row("p", "e", last(Duration::from_secs(86399)), false),
-            quota_row("p", "f", last(Duration::from_secs(86400)), false),
-            quota_row("p", "g", QuotaEntry::Unreachable { last: None }, false),
-        ],
-    };
+    let view = QuotaView::Loaded(vec![
+        quota_row("p", "a", last(Duration::from_secs(59)), false),
+        quota_row("p", "b", last(Duration::from_secs(60)), false),
+        quota_row("p", "c", last(Duration::from_secs(3599)), false),
+        quota_row("p", "d", last(Duration::from_secs(3600)), false),
+        quota_row("p", "e", last(Duration::from_secs(86399)), false),
+        quota_row("p", "f", last(Duration::from_secs(86400)), false),
+        quota_row("p", "g", QuotaEntry::Unreachable { last: None }, false),
+    ]);
     assert_eq!(
         quota_text(&view),
         "Quota:\np/a: unreachable (last: primary 80% used, 59s ago)\n\
@@ -1294,13 +1265,10 @@ fn an_unreachable_row_prints_last_value_and_age_or_nothing() {
 
 #[test]
 fn a_pending_label_prints_no_value_yet_and_a_failed_first_fetch_prints_unreachable() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![
-            quota_row("p", "a", QuotaEntry::Unreachable { last: None }, true),
-            quota_row("p", "b", QuotaEntry::Unreachable { last: None }, false),
-        ],
-    };
+    let view = QuotaView::Loaded(vec![
+        quota_row("p", "a", QuotaEntry::Unreachable { last: None }, true),
+        quota_row("p", "b", QuotaEntry::Unreachable { last: None }, false),
+    ]);
     assert_eq!(
         quota_text(&view),
         "Quota:\np/a: no value yet\np/b: unreachable"
@@ -1309,14 +1277,11 @@ fn a_pending_label_prints_no_value_yet_and_a_failed_first_fetch_prints_unreachab
 
 #[test]
 fn quota_rows_sort_by_provider_then_credential() {
-    let view = QuotaView {
-        loading: false,
-        labels: vec![
-            quota_row("z", "b", QuotaEntry::NoQuota, false),
-            quota_row("a", "z", QuotaEntry::NoQuota, false),
-            quota_row("a", "a", QuotaEntry::NoQuota, false),
-        ],
-    };
+    let view = QuotaView::Loaded(vec![
+        quota_row("z", "b", QuotaEntry::NoQuota, false),
+        quota_row("a", "z", QuotaEntry::NoQuota, false),
+        quota_row("a", "a", QuotaEntry::NoQuota, false),
+    ]);
     assert_eq!(
         quota_text(&view),
         "Quota:\na/a: no quota reported\na/z: no quota reported\nz/b: no quota reported"
@@ -1376,15 +1341,9 @@ fn models_renders_the_reader_each_call() {
         let call = counted.fetch_add(1, Ordering::SeqCst);
         // Alternate the quota section, so equal texts would prove caching.
         if call == 0 {
-            QuotaView {
-                loading: true,
-                labels: Vec::new(),
-            }
+            QuotaView::Loading
         } else {
-            QuotaView {
-                loading: false,
-                labels: Vec::new(),
-            }
+            QuotaView::Loaded(Vec::new())
         }
     });
     let models = models_rig("CAT").with_quota(reader).models();
@@ -1399,20 +1358,14 @@ fn models_says_quota_loading_while_the_reader_is_held_then_lists_the_label() {
     let released = Arc::new(Mutex::new(released));
     let reader: crate::switch::quota::ModelQuotaRead = Arc::new(move || {
         if released.lock().unwrap().try_recv().is_ok() {
-            QuotaView {
-                loading: false,
-                labels: vec![quota_row(
-                    "p",
-                    "c",
-                    QuotaEntry::Reported(Quota::Windows(vec![window("primary", 42.5, None)])),
-                    false,
-                )],
-            }
+            QuotaView::Loaded(vec![quota_row(
+                "p",
+                "c",
+                QuotaEntry::Reported(Quota::Windows(vec![window("primary", 42.5, None)])),
+                false,
+            )])
         } else {
-            QuotaView {
-                loading: true,
-                labels: Vec::new(),
-            }
+            QuotaView::Loading
         }
     });
     let models = models_rig("CAT").with_quota(reader).models();

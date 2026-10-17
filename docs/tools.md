@@ -1337,7 +1337,9 @@ Each entry is one of:
 - `no value yet`, for a label whose first fetch is still in flight, with no
   last value
 
-Until the loader has checked every provider for `quota()`, the quota section is the one line `loading`.
+Until the loader has checked every provider for `quota()`, the quota
+section is the one line `Quota: loading`. Once it has, a session with no
+credentialed label reads `Quota: none`.
 
 A window whose reset time has passed shows as reset. Quota never appears in a
 tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").

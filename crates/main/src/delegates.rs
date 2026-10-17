@@ -264,13 +264,12 @@ fn credential_for(
 /// single `Quota: loading` line before any per-label entry; a loaded view
 /// with no credentialed label renders `Quota: none`.
 fn quota_text(view: &QuotaView) -> String {
-    if view.loading {
-        return String::from("Quota: loading");
-    }
-    if view.labels.is_empty() {
-        return String::from("Quota: none");
-    }
-    let mut rows = view.labels.clone();
+    let labels = match view {
+        QuotaView::Loading => return String::from("Quota: loading"),
+        QuotaView::Loaded(labels) if labels.is_empty() => return String::from("Quota: none"),
+        QuotaView::Loaded(labels) => labels,
+    };
+    let mut rows = labels.clone();
     rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
     let mut text = String::from("Quota:");
     for row in &rows {
