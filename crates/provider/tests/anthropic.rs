@@ -1177,7 +1177,9 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
         json!({"role": "assistant", "content": [
             {"type": "text", "text": "A", "cache_control": marker},
             {"type": "tool_use", "id": "t1", "name": "get_weather", "input": {"city": "Paris"}},
-            {"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}},
+            // A trailing assistant message carries no last-block marker, so
+            // a paused reply goes back unchanged.
+            {"type": "text", "text": "B"},
         ]})
     );
 }
@@ -2133,7 +2135,19 @@ fn a_hosted_pair_is_left_out_for_another_model_and_its_citing_text_goes_as_plain
 fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
     let mut conversation = hosted_conversation("anthropic/claude-sonnet-5-5");
     conversation.truncate(3);
-    let messages = sent_messages(conversation);
+    // A trailing assistant message carries no last-block marker, so the
+    // marker here is the previous request's end: the point is what a marker
+    // adds to a hosted block, not which boundary put it there.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation,
+        previous_end: Some(3),
+        ..request()
+    };
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let messages = sent_body(&server, 0)["messages"].clone();
     assert_eq!(
         messages[1]["content"][1],
         json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": [],
@@ -2143,6 +2157,43 @@ fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
         messages[1]["content"][0],
         json!({"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
             "input": {"query": "rust 1.90"}})
+    );
+}
+
+#[test]
+fn a_trailing_paused_block_is_sent_with_no_cache_marker() {
+    let block = json!({"type": "server_tool_use", "id": "srvtoolu_01",
+        "name": "web_search", "input": {"query": "rust 1.90"}});
+    let mut conversation = request().conversation;
+    conversation.push(Input::Assistant {
+        model: "anthropic/claude-sonnet-5-5".into(),
+        text: String::new(),
+        provider_item: Some(block.clone()),
+    });
+    assert_eq!(
+        sent_messages(conversation),
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": [block]},
+        ])
+    );
+}
+
+#[test]
+fn a_trailing_thinking_block_is_sent_with_no_cache_marker() {
+    let block = json!({"type": "thinking", "thinking": "hmm", "signature": "sig"});
+    let mut conversation = request().conversation;
+    conversation.push(Input::Reasoning {
+        model: "anthropic/claude-sonnet-5-5".into(),
+        text: "hmm".into(),
+        provider_item: Some(block.clone()),
+    });
+    assert_eq!(
+        sent_messages(conversation),
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": [block]},
+        ])
     );
 }
 
