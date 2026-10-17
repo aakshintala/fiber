@@ -341,6 +341,22 @@ impl hub::Machine for Seam {
                 }
                 Value::Object(value)
             }
+            "models" => {
+                a.shape(&["workspace"], &["refresh"])?;
+                // An absent `refresh` reads the cached lists; a present
+                // one names its thoroughness, and anything else is not a
+                // refresh at all.
+                let refresh = match args.get("refresh") {
+                    None => tui::Refresh::Cached,
+                    Some(value) => match value.as_str() {
+                        Some("cached") => tui::Refresh::Cached,
+                        Some("stale") => tui::Refresh::Stale,
+                        Some("every") => tui::Refresh::Every,
+                        _ => return Err(invalid()),
+                    },
+                };
+                self.models(a.workspace()?, refresh, clock)?
+            }
             "set_reviewer" => {
                 a.shape(&["name", "id"], &[])?;
                 self.set_reviewer(a.string("name")?, a.string("id")?)
