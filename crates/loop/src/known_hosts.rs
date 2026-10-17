@@ -112,7 +112,66 @@ impl KnownHosts {
                         .extend(hosts.iter().filter_map(|url| host_of(url)));
                 }
             }
-            _ => {}
+            Event::FiberStarted(_) => {}
+            Event::FiberExited(_) => {}
+            Event::SessionStarted(_) => {}
+            Event::Rewound(_) => {}
+            Event::StepStarted(_) => {}
+            Event::TurnCompleted(_) => {}
+            Event::SteeringQueue(_) => {}
+            Event::ShellCommand(_) => {}
+            Event::SessionNamed(_) => {}
+            Event::Clients(_) => {}
+            Event::SessionStatus(_) => {}
+            Event::ContextAdded(_) => {}
+            Event::AssistantMessageStarted(_) => {}
+            Event::AssistantMessageDelta(_) => {}
+            Event::AssistantMessageCompleted(_) => {}
+            Event::TextCompleted(_) => {}
+            Event::ToolCallArgumentsDelta(_) => {}
+            Event::ReasoningStarted(_) => {}
+            Event::ReasoningDelta(_) => {}
+            Event::ReasoningCompleted(_) => {}
+            Event::ToolCallRequested(_) => {}
+            Event::ToolCallStarted(_) => {}
+            Event::ToolCallDelta(_) => {}
+            Event::PermissionRequested(_) => {}
+            Event::InteractionRequested(_) => {}
+            Event::InteractionResolved(_) => {}
+            Event::RepositoryCodeOffered(_) => {}
+            Event::RepositoryCodeResolved(_) => {}
+            Event::UsageRecorded(_) => {}
+            Event::QuotaNoticed(_) => {}
+            Event::RetryScheduled(_) => {}
+            Event::Notice(_) => {}
+            Event::PreambleBuilt(_) => {}
+            Event::ModelChanged(_) => {}
+            Event::DateChanged(_) => {}
+            Event::SkillsChanged(_) => {}
+            Event::HandoffStarted(_) => {}
+            Event::HandoffCompleted(_) => {}
+            Event::SkillsResent(_) => {}
+            Event::ContextNudged(_) => {}
+            Event::ReviewerKept(_) => {}
+            Event::McpServerFailed(_) => {}
+            Event::McpServerReady(_) => {}
+            Event::Reloaded(_) => {}
+            Event::ExtensionsLoaded(_) => {}
+            Event::ExtensionStateSet(_) => {}
+            Event::ExtensionStateUnset(_) => {}
+            Event::ExtensionUi(_) => {}
+            Event::ExtensionMessage(_) => {}
+            Event::ExtensionLog(_) => {}
+            Event::ExtensionExec(_) => {}
+            Event::JobStarted(_) => {}
+            Event::DelegateStarted(_) => {}
+            Event::JobDelta(_) => {}
+            Event::JobLine(_) => {}
+            Event::DelegateFinished(_) => {}
+            Event::JobCompleted(_) => {}
+            Event::JobsPendingNotified(_) => {}
+            Event::CommandAccepted(_) => {}
+            Event::CommandRejected(_) => {}
         }
     }
 
