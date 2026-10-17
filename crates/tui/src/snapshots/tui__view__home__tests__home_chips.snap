@@ -25,4 +25,4 @@ expression: "screen(&app, 80, 24)"
 ▌
 ▌ [w]  [test/model]  [thinking: high]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit
+Enter opens the focused session, or starts one from the box · ↑↓ move · Delete d
