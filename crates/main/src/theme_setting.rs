@@ -48,7 +48,8 @@ pub(crate) fn named(
         Some("light") => tui::ThemeSetting::Light,
         Some(name) => tui::ThemeSetting::File {
             name: name.to_owned(),
-            text: config::theme_text(home, name, &extensions::package_names(home), enabled, read),
+            text: config::theme_text(home, name, &extensions::package_names(home), enabled, read)
+                .map_err(|error| error.to_string()),
         },
     }
 }

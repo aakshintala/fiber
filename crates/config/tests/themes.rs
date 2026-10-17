@@ -14,6 +14,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use config::{theme_names, theme_text};
+use contract::ErrorCode;
 
 /// The lookup of `name` in `home` with `packages`, and every path the
 /// reader was asked for. The reader answers `answer` per path.
@@ -131,7 +132,10 @@ fn a_home_read_error_other_than_absence_is_the_theme() {
         }
     };
     let (got, asked) = text_with(home.path(), "dusk", &packages, &always_enabled, &denied);
-    assert_eq!(got, Err("denied".to_owned()));
+    assert_eq!(
+        got.map_err(|error| error.to_string()),
+        Err("denied".to_owned())
+    );
     assert_eq!(asked, [home.path().join("themes").join("dusk.json")]);
 }
 
@@ -152,7 +156,10 @@ fn a_package_read_error_other_than_absence_is_the_theme() {
         }
     };
     let (got, asked) = text_with(home.path(), "dusk", &packages, &always_enabled, &denied);
-    assert_eq!(got, Err("denied".to_owned()));
+    assert_eq!(
+        got.map_err(|error| error.to_string()),
+        Err("denied".to_owned())
+    );
     assert_eq!(asked.last(), Some(&a_file));
 }
 
@@ -207,7 +214,10 @@ fn when_every_source_lacks_the_file_the_text_is_homes_error() {
         }
     };
     let (got, asked) = text_with(home.path(), "dusk", &packages, &always_enabled, &missing);
-    assert_eq!(got, Err("home gone".to_owned()));
+    assert_eq!(
+        got.map_err(|error| error.to_string()),
+        Err("home gone".to_owned())
+    );
     assert_eq!(
         asked,
         [
@@ -231,7 +241,11 @@ fn bad_names_are_refused_without_a_read() {
             panic!("a refused name reads nothing");
         };
         let got = theme_text(home.path(), name, &packages, &always_enabled, &read);
-        assert_eq!(got, Err("not a theme name".to_owned()), "{name}");
+        assert_eq!(
+            got.map_err(|error| error.to_string()),
+            Err("not a theme name".to_owned()),
+            "{name}"
+        );
         assert!(asked.borrow().is_empty(), "{name}: {asked:?}");
     }
     // A dot past the first character is part of an ordinary name.
@@ -363,4 +377,16 @@ fn a_linked_package_theme_file_loads() {
         std::fs::read_to_string(path)
     });
     assert_eq!(got, Ok("linked".to_owned()));
+}
+
+#[test]
+fn theme_errors_carry_stable_codes() {
+    assert_eq!(
+        config::ConfigError::BadThemeName.code(),
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        config::ConfigError::ThemeRead("denied".to_owned()).code(),
+        ErrorCode::IoFailed
+    );
 }

@@ -8,6 +8,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::ConfigError;
+
 /// The text of the theme `name`: Fiber home's `themes/<name>.json`, then
 /// each enabled package's in the given order. A name that fails the shared
 /// rule is refused unread, so `tui.theme` never reaches outside `themes/`.
@@ -21,15 +23,15 @@ pub fn theme_text(
     packages: &[(String, PathBuf)],
     enabled: &dyn Fn(&str) -> bool,
     read: &dyn Fn(&Path) -> io::Result<String>,
-) -> Result<String, String> {
+) -> Result<String, ConfigError> {
     if !is_name(name) {
-        return Err("not a theme name".to_owned());
+        return Err(ConfigError::BadThemeName);
     }
     let file = format!("{name}.json");
     let home_error = match read(&home.join("themes").join(&file)) {
         Ok(text) => return Ok(text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => error,
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(ConfigError::ThemeRead(error.to_string())),
     };
     for (extension, package) in packages {
         if !enabled(extension) {
@@ -38,10 +40,10 @@ pub fn theme_text(
         match read(&package.join("themes").join(&file)) {
             Ok(text) => return Ok(text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(ConfigError::ThemeRead(error.to_string())),
         }
     }
-    Err(home_error.to_string())
+    Err(ConfigError::ThemeRead(home_error.to_string()))
 }
 
 /// Every theme [`theme_text`] can load, each once, sorted: Fiber home's
