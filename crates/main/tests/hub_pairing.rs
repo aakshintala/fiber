@@ -131,23 +131,24 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
     );
     assert!(!setup.home().join("hub/devices/phone").exists());
     let log = setup.home().join("logs/hub.log");
-    bounded(
-        setup.deadline,
-        "the device_revoked line in hub.log",
-        move || loop {
+    let deadline = setup.deadline;
+    let seen = bounded(deadline, "the device_revoked line in hub.log", move || {
+        loop {
             if fs::read_to_string(&log)
                 .unwrap_or_default()
                 .contains("device_revoked")
             {
-                break;
+                return true;
             }
-            // The hub writes the log line after announcing the revocation, so the poll pauses between reads instead of spinning.
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "a poll pause between log reads, not a deadline (docs/testing.md, \"Waits and timeouts\")"
-            )]
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        },
+            if deadline.left().is_zero() {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+    });
+    assert!(
+        seen,
+        "waited until the deadline for the device_revoked line in hub.log"
     );
     finish(hub, client);
 }
