@@ -78,21 +78,21 @@ fn delete(setup: &Setup, args: &[&str]) -> std::process::Output {
 }
 
 /// Waits under the test's [`Deadline`] until `socket` is gone, naming
-/// `what`.
+/// `what`: the hub holds the `run/` flock until `serve` returns, after
+/// unlinking the socket, so a returned flock means the hub is gone.
 #[track_caller]
 fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
+    let run = socket.parent().map(Path::to_owned);
     let socket = socket.to_owned();
-    let (done, reached) = mpsc::channel();
-    thread::spawn(move || {
-        while socket.exists() {
-            thread::yield_now();
+    let what = what.to_owned();
+    bounded(deadline, &what.clone(), move || {
+        if let Some(run) = run {
+            if let Ok(file) = File::open(&run) {
+                file.lock().unwrap();
+            }
         }
-        done.send(()).unwrap_or(());
+        assert!(!socket.exists(), "{what}: the hub exited but left its socket");
     });
-    assert!(
-        deadline.recv(&reached).is_ok(),
-        "waited until the deadline for {what}"
-    );
 }
 
 fn text(bytes: &[u8]) -> String {
