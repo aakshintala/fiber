@@ -23,6 +23,7 @@ mod prompt_files;
 mod rules;
 mod secret;
 mod settings;
+mod themes;
 mod write;
 
 #[cfg(test)]
@@ -58,6 +59,7 @@ pub use home::{
 };
 pub use layout::{crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir, project_data_dir};
 pub use prompt_files::{append_prompt, system_prompt};
+pub use themes::{theme_names, theme_text};
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
 pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
