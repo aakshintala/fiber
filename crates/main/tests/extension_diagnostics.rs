@@ -215,6 +215,7 @@ fn sentinels(server_url: &str) -> Vec<String> {
         server_url.to_owned(),
         "/lua-models".to_owned(),
         "/lua-token".to_owned(),
+        "/lua-quota".to_owned(),
         "/lua-cost".to_owned(),
     ]
 }
