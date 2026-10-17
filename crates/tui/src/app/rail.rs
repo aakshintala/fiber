@@ -95,7 +95,10 @@ impl App {
     /// The cards and the launch project, or None without home.
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, &str)> {
         let home = self.home.as_ref()?;
-        Some((home.sessions.cards(), home.launch_project()))
+        Some((
+            home.sessions.cards(),
+            home.launch_project().unwrap_or_default(),
+        ))
     }
 
     /// Sets the wall time a card's elapsed time reads, in milliseconds

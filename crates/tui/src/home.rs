@@ -523,7 +523,7 @@ impl Sessions {
 
     /// Project sections: launch first, live projects in feed order, exited-only
     /// projects by their earliest loaded start, with loaded order breaking ties.
-    pub(crate) fn sections(&self, launch_project: &str) -> Vec<Section<'_>> {
+    pub(crate) fn sections(&self, launch_project: Option<&str>) -> Vec<Section<'_>> {
         let mut sections: Vec<Section<'_>> = Vec::new();
         for row in self.all() {
             if sections
@@ -570,7 +570,7 @@ impl Sessions {
             });
         }
         sections.sort_by_key(|section| {
-            let category = if section.project == launch_project {
+            let category = if Some(section.project) == launch_project {
                 0
             } else if !section.live.is_empty() {
                 1
@@ -1026,13 +1026,13 @@ pub(crate) fn glyph(row: &Row) -> &'static str {
 /// A row's line: the glyph, the name or the id, the detail, and the
 /// workspace's last path segment outside the launch project, joined by
 /// two spaces with empty parts left out.
-pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+pub(crate) fn line(row: &Row, launch_project: Option<&str>) -> String {
     line_with(row, launch_project, glyph(row))
 }
 
 /// A row's line with `glyph` drawn first: the frame's spinner while the
 /// row works, else the still glyph.
-pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String {
+pub(crate) fn line_with(row: &Row, launch_project: Option<&str>, glyph: &str) -> String {
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {
@@ -1050,7 +1050,7 @@ pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String 
         }
     }
     let mut segment = String::new();
-    if row.project != launch_project {
+    if Some(row.project.as_str()) != launch_project {
         segment = row
             .workspace
             .split('/')

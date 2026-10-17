@@ -78,9 +78,9 @@ pub(super) struct Home {
 
 impl Home {
     /// The launch project that sections and row text compare against;
-    /// a listed hub has none, so no project matches it.
-    pub(super) fn launch_project(&self) -> &str {
-        self.launch.location.project().unwrap_or_default()
+    /// a listed hub has none.
+    pub(super) fn launch_project(&self) -> Option<&str> {
+        self.launch.location.project()
     }
 
     /// The project `prompt_history` names: the launch project, else
