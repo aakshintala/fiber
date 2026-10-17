@@ -777,3 +777,193 @@ fn file_closed_rereads_the_rules() {
     app.config_file_closed(Ok(()));
     assert_eq!(seam.reads().len(), 2);
 }
+
+fn remote_settings() -> (serde_json::Value, serde_json::Value) {
+    use serde_json::json;
+    (
+        json!({"command":"configure","args":{"operation":"settings","workspace":"/w"}}),
+        json!({"rows":[{"key":"model","shown":"value","value":"\"hub/m\"","layer":"global","file":"/hub/config.json","scope":"global_only"}]}),
+    )
+}
+fn remote_read() -> (serde_json::Value, serde_json::Value) {
+    use serde_json::json;
+    (
+        json!({"command":"read_config","args":{"workspace":"/w","path":"/hub/config.json"}}),
+        json!({"text":"original\r\n","version":"version-1"}),
+    )
+}
+
+fn remote_editor_case(
+    script: Vec<(serde_json::Value, serde_json::Value)>,
+    test: impl FnOnce(App) + Send + 'static,
+) {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+    let deadline = fakes::Deadline::start();
+    let router = crate::remote::Router::new();
+    let (client, hub) = std::os::unix::net::UnixStream::pair().unwrap();
+    let reader = client.try_clone().unwrap();
+    router.attach(client);
+    let (tx, _rx) = mpsc::channel();
+    let feed =
+        crate::link::Feed::new(tx, crate::link::Credits::new(64)).routed(Arc::clone(&router));
+    let (server, served) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(hub.try_clone().unwrap());
+        for (expected, result) in script {
+            let mut text = String::new();
+            reader.read_line(&mut text).unwrap();
+            let line: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(line["command"], expected["command"]);
+            assert_eq!(line["args"], expected["args"]);
+            let payload = if let Some(message) = result.get("reject") {
+                json!({"command_id":line["id"],"code":"stale_request","message":message})
+            } else {
+                json!({"command_id":line["id"],"result":result})
+            };
+            let kind = if payload.get("code").is_some() {
+                "command_rejected"
+            } else {
+                "command_accepted"
+            };
+            crate::link::write_line(
+                &hub,
+                &json!({"kind":kind,"ts":1,"schema_version":1,"payload":payload}).to_string(),
+            )
+            .unwrap();
+        }
+        server.send(()).unwrap();
+    });
+    std::thread::spawn(move || crate::link::read_lines(reader, &feed));
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let seam = Arc::new(Fake::new(vec![]));
+        let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
+        let mut app = attached(None);
+        app.set_remote(remote);
+        test(app);
+        done.send(()).unwrap();
+    });
+    deadline.recv_or_fail(&finished, "remote editor behaviour");
+    deadline.recv_or_fail(&served, "remote editor wire script");
+}
+
+#[test]
+fn remote_ctrl_g_round_trips_and_rereads_after_success_stale_or_editor_error() {
+    use serde_json::json;
+    for outcome in ["ok", "stale", "editor"] {
+        let mut script = vec![remote_settings(), remote_read()];
+        if outcome != "editor" {
+            script.push((json!({"command":"write_config","args":{"workspace":"/w","path":"/hub/config.json","text":"edited\n","version":"version-1"}}),if outcome=="stale" {json!({"reject":"file changed at hub"})} else {json!(null)}));
+        }
+        script.push(remote_settings());
+        remote_editor_case(script, move |mut app| {
+            app.open_config_view(ConfigView::Settings);
+            let Effect::OpenFile(temp) = app.on_key(Key::CtrlG, now()) else {
+                panic!("remote editor copy");
+            };
+            assert_eq!(std::fs::read(&temp).unwrap(), b"original\r\n");
+            assert_ne!(temp, PathBuf::from("/hub/config.json"));
+            std::fs::write(&temp, "edited\n").unwrap();
+            let dir = temp.parent().unwrap().to_path_buf();
+            app.config_file_closed(if outcome == "editor" {
+                Err("editor failed".into())
+            } else {
+                Ok(())
+            });
+            assert!(!dir.exists());
+            assert!(app.config_view_open());
+            match outcome {
+                "ok" => assert_eq!(app.notices.newest(), None),
+                "stale" => assert_eq!(app.notices.newest(), Some("file changed at hub")),
+                "editor" => assert_eq!(app.notices.newest(), Some("editor failed")),
+                _ => unreachable!(),
+            }
+        });
+    }
+}
+
+#[test]
+fn pending_editor_copy_drops_on_replacement_and_shutdown() {
+    remote_editor_case(
+        vec![remote_settings(), remote_read(), remote_read()],
+        |mut app| {
+            app.open_config_view(ConfigView::Settings);
+            let Effect::OpenFile(first) = app.on_key(Key::CtrlG, now()) else {
+                panic!("first copy")
+            };
+            let Effect::OpenFile(second) = app.on_key(Key::CtrlG, now()) else {
+                panic!("second copy")
+            };
+            assert!(!first.parent().unwrap().exists());
+            assert!(second.exists());
+            drop(app);
+            assert!(!second.parent().unwrap().exists());
+        },
+    );
+}
+
+#[test]
+fn failed_remote_fetch_opens_nothing_and_client_files_never_use_the_hub() {
+    use serde_json::json;
+    let mut read = remote_read();
+    read.1 = json!({"reject":"hub read refused"});
+    remote_editor_case(vec![remote_settings(), read], |mut app| {
+        app.open_config_view(ConfigView::Settings);
+        assert_eq!(app.on_key(Key::CtrlG, now()), Effect::None);
+        assert_eq!(app.notices.newest(), Some("hub read refused"));
+        assert_eq!(
+            app.config_act(super::Act::OpenLocal(Some("/client/keys.json".into()))),
+            Effect::OpenFile("/client/keys.json".into())
+        );
+        assert_eq!(
+            app.config_act(super::Act::OpenLocal(None)),
+            Effect::OpenFile(file(Layer::Global))
+        );
+    });
+    let mut local = attached(Some(fake()));
+    assert_eq!(
+        local.config_act(super::Act::OpenLocal(None)),
+        Effect::OpenFile(file(Layer::Global))
+    );
+}
+
+#[test]
+fn failed_copy_cleanup_does_not_prevent_store_or_view_reread() {
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+    remote_editor_case(
+        vec![
+            remote_settings(),
+            remote_read(),
+            (
+                json!({"command":"write_config","args":{"workspace":"/w","path":"/hub/config.json","text":"original\r\n","version":"version-1"}}),
+                json!(null),
+            ),
+            remote_settings(),
+        ],
+        |mut app| {
+            app.open_config_view(ConfigView::Settings);
+            let Effect::OpenFile(temp) = app.on_key(Key::CtrlG, now()) else {
+                panic!("copy")
+            };
+            let dir = temp.parent().unwrap().to_path_buf();
+            let inner = dir.join("inner");
+            std::fs::create_dir(&inner).unwrap();
+            let held = inner.join("held");
+            std::fs::write(&held, "held").unwrap();
+            std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o500)).unwrap();
+            assert_eq!(
+                std::fs::remove_file(&held).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "fixture must deny removal; do not run as root"
+            );
+            app.config_file_closed(Ok(()));
+            assert!(dir.exists());
+            assert_eq!(app.notices.newest(), None);
+            std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+        },
+    );
+}
