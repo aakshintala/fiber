@@ -3019,3 +3019,64 @@ fn advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         .recv(&exit)
         .expect("the parked thread exits");
 }
+
+#[test]
+fn subscribing_one_waker_twice_wakes_it_once_per_advance() {
+    let clock = FakeClock::new();
+    let (tx, rx) = mpsc::channel();
+    let wake: Arc<dyn Wake> = Arc::new(ChanWake(tx));
+    clock.subscribe(Arc::downgrade(&wake));
+    clock.subscribe(Arc::downgrade(&Arc::clone(&wake)));
+    clock.advance(Duration::from_millis(5));
+    assert!(rx.try_recv().is_ok(), "one advance wakes the waker once");
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the second subscription wakes nothing more"
+    );
+    clock.advance(Duration::from_millis(5));
+    assert!(
+        rx.try_recv().is_ok(),
+        "a second advance wakes the waker once more"
+    );
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the second subscription still wakes nothing more"
+    );
+    drop(wake);
+}
+
+#[test]
+fn two_distinct_wakers_each_wake_once_per_advance() {
+    let clock = FakeClock::new();
+    let (tx, rx) = mpsc::channel();
+    let first: Arc<dyn Wake> = Arc::new(ChanWake(tx.clone()));
+    let second: Arc<dyn Wake> = Arc::new(ChanWake(tx));
+    clock.subscribe(Arc::downgrade(&first));
+    clock.subscribe(Arc::downgrade(&second));
+    clock.advance(Duration::from_millis(5));
+    assert!(rx.try_recv().is_ok(), "the first waker wakes");
+    assert!(rx.try_recv().is_ok(), "the second waker wakes");
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "each distinct waker wakes exactly once"
+    );
+    drop(first);
+    drop(second);
+}
+
+#[test]
+fn subscribe_drops_dead_wakers() {
+    let clock = FakeClock::new();
+    let (tx, _rx) = mpsc::channel();
+    let first: Arc<dyn Wake> = Arc::new(ChanWake(tx.clone()));
+    clock.subscribe(Arc::downgrade(&first));
+    drop(first);
+    let second: Arc<dyn Wake> = Arc::new(ChanWake(tx));
+    clock.subscribe(Arc::downgrade(&second));
+    assert_eq!(
+        super::lock(&clock.state).wakers.len(),
+        1,
+        "the dead subscription is gone"
+    );
+    drop(second);
+}

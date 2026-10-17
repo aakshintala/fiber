@@ -620,8 +620,19 @@ impl Clock for FakeClock {
         wait(bound);
     }
 
+    /// Registers `waker` to wake on every move of this clock. One entry
+    /// per allocation: a waker already listed keeps its place and wakes
+    /// once per move, and dead entries are dropped first.
     fn subscribe(&self, waker: Weak<dyn Wake>) {
-        lock(&self.state).wakers.push(waker);
+        let mut state = lock(&self.state);
+        state.wakers.retain(|listed| listed.strong_count() > 0);
+        if !state
+            .wakers
+            .iter()
+            .any(|listed| Weak::ptr_eq(listed, &waker))
+        {
+            state.wakers.push(waker);
+        }
     }
 }
 
