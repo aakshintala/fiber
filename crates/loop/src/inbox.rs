@@ -559,9 +559,7 @@ impl Loop {
             Delivery::Credential(args, ack) => {
                 self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
-            Delivery::Reload(ack) => {
-                reject(ack, ErrorCode::InvalidArguments, "This session cannot reload.");
-            }
+            Delivery::Reload(ack) => self.take_reload(ack)?,
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.
             Delivery::Name(args, ack) => self.take_name(args, ack)?,
@@ -708,7 +706,11 @@ impl Loop {
                 }
             }
             Delivery::Reload(ack) => {
-                reject(ack, ErrorCode::InvalidArguments, "This session cannot reload.");
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
+                }
             }
             // The person's name starts no turn, so it is taken after
             // `close` too: written, pinned and acked at this drain.

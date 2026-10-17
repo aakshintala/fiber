@@ -91,7 +91,12 @@ fn reload_sends_only_changed_descriptions_and_keeps_the_last_sent_baseline() {
         open(&live, &tree);
         let collected = crate::opening::collect(&tree.inputs(), &tree.top());
         let resumed = tree.set();
-        resumed.resumed(&[line("opening_message", &Event::OpeningMessage(collected.message))]).unwrap();
+        resumed
+            .resumed(&[line(
+                "opening_message",
+                &Event::OpeningMessage(collected.message),
+            )])
+            .unwrap();
         skill(&place, "a", "a", description);
         assert!(live.check().changed.is_none());
         assert!(resumed.check().changed.is_none());
