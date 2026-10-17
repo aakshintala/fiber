@@ -129,7 +129,8 @@ fn get_and_get_segments_pin_the_value_and_source_across_layers() {
     // object merges key by key under its highest holder; a per-model
     // entry wins for its model only; a union key holds every layer's
     // names; an entry-replaced row goes whole to one layer.
-    let cases: Vec<(&str, &[&str], Option<&str>, (Value, Source))> = vec![
+    type Case<'a> = (&'a str, &'a [&'a str], Option<&'a str>, (Value, Source));
+    let cases: Vec<Case> = vec![
         (
             "model",
             &["model"],
