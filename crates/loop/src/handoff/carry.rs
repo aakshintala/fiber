@@ -234,9 +234,6 @@ impl Carry {
         artifact: Option<&str>,
         control: Option<&Control>,
     ) {
-        if self.in_summary() {
-            return;
-        }
         if let Some(path) = artifact {
             self.artifacts.push((action.clone(), path.to_owned()));
         }

@@ -114,6 +114,68 @@ fn a_crashed_summary_stops_being_skipped_at_the_process_start() {
 }
 
 #[test]
+fn summary_rendering_preserves_the_persons_input_and_last_step() {
+    let mut conversation = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    let mut had = std::collections::BTreeMap::new();
+    let action = contract::ActionId("a_real".into());
+    let before = [
+        line(
+            "turn_started",
+            json!({"input":[{"type":"message", "source":"driver", "content":[{"type":"text","text":"real prompt"}]}]}),
+        ),
+        line(
+            "tool_call_requested",
+            json!({"name":"read_file", "arguments":{"path":"real"}}),
+        ),
+    ];
+    for line in before {
+        let event = contract::events::Event::from_envelope(&line)
+            .unwrap()
+            .unwrap();
+        crate::conversation::render(
+            &mut conversation,
+            &event,
+            Some(&action),
+            "model",
+            &mut had,
+            &mut carry,
+        );
+    }
+    let saved = carry.clone();
+    let context = conversation.clone();
+    let action = contract::ActionId("a_summary".into());
+    for line in [
+        summary(),
+        line("assistant_message_started", json!({})),
+        text("discard"),
+        line(
+            "tool_call_requested",
+            json!({"name":"write_file", "arguments":{}}),
+        ),
+        line(
+            "tool_call_completed",
+            json!({"status":"cancelled", "content":[{"type":"text","text":"Cancelled before it ran."}]}),
+        ),
+        line("turn_completed", json!({"outcome":"completed"})),
+    ] {
+        let event = contract::events::Event::from_envelope(&line)
+            .unwrap()
+            .unwrap();
+        crate::conversation::render(
+            &mut conversation,
+            &event,
+            Some(&action),
+            "model",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert_eq!(carry, saved);
+    assert_eq!(conversation, context);
+}
+
+#[test]
 fn no_qualifying_line_has_no_quote() {
     assert_eq!(excerpt(&[]), None);
     assert_eq!(
