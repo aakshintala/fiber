@@ -678,7 +678,11 @@ fn a_failed_provider_read_keeps_the_other_providers_labels() {
     assert!(held.is_empty());
     assert_eq!(
         state.failed,
-        [failed("zq", "work"), failed("qp", "work"), failed("qp", "home")]
+        [
+            failed("zq", "work"),
+            failed("qp", "work"),
+            failed("qp", "home")
+        ]
     );
     // A shutdown stops the loader instead.
     let (keep_going, _) = apply_outcome(

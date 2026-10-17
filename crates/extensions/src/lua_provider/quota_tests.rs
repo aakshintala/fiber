@@ -1460,7 +1460,10 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     }));
     // After a first fetch fails with no last value: not pending either.
     seed(&provider, None, None);
-    lock(&provider.quotas.state).get_mut(&pair()).unwrap().failed = true;
+    lock(&provider.quotas.state)
+        .get_mut(&pair())
+        .unwrap()
+        .failed = true;
     assert!(!within({
         let provider = provider.clone();
         move || provider.quota_pending(&pair())

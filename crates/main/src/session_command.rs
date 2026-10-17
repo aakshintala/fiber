@@ -345,6 +345,7 @@ pub(crate) fn run_new(
     let fiber_path = fiber
         .clone()
         .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let (quota, model_quota) = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -354,7 +355,8 @@ pub(crate) fn run_new(
         jobs.clone(),
         Arc::clone(&clock),
         resolve,
-    );
+    )
+    .with_quota(model_quota);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     // The `skill` tool answers from the loop's set: the reader shares it,
@@ -475,7 +477,7 @@ pub(crate) fn run_new(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
-    session.quota(switching.quota_reader());
+    session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,

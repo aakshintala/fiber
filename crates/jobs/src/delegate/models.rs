@@ -50,11 +50,17 @@ pub struct Resolve {
     pub credential: Arc<dyn Fn(&str) -> Result<Option<String>, String> + Send + Sync>,
 }
 
-/// Returns the catalogue: the configured roles, what each maps to now,
-/// and the full references available, for `delegate_spawn`'s `model`.
+/// Returns the catalogue with the quota appended on top: the configured
+/// roles, what each maps to now, the full references available, and one
+/// quota entry per provider credential label (`docs/delegates.md`,
+/// "The tools"). A refusal carries the catalogue alone; only
+/// `delegate_models` appends the quota. The quota is read on every call,
+/// so a `delegate_models` call never answers a stale figure.
 pub struct DelegateModels {
     /// The catalogue text, built with the session's resolver.
     pub catalogue: Arc<str>,
+    /// Renders the quota section, read on every call.
+    pub quota: Arc<dyn Fn() -> String + Send + Sync>,
 }
 
 impl Tool for DelegateModels {
@@ -99,7 +105,7 @@ impl Tool for DelegateModels {
     ) -> Output {
         Output {
             content: vec![ContentPart::Text {
-                text: self.catalogue.to_string(),
+                text: format!("{}\n{}", self.catalogue, (self.quota)()),
             }],
             ..Output::default()
         }

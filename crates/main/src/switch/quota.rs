@@ -95,11 +95,6 @@ struct Store {
 }
 
 impl Switching {
-    pub(crate) fn quota_reader(&self) -> QuotaRead {
-        let store = self.quota_store();
-        Arc::new(move || store.answer())
-    }
-
     /// Both quota readers over one store: the doors command's rows and the
     /// model-facing snapshot share one loader, so one session loads once.
     pub(crate) fn quota_readers(&self) -> (QuotaRead, ModelQuotaRead) {
@@ -210,9 +205,7 @@ impl Store {
                 pending: false,
             });
         }
-        rows.sort_by(|a, b| {
-            (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential))
-        });
+        rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
         QuotaView {
             loading: false,
             labels: rows,
@@ -443,6 +436,10 @@ fn failed(provider: &str, label: &str) -> QuotaInfo {
     }
 }
 
+/// One provider's loaded rows: its held labels, its failed rows and its
+/// silent labels.
+type LoadRows = (Vec<Label>, Vec<QuotaInfo>, Vec<Silent>);
+
 /// One provider's loader outcome folded into the held rows, under one hold:
 /// a loaded provider's labels, failures and silent labels all at once. A
 /// shutdown (`Closing`) stops the loader with later providers unchecked;
@@ -454,7 +451,7 @@ fn apply_outcome(
     state: &mut Held,
     provider: &str,
     labels: &[String],
-    outcome: Result<(Vec<Label>, Vec<QuotaInfo>, Vec<Silent>), Failure>,
+    outcome: Result<LoadRows, Failure>,
 ) -> (bool, Vec<Label>) {
     match outcome {
         Ok((held, failed, silent)) => {
