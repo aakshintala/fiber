@@ -134,8 +134,11 @@ fn home_app(started: u64) -> (App, Arc<FakeClock>) {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.attach(contract::SessionId(SESSION.to_owned()));

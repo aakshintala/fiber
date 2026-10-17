@@ -71,9 +71,11 @@ pub(crate) fn launch(
     // (`docs/configuration.md`, "Keys").
     let scoped_models = config.list("scoped_models", None);
     tui::Launch {
-        workspace,
-        project,
-        git,
+        location: tui::LaunchLocation::Local {
+            workspace,
+            project,
+            git,
+        },
         open_at: tui::OpenAt::Home,
         hover,
         reduced_motion,

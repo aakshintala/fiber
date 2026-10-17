@@ -2,15 +2,13 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use std::path::PathBuf;
-
 use serde_json::{Value, json};
 
 use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line, delete_line,
-    from_status, line, recent_rows,
+    Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
+    delete_line, from_status, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -78,13 +76,34 @@ pub(super) struct Home {
     pub(super) left_after_attach: Option<SessionId>,
 }
 
+impl Home {
+    /// The launch project that sections and row text compare against;
+    /// a listed hub has none.
+    pub(super) fn launch_project(&self) -> Option<&str> {
+        self.launch.location.project()
+    }
+
+    /// The project `prompt_history` names: the launch project, else
+    /// the project of the chosen workspace's newest row.
+    pub(super) fn history_project(&self) -> Option<String> {
+        self.launch
+            .location
+            .project()
+            .or_else(|| {
+                self.chooser
+                    .chosen()
+                    .and_then(|workspace| self.sessions.project_of(workspace))
+            })
+            .map(str::to_owned)
+    }
+}
+
 impl App {
     /// Stores the launch description as home, keying prompt history by its
     /// project as the run argument did. The app keeps today's screen, so
     /// the jigs and every existing app test stay byte-identical.
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_reduced_motion(launch.reduced_motion);
-        self.set_project(launch.project.clone());
         // A launch that saved the rail hidden starts with it hidden;
         // this is the launch's state, not a person-caused hide, so it
         // queues nothing.
@@ -107,6 +126,10 @@ impl App {
             questions: Questions::default(),
             left_after_attach: None,
         });
+        self.sync_project();
+        if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
+            self.open_picker();
+        }
         if rail_hidden {
             self.chrome.hide_rail();
         }
@@ -152,11 +175,7 @@ impl App {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker.
-        let workspace = home
-            .chooser
-            .chosen()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.launch.workspace.clone());
+        let workspace = self.home_workspace();
         let segment = workspace
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -186,7 +205,7 @@ impl App {
         // The foot names the key map's bound key, leaving it out
         // when the action is unbound; Ctrl+C cannot be rebound, so its
         // hint stays fixed.
-        let sections = home.sessions.sections(&home.launch.project);
+        let sections = home.sessions.sections(home.launch_project());
         let (mut waiting_count, mut working, mut retrying, mut crashed, mut ready) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
         let mut spend = 0.0;
@@ -310,15 +329,27 @@ impl App {
             list,
             empty: home.sessions.all().is_empty(),
             version: home.launch.version.clone(),
-            // A remote client has no launch directory; the picker it would
-            // always show is a later ticket's.
             glyph: home.launch.logo_glyph.clone(),
             chips: {
-                let mut chips = vec![(Some(Spot::Workspace), format!("[{segment}]"))];
+                let chip = |spot: Option<Spot>, text: String| Chip {
+                    spot,
+                    dim: false,
+                    text,
+                };
+                let dim = home.no_workspace();
+                let workspace = if dim {
+                    "no workspace"
+                } else {
+                    segment.as_str()
+                };
+                let mut chips = vec![Chip {
+                    dim,
+                    ..chip(Some(Spot::Workspace), format!("[{workspace}]"))
+                }];
                 // The new worktree switch sits beside the workspace
                 // chip, shown while the workspace in use is in git.
                 if home.in_git() {
-                    chips.push((
+                    chips.push(chip(
                         Some(Spot::Worktree),
                         if home.chooser.worktree() {
                             "[x] new worktree".to_owned()
@@ -328,18 +359,18 @@ impl App {
                     ));
                 }
                 chips.extend([
-                    (
+                    chip(
                         Some(Spot::Model),
                         format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
-                    (
+                    chip(
                         Some(Spot::Thinking),
                         format!(
                             "[thinking: {}]",
                             home.launch.thinking.as_deref().unwrap_or("default")
                         ),
                     ),
-                    (None, "Enter starts a session".to_owned()),
+                    chip(None, "Enter starts a session".to_owned()),
                 ]);
                 chips
             },
@@ -477,6 +508,7 @@ impl App {
                                 .unwrap_or_default();
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
+                                home.refill_picker();
                             }
                             self.list_answered(first, true);
                         } else {
@@ -515,6 +547,7 @@ impl App {
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
+                        home.refill_picker();
                         // A live status for the session supersedes an exit
                         // that arrived after attach: it is live again.
                         if home
@@ -754,10 +787,8 @@ impl App {
                     .and_then(|home| home.sessions.by_key(key))
                     .map(|row| row.workspace.clone())
                     .filter(|workspace| !workspace.is_empty());
-                if let Some(workspace) = workspace
-                    && let Some(home) = self.home.as_mut()
-                {
-                    home.choose(workspace);
+                if let Some(workspace) = workspace {
+                    self.choose_workspace(workspace);
                     self.focus = None;
                 }
                 Effect::None
@@ -856,14 +887,14 @@ impl App {
             Spot::Entry(key) => {
                 let home = self.home.as_ref()?;
                 let row = home.sessions.by_key(key)?;
-                Some(line(row, &home.launch.project))
+                Some(line(row, home.launch_project()))
             }
             Spot::More(key) => {
                 let home = self.home.as_ref()?;
                 let row = home.sessions.by_key(key)?;
                 let section = home
                     .sessions
-                    .sections(&home.launch.project)
+                    .sections(home.launch_project())
                     .into_iter()
                     .find(|section| section.project == row.project)?;
                 let hidden = section.hidden();
@@ -894,12 +925,16 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
-                let workspace = home
-                    .chooser
-                    .chosen()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                let mut args = json!({"workspace": workspace});
+                let workspace = home.chooser.chosen().map(str::to_owned).or_else(|| {
+                    home.launch
+                        .location
+                        .workspace()
+                        .map(|workspace| workspace.display().to_string())
+                });
+                let mut args = json!({});
+                if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
+                    object.insert("workspace".to_owned(), Value::String(workspace));
+                }
                 if let Some(object) = args.as_object_mut() {
                     if !self.launch_overrides.is_empty() {
                         object.insert(

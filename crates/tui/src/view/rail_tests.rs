@@ -49,8 +49,11 @@ fn row(key: u64, project: &str, workspace: &str, spend: f64, left: Option<Left>)
 fn app(share: f64) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/Users/you/work/fiber"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/Users/you/work/fiber"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: share,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -157,7 +160,7 @@ fn groups_put_the_launch_project_first_then_first_appearance() {
     let hub = row(2, "-hub", "/work/hub", 0.0, None);
     let site2 = row(3, "-site", "/src/site", 0.0, None);
     let cards = [&site, &fiber, &hub, &site2];
-    let names: Vec<(String, Vec<u64>)> = groups(&cards, "-w")
+    let names: Vec<(String, Vec<u64>)> = groups(&cards, Some("-w"))
         .into_iter()
         .map(|group| {
             (
@@ -180,7 +183,7 @@ fn groups_put_the_launch_project_first_then_first_appearance() {
 fn a_group_is_named_by_its_first_cards_workspace() {
     let first = row(0, "-p", "/work/one/", 0.0, None);
     let second = row(1, "-p", "/work/two", 0.0, None);
-    let named = groups(&[&first, &second], "-w");
+    let named = groups(&[&first, &second], Some("-w"));
     assert_eq!(named.len(), 1);
     assert_eq!(named[0].name, "one");
 }
@@ -190,7 +193,7 @@ fn spend_sums_live_cards() {
     let one = row(0, "-w", "/w", 1.25, None);
     let two = row(1, "-w", "/w", 0.5, None);
     let crashed = row(2, "-w", "/w", 7.0, Some(Left::Crashed));
-    let summed = groups(&[&one, &two, &crashed], "-w");
+    let summed = groups(&[&one, &two, &crashed], Some("-w"));
     assert!((summed[0].spend - 1.75).abs() < f64::EPSILON);
 }
 
@@ -718,8 +721,11 @@ fn rail_scrolled() {
 fn on_home_no_rail_is_drawn() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -783,8 +789,11 @@ fn session_card_with_n_waiting() {
     // panel and the conversation's 84.
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/Users/you/work/fiber"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/Users/you/work/fiber"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 30.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),

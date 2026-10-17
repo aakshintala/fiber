@@ -35,8 +35,11 @@ fn attached(width: u16, height: u16) -> App {
 fn home_attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         panel_cards: vec!["session".to_owned()],
         ..Default::default()
     });
@@ -781,8 +784,11 @@ fn the_narrow_context_segment_opens_the_view_and_keeps_the_draft() {
 fn files_attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         panel_cards: vec!["changed_files".to_owned()],
         ..Default::default()
     });
@@ -1043,8 +1049,11 @@ fn escape_in_the_file_list_closes_it() {
 fn choosing_a_file_while_disconnected_says_not_connected_and_sends_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         panel_cards: vec!["changed_files".to_owned()],
         ..Default::default()
     });

@@ -174,8 +174,11 @@ fn the_cursor_hides_where_the_box_loses_the_keyboard() {
     // directly, no cursor shows.
     let mut floored = App::new(PathBuf::from("/w"));
     floored.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     floored.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));

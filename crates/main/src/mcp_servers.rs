@@ -321,7 +321,7 @@ pub(crate) fn session_tools(
     }
     let mut specs = specs;
     specs.extend(prepared.ready);
-    let cache = home.join("cache").join("mcp");
+    let cache = config::mcp_cache_dir(home);
     let started = mcp::start_observed(
         specs,
         workspace,

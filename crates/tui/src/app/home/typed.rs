@@ -78,6 +78,17 @@ impl Typed {
         }
     }
 
+    /// A typed path already holding `root`, with only the root's own
+    /// directory queued and nothing focused.
+    pub(super) fn at(root: &str) -> Self {
+        let mut typed = Self::new();
+        typed.text = root.to_owned();
+        if let Some(dir) = split(root).map(|(dir, _)| dir.to_owned()) {
+            typed.queue_dir(&dir);
+        }
+        typed
+    }
+
     /// The typed text.
     pub(super) fn text(&self) -> &str {
         &self.text

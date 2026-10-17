@@ -30,8 +30,11 @@ fn wide() -> super::Loop<TestBackend> {
         .resize(200, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),

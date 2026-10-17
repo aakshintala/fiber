@@ -35,7 +35,7 @@ pub(crate) struct Group<'a> {
 
 /// The cards grouped by project: the launch project's group first, then
 /// each other project in the order its first card appears.
-pub(crate) fn groups<'a>(cards: &[&'a Row], launch_project: &str) -> Vec<Group<'a>> {
+pub(crate) fn groups<'a>(cards: &[&'a Row], launch_project: Option<&str>) -> Vec<Group<'a>> {
     let mut projects: Vec<&str> = Vec::new();
     for card in cards {
         if !projects.contains(&card.project.as_str()) {
@@ -44,10 +44,10 @@ pub(crate) fn groups<'a>(cards: &[&'a Row], launch_project: &str) -> Vec<Group<'
     }
     if let Some(at) = projects
         .iter()
-        .position(|project| *project == launch_project)
+        .position(|project| Some(*project) == launch_project)
     {
-        projects.remove(at);
-        projects.insert(0, launch_project);
+        let launch = projects.remove(at);
+        projects.insert(0, launch);
     }
     projects
         .into_iter()

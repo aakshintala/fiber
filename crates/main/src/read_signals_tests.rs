@@ -63,6 +63,71 @@ fn credential_on_thread(
     finished
 }
 
+/// Waits for `done` while driving a settle parked on `fake` past group-poll
+/// parks it holds again after its first one, returning `done`'s value. The
+/// caller holds the settle's second pass at its armed pause: reaching the
+/// pause proves the first park answered on the bumps alone, with the clock
+/// still frozen, so the first advance below covers the second park only.
+/// A pass that finishes instead ends the wait at once, so a settle that
+/// never parks again drives no advance. The whole wait shares `drive`.
+/// No clock call happens before the second pause arrives; every advance
+/// after that names the one parked thread and the poll instant it holds.
+#[track_caller]
+fn finish_past_one_park<D>(
+    fake: &FakeClock,
+    drive: &Deadline,
+    done: &mpsc::Receiver<D>,
+    done_what: &str,
+    parked_again: mpsc::Receiver<()>,
+    release_again: mpsc::Sender<()>,
+) -> D {
+    let mut poll = fake
+        .origin()
+        .checked_add(GROUP_POLL)
+        .expect("the poll is countable");
+    loop {
+        if let Ok(value) = done.try_recv() {
+            return value;
+        }
+        match parked_again.try_recv() {
+            Ok(()) => {
+                release_again.send(()).expect("the settle's second release");
+                break;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the settle left without parking again or finishing")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if drive.left().is_zero() {
+            return drive.recv_or_fail(done, done_what);
+        }
+        std::thread::yield_now();
+    }
+    loop {
+        if let Ok(value) = done.try_recv() {
+            return value;
+        }
+        // The caller drained every bump before releasing the first pass,
+        // and each advance wakes the one waiter once, so a marked park is
+        // still held when the advance looks: only this advance can end it.
+        if let Some(mark) = fake.mark_parked(poll, drive.left().min(Duration::from_millis(200))) {
+            let threads = mark.threads();
+            assert!(
+                threads.len() == 1,
+                "one thread parks at the poll: {threads:?}"
+            );
+            let thread = threads.into_iter().next().expect("the one parked thread");
+            fake.advance_when_parked(Some(poll), Some(thread), GROUP_POLL, drive);
+            poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
+        }
+        if drive.left().is_zero() {
+            return drive.recv_or_fail(done, done_what);
+        }
+        std::thread::yield_now();
+    }
+}
+
 /// The watcher reaches its finish only after every cancelled group is
 /// empty: a listed sleep group and a held spawn both hold the shared
 /// shutdown. Releasing the spawn drains both, and only then does the
@@ -74,18 +139,31 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     let fake = FakeClock::new();
     let clock: Arc<dyn Clock> = fake.clone();
     let reads = Arc::new(Reads::default());
+    let releases = Arc::new(Releases {
+        spawn: Mutex::new(None),
+        reaper: Mutex::new(None),
+        settle: Mutex::new(None),
+    });
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
-    // The listed group first: its ready line arrives after the spawn
-    // listed it, so the pause armed next holds only the spawn below.
+    // The listed spawn's pause is armed before its thread starts, so its
+    // report arrives after the spawn listed its group: receiving it orders
+    // the listing bump before everything the test does next.
+    let (listed_entered, is_listed_entered) = mpsc::channel::<()>();
+    let (listed_release, listed_freed) = mpsc::channel::<()>();
+    reads.pause_at_listed(listed_entered, listed_freed);
     let listed = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
+    Deadline::after(DEADLINE)
+        .recv(&is_listed_entered)
+        .expect("the listed spawn listed its group");
+    listed_release.send(()).expect("the listed spawn's release");
     // Then a held spawn, so the shutdown parks on the count as well as
     // the group. The marker stays in its command line, so a leaked late
     // child still matches.
@@ -94,6 +172,10 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     let (entered, is_entered) = mpsc::channel::<()>();
     let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_spawn(entered, freed);
+    *releases
+        .spawn
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(release);
     let late = credential_on_thread(
         &reads,
         sh(&format!("sleep 30 # {marker}")),
@@ -103,53 +185,45 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     Deadline::after(DEADLINE)
         .recv(&is_entered)
         .expect("the spawn reached its pause");
+    // The settle's first pass pauses before its park: with the spawn still
+    // counted the pass cannot finish, so reaching the pause proves the
+    // shutdown is held while the spawn stays held.
+    let (parked, is_parked) = mpsc::channel::<()>();
+    let (resume, held) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked, held);
+    *releases
+        .settle
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(resume);
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    let _release = ReleaseOnDrop(Arc::clone(&releases));
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
-    // Held: the spawn is still counted, so the shared shutdown parks
-    // instead of finishing: the park proves it is held while the spawn
-    // remains held. The cancel can kill and retire the listed group
-    // before the settlement checks it; with only the held spawn left,
-    // the settlement parks at its end instead of its poll. Either park
-    // proves it is held.
-    let mut poll = fake.origin() + GROUP_POLL;
-    let end = fake.origin() + doors::SHUTDOWN_BOUND;
-    let held = Deadline::after(DEADLINE);
-    loop {
-        if fake.parked().contains(&Some(poll)) || fake.parked().contains(&Some(end)) {
-            break;
-        }
-        assert!(
-            !held.left().is_zero(),
-            "the shutdown parked while the spawn is held"
-        );
-        // A short ack of either park; expiry re-checks both under the
-        // shared deadline instead of pinning one.
-        if fake.await_parked(poll, held.left().min(Duration::from_millis(200)))
-            || fake.await_parked(end, held.left().min(Duration::from_millis(200)))
-        {
-            break;
-        }
-    }
-    release.send(()).expect("the spawn's release");
-    // The shutdown re-parks at its poll until every group is empty: each
-    // advance follows a confirmed park, and a park that never comes means
-    // the finish already arrived. The whole drive shares one deadline.
+    Deadline::after(DEADLINE)
+        .recv(&is_parked)
+        .expect("the settle reached its park");
+    // Armed while the first pass is still held, so the next pass pauses
+    // too: reaching it proves the first park woke on the bumps, with the
+    // clock frozen, before any advance below.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
+    releases.release_spawn();
+    // The late spawn listed its group, killed it, reaped its leader and
+    // left its count before the settle resumes: its bumps land after the
+    // captured generation, so the first park answers on them alone.
+    let late = Deadline::after(DEADLINE)
+        .recv(&late)
+        .expect("the late read");
+    releases.release_settle();
     let drive = Deadline::after(DEADLINE);
-    let signal = loop {
-        match is_fired.try_recv() {
-            Ok(signal) => break signal,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                panic!("the watcher ended without a finish")
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
-        }
-        if fake.await_parked(poll, Duration::from_millis(200)) {
-            fake.advance(GROUP_POLL);
-            poll += GROUP_POLL;
-        } else if drive.left().is_zero() {
-            break drive.recv_or_fail(&is_fired, "the watcher's finish");
-        }
-    };
+    let signal = finish_past_one_park(
+        &fake,
+        &drive,
+        &is_fired,
+        "the watcher's finish",
+        is_parked_again,
+        resume_again,
+    );
     assert_eq!(signal, SIGTERM);
     assert!(
         fakes::group_empties(pgid, DEADLINE),
@@ -159,10 +233,7 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
         fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
     );
-    let error = Deadline::after(DEADLINE)
-        .recv(&late)
-        .expect("the late read")
-        .expect_err("a command spawned after the cancel");
+    let error = late.expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     let _listed = fakes::within("the killed command", DEADLINE, move || {
         listed.join().unwrap()
@@ -294,30 +365,88 @@ fn the_lists_are_exactly_the_foreground_and_terminal_signals() {
 fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
     let root = fakes::TempDir::new("fiber-cancel-on-signal");
     let ready = Ready::new(root.path());
-    let clock: Arc<dyn Clock> = FakeClock::new();
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
     let reads = Arc::new(Reads::default());
+    let releases = Arc::new(Releases {
+        spawn: Mutex::new(None),
+        reaper: Mutex::new(None),
+        settle: Mutex::new(None),
+    });
     let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    // Every registration comes before the thread that emits its event:
+    // the reaper hold keeps the leader unreaped, so the first settle pass
+    // still sees the group alive and reaches its pause below.
+    let (reaper_entered, is_reaper_entered) = mpsc::channel::<()>();
+    let (reaper_release, reaper_freed) = mpsc::channel::<()>();
+    reads.pause_at_reaper(reaper_entered, reaper_freed);
+    *releases
+        .reaper
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(reaper_release);
+    // The settle parks on the `FakeClock`: one pause per pass proves each
+    // park the test drives past, so no advance hides the bumps that must
+    // wake the first park. Both completion notes land after their bump, so
+    // draining them after the pause below proves the bumps came after the
+    // captured generation.
+    let (parked, is_parked) = mpsc::channel::<()>();
+    let (resume, held) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked, held);
+    *releases
+        .settle
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(resume);
+    let (noted, notes) = mpsc::channel::<()>();
+    reads.note_completions(noted);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    let _release = ReleaseOnDrop(Arc::clone(&releases));
+    Deadline::after(DEADLINE)
+        .recv(&is_reaper_entered)
+        .expect("the reaper reached its pause");
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The watcher cancels, settles, then finishes: only the finish is
     // injected, so its number proves the production calls ran before it.
     // The finish arrives through `Deadline` in seconds: under the `==`/`!=`
     // mutant the watcher's settle at zero parks on the `FakeClock`, so no
-    // finish arrives and this fails instead of hanging the suite.
-    let fired = Deadline::after(DEADLINE).recv(&is_fired);
+    // finish arrives and this fails instead of hanging the suite. A probe
+    // that still sees the group alive after the reap parks the settle
+    // again at its poll: the helper drives each such park to the finish.
+    Deadline::after(DEADLINE)
+        .recv(&is_parked)
+        .expect("the settle reached its park");
+    // Armed while the first pass is still held, so the next pass pauses
+    // too: reaching it proves the first park woke on the bumps, with the
+    // clock frozen, before any advance below.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
+    releases.release_reaper();
+    let drain = Deadline::after(DEADLINE);
+    drain.recv(&notes).expect("the first completion note");
+    drain.recv(&notes).expect("the second completion note");
+    releases.release_settle();
+    let drive = Deadline::after(DEADLINE);
+    let fired = finish_past_one_park(
+        &fake,
+        &drive,
+        &is_fired,
+        "the watcher's finish",
+        is_parked_again,
+        resume_again,
+    );
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary. `within` never
     // joins its thread.
     fakes::within("the guard's drop", DEADLINE, move || {
         drop(guard);
     });
-    assert_eq!(fired.expect("the watcher's finish"), SIGTERM);
+    assert_eq!(fired, SIGTERM);
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the cancelled read")
@@ -335,21 +464,44 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
 fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
     let root = fakes::TempDir::new("fiber-cancel-on-signal-spawn");
     let marker = format!("fiber-cancel-settle-{}", root.path().display());
-    let clock: Arc<dyn Clock> = FakeClock::new();
+    let fake = FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
     let reads = Arc::new(Reads::default());
+    let releases = Arc::new(Releases {
+        spawn: Mutex::new(None),
+        reaper: Mutex::new(None),
+        settle: Mutex::new(None),
+    });
     // The marker stays in the late shell's command line, so a leaked late
     // child still matches.
     let script = format!("sleep 30 # {marker}");
     let watching = fakes::Watchdog::matching(&marker);
     // The spawn blocks before it spawns; the release below lets it run.
+    // The hold lives in `Releases`, so it drops before the guard's join
+    // on every path.
     let (entered, is_entered) = mpsc::channel::<()>();
     let (release, freed) = mpsc::channel::<()>();
     reads.pause_at_spawn(entered, freed);
+    *releases
+        .spawn
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(release);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     Deadline::after(DEADLINE)
         .recv(&is_entered)
         .expect("the spawn reached its pause");
+    // The settle's first pass pauses before its park at the shutdown end:
+    // released only after the late spawn is freed below, its bump lands
+    // after the captured generation, so the first park answers on it alone.
+    let (parked, is_parked) = mpsc::channel::<()>();
+    let (resume, held) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked, held);
+    *releases
+        .settle
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(resume);
     let (is_fired, _guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    let _release = ReleaseOnDrop(Arc::clone(&releases));
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The watcher took the signal once the cancel landed: a `run` past a
     // cancel refuses without starting its read. The spin ends on the
@@ -369,17 +521,39 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
         Deadline::after(SHORT).recv(&is_fired).is_err(),
         "the watcher finished before the spawn settled"
     );
-    release.send(()).expect("the spawn's release");
+    Deadline::after(DEADLINE)
+        .recv(&is_parked)
+        .expect("the settle reached its park");
+    // Armed while the first pass is still held, so the next pass pauses
+    // too: reaching it proves the first park woke on the bump, with the
+    // clock frozen, before any advance below. A probe that still sees the
+    // group alive after the reap parks the settle again at its poll: the
+    // helper drives each such park to the finish.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
+    releases.release_spawn();
+    // The late spawn listed its group, killed it, reaped its leader and
+    // left its count before the settle resumes: both bumps land after the
+    // captured generation, so the first park answers on them alone and no
+    // later bump can wake the second park early.
+    let late = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the late read");
+    releases.release_settle();
+    let drive = Deadline::after(DEADLINE);
     assert_eq!(
-        Deadline::after(DEADLINE)
-            .recv(&is_fired)
-            .expect("the watcher's finish"),
+        finish_past_one_park(
+            &fake,
+            &drive,
+            &is_fired,
+            "the watcher's finish",
+            is_parked_again,
+            resume_again,
+        ),
         SIGTERM
     );
-    let error = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("the late read")
-        .expect_err("a command spawned after the cancel");
+    let error = late.expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
         fakes::matching_exits(&marker, DEADLINE),
@@ -483,14 +657,26 @@ fn a_dropped_guard_leaves_a_later_signal_unhandled_by_the_callback() {
     );
 }
 
-/// Owns the release senders of the terminal watcher tests' holds, so one
+/// Owns the release senders of the watcher tests' holds, so one
 /// drop releases every hold before the guard drops and joins the watcher.
 struct Releases {
+    spawn: Mutex<Option<mpsc::Sender<()>>>,
     reaper: Mutex<Option<mpsc::Sender<()>>>,
     settle: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl Releases {
+    /// Releases the held spawn, if it is still armed.
+    fn release_spawn(&self) {
+        if let Some(release) = self
+            .spawn
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            release.send(()).unwrap_or(());
+        }
+    }
     /// Releases the credential reaper's hold, if it is still armed.
     fn release_reaper(&self) {
         if let Some(release) = self
@@ -517,6 +703,7 @@ impl Releases {
 
     /// Releases every hold still armed.
     fn release_all(&self) {
+        self.release_spawn();
         self.release_reaper();
         self.release_settle();
     }
@@ -566,6 +753,7 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let releases = Arc::new(Releases {
+        spawn: Mutex::new(None),
         reaper: Mutex::new(None),
         settle: Mutex::new(None),
     });
@@ -600,6 +788,14 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
     Deadline::after(DEADLINE)
         .recv(&is_parked)
         .expect("the settle reached its park");
+    // Armed while the first pass is still held, so the next pass pauses
+    // too: reaching it proves the first park woke on the counted bumps,
+    // with the clock frozen, before any advance below. A probe that still
+    // sees the group alive after the reap parks the settle again at its
+    // poll: the helper drives each such park to the drop.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
     releases.release_reaper();
     // Both bumps land before the settle resumes: the reaper's and the
     // stdout reader's, each noted after its bump. One deadline drains the
@@ -609,17 +805,22 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
     drain.recv(&notes).expect("the second completion note");
     // The drop joins the watcher: started on its own thread before the
     // release and received within its bound, so a hang fails here instead
-    // of hanging the binary. With no clock advance the park must answer
-    // on the counted bumps alone.
+    // of hanging the binary.
     let (dropped, is_dropped) = mpsc::channel::<()>();
     std::thread::spawn(move || {
         drop(guard);
         dropped.send(()).unwrap_or(());
     });
     releases.release_settle();
-    Deadline::after(DEADLINE)
-        .recv(&is_dropped)
-        .expect("the guard's drop");
+    let drive = Deadline::after(DEADLINE);
+    finish_past_one_park(
+        &fake,
+        &drive,
+        &is_dropped,
+        "the guard's drop",
+        is_parked_again,
+        resume_again,
+    );
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the cancelled read")
@@ -634,8 +835,8 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
 }
 
 /// The terminal watcher's cancel-settle-drop run, shared by the plain test
-/// and the slow-drop test above. With `Some(held_for)` the credential
-/// reaper stays held for that long before the test releases it.
+/// and the slow-drop test above. The credential reaper stays held in both
+/// runs; `held_for` sets how long the hold lasts before the test releases it.
 fn terminal_watcher_run(held_for: Option<Duration>) {
     let root = fakes::TempDir::new("fiber-terminal-watch");
     let ready = Ready::new(root.path());
@@ -647,30 +848,40 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     // command-line watchdog covers a spawn no later watchdog can reach.
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let releases = Arc::new(Releases {
+        spawn: Mutex::new(None),
         reaper: Mutex::new(None),
         settle: Mutex::new(None),
     });
-    let reaper_entered = held_for.map(|_| {
-        let (entered, is_entered) = mpsc::channel::<()>();
-        let (release, freed) = mpsc::channel::<()>();
-        reads.pause_at_reaper(entered, freed);
-        *releases
-            .reaper
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(release);
-        is_entered
-    });
+    // Every registration comes before the thread that emits its event,
+    // in both runs: the reaper hold keeps the leader unreaped, so the
+    // first settle pass still sees the group alive and reaches its pause.
+    let (reaper_entered, is_reaper_entered) = mpsc::channel::<()>();
+    let (reaper_release, reaper_freed) = mpsc::channel::<()>();
+    reads.pause_at_reaper(reaper_entered, reaper_freed);
+    *releases
+        .reaper
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(reaper_release);
+    let (noted, notes) = mpsc::channel::<()>();
+    reads.note_completions(noted);
+    // The first pass pauses before its park: reaching it proves the pass
+    // saw the group alive on the held reaper, with its wait computed.
+    let (parked, is_parked) = mpsc::channel::<()>();
+    let (resume, held) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked, held);
+    *releases
+        .settle
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(resume);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
         .expect("the test's registration");
     let _release = ReleaseOnDrop(Arc::clone(&releases));
-    if let Some(is_entered) = reaper_entered {
-        Deadline::after(DEADLINE)
-            .recv(&is_entered)
-            .expect("the reaper reached its pause");
-    }
+    Deadline::after(DEADLINE)
+        .recv(&is_reaper_entered)
+        .expect("the reaper reached its pause");
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The watcher cancels and settles, then keeps watching instead of
     // exiting: survival past the cancel proves no exit, and the
@@ -688,56 +899,60 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     // A second signal still exits nothing: the process is here to drop
     // the guard.
     signal_hook::low_level::raise(SIGTERM).expect("the test's second raise");
-    if held_for.is_some() {
-        // The settle parked on its poll while the reaper is held: the
-        // leader is killed and unreaped, so the group probes alive and the
-        // poll is the pass's wait.
-        assert!(
-            fake.await_parked(fake.origin() + GROUP_POLL, DEADLINE),
-            "the settle parked on the held reaper"
-        );
-    }
+    Deadline::after(DEADLINE)
+        .recv(&is_parked)
+        .expect("the settle reached its park");
     // A third signal still exits nothing: the process is here to drop
     // the guard.
     signal_hook::low_level::raise(SIGTERM).expect("the test's third raise");
-    let bound = DEADLINE;
-    // The guard's drop joins the watcher: bounded on its own thread, so a
-    // hung settle fails here instead of hanging the binary.
-    match held_for {
-        Some(held_for) => {
-            let drop_by = Deadline::after(bound);
-            let (dropped, is_dropped) = mpsc::channel::<()>();
-            std::thread::spawn(move || {
-                drop(guard);
-                dropped.send(()).unwrap_or(());
-            });
-            // The hold ends on a bounded receive on the wall clock, not a
-            // sleep: nothing sends on it, so it must time out.
-            let (left_sent, is_left) = mpsc::channel::<Duration>();
-            let releases = Arc::clone(&releases);
-            std::thread::spawn(move || {
-                let (_never, never) = mpsc::channel::<()>();
-                assert!(
-                    Deadline::after(held_for).recv(&never).is_err(),
-                    "the hold ended before {held_for:?}"
-                );
-                left_sent.send(drop_by.left()).unwrap_or(());
-                releases.release_reaper();
-            });
-            if drop_by.recv(&is_dropped).is_err() {
-                panic!("waited {bound:?} for the guard's drop");
-            }
-            match Deadline::after(DEADLINE).recv(&is_left) {
-                Ok(left) => assert!(!left.is_zero(), "waited {bound:?} for the guard's drop"),
-                Err(_) => panic!("waited {bound:?} for the guard's drop"),
-            }
-        }
-        None => {
-            fakes::within("the guard's drop", bound, move || {
-                drop(guard);
-            });
-        }
+    // Armed while the first pass is still held, so the next pass pauses
+    // too: reaching it proves the first park woke on the bumps, with the
+    // clock frozen, before any advance below.
+    let (parked_again, is_parked_again) = mpsc::channel::<()>();
+    let (resume_again, held_again) = mpsc::channel::<()>();
+    reads.pause_at_settle_park(parked_again, held_again);
+    // The guard's drop joins the watcher: started on its own thread, the
+    // test receives it within its bound, so a hang fails here instead of
+    // hanging the binary. A probe that still sees the group alive after
+    // the reap parks that settle again at its poll on the `FakeClock`:
+    // the helper drives each such park to the drop.
+    let drop_by = Deadline::after(DEADLINE);
+    let (dropped, is_dropped) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        drop(guard);
+        dropped.send(()).unwrap_or(());
+    });
+    if let Some(held_for) = held_for {
+        // The hold ends on a bounded receive on the wall clock, with the
+        // first pass still at its pause: nothing sends on it, so it must
+        // time out. The sender stays bound past the receive, so only a
+        // timeout can end the hold.
+        let (_never, never) = mpsc::channel::<()>();
+        assert!(
+            Deadline::after(held_for).recv(&never).is_err(),
+            "the hold ended before {held_for:?}"
+        );
+        assert!(
+            !drop_by.left().is_zero(),
+            "the hold left no time for the guard's drop"
+        );
     }
+    releases.release_reaper();
+    // Both bumps land before the settle resumes: the reaper's and the
+    // stdout reader's, each noted after its bump. One deadline drains the
+    // one stream; nothing else bumps afterwards.
+    let drain = Deadline::after(DEADLINE);
+    drain.recv(&notes).expect("the first completion note");
+    drain.recv(&notes).expect("the second completion note");
+    releases.release_settle();
+    finish_past_one_park(
+        &fake,
+        &drop_by,
+        &is_dropped,
+        "the guard's drop",
+        is_parked_again,
+        resume_again,
+    );
     let error = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the cancelled read")

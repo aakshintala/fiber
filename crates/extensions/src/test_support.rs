@@ -9,7 +9,7 @@ use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
     ToolDefinition,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 pub(crate) use fakes::write_record;
 
@@ -147,14 +147,7 @@ impl Provider for Inner {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        tools
-            .iter()
-            .map(|tool| {
-                let mut map = Map::new();
-                map.insert("own".into(), json!(tool.name));
-                map
-            })
-            .collect()
+        fakes::wire_tools(tools)
     }
 }
 

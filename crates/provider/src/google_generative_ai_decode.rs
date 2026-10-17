@@ -462,7 +462,10 @@ fn tool_error(response: &Value) -> Option<&str> {
 fn place_grounding(actions: &mut [ReplyAction], grounding: &Value) {
     let Some(hosted) = actions.iter_mut().rev().find_map(|action| match action {
         ReplyAction::Hosted(hosted) => Some(hosted),
-        ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::ToolCall(_) => None,
+        ReplyAction::HostedResult { .. }
+        | ReplyAction::Reasoning(_)
+        | ReplyAction::Text(_)
+        | ReplyAction::ToolCall(_) => None,
     }) else {
         return;
     };

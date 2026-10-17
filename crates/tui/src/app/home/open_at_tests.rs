@@ -18,9 +18,11 @@ fn id(session: &str) -> SessionId {
 fn home_at(open_at: OpenAt) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

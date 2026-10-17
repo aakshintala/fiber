@@ -53,9 +53,11 @@ fn attached() -> App {
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),
@@ -584,7 +586,11 @@ fn ctrl_v_does_nothing_with_the_picker_open() {
         json!({"state": "idle"}),
     ));
     type_text(&mut app, "hi");
-    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    // The picker opens asking only for its root's listing.
+    assert!(matches!(
+        app.home_click(Spot::Workspace),
+        Effect::Send(lines) if lines.len() == 1 && lines[0].contains("\"directories\"")
+    ));
     assert!(app.home_screen().and_then(|screen| screen.picker).is_some());
     stays_shut(&mut app);
     assert!(app.home_screen().and_then(|screen| screen.picker).is_some());

@@ -29,8 +29,11 @@ const WALL: u64 = 1_700_000_000_000;
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
