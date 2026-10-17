@@ -25,10 +25,6 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{Deadline, Setup, is_status, run_to_exit, write_json};
 
-fn hello() -> fakes::Response {
-    support::hello()
-}
-
 fn stream(events: &[Value]) -> fakes::Response {
     support::stream(events)
 }
@@ -205,7 +201,7 @@ fn clear_logs(setup: &Setup) {
 #[test]
 fn a_debug_worktree_run_writes_one_create_in_the_pid_file() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup);
     init_repo(setup.deadline, &setup.workspace());
@@ -244,7 +240,7 @@ fn a_debug_worktree_run_writes_one_create_in_the_pid_file() {
 #[test]
 fn an_info_worktree_run_writes_no_timing() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
 
@@ -269,7 +265,7 @@ fn an_info_worktree_run_writes_no_timing() {
 #[test]
 fn a_debug_worktree_run_outside_a_repository_writes_no_worktree_line() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup);
 
@@ -287,7 +283,7 @@ fn a_debug_worktree_run_outside_a_repository_writes_no_worktree_line() {
 // debt: this clean-setup repeats the test at :205. Upgrade trigger: fold the two into one helper when a third clean-setup test is added.
 fn a_debug_worktree_run_writes_one_remove_in_the_session_file() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup);
     init_repo(setup.deadline, &setup.workspace());
@@ -329,7 +325,7 @@ fn a_debug_worktree_run_writes_one_remove_in_the_session_file() {
 #[test]
 fn a_dirty_debug_worktree_run_writes_no_remove_line() {
     let setup = Setup::new();
-    let server = ProviderServer::start([write_call("note.txt", "hi\n"), hello()]).unwrap();
+    let server = ProviderServer::start([write_call("note.txt", "hi\n"), support::hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup);
     init_repo(setup.deadline, &setup.workspace());
@@ -362,7 +358,7 @@ fn a_dirty_debug_worktree_run_writes_no_remove_line() {
 #[test]
 fn a_debug_resume_recreates_and_removes() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let server = ProviderServer::start([support::hello(), support::hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup);
     init_repo(setup.deadline, &setup.workspace());
@@ -413,7 +409,12 @@ fn a_debug_resume_recreates_and_removes() {
 #[test]
 fn a_debug_resume_of_a_kept_present_worktree_writes_neither() {
     let setup = Setup::new();
-    let server = ProviderServer::start([write_call("note.txt", "hi\n"), hello(), hello()]).unwrap();
+    let server = ProviderServer::start([
+        write_call("note.txt", "hi\n"),
+        support::hello(),
+        support::hello(),
+    ])
+    .unwrap();
     setup.provider(&server);
     debug_config(&setup);
     init_repo(setup.deadline, &setup.workspace());
@@ -458,7 +459,7 @@ fn a_debug_resume_of_a_kept_present_worktree_writes_neither() {
 #[test]
 fn an_info_resume_writes_neither() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let server = ProviderServer::start([support::hello(), support::hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
 

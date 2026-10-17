@@ -21,9 +21,8 @@ use std::process::ExitStatus;
 use extension_harness::*;
 use fakes::Client;
 use fakes::ProviderServer;
-use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call, group_alive};
+use support::{Deadline, KillGroup, Setup, function_call, group_alive, spawn_watched};
 
 fn subscribe(deadline: Deadline, client: &Client) {
     client
@@ -229,30 +228,6 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     (status, out, stderr)
-}
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group (see `Setup::fiber` in the shared harness, which already sets
-/// `process_group(0)`; as the sibling tests do).
-fn spawn_watched(command: &mut std::process::Command) -> (std::process::Child, Watchdog) {
-    use std::os::unix::process::CommandExt;
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    // A failed watchdog spawn still kills the child on unwind.
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 #[test]
