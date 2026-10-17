@@ -14,6 +14,7 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
+use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
@@ -1037,7 +1038,26 @@ fn a_repository_layer_role_credential_is_ignored() {
     );
     let resolve = resolver(&providers, &config);
     // A repository's role cannot name a credential: the label is ignored,
-    // and a non-string `credential` reads as no label too.
+    // and a non-string `credential` reads as no label too. The load raises
+    // one ignored-key notice per role carrying one, naming the key.
+    let notices = config.notices();
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code == ErrorCode::ConfigKeyIgnored),
+        "{notices:?}"
+    );
+    let file = root.path().join("workspace/.fiber/config.json");
+    for name in ["fast", "odd"] {
+        assert!(
+            notices.iter().any(|notice| notice
+                .message
+                .contains(&format!("roles.\"{name}\".credential"))
+                && notice.message.contains(&file.display().to_string())),
+            "{notices:?}"
+        );
+    }
     assert_eq!((resolve.credential)("fast"), Ok(None));
     assert_eq!((resolve.credential)("odd"), Ok(None));
     // The launch then passes no `-c`: the child reads the provider's
