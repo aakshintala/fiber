@@ -33,11 +33,7 @@ fn var(name: &str) -> String {
 /// driver reads unwritten cells (`crates/main/tests/support/pty.rs`).
 fn symbol(cell: &vt100::Cell) -> &str {
     let contents = cell.contents();
-    if contents.is_empty() {
-        " "
-    } else {
-        contents
-    }
+    if contents.is_empty() { " " } else { contents }
 }
 
 /// Row `y` of the screen as text, with trailing spaces trimmed: the form
@@ -78,11 +74,7 @@ fn first_difference(
         return Some(("bg", colour(capture.bgcolor()), colour(dump.bgcolor())));
     }
     if capture.bold() != dump.bold() {
-        return Some((
-            "bold",
-            capture.bold().to_string(),
-            dump.bold().to_string(),
-        ));
+        return Some(("bold", capture.bold().to_string(), dump.bold().to_string()));
     }
     if capture.italic() != dump.italic() {
         return Some((
@@ -138,7 +130,9 @@ fn compare(test: &str, out: &str) -> String {
     let mut dump_parser = vt100::Parser::new(ROWS, COLS, 0);
     dump_parser.process(&dump);
     let dump_screen = dump_parser.screen().clone();
-    let ansi = std::env::var("LOOK_DIFF_ANSI").ok().filter(|s| !s.is_empty());
+    let ansi = std::env::var("LOOK_DIFF_ANSI")
+        .ok()
+        .filter(|s| !s.is_empty());
     let ansi_screen = match ansi {
         None => None,
         Some(path) => match std::fs::read(&path) {
@@ -172,7 +166,9 @@ fn compare(test: &str, out: &str) -> String {
             let dump_cell = dump_screen.cell(y, x).expect("the dump parses at 160x48");
             let difference = match ansi_screen.as_ref() {
                 Some(ansi_screen) => {
-                    let capture_cell = ansi_screen.cell(y, x).expect("the capture parses at 160x48");
+                    let capture_cell = ansi_screen
+                        .cell(y, x)
+                        .expect("the capture parses at 160x48");
                     first_difference(capture_cell, dump_cell)
                 }
                 None => {
