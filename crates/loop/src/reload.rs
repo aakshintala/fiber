@@ -187,7 +187,7 @@ impl Loop {
         self.preamble = None;
         self.preamble_reason = PreambleReason::Reload;
         self.warming.stop(self.log.clock().now());
-        self.load_after_reload = self.repository.load.is_some() && !self.repository.loaded;
+        self.load_after_reload = true;
         self.build_preamble()?;
         if self.opened {
             let skills = self.skills.reload_check();
