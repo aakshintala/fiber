@@ -199,7 +199,7 @@ fn armed_hook() -> (Arc<Hub>, u64, Target, Duration, Instant) {
             watched,
             Progress::Started {
                 deadline: Some(deadline),
-                parked: false,
+                run: Run::Running,
             },
         );
         match shared.judge("ext", watched, &target, asked, now) {
@@ -253,6 +253,7 @@ fn parking_only_the_watched_hook_disarms_its_abandon_watch() {
             None,
             None,
             None,
+            Run::Parked,
         );
         assert!(
             shared
@@ -290,6 +291,7 @@ fn parking_only_the_watched_hook_disarms_its_abandon_watch() {
             None,
             None,
             None,
+            Run::Parked,
         );
         assert!(
             shared.abandon.is_none(),
@@ -338,7 +340,7 @@ fn armed_command() -> (Arc<Hub>, u64, Target, Duration, Instant) {
             watched,
             Progress::Started {
                 deadline: Some(deadline),
-                parked: false,
+                run: Run::Running,
             },
         );
         match shared.judge("ext", watched, &target, asked, now) {
@@ -412,6 +414,7 @@ fn a_command_that_parks_after_its_caller_answered_ends_at_its_own_deadline() {
             None,
             None,
             None,
+            Run::Parked,
         );
         assert!(
             shared.abandon.is_none(),
@@ -539,7 +542,7 @@ fn a_cancel_that_meets_a_returned_callback_leaves_its_result() {
         during,
         Progress::Started {
             deadline: None,
-            parked: false,
+            run: Run::Running,
         },
     );
     shared.cancel_call(during);
@@ -563,7 +566,7 @@ fn started(hub: &Hub) -> u64 {
         id,
         Progress::Started {
             deadline: None,
-            parked: false,
+            run: Run::Running,
         },
     );
     id
@@ -649,7 +652,7 @@ fn cancelling_a_started_call_stops_its_admitted_exec() {
         id,
         Progress::Started {
             deadline: None,
-            parked: true,
+            run: Run::Parked,
         },
     );
     let rx = shared.register_exec(id);
@@ -682,7 +685,7 @@ fn cancelling_without_an_admitted_exec_registers_nothing() {
         id,
         Progress::Started {
             deadline: None,
-            parked: true,
+            run: Run::Parked,
         },
     );
     shared.cancel_call(id);
@@ -711,7 +714,7 @@ fn a_cancelled_abandoned_call_waits_for_its_exec() {
         id,
         Progress::Started {
             deadline: None,
-            parked: true,
+            run: Run::Parked,
         },
     );
     shared.register_exec(id);
@@ -736,7 +739,7 @@ fn a_cancelled_abandoned_call_without_exec_ends_at_once() {
         id,
         Progress::Started {
             deadline: None,
-            parked: true,
+            run: Run::Parked,
         },
     );
     shared.cancel_call(id);
@@ -758,7 +761,7 @@ fn an_uncancelled_abandoned_call_with_exec_still_fails() {
         id,
         Progress::Started {
             deadline: None,
-            parked: true,
+            run: Run::Parked,
         },
     );
     shared.register_exec(id);
@@ -1490,7 +1493,10 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
                 shared.calls.values().any(|progress| {
                     matches!(
                         progress,
-                        super::super::hub::Progress::Started { parked: true, .. }
+                        super::super::hub::Progress::Started {
+                            run: Run::Parked,
+                            ..
+                        }
                     )
                 })
             }),

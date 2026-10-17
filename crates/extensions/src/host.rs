@@ -310,6 +310,20 @@ pub(crate) enum Request {
     Sleep(Duration),
 }
 
+impl Request {
+    pub(crate) fn waits_on_login(&self) -> bool {
+        match self {
+            Self::Callback { .. } | Self::Sleep(_) => true,
+            Self::Http(_)
+            | Self::Ask(_)
+            | Self::Tool(_)
+            | Self::Drive(_)
+            | Self::Exec(_)
+            | Self::Lock => false,
+        }
+    }
+}
+
 /// One `host.drive` call, copied out of Lua so the session's door can run
 /// it: the driver command and its arguments as JSON.
 pub(crate) struct DriveRequest {

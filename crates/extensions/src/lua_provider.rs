@@ -548,6 +548,8 @@ impl LuaProvider {
             let message = detail(&e);
             if matches!(e, Error::Unattended { .. }) {
                 signing::Error::Unattended { message }
+            } else if matches!(e, Error::LoginTimedOut { .. }) {
+                signing::Error::LoginTimedOut { message }
             } else {
                 signing::Error::Credential {
                     code: e.code(),
@@ -679,6 +681,7 @@ impl LuaProvider {
             Error::RefreshRejected { .. }
                 | Error::RefreshUnreachable { .. }
                 | Error::Unattended { .. }
+                | Error::LoginTimedOut { .. }
         ) {
             e
         } else {

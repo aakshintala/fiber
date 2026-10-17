@@ -373,6 +373,18 @@ pub enum Error {
         /// `open`, `callback` or `poll`.
         call: String,
     },
+    /// A credential still waiting on a callback or poll sleep when its timeout passed.
+    #[error(
+        "`{extension}`: `{callback}` waited {timeout_ms} ms for a login that did not finish, and was stopped. Log in again."
+    )]
+    LoginTimedOut {
+        /// The extension.
+        extension: String,
+        /// The credential callback.
+        callback: String,
+        /// The timeout it declared.
+        timeout_ms: u64,
+    },
     /// A callback ran past the timeout it declared, and was stopped.
     #[error("`{extension}`: `{callback}` passed its {timeout_ms} ms timeout and was stopped.")]
     Timeout {
@@ -507,7 +519,7 @@ impl Error {
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
-            Self::RefreshRejected { .. } | Self::Unattended { .. } => {
+            Self::RefreshRejected { .. } | Self::Unattended { .. } | Self::LoginTimedOut { .. } => {
                 ErrorCode::AuthenticationFailed
             }
             Self::RefreshUnreachable { .. } => ErrorCode::ConnectionFailed,

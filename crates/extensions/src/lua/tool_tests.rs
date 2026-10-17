@@ -374,7 +374,10 @@ fn parked(shared: &super::super::Shared) -> bool {
     shared.calls.values().any(|progress| {
         matches!(
             progress,
-            super::super::hub::Progress::Started { parked: true, .. }
+            super::super::hub::Progress::Started {
+                run: Run::Parked,
+                ..
+            }
         )
     })
 }
