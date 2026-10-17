@@ -104,6 +104,98 @@ fn an_object_names_the_highest_layer_that_set_part_of_it() {
 }
 
 #[test]
+fn get_and_get_segments_pin_the_value_and_source_across_layers() {
+    // One fixture holding every layering shape, read through both the
+    // dotted-key and the literal-segments spellings: whatever the fast
+    // path does, the value and its source never move.
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"model": "g/b", "handoff": {"tokens": 1},
+            "models": {"a/b": {"handoff": {"tokens": 9}}},
+            "skills": {"disabled": ["a"]},
+            "providers": {"acme": {"credentials": {"work": {"env": "G"}}}}}"#,
+    );
+    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    setup.write(
+        &setup.project(),
+        r#"{"model": "p/b", "skills": {"disabled": ["b", "a"]},
+            "providers": {"acme": {"credentials": {"work": {"file": "/k"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    let segments = |key: &[&str]| {
+        key.iter().map(|segment| (*segment).to_owned()).collect::<Vec<_>>()
+    };
+
+    // A scalar names the highest layer holding it.
+    assert_eq!(
+        config.get("model", None),
+        Some((json!("p/b"), Source::Project(setup.project())))
+    );
+    assert_eq!(
+        config.get_segments(&segments(&["model"]), None),
+        Some((json!("p/b"), Source::Project(setup.project())))
+    );
+
+    // An object merges key by key and names the highest layer holding
+    // any part of it.
+    for found in [
+        config.get("handoff", None),
+        config.get_segments(&segments(&["handoff"]), None),
+    ] {
+        let (value, source) = found.unwrap();
+        assert_eq!(source, Source::Repository(setup.repository()));
+        assert_eq!(value["tokens"], json!(1));
+        assert_eq!(value["nudge"], json!(false));
+    }
+
+    // A per-model entry wins for its model; any other model reads the
+    // same layer's top level.
+    assert_eq!(
+        config.get("handoff.tokens", Some("a/b")),
+        Some((json!(9), Source::Global(setup.global())))
+    );
+    assert_eq!(
+        config.get_segments(&segments(&["handoff", "tokens"]), Some("a/b")),
+        Some((json!(9), Source::Global(setup.global())))
+    );
+    assert_eq!(
+        config.get("handoff.tokens", Some("c/d")),
+        Some((json!(1), Source::Global(setup.global())))
+    );
+    assert_eq!(
+        config.get_segments(&segments(&["handoff", "tokens"]), Some("c/d")),
+        Some((json!(1), Source::Global(setup.global())))
+    );
+
+    // A union key holds every layer's names and names the highest layer
+    // holding any.
+    assert_eq!(
+        config.get("skills.disabled", None),
+        Some((json!(["a", "b"]), Source::Project(setup.project())))
+    );
+    assert_eq!(
+        config.get_segments(&segments(&["skills", "disabled"]), None),
+        Some((json!(["a", "b"]), Source::Project(setup.project())))
+    );
+
+    // An entry-replaced row goes whole to one layer: the lower entry is
+    // gone, and the row names the layer holding the survivor.
+    assert_eq!(
+        config.get("providers.acme.credentials.work", None),
+        Some((json!({"file": "/k"}), Source::Project(setup.project())))
+    );
+    assert_eq!(
+        config.get_segments(
+            &segments(&["providers", "acme", "credentials", "work"]),
+            None
+        ),
+        Some((json!({"file": "/k"}), Source::Project(setup.project())))
+    );
+}
+
+#[test]
 fn a_per_model_key_wins_over_the_same_layers_top_level() {
     let setup = Setup::new();
     setup.write(
