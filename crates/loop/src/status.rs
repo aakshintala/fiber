@@ -19,6 +19,7 @@ use contract::events::{
 use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log, Watcher};
+use support::text::one_line;
 
 use crate::Loop;
 
@@ -31,6 +32,9 @@ const LIVE: &str = "status_live";
 /// The control line that ends the thread. Both control lines are internal:
 /// they go to this watcher alone, never to a client or the log.
 const STOP: &str = "status_stop";
+
+/// A classified subject, kept only on this watcher's queue.
+const SUBJECT: &str = "status_subject";
 
 /// What a state is, for deciding when `since` restarts: the state's kind,
 /// and the tool name or request id it names.
@@ -56,6 +60,7 @@ pub(crate) struct Fold {
     project: String,
     parent: Option<SessionId>,
     model: String,
+    thinking: Option<String>,
     window: Option<u64>,
     /// Each requested call's tool name, by action.
     tools: BTreeMap<ActionId, String>,
@@ -78,6 +83,12 @@ pub(crate) struct Fold {
     /// line instead of twice.
     last: SessionStatus,
     since: Option<u64>,
+    started: u64,
+    calls: u64,
+    turns: u64,
+    step: Option<String>,
+    latest: Option<(String, serde_json::Map<String, serde_json::Value>)>,
+    pending_subject: Option<(serde_json::Value, Option<String>)>,
     /// Whether history is folded: from then on `running` and `git` are read.
     live: bool,
     read_running: Running,
@@ -106,6 +117,7 @@ impl Fold {
             workspace,
             parent: None,
             model,
+            thinking: None,
             window,
             tools: BTreeMap::new(),
             running_calls: Vec::new(),
@@ -125,8 +137,13 @@ impl Fold {
                 project: String::new(),
                 parent: None,
                 model: String::new(),
+                thinking: None,
                 state: SessionState::Idle,
                 since: 0,
+                started: 0,
+                calls: 0,
+                turns: Some(0),
+                step: None,
                 git: None,
                 context: None,
                 spend: Usage {
@@ -144,6 +161,12 @@ impl Fold {
                 clients: 0,
             },
             since: None,
+            started: 0,
+            calls: 0,
+            turns: 0,
+            step: None,
+            latest: None,
+            pending_subject: None,
             live: false,
             read_running,
             read_git,
@@ -188,21 +211,52 @@ impl Fold {
         changed
     }
 
+    /// Holds the latest classification even when its request is still in
+    /// the lagged watcher's history. Equal call payloads have equal subjects.
+    pub(crate) fn subject(&mut self, line: &Envelope) -> bool {
+        let Some(call) = line.payload.get("call") else {
+            return false;
+        };
+        let subject = line
+            .payload
+            .get("subject")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        self.pending_subject = Some((call.clone(), subject.clone()));
+        if let Some((name, payload)) = &self.latest
+            && call.as_object() == Some(payload)
+        {
+            self.step = Some(call_step(name, subject.as_deref()));
+        }
+        let status = self.status();
+        let changed = status != self.last;
+        self.last = status;
+        changed
+    }
+
     fn apply(&mut self, event: &Event, line: &Envelope) {
         match event {
             Event::SessionStarted(started) => {
+                self.started = line.ts;
                 self.workspace.clone_from(&started.workspace);
                 self.parent = started.parent.as_ref().map(|p| p.session_id.clone());
             }
             Event::SessionNamed(named) => self.name.clone_from(&named.name),
             Event::PreambleBuilt(built) => {
                 self.model.clone_from(&built.model);
+                self.thinking.clone_from(&built.thinking);
                 self.window = Some(built.context_window);
                 // A process that built its preamble no longer waits on an offer.
                 self.pending.retain(|p| p.kind != WaitingKind::Offer);
             }
-            Event::ModelChanged(changed) => self.model.clone_from(&changed.after.model),
+            Event::ModelChanged(changed) => {
+                self.model.clone_from(&changed.after.model);
+                self.thinking.clone_from(&changed.after.thinking);
+            }
             Event::TurnStarted(started) => {
+                if line.turn_id.is_some() {
+                    self.turns += 1;
+                }
                 if self.first_prompt.is_none() {
                     if let Some(prompt) = prompt_of(&started.input) {
                         self.first_prompt = Some(prompt);
@@ -240,6 +294,14 @@ impl Fold {
             Event::RetryScheduled(_) => self.retrying = true,
             Event::AssistantMessageStarted(_) | Event::StepStarted(_) => self.retrying = false,
             Event::ToolCallRequested(call) => {
+                self.calls += 1;
+                self.step = Some(one_line(&call.name));
+                self.latest = Some((call.name.clone(), line.payload.clone()));
+                if let Some((payload, subject)) = &self.pending_subject
+                    && payload.as_object() == Some(&line.payload)
+                {
+                    self.step = Some(call_step(&call.name, subject.as_deref()));
+                }
                 if let Some(id) = &line.action_id {
                     self.tools.insert(id.clone(), call.name.clone());
                 }
@@ -463,8 +525,13 @@ impl Fold {
             project: self.project.clone(),
             parent: self.parent.clone(),
             model: self.model.clone(),
+            thinking: self.thinking.clone(),
             state: self.state(),
             since: self.since.unwrap_or_default(),
+            started: self.started,
+            calls: self.calls,
+            turns: Some(self.turns),
+            step: self.step.clone(),
             git: self.git.clone(),
             // A window of 0 is no window: a fill against it means nothing.
             context: self
@@ -503,9 +570,33 @@ fn prompt_of(input: &[InputItem]) -> Option<String> {
     })
 }
 
-/// `text` on one line.
-fn one_line(text: &str) -> String {
-    text.replace(['\n', '\r'], " ")
+/// A tool with no usable subject shows its name alone.
+fn call_step(name: &str, subject: Option<&str>) -> String {
+    match subject.filter(|subject| !subject.is_empty()) {
+        Some(subject) => one_line(&format!("{name} {subject}")),
+        None => one_line(name),
+    }
+}
+
+/// Classification's private path to the status watcher; never logged.
+#[derive(Clone)]
+pub(crate) struct Tap(Injector);
+
+impl Tap {
+    /// Queues the subject with exactly the call payload the log wrote.
+    pub(crate) fn subject(
+        &self,
+        call: &contract::events::ToolCallRequested,
+        subject: Option<&str>,
+    ) {
+        let Ok(call) = serde_json::to_value(call) else {
+            return;
+        };
+        let mut line = control(SUBJECT);
+        line.payload.insert("call".to_owned(), call);
+        line.payload.insert("subject".to_owned(), subject.into());
+        self.0.push_kept(line);
+    }
 }
 
 /// The running observer thread.
@@ -515,6 +606,11 @@ pub(crate) struct Status {
 }
 
 impl Status {
+    /// A sender for this observer's private control queue.
+    pub(crate) fn tap(&self) -> Tap {
+        Tap(self.injector.clone())
+    }
+
     /// Ends the thread after every line already written, and waits for it:
     /// no `session_status` follows this call.
     pub(crate) fn stop(self) {
@@ -637,6 +733,7 @@ impl Observer {
     fn line(&mut self, line: &Envelope) -> Flow {
         let changed = match line.kind.as_str() {
             STOP => return Flow::Stop,
+            SUBJECT => self.fold.subject(line),
             LIVE => {
                 self.live = true;
                 self.fold.go_live();

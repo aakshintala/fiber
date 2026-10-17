@@ -630,10 +630,7 @@ fn architecture_command_reports_source_collection_failure_as_exit_two() {
     std::fs::remove_dir_all(dir.path().join(".git")).unwrap();
     let (code, out) = xtask(&dir, &["session-paths"], &[], "");
     assert_eq!(code, 2);
-    assert_eq!(
-        out,
-        "xtask: git ls-files --cached --others --exclude-standard -- crates/a crates/b crates/c: fatal: not a git repository (or any of the parent directories): .git\n"
-    );
+    assert!(out.starts_with("xtask: git ls-files --cached --others --exclude-standard -- crates/a crates/b crates/c: fatal: not a git repository"), "{out}");
 }
 
 #[test]

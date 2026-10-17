@@ -9,6 +9,7 @@
 mod cache;
 mod credential;
 mod credential_file;
+mod editable;
 mod error;
 mod extension;
 mod extension_settings;
@@ -37,6 +38,7 @@ pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
 pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
+pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
     Binary, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
@@ -304,6 +306,37 @@ impl Config {
                 Some((default, Source::Default))
             }
         }
+    }
+
+    /// The effective value of `key` as a whole number of zero or more:
+    /// `None` for a missing key without a default, or a value of another
+    /// JSON type (a negative or fractional number is `None`).
+    pub fn count(&self, key: &str, model: Option<&str>) -> Option<u64> {
+        self.get(key, model).and_then(|(value, _)| value.as_u64())
+    }
+
+    /// The effective value of `key` as a flag: `None` for a missing key
+    /// without a default, or a value of another JSON type.
+    pub fn flag(&self, key: &str, model: Option<&str>) -> Option<bool> {
+        self.get(key, model).and_then(|(value, _)| value.as_bool())
+    }
+
+    /// The effective value of `key` as text: `None` for a missing key
+    /// without a default, or a value of another JSON type.
+    pub fn text(&self, key: &str, model: Option<&str>) -> Option<String> {
+        self.get(key, model)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned))
+    }
+
+    /// The effective value of `key` as a list of strings, in order,
+    /// skipping non-strings: empty for a missing key or a non-array.
+    pub fn list(&self, key: &str, model: Option<&str>) -> Vec<String> {
+        self.get(key, model)
+            .and_then(|(value, _)| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect()
     }
 
     /// Every name in the list at `key`, from every layer that sets it,

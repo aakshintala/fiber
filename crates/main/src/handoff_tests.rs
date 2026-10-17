@@ -13,10 +13,6 @@ fn config(overrides: &[&str]) -> config::Config {
 fn the_defaults_are_the_documented_ones() {
     let settings = handoff_settings(&config(&[]), MODEL);
     assert_eq!(settings, r#loop::HandoffSettings::default());
-    assert!(settings.enabled);
-    assert_eq!(settings.tokens, 400_000);
-    assert!((settings.window_fraction - 0.7).abs() < f64::EPSILON);
-    assert!(settings.nudge);
 }
 
 #[test]

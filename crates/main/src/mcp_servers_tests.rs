@@ -747,6 +747,7 @@ fn delegates() -> crate::delegates::Delegates {
         jobs::Resolve {
             lookup: std::sync::Arc::new(|_| Err(String::new())),
             catalogue: std::sync::Arc::from(""),
+            credential: std::sync::Arc::new(|_| Ok(None)),
         },
     )
 }

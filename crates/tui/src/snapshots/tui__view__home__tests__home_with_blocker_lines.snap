@@ -1,28 +1,28 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-expression: "screen(&app, 80, 24)"
+expression: frame.clone()
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    7 working · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
-
-
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
-
-No API key for test/model in this workspace. Run `fiber login` and press Enter
-to try again, or pick another model.
-A second line stays short.
+w +  7 live · $0.00
+⌥1 ● session                                                       WORKING  0s ✕
+    s_0000000000000000 · $0.00
+⌥2 ● session                                                       WORKING  0s ✕
+    s_0000000000000001 · $0.00
+⌥3 ● session                                                       WORKING  0s ✕
+    s_0000000000000002 · $0.00
+⌥4 ● session                                                       WORKING  0s ✕
+    s_0000000000000003 · $0.00
+⌥5 ● session                                                       WORKING  0s ✕
+  ⚠ start_failed · one two                                                     ✕
+one
+two
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› hi█
-
-
-[w]  [no model]  [thinking: default]  Enter starts a session
+▌ › hi█
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-
-  ⚠ start_failed · No API key for test/model in this workspace. Run `fiber lo… ✕
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

@@ -353,7 +353,7 @@ pub(crate) fn parts_in(
     let reviewer_notes = config.reviewer_context();
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
-    let idle = settings::idle_exit(&config);
+    let idle = Some(settings::idle_exit(&config));
     let warm = scripted::warm(model.model, settings::warm(&config));
     let thinking = settings::thinking(
         model.thinking,

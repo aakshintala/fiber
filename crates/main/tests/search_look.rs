@@ -120,11 +120,12 @@ fn col_at_or(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
     if want.is_empty() {
         return None;
     }
-    for x in 0..160u16 {
+    let (width, _) = grid.size();
+    for x in 0..width {
         let mut ok = true;
         for (dx, want) in want.iter().enumerate() {
             let xi = x.checked_add(u16::try_from(dx).ok()?)?;
-            if xi >= 160 || grid.cell(xi, y).symbol != want.to_string() {
+            if xi >= width || grid.cell(xi, y).symbol != want.to_string() {
                 ok = false;
                 break;
             }
@@ -674,4 +675,440 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     let grid = open_view(&mut run, "tools");
     assert_top_row(&grid, "Tools", "/tools");
     esc_closes(&mut run);
+}
+
+/// A held delegate at 65% context and a background job on the same FIFO.
+/// Neither can finish until the test releases its open FIFO or quits.
+fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
+    let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "p3");
+    fs::create_dir_all(root.path().join("h")).unwrap();
+    fs::create_dir_all(root.path().join("w")).unwrap();
+    let setup = Setup {
+        root,
+        deadline: support::Deadline::start(),
+    };
+    let hold = setup.workspace().join("hold");
+    let mut make = std::process::Command::new("mkfifo");
+    make.arg(&hold)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    assert!(
+        support::run_to_exit(setup.deadline, "make the hold FIFO", make)
+            .status
+            .success()
+    );
+    let release = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&hold)
+        .unwrap();
+    let command = format!("head -n 1 {}", hold.display());
+    write_json(
+        &setup.workspace().join("d.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}], "usage": {"input": 650000}},
+            {"text": ["Reviewed."]}
+        ]}),
+    );
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "delegate_spawn", "arguments": {
+                "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command, "run_in_background": true}}]},
+            {"text": [REPLY]}
+        ]}),
+    );
+    write_json(
+        &setup.workspace().join("r.json"),
+        &json!({"steps": [
+            {"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}
+        ]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
+            "roles": {"delegate": "fiber:scripted/d.json"},
+            "hub": {"idle_exit_ms": 1000}
+        }),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+            json!({"decision": "allow", "tool": "shell", "prefix": command}),
+        ),
+    )
+    .unwrap();
+    let guard = fakes::Watchdog::matching(hold.to_str().unwrap());
+    (setup, release, guard, command)
+}
+
+fn narrow_running(setup: &Setup) -> Run {
+    let mut run = Run::spawn(setup, 80, 24, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
+    run.wait_screen("the narrow running counts", |grid| {
+        grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running")
+    });
+    run
+}
+
+fn open_running(run: &mut Run, count: &str, heading: &str) -> Grid {
+    let grid = run.wait_screen("the running count", |grid| grid.contents.contains(count));
+    let y = row_with(&grid, count);
+    click(run, col_at(&grid, y, count), y);
+    run.wait_screen("the running list", |grid| grid.contents.contains(heading))
+}
+
+/// Durations are normalised to their shape, never compared with real time.
+fn running_duration(text: &str) -> bool {
+    text.strip_suffix(['s', 'm', 'h', 'd'])
+        .is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+/// The delegate list's whole promised row, including its colours and inks.
+fn delegate_list_ready(grid: &Grid) -> bool {
+    let Some(y) = row_with_or(&grid.rows, "Delegates · 1 running") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, y, "Delegates · 1 running") else {
+        return false;
+    };
+    let Some(desc) = grid.rows.get(usize::from(y + 1)) else {
+        return false;
+    };
+    let Some(duration) = desc.trim().strip_prefix("◆ review the diff · ") else {
+        return false;
+    };
+    if !running_duration(duration) {
+        return false;
+    }
+    if !(0.."Delegates · 1 running".chars().count() as u16).all(|dx| grid.cell(x + dx, y).bold) {
+        return false;
+    }
+    let detail = y + 2;
+    let Some(model) = col_at_or(grid, detail, "scripted/d.json · 1 call · s_") else {
+        return false;
+    };
+    if model != x + 2 {
+        return false;
+    }
+    let Some(bar) = col_at_or(grid, detail, "▆▆▆▆▆▆░░░░ 65%") else {
+        return false;
+    };
+    if !(model..bar).all(|col| grid.cell(col, detail).dim) {
+        return false;
+    }
+    if !(0..6).all(|dx| grid.cell(bar + dx, detail).fg == ATTENTION) {
+        return false;
+    }
+    if !(6..10).all(|dx| grid.cell(bar + dx, detail).fg == Colour::Rgb(58, 58, 74)) {
+        return false;
+    }
+    if !(10..14).all(|dx| grid.cell(bar + dx, detail).dim) {
+        return false;
+    }
+    let Some(hint) = row_with_or(&grid.rows, "a row opens that item's view") else {
+        return false;
+    };
+    let Some(hint_x) = col_at_or(grid, hint, "a row opens that item's view") else {
+        return false;
+    };
+    (0.."a row opens that item's view".chars().count() as u16)
+        .all(|dx| grid.cell(hint_x + dx, hint).dim)
+}
+
+#[test]
+fn the_running_lists_match_the_doc() {
+    let (setup, _release, _guard, command) = running_setup();
+    let mut run = narrow_running(&setup);
+    open_running(&mut run, "1 delegate running", "Delegates · 1 running");
+    let grid = run.wait_screen("the delegate list's rows and colours", delegate_list_ready);
+    assert!(delegate_list_ready(&grid));
+    esc_closes(&mut run);
+    let grid = open_running(&mut run, "1 job running", "Jobs · 1 running");
+    let heading = row_with(&grid, "Jobs · 1 running");
+    let x = col_at(&grid, heading, "Jobs · 1 running");
+    for dx in 0.."Jobs · 1 running".chars().count() as u16 {
+        assert!(grid.cell(x + dx, heading).bold);
+    }
+    let row = grid.rows[usize::from(heading + 1)].trim();
+    let tail = row
+        .strip_prefix(&format!("◆ {command} · "))
+        .expect("the job command");
+    let (elapsed, job) = tail.split_once(" · ").expect("the job elapsed and id");
+    assert!(running_duration(elapsed));
+    assert!(job.starts_with("j_"));
+    let hint = row_with(&grid, "a row opens that item's view");
+    let x = col_at(&grid, hint, "a row opens that item's view");
+    for dx in 0.."a row opens that item's view".chars().count() as u16 {
+        assert!(grid.cell(x + dx, hint).dim);
+    }
+}
+
+/// The two no-file results, with their complete labels and match inks.
+fn search_results_ready(grid: &Grid) -> bool {
+    if col_at_or(grid, 0, " Search  ⌕ lock").is_none() {
+        return false;
+    }
+    let (first, last) = top_run(grid, "Search");
+    if !(first..=last).all(|x| grid.cell(x, 0).bg == SURFACE) {
+        return false;
+    }
+    for (text, bold) in [("Search", true), ("⌕ lock", false), ("Esc returns", false)] {
+        let Some(x) = col_at_or(grid, 0, text) else {
+            return false;
+        };
+        if !(0..text.chars().count() as u16).all(|dx| {
+            if bold {
+                grid.cell(x + dx, 0).bold
+            } else {
+                grid.cell(x + dx, 0).dim
+            }
+        }) {
+            return false;
+        }
+    }
+    let Some(count) = row_with_or(&grid.rows, "of 2 · ⌕ lock") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, count, "of 2 · ⌕ lock") else {
+        return false;
+    };
+    if !(0.."of 2 · ⌕ lock".chars().count() as u16).all(|dx| grid.cell(x + dx, count).dim) {
+        return false;
+    }
+    for label in ["turn 1", "turn 2"] {
+        let Some(y) = row_with_or(&grid.rows, label) else {
+            return false;
+        };
+        let text: String = (first..=last).map(|x| grid.cell(x, y).symbol).collect();
+        if text.trim() != label {
+            return false;
+        }
+        if !(last - 5..=last).all(|x| grid.cell(x, y).dim) {
+            return false;
+        }
+    }
+    let Some(hint) = row_with_or(&grid.rows, "Enter jumps to the match") else {
+        return false;
+    };
+    if !(0..23).all(|dx| grid.cell(first + dx, hint).dim) {
+        return false;
+    }
+    if grid.cell((first + last) / 2, hint + 1).symbol != "▄" {
+        return false;
+    }
+    let cells = (0..grid.size().1)
+        .flat_map(|y| (first..=last).map(move |x| (x, y)))
+        .map(|(x, y)| grid.cell(x, y));
+    let (mut matched, mut current) = (false, false);
+    for cell in cells {
+        if cell.bg == MATCH {
+            if cell.fg != WHITE {
+                return false;
+            }
+            matched = true;
+        }
+        if cell.bg == CURRENT {
+            if cell.fg != BLACK {
+                return false;
+            }
+            current = true;
+        }
+    }
+    matched && current
+}
+
+#[test]
+fn the_search_results_rows_match_the_doc() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "filehit\n").unwrap();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"text": ["lock one"]}, {"text": ["lock two"]}
+        ]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    let mut run = turned(&setup, "first");
+    let from = run.output().len();
+    run.write(b"second\r");
+    run.turn_finished(from);
+    run.write(b"\x06lock");
+    run.wait_screen("the two search matches", |grid| {
+        grid.contents.contains("of 2")
+    });
+    run.write(b"\x06");
+    let grid = run.wait_screen("the result rows, labels and inks", search_results_ready);
+    assert!(search_results_ready(&grid));
+    let (first, last) = assert_top_row(&grid, "Search", "⌕ lock");
+    click(&mut run, (first + last) / 2, 0);
+    run.wait_screen(
+        "the conversation after the search top row returns",
+        |grid| {
+            grid.contents.contains("lock two")
+                && !grid.contents.contains("Enter jumps to the match")
+        },
+    );
+    run.write(b"\x1b[27u");
+    run.wait_screen("the closed search bar", |grid| !grid.contents.contains('⌕'));
+    run.write(b"\x1b[<35;1;21M");
+    run.write(b"\x06filehit");
+    run.wait_screen("the file-call match", |grid| grid.contents.contains("of 1"));
+    run.write(b"\x06");
+    let grid = run.wait_screen("the file-call path and turn", |grid| {
+        let Some(y) = row_with_or(&grid.rows, "turn 1") else {
+            return false;
+        };
+        let Some(path) = col_at_or(grid, y, "a.txt") else {
+            return false;
+        };
+        let Some(turn) = col_at_or(grid, y, "turn 1") else {
+            return false;
+        };
+        (0..5).all(|dx| grid.cell(path + dx, y).bold)
+            && (0..6).all(|dx| grid.cell(turn + dx, y).dim)
+    });
+    let y = row_with(&grid, "turn 1");
+    assert!(grid.rows[usize::from(y)].contains("a.txt"));
+    let (_, last) = assert_top_row(&grid, "Search", "⌕ filehit");
+    assert_eq!(col_at(&grid, y, "turn 1") + 5, last);
+}
+
+fn changed_file_row_ready(grid: &Grid) -> bool {
+    if !grid.rows[0].contains(" Changed files  diff against HEAD") {
+        return false;
+    }
+    let Some(y) = row_with_or(&grid.rows, "changed.txt · +2 −0") else {
+        return false;
+    };
+    let Some(x) = col_at_or(grid, y, "changed.txt · +2 −0") else {
+        return false;
+    };
+    (0..11).all(|dx| grid.cell(x + dx, y).bold)
+        && (11..14).all(|dx| grid.cell(x + dx, y).dim)
+        && (14..16).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(115, 201, 145))
+        && (17..19).all(|dx| grid.cell(x + dx, y).fg == Colour::Rgb(255, 93, 115))
+}
+
+#[test]
+fn the_changed_files_rows_match_the_doc() {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "write", "arguments": {"path": "changed.txt", "content": "one\ntwo\n"}}]},
+            {"text": [REPLY]}
+        ]}),
+    );
+    write_json(
+        &setup.workspace().join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"}, "hub": {"idle_exit_ms": 1000}
+        }),
+    );
+    let mut run = turned(&setup, "go");
+    let grid = run.wait_screen("the changed-files panel card", |grid| {
+        session_settled(grid) && panel_item_at(grid, "changed.txt").is_some()
+    });
+    let (_, y) = panel_item_at(&grid, "changed.txt").unwrap();
+    let x = col_at(&grid, y + 1, "+2");
+    click(&mut run, x, y + 1);
+    let grid = run.wait_screen("the changed-file row and inks", changed_file_row_ready);
+    assert!(changed_file_row_ready(&grid));
+}
+
+/// The Session card once its `cost` row is drawn: the row is absent only
+/// when spend is `Some(0.0)` with no budget, and the cards below it sit
+/// one row higher without it, so a wait that supplies coordinates for a
+/// later click or hover holds until the row lands
+/// (`crates/tui/src/view/panel.rs`, `session_rows`). The `cost` label
+/// draws only with the row: `cost on subscription` draws without it, so
+/// its `cost` prefix does not count.
+fn session_settled(grid: &Grid) -> bool {
+    // The panel starts at column 100, as in `panel_item_at`: a `cost`
+    // elsewhere (a conversation echo, another card) does not settle us.
+    support::session_cost_drawn(grid, 100)
+}
+
+fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
+    grid.rows.iter().enumerate().find_map(|(y, _)| {
+        let y = u16::try_from(y).ok()?;
+        let x = col_at_or(grid, y, description)?;
+        (x >= 100).then_some((x, y))
+    })
+}
+
+/// A card's first item, not a matching subject in another card's progress row.
+fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16, u16)> {
+    let (_, heading) = panel_item_at(grid, card)?;
+    let y = heading.checked_add(1)?;
+    Some((col_at_or(grid, y, description)?, y))
+}
+
+#[test]
+fn the_item_views_top_row_closes_them() {
+    let (setup, _release, _guard, command) = running_setup();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the parent reply and running panel cards", |grid| {
+        grid.contents.contains(REPLY)
+            && panel_item_at(grid, "review the diff").is_some()
+            && panel_item_at(grid, "Jobs").is_some()
+            && session_settled(grid)
+    });
+    let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
+    click(&mut run, x, y);
+    run.wait_screen("the expanded Jobs card", |grid| {
+        panel_item_at(grid, "head -n 1").is_some()
+    });
+    for (card, description, crumb) in [
+        (
+            "Delegates",
+            "review the diff",
+            "› ◆ review the diff".to_owned(),
+        ),
+        ("Jobs", "head -n 1", format!("› ▸ {command}")),
+    ] {
+        let grid = run.wait_screen("the running panel card's first item", |grid| {
+            session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
+        });
+        let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
+        // The hover frame acknowledges this cell as a live click target.
+        // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
+        run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+        run.wait_screen("the running item's hover acknowledgement", |grid| {
+            session_settled(grid)
+                && panel_card_item_at(grid, card, description) == Some((x, y))
+                && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)
+        });
+        click(&mut run, x, y);
+        let grid = run.wait_screen("the item's breadcrumb without a cross", |grid| {
+            grid.rows[0].contains(&crumb) && !grid.rows[0].contains('✕')
+        });
+        assert!(grid.rows[0].contains(&crumb));
+        assert!(!grid.rows[0].contains('✕'));
+        click(&mut run, 80, 0);
+        run.wait_screen(
+            "the conversation after clicking the item's top row",
+            |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
+        );
+    }
 }

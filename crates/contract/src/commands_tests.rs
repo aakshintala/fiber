@@ -94,6 +94,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "tools"}),
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
+        json!({"id": "c", "command": "quota"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 0}}),
@@ -230,6 +231,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("tools", Command::Tools),
         ("commands", Command::Commands),
         ("skills", Command::Skills),
+        ("quota", Command::Quota),
         ("close", Command::Close(CloseArgs { now: false })),
     ] {
         let missing = format!(r#"{{"id":"c","command":"{name}"}}"#);
@@ -245,7 +247,11 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         );
         assert!(parse(&extra).is_err(), "{extra}");
     }
-    for (name, command) in [("commands", Command::Commands), ("skills", Command::Skills)] {
+    for (name, command) in [
+        ("commands", Command::Commands),
+        ("skills", Command::Skills),
+        ("quota", Command::Quota),
+    ] {
         let line = CommandLine {
             id: CommandId("c_1".into()),
             command,
@@ -436,8 +442,41 @@ fn an_optional_arg_set_to_null_is_invalid_arguments() {
 }
 
 #[test]
-fn an_unknown_command_is_refused() {
-    assert!(parse(r#"{"id":"c","command":"teleport"}"#).is_err());
+fn an_unknown_command_reads_as_unknown() {
+    assert_eq!(
+        parse(r#"{"id":"c","command":"teleport"}"#).unwrap().command,
+        Command::Unknown
+    );
+}
+
+#[test]
+fn an_unknown_name_reads_as_unknown_and_refuses_args() {
+    // A bare unknown name reads as `Unknown`; with args the line does not
+    // read as a command line at all, and the driver re-reads the name
+    // alone to answer `unknown_command`.
+    assert_eq!(
+        parse(r#"{"id":"c","command":"frob"}"#).unwrap().command,
+        Command::Unknown,
+        "bare frob"
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"frob","args":{"x":1}}"#).is_err(),
+        "frob with args"
+    );
+    // The unbuilt `reload` still reads as itself beside `Unknown`.
+    assert_eq!(
+        parse(r#"{"id":"c","command":"reload"}"#).unwrap().command,
+        Command::Reload
+    );
+}
+
+#[test]
+fn unknown_is_never_serialised() {
+    let line = CommandLine {
+        id: CommandId("c".into()),
+        command: Command::Unknown,
+    };
+    assert!(serde_json::to_string(&line).is_err());
 }
 
 #[test]

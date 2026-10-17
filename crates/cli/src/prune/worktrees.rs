@@ -123,13 +123,13 @@ pub(crate) struct RemovedWorktrees {
 /// is not listed. Dropping the plan releases every kept lock.
 pub(crate) fn select(
     home: &Path,
+    users: &[log::Started],
     workspace: &Path,
     force: bool,
     dry_run: bool,
     now: SystemTime,
 ) -> Planned {
     let keys = scope_keys(home, workspace);
-    let users = log::started_sessions(home);
     let mut planned = Planned {
         rows: Vec::new(),
         removals: Vec::new(),
@@ -161,7 +161,7 @@ pub(crate) fn select(
                 });
                 continue;
             };
-            if hold_users(&users, &canonical, &mut planned, dry_run) {
+            if hold_users(users, &canonical, &mut planned, dry_run) {
                 listed.push(Listed {
                     row: WorktreeRow::Running { name },
                     removal: None,
@@ -385,7 +385,7 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
 
 /// The project keys in scope: the repository's project inside one, every
 /// project under `projects/` outside one.
-fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
+pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
     let resolved = doors::resolve_project(workspace);
     if resolved.in_repository {
         return vec![log::project_key(&resolved.path)];
@@ -496,10 +496,7 @@ fn revalidate(home: &Path, planned: &mut Planned, removal: &PlannedRemoval) -> R
         .join("projects")
         .join(&removal.project)
         .join("sessions");
-    for started in log::started_sessions(home) {
-        if started.dir.parent() != Some(sessions.as_path()) {
-            continue;
-        }
+    for started in log::started_sessions_in(&sessions) {
         if !is_user(&started.workspace, &canonical) {
             continue;
         }

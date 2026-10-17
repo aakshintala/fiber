@@ -455,6 +455,140 @@ fn each_label_fetches_its_own_account() {
 }
 
 #[test]
+fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
+    let root = fakes::TempDir::new("fiber-quota-now-held");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
+    assert!(
+        within({
+            let provider = provider.clone();
+            move || provider.registers("quota")
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        QuotaEntry::Unreachable { last: None }
+    );
+    assert!(
+        server.await_requests(1, WAIT),
+        "the fetch reached the held server"
+    );
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        QuotaEntry::Unreachable { last: None }
+    );
+    assert_eq!(server.requests().len(), 1);
+    server.release();
+    assert_eq!(
+        read(&provider),
+        QuotaEntry::Reported(percent("primary", 10.0, None))
+    );
+}
+
+#[test]
+fn quota_now_refetches_only_after_the_freshness_boundary() {
+    let root = fakes::TempDir::new("fiber-quota-now-fresh");
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
+    let clock = FakeClock::new();
+    let provider = http_quota_provider(&root, &server.url(), clock.clone());
+    let value = QuotaEntry::Reported(percent("primary", 10.0, None));
+    assert_eq!(read(&provider), value);
+    for advance in [
+        FRESH_FOR.checked_sub(Duration::from_nanos(1)).unwrap(),
+        Duration::from_nanos(1),
+    ] {
+        clock.advance(advance);
+        assert_eq!(provider.quota_now(&pair(), None), value);
+        assert!(
+            lock(&provider.quotas.state)
+                .get(&pair())
+                .unwrap()
+                .flight
+                .is_none()
+        );
+    }
+    clock.advance(Duration::from_nanos(1));
+    server.hold();
+    assert_eq!(provider.quota_now(&pair(), None), value);
+    assert!(
+        server.await_requests(2, WAIT),
+        "the overdue cache started a fetch"
+    );
+    assert_eq!(server.requests().len(), 2);
+    assert_eq!(
+        within({
+            let provider = provider.clone();
+            move || provider.quota_now(&pair(), None)
+        }),
+        value
+    );
+    server.release();
+    assert_eq!(
+        read(&provider),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
+}
+
+#[test]
+fn quota_now_expires_an_overdue_flight_without_waiting() {
+    let root = fakes::TempDir::new("fiber-quota-now-expire");
+    let (provider, clock) = quota_provider(&root, "nil");
+    let value = percent("weekly", 35.0, None);
+    for age in [
+        FETCH_TIMEOUT.checked_sub(Duration::from_nanos(1)).unwrap(),
+        FETCH_TIMEOUT,
+        FETCH_TIMEOUT + Duration::from_nanos(1),
+    ] {
+        let now = clock.now();
+        lock(&provider.quotas.state).insert(
+            pair(),
+            Cache {
+                fetched: Some((Some(value.clone()), now)),
+                flight: Some(Flight {
+                    id: 0,
+                    started: now.checked_sub(age).unwrap(),
+                }),
+                ..Cache::default()
+            },
+        );
+        let expected = if age < FETCH_TIMEOUT {
+            QuotaEntry::Reported(value.clone())
+        } else {
+            QuotaEntry::Unreachable {
+                last: Some((value.clone(), Duration::ZERO)),
+            }
+        };
+        assert_eq!(
+            within({
+                let provider = provider.clone();
+                move || provider.quota_now(&pair(), None)
+            }),
+            expected
+        );
+    }
+    lock(&provider.quotas.state).insert(
+        pair(),
+        Cache {
+            fetched: Some((None, clock.now())),
+            ..Cache::default()
+        },
+    );
+    assert_eq!(provider.quota_now(&pair(), None), QuotaEntry::NoQuota);
+}
+
+#[test]
 fn concurrent_readers_share_one_fetch() {
     let root = fakes::TempDir::new("fiber-quota-shared");
     let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
@@ -1302,4 +1436,46 @@ fn with_quota_observed_failure_matches_with_quota() {
         observed.is_err(),
         "the broken provider fails with_quota_observed the same way"
     );
+}
+
+#[test]
+fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
+    let root = fakes::TempDir::new("fiber-quota-pending");
+    let (provider, clock) = quota_provider(&root, "nil");
+    // A fresh label never fetched: pending.
+    assert!(within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // After a fetch succeeds: no longer pending.
+    let now = clock.now();
+    seed(
+        &provider,
+        Some((Some(percent("primary", 10.0, None)), now)),
+        None,
+    );
+    assert!(!within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // After a first fetch fails with no last value: not pending either.
+    seed(&provider, None, None);
+    lock(&provider.quotas.state)
+        .get_mut(&pair())
+        .unwrap()
+        .failed = true;
+    assert!(!within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // While the VM is busy the call still returns at once: no wait, no Lua.
+    let root = fakes::TempDir::new("fiber-quota-pending-busy");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let busy = http_quota_provider(&root, &server.url(), FakeClock::new());
+    assert!(within({
+        let busy = busy.clone();
+        move || busy.quota_pending(&pair())
+    }));
+    server.release();
 }

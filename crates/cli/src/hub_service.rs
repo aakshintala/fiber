@@ -31,12 +31,6 @@ const BOOTOUT_DEADLINE: Duration = Duration::from_secs(10);
 const RERUN: &str =
     "Run fiber hub install again, or fiber hub uninstall to remove what was written.";
 
-/// Runs a service manager's command.
-pub(crate) trait Runner {
-    /// Runs `program` with `args` to completion.
-    fn run(&self, program: &str, args: &[String]) -> io::Result<Ran>;
-}
-
 /// How a manager command ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Ran {
@@ -46,22 +40,18 @@ pub(crate) struct Ran {
 }
 
 /// Runs the real program, with stdin and stdout closed and stderr kept.
-pub(crate) struct SystemRunner;
-
-impl Runner for SystemRunner {
-    fn run(&self, program: &str, args: &[String]) -> io::Result<Ran> {
-        let output = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()?;
-        Ok(Ran {
-            success: output.status.success(),
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
+pub(crate) fn system_run(program: &str, args: &[String]) -> io::Result<Ran> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    Ok(Ran {
+        success: output.status.success(),
+        code: output.status.code(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 /// `fiber hub install [--port <port>]` for this Fiber home and binary.
@@ -70,13 +60,15 @@ pub fn hub_install(port: Option<u16>, clock: &dyn Clock) -> i32 {
         let answers = hub_answers(&home, clock, doors::hub::CONNECT_DEADLINE);
         install(
             &service,
-            &home,
-            port,
-            &SystemRunner,
-            clock,
-            answers,
-            &mut io::stdout(),
-            &write_unit,
+            &system_run,
+            InstallRow {
+                home: &home,
+                port,
+                clock,
+                hub_answers: answers,
+                out: &mut io::stdout(),
+                write: &write_unit,
+            },
         )
     });
     finish(ran)
@@ -85,7 +77,7 @@ pub fn hub_install(port: Option<u16>, clock: &dyn Clock) -> i32 {
 /// `fiber hub uninstall` for this Fiber home.
 pub fn hub_uninstall() -> i32 {
     let ran = system_service()
-        .and_then(|(_, service)| uninstall(&service, &SystemRunner, &mut io::stdout()));
+        .and_then(|(_, service)| uninstall(&service, &system_run, &mut io::stdout()));
     finish(ran)
 }
 
@@ -95,7 +87,7 @@ pub fn hub_uninstall() -> i32 {
 pub fn hub_restart(home: &Path) -> Result<bool, Failure> {
     let exe = current_exe()?;
     let service = Service::locate(manager(), home, &exe, &|key| std::env::var_os(key))?;
-    restart(&service, &SystemRunner)
+    restart(&service, &system_run)
 }
 
 /// Fiber home and its service, from this process's environment.
@@ -132,37 +124,41 @@ pub(crate) fn hub_answers(home: &Path, clock: &dyn Clock, within: Duration) -> b
 /// sync failed.
 type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), Failure>;
 
+/// Runs a manager command to completion.
+type ManagerRun = dyn Fn(&str, &[String]) -> io::Result<Ran>;
+
+/// install's inputs, bundled so the signature stays small.
+pub(crate) struct InstallRow<'a> {
+    pub(crate) home: &'a Path,
+    pub(crate) port: Option<u16>,
+    pub(crate) clock: &'a dyn Clock,
+    pub(crate) hub_answers: bool,
+    pub(crate) out: &'a mut dyn Write,
+    pub(crate) write: &'a UnitWrite,
+}
+
 /// Installs `service` listening on `port` as well as its socket, and loads
 /// it. `hub_answers` says whether a hub already answers on `run/hub`.
 /// `write` writes the unit file: a failed write restores like a failed
 /// manager call.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the install row: service, home, port, runner, clock, probe, output and writer"
-)]
 pub(crate) fn install(
     service: &Service,
-    home: &Path,
-    port: Option<u16>,
-    runner: &dyn Runner,
-    clock: &dyn Clock,
-    hub_answers: bool,
-    out: &mut dyn Write,
-    write: &UnitWrite,
+    run: &ManagerRun,
+    row: InstallRow<'_>,
 ) -> Result<(), Failure> {
-    config::replace_global(home, "hub.port", port.map(Value::from))
+    config::replace_global(row.home, "hub.port", row.port.map(Value::from))
         .map_err(|e| failed(e.code(), e))?;
     let previous = read_unit(&service.unit)?;
-    let rendered = service.render(port)?;
+    let rendered = service.render(row.port)?;
     let changed = previous.as_deref() != Some(rendered.as_bytes());
     let loaded = match service.manager {
-        Manager::Launchd { uid } => call(runner, "launchctl", &print_args(service, uid))?.success,
+        Manager::Launchd { uid } => call(run, "launchctl", &print_args(service, uid))?.success,
         Manager::Systemd => previous.is_some(),
     };
-    if changed && let Err(error) = write(&service.unit, rendered.as_bytes()) {
+    if changed && let Err(error) = (row.write)(&service.unit, rendered.as_bytes()) {
         return Err(restore_or_rerun(&service.unit, previous.as_deref(), error));
     }
-    if let Err(error) = load(service, runner, clock, loaded, changed) {
+    if let Err(error) = load(service, run, row.clock, loaded, changed) {
         let message = match changed.then(|| restore(&service.unit, previous.as_deref())) {
             Some(Err(lost)) => format!(
                 "{} The unit file {} could not be put back ({}); run fiber hub uninstall.",
@@ -175,15 +171,15 @@ pub(crate) fn install(
         return Err(failed(error.code, message));
     }
     write_line(
-        out,
+        row.out,
         &format!(
             "Installed the hub's login service: {}",
             service.unit.display()
         ),
     )?;
-    if hub_answers && !loaded {
+    if row.hub_answers && !loaded {
         write_line(
-            out,
+            row.out,
             "A hub a client started is running; the installed hub takes over once it exits, \
              when no client has been connected for hub.idle_exit_ms.",
         )?;
@@ -195,7 +191,7 @@ pub(crate) fn install(
 /// the service was loaded, and whether the file changed.
 fn load(
     service: &Service,
-    runner: &dyn Runner,
+    run: &ManagerRun,
     clock: &dyn Clock,
     loaded: bool,
     changed: bool,
@@ -205,7 +201,7 @@ fn load(
         Manager::Launchd { uid } => {
             let bootstrap = || {
                 must(
-                    runner,
+                    run,
                     "launchctl",
                     &[
                         "bootstrap".to_owned(),
@@ -218,22 +214,22 @@ fn load(
                 bootstrap()
             } else if changed {
                 must(
-                    runner,
+                    run,
                     "launchctl",
                     &["bootout".to_owned(), target(service, uid)],
                 )?;
-                await_gone(service, uid, runner, clock)?;
+                await_gone(service, uid, run, clock)?;
                 bootstrap()
             } else {
                 Ok(())
             }
         }
         Manager::Systemd if changed => {
-            must(runner, "systemctl", &user(&["daemon-reload"]))?;
-            must(runner, "systemctl", &user(&["enable", &unit]))?;
-            must(runner, "systemctl", &user(&["restart", &unit]))
+            must(run, "systemctl", &user(&["daemon-reload"]))?;
+            must(run, "systemctl", &user(&["enable", &unit]))?;
+            must(run, "systemctl", &user(&["restart", &unit]))
         }
-        Manager::Systemd => must(runner, "systemctl", &user(&["enable", "--now", &unit])),
+        Manager::Systemd => must(run, "systemctl", &user(&["enable", "--now", &unit])),
     }
 }
 
@@ -243,12 +239,12 @@ fn load(
 fn await_gone(
     service: &Service,
     uid: u32,
-    runner: &dyn Runner,
+    run: &ManagerRun,
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
     let deadline = clock.now() + BOOTOUT_DEADLINE;
     loop {
-        if !call(runner, "launchctl", &print_args(service, uid))?.success {
+        if !call(run, "launchctl", &print_args(service, uid))?.success {
             return Ok(());
         }
         if clock.now() >= deadline {
@@ -267,15 +263,15 @@ fn await_gone(
 /// Unloads `service` and deletes its unit file. Running sessions carry on.
 pub(crate) fn uninstall(
     service: &Service,
-    runner: &dyn Runner,
+    run: &ManagerRun,
     out: &mut dyn Write,
 ) -> Result<(), Failure> {
     let removed = match service.manager {
         Manager::Launchd { uid } => {
-            let loaded = call(runner, "launchctl", &print_args(service, uid))?.success;
+            let loaded = call(run, "launchctl", &print_args(service, uid))?.success;
             if loaded {
                 must(
-                    runner,
+                    run,
                     "launchctl",
                     &["bootout".to_owned(), target(service, uid)],
                 )?;
@@ -285,9 +281,9 @@ pub(crate) fn uninstall(
         Manager::Systemd => {
             if read_unit(&service.unit)?.is_some() {
                 let unit = unit_name(service);
-                must(runner, "systemctl", &user(&["disable", "--now", &unit]))?;
+                must(run, "systemctl", &user(&["disable", "--now", &unit]))?;
                 delete_unit(&service.unit)?;
-                must(runner, "systemctl", &user(&["daemon-reload"]))?;
+                must(run, "systemctl", &user(&["daemon-reload"]))?;
                 true
             } else {
                 false
@@ -306,13 +302,13 @@ pub(crate) fn uninstall(
 
 /// Restarts the installed service; `Ok(false)` with no call when its unit
 /// file is absent.
-pub(crate) fn restart(service: &Service, runner: &dyn Runner) -> Result<bool, Failure> {
+pub(crate) fn restart(service: &Service, run: &ManagerRun) -> Result<bool, Failure> {
     if read_unit(&service.unit)?.is_none() {
         return Ok(false);
     }
     match service.manager {
         Manager::Launchd { uid } => must(
-            runner,
+            run,
             "launchctl",
             &[
                 "kickstart".to_owned(),
@@ -320,11 +316,7 @@ pub(crate) fn restart(service: &Service, runner: &dyn Runner) -> Result<bool, Fa
                 target(service, uid),
             ],
         )?,
-        Manager::Systemd => must(
-            runner,
-            "systemctl",
-            &user(&["restart", &unit_name(service)]),
-        )?,
+        Manager::Systemd => must(run, "systemctl", &user(&["restart", &unit_name(service)]))?,
     }
     Ok(true)
 }
@@ -351,8 +343,8 @@ fn user(args: &[&str]) -> Vec<String> {
 
 /// Runs a manager command; a missing program names what the installed hub
 /// needs.
-fn call(runner: &dyn Runner, program: &str, args: &[String]) -> Result<Ran, Failure> {
-    runner.run(program, args).map_err(|e| {
+fn call(run: &ManagerRun, program: &str, args: &[String]) -> Result<Ran, Failure> {
+    run(program, args).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
             let needs = if program == "launchctl" {
                 "launchd"
@@ -371,8 +363,8 @@ fn call(runner: &dyn Runner, program: &str, args: &[String]) -> Result<Ran, Fail
 
 /// [`call`], failing when the command fails, naming it, its exit code and
 /// the first line of its stderr.
-fn must(runner: &dyn Runner, program: &str, args: &[String]) -> Result<(), Failure> {
-    let ran = call(runner, program, args)?;
+fn must(run: &ManagerRun, program: &str, args: &[String]) -> Result<(), Failure> {
+    let ran = call(run, program, args)?;
     if ran.success {
         return Ok(());
     }

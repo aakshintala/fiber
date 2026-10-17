@@ -1115,7 +1115,7 @@ impl contract::jobs::Jobs for StillRunning {
         &self,
         _: contract::jobs::Opening,
     ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
-        Err(contract::jobs::OpenError::Io {
+        Err(contract::jobs::OpenError {
             path: "unused".into(),
             source: std::io::Error::other("a listed job is not opened"),
         })
@@ -1924,4 +1924,241 @@ fn a_rewind_adopting_a_job_that_is_not_running_is_stale() {
     assert_eq!(rejection.code, ErrorCode::StaleRequest);
     assert_eq!(rejection.message, "The adopted jobs are not running: j_x.");
     assert_eq!(log_bytes(&dir), before);
+}
+
+/// Loop-level handoff rewinds (`docs/events.md`, "Rewind"): session A runs
+/// an in-turn handoff in its first turn, then a plain second turn. A rewind
+/// past the handoff starts from the handoff's context; one before it
+/// ignores the handoff.
+const HANDOFF_TRIGGER: u64 = 1_000;
+
+fn handed_settings() -> r#loop::HandoffSettings {
+    r#loop::HandoffSettings {
+        tokens: HANDOFF_TRIGGER,
+        nudge: false,
+        ..r#loop::HandoffSettings::default()
+    }
+}
+
+/// A reply of `text`, with `tokens` in its prompt.
+fn handed_said(text: &str, tokens: u64) -> Scripted {
+    support::with_tokens(Scripted::text(text), tokens, 0)
+}
+
+/// Session A after two turns: turn 1 calls `write_file`, hands off on
+/// the trigger and answers "Done." from the new context; turn 2 answers
+/// "Again." with no handoff. Its tools match the ones `start_b` wires,
+/// so a rewound session's request tools equal the old session's.
+fn run_a_handed() -> Session {
+    let tools: Vec<Arc<dyn Tool>> = vec![
+        Arc::clone(&write_tool()) as Arc<dyn Tool>,
+        Arc::clone(&exec_tool()) as Arc<dyn Tool>,
+    ];
+    let mut session = Session::with_tools(
+        vec![
+            support::with_tokens(
+                calls_reply("working", &[("write_file", paris())]),
+                HANDOFF_TRIGGER - 1,
+                0,
+            ),
+            Scripted::text("The note."),
+            handed_said("Done.", 50),
+            handed_said("Again.", 50),
+        ],
+        None,
+        tools,
+    )
+    .handoff(handed_settings());
+    session.rules.set(StandingRules {
+        global: vec![allow_rule("write_file")],
+        project: Vec::new(),
+    });
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session
+}
+
+/// The `seq` of the `turn_started` starting A's `nth` turn, one-indexed.
+fn turn_start(lines: &[Envelope], nth: usize) -> u64 {
+    lines
+        .iter()
+        .filter(|line| line.kind == "turn_started")
+        .nth(nth - 1)
+        .unwrap()
+        .seq
+        .unwrap()
+        .0
+}
+
+fn user_text(input: &Input) -> &str {
+    match input {
+        Input::User { text, .. } => text,
+        other @ (Input::Assistant { .. }
+        | Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }) => panic!("not a user message: {other:?}"),
+    }
+}
+
+#[test]
+fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
+    let session = run_a_handed();
+    let a_lines = log::read(&session.dir).unwrap();
+    // The handoff ran in turn 1: its completion and the new opening sit
+    // between the two turns.
+    let kinds: Vec<&str> = a_lines.iter().map(|line| line.kind.as_str()).collect();
+    let completed = kinds
+        .iter()
+        .position(|kind| *kind == "handoff_completed")
+        .unwrap();
+    assert_eq!(kinds[completed + 1], "opening_message");
+    assert!(
+        completed
+            < kinds
+                .iter()
+                .position(|kind| *kind == "turn_completed")
+                .unwrap()
+    );
+    let a_requests = session.provider.requests();
+    assert_eq!(a_requests.len(), 4, "call, note, reply, second turn");
+    // The second turn's first request follows the handoff: the new opening,
+    // the carried input, the note, then its own prompt.
+    let a_second = a_requests.last().unwrap();
+    assert_eq!(a_second.conversation.len(), 5);
+    assert!(
+        user_text(&a_second.conversation[0]).starts_with("This message is from Fiber"),
+        "the opening message renders first"
+    );
+    assert_eq!(user_text(&a_second.conversation[1]), "hi");
+    assert_eq!(user_text(&a_second.conversation[2]), "The note.");
+    assert!(
+        matches!(&a_second.conversation[3], Input::Assistant { text, .. } if text == "Done."),
+        "turn 1's post-handoff reply stays in the context"
+    );
+    assert_eq!(user_text(&a_second.conversation[4]), "again");
+    // The point is the line before the second turn's `turn_started`, a
+    // boundary after the handoff.
+    let at = turn_start(&a_lines, 2) - 1;
+    let note = rewind_note(&session.dir, Seq(at)).unwrap();
+    let k = a_second.conversation.len() - 1;
+    let (b, tx, provider, _dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        note.clone(),
+        None,
+        vec![Scripted::text("three-done")],
+    );
+    let _b = run_turn(b, &tx, "three");
+    let b_requests = provider.requests();
+    assert_eq!(b_requests.len(), 1);
+    let first = &b_requests[0];
+    assert_eq!(first.system_prompt, a_second.system_prompt);
+    assert_eq!(first.thinking, a_second.thinking);
+    assert_eq!(first.tool_choice, a_second.tool_choice);
+    assert_eq!(first.cache_lifetime, a_second.cache_lifetime);
+    assert_eq!(first.cache_key, "s_test");
+    assert_eq!(first.previous_end, a_second.previous_end);
+    assert_eq!(first.tools, a_second.tools);
+    // The handoff's context, then the rewind note, then the new prompt.
+    assert_eq!(&first.conversation[..k], &a_second.conversation[..k]);
+    assert_eq!(
+        first.conversation[k],
+        Input::User {
+            text: note,
+            images: Vec::new(),
+        }
+    );
+    assert_eq!(user_text(&first.conversation[k + 1]), "three");
+}
+
+#[test]
+fn a_rewound_session_before_a_handoff_ignores_it() {
+    let session = run_a_handed();
+    let a_lines = log::read(&session.dir).unwrap();
+    // The point is the boundary just before the step that triggered the
+    // handoff: the tool results answered, the next line a `step_started`.
+    let handoff = a_lines
+        .iter()
+        .find(|line| line.kind == "handoff_started")
+        .unwrap()
+        .seq
+        .unwrap()
+        .0;
+    let step = a_lines
+        .iter()
+        .rfind(|line| line.kind == "step_started" && line.seq.unwrap().0 < handoff)
+        .unwrap()
+        .seq
+        .unwrap()
+        .0;
+    let at = step - 1;
+    assert_eq!(
+        a_lines
+            .iter()
+            .find(|line| line.seq.unwrap().0 == step)
+            .unwrap()
+            .kind,
+        "step_started"
+    );
+    // A's note request: the history to the point, then the handoff's
+    // instruction. It is the only request ending in one.
+    let a_requests = session.provider.requests();
+    let noted = a_requests
+        .iter()
+        .find(|request| {
+            request
+                .conversation
+                .last()
+                .is_some_and(|last| user_text(last).starts_with("Fiber is about to restart"))
+        })
+        .expect("the handoff's note request ran");
+    let k = noted.conversation.len() - 1;
+    let note = rewind_note(&session.dir, Seq(at)).unwrap();
+    let (b, tx, provider, _dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        note.clone(),
+        None,
+        vec![Scripted::text("three-done")],
+    );
+    let _b = run_turn(b, &tx, "three");
+    let b_requests = provider.requests();
+    assert_eq!(b_requests.len(), 1);
+    let first = &b_requests[0];
+    assert_eq!(first.system_prompt, noted.system_prompt);
+    assert_eq!(first.thinking, noted.thinking);
+    assert_eq!(first.tool_choice, noted.tool_choice);
+    assert_eq!(first.cache_lifetime, noted.cache_lifetime);
+    assert_eq!(first.previous_end, noted.previous_end);
+    assert_eq!(first.tools, noted.tools);
+    // The history to the point, then the rewind note, then the new prompt.
+    assert_eq!(&first.conversation[..k], &noted.conversation[..k]);
+    assert_eq!(
+        first.conversation[k],
+        Input::User {
+            text: note,
+            images: Vec::new(),
+        }
+    );
+    assert_eq!(user_text(&first.conversation[k + 1]), "three");
+    assert!(
+        first.conversation.iter().all(|input| match input {
+            Input::User { text, .. } => !text.contains("The note."),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => true,
+        }),
+        "no handoff note reaches the rewound session"
+    );
 }

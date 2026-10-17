@@ -117,7 +117,7 @@ impl Listed {
 
 impl Jobs for Listed {
     fn open(&self, _: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: "unused".into(),
             source: std::io::Error::other("a listed job is not opened"),
         })

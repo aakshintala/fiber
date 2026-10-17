@@ -161,15 +161,16 @@ pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
 /// click target closing the view, pushed before any row's own target,
 /// so a row's target still wins on its cells. With no colour the row
 /// is plain: bold and dim stay, with no tint and no box.
-fn draw_top_row(
+pub(crate) fn draw_top_row(
     buf: &mut Buffer,
     area: Rect,
     name: &str,
     command: &str,
+    close: TargetId,
     targets: &mut Vec<Target>,
 ) {
     targets.push(Target {
-        id: TargetId::View(Spot::Close),
+        id: close,
         rect: Rect::new(area.x, area.y, area.width, 1),
     });
     // The tint runs the whole row, padding included; each part paints
@@ -219,7 +220,14 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         return;
     }
     if let Some(view) = app.model_picker_view() {
-        draw_top_row(buf, area, "Models", "/model", targets);
+        draw_top_row(
+            buf,
+            area,
+            "Models",
+            "/model",
+            TargetId::View(Spot::Close),
+            targets,
+        );
         let below = Rect::new(
             area.x,
             area.y.saturating_add(1),
@@ -250,7 +258,14 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         return;
     }
     let width = usize::from(area.width);
-    draw_top_row(buf, area, &frame.title, frame.command, targets);
+    draw_top_row(
+        buf,
+        area,
+        &frame.title,
+        frame.command,
+        TargetId::View(Spot::Close),
+        targets,
+    );
     let shown = rows_height(frame, usize::from(area.height));
     let mut y = area.y.saturating_add(1);
     for (at, cells) in frame

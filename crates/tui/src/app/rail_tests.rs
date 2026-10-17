@@ -72,7 +72,7 @@ fn linked(app: &mut App) -> (String, String) {
 fn live(session: &str, fields: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "state": "idle", "since": 0,
+        "state": "idle", "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -230,7 +230,7 @@ fn a_recent_row_gets_no_number() {
     }));
     assert!(
         app.home_screen()
-            .is_some_and(|screen| screen.rows.len() == 1)
+            .is_some_and(|screen| crate::home::home_test_rows(&screen).len() == 1)
     );
     assert_eq!(app.rail_cards().map(|(cards, _)| cards.len()), Some(0));
     app.on_line(live(B, json!({})));
@@ -671,7 +671,7 @@ fn a_card_taller_than_the_rail_shows_its_bottom() {
 
 /// A waiting `session_status` field set: request `request` since `since`.
 fn waiting(request: &str, since: u64) -> Value {
-    json!({"state": "waiting", "since": since, "waiting": {"request_id": request,
+    json!({"state": "waiting", "started": 0, "calls": 0, "since": since, "waiting": {"request_id": request,
         "kind": "approval", "summary": "shell ls"}})
 }
 

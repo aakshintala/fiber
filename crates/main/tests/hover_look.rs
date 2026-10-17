@@ -175,8 +175,10 @@ fn hover_chips_look(config: serde_json::Value, surface: Colour, lifted: Colour, 
         let bg = screen.cell(mx, chip).bg;
         bg == lifted || bg == hover
     });
-    let end = row[mx as usize..]
-        .find(']')
+    let end = row
+        .chars()
+        .skip(usize::from(mx))
+        .position(|ch| ch == ']')
         .map(|at| mx + u16::try_from(at).expect("the chip fits its row") + 1)
         .expect("the model chip closes");
     for x in mx..end {

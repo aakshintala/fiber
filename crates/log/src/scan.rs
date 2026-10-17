@@ -24,6 +24,38 @@ pub struct Started {
     pub forked_from: Option<SessionId>,
 }
 
+/// Every started session in one project's `sessions` directory, sorted
+/// by id: each directory whose first line is a readable
+/// `session_started`. A directory that cannot be read gives nothing, not
+/// an error. A symlinked directory is not a session, and neither is a
+/// missing directory.
+pub fn started_sessions_in(sessions: &Path) -> Vec<Started> {
+    let Ok(entries) = std::fs::read_dir(sessions) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        // `file_type` does not follow a link: a linked directory is
+        // not a session.
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        let Some((workspace, forked_from)) = started_line(&dir.join(EVENTS)) else {
+            continue;
+        };
+        let id = SessionId(entry.file_name().to_string_lossy().into_owned());
+        found.push(Started {
+            id,
+            dir,
+            workspace,
+            forked_from,
+        });
+    }
+    found.sort_by(|a: &Started, b: &Started| a.id.0.cmp(&b.id.0));
+    found
+}
+
 /// Every session under `home/projects/*/sessions/`, sorted by id: each
 /// directory whose first line is a readable `session_started`. A directory
 /// that cannot be read gives nothing, not an error. A symlinked directory
@@ -34,27 +66,7 @@ pub fn started_sessions(home: &Path) -> Vec<Started> {
     };
     let mut found = Vec::new();
     for project in projects.flatten() {
-        let Ok(sessions) = std::fs::read_dir(project.path().join("sessions")) else {
-            continue;
-        };
-        for entry in sessions.flatten() {
-            // `file_type` does not follow a link: a linked directory is
-            // not a session.
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let dir = entry.path();
-            let Some((workspace, forked_from)) = started_line(&dir.join(EVENTS)) else {
-                continue;
-            };
-            let id = SessionId(entry.file_name().to_string_lossy().into_owned());
-            found.push(Started {
-                id,
-                dir,
-                workspace,
-                forked_from,
-            });
-        }
+        found.extend(started_sessions_in(&project.path().join("sessions")));
     }
     found.sort_by(|a: &Started, b: &Started| a.id.0.cmp(&b.id.0));
     found

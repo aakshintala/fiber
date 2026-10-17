@@ -79,7 +79,7 @@ fn delegate_line(kind: &str, ts: u64, payload: Value) -> Line {
 fn live(session: &str, state: Value) -> Line {
     let mut payload = json!({
         "name": "fix the parser", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -104,7 +104,7 @@ fn live(session: &str, state: Value) -> Line {
 fn delegate_status(state: Value) -> Line {
     let mut payload = json!({
         "name": "delegate one", "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -138,10 +138,9 @@ fn opened(app: &mut App) {
     let key = app
         .home_screen()
         .map(|screen| {
-            screen
-                .rows
+            crate::home::home_test_rows(&screen)
                 .into_iter()
-                .map(|(key, _, _)| key)
+                .map(|(key, _)| key)
                 .collect::<Vec<_>>()
         })
         .and_then(|keys| keys.into_iter().next())
@@ -279,7 +278,9 @@ fn running_delegate_header_with_held_status() {
     // Sixty seconds in: the status row reads whole minutes.
     start_delegate(&mut app, wall_ms(&clock).saturating_sub(61_000));
     // The delegate's own summary is held: the glyph and word name it.
-    app.on_line(delegate_status(json!({"state": "streaming"})));
+    app.on_line(delegate_status(
+        json!({"state": "streaming", "started": wall_ms(&clock)}),
+    ));
     open_item(&mut app);
     let (rows, _) = rendered(&app, 80, 24);
     insta::assert_snapshot!("running_delegate_header_with_held_status", rows.join("\n"));
@@ -375,17 +376,42 @@ fn breadcrumb_names_the_session() {
 }
 
 #[test]
-fn clicking_the_cross_closes_the_view() {
+fn a_click_anywhere_on_the_top_row_closes_the_view() {
     let mut app = home(80, 24);
     opened(&mut app);
     start_delegate(&mut app, 0);
     open_item(&mut app);
-    let (_, targets) = rendered(&app, 80, 24);
-    let close = targets
+    let area = Rect::new(3, 2, 80, 2);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let close: Vec<_> = targets
         .iter()
-        .find(|target| target.id == TargetId::Item(Spot::Close))
-        .unwrap_or_else(|| panic!("a ✕ target"));
-    let _ = close;
+        .filter(|target| target.id == TargetId::Item(Spot::Close))
+        .collect();
+    assert_eq!(close.len(), 1);
+    assert_eq!(close[0].rect, Rect::new(3, 2, 80, 1));
+    assert!(
+        !crate::view::text(&buf)
+            .lines()
+            .next()
+            .unwrap()
+            .contains('✕')
+    );
+    for x in area.left()..area.right() {
+        assert_eq!(
+            crate::mouse::hit(&targets, x, area.y),
+            Some(TargetId::Item(Spot::Close))
+        );
+    }
+    let stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Item(Spot::Stop))
+        .unwrap();
+    assert_eq!(
+        crate::mouse::hit(&targets, stop.rect.x, stop.rect.y),
+        Some(TargetId::Item(Spot::Stop))
+    );
     assert_eq!(
         app.on_click(TargetId::Item(Spot::Close)),
         crate::app::Effect::None

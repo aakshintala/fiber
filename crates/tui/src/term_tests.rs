@@ -12,15 +12,15 @@ use std::path::PathBuf;
 /// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, the
 /// appearance queries, then the two detection queries.
 const START_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
 /// What `setup` writes with hover off: no mode 1003.
 const START_NO_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
 /// What `restore` writes: kitty's flags popped, bracketed paste and every
 /// mouse mode off, theme reporting off, the title popped, the alternate
 /// screen left, the cursor shown.
 const END: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// A pty pair: the main side and the slave as a file.
 struct Pair {
@@ -139,7 +139,8 @@ fn size_reads_the_winsize() {
 
 /// What `resume` writes before kitty's push: as `setup` without the
 /// queries.
-const RESUME_NO_HOVER: &[u8] = b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const RESUME_NO_HOVER: &[u8] =
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h";
 
 #[test]
 fn suspend_restores_and_resume_sets_up_again_without_hover_or_kitty() {

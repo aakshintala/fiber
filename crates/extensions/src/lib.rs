@@ -18,6 +18,9 @@ mod install;
 mod installed;
 mod login;
 mod lua;
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use lua::observe_load;
 mod lua_cost;
 mod lua_provider;
 mod manage;
@@ -64,9 +67,9 @@ pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use release::{Release, install_release};
 pub use repository::{
-    ApprovedServer, CopyHold, Decision, Fetch, Index, Pending, RepoItem, ServerApproval,
-    SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name, mcp_server_item, pending,
-    repository_servers,
+    ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy, Pending, RepoItem,
+    ServerApproval, SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name,
+    mcp_server_item, pending, repository_servers,
 };
 
 /// The extension API's major version this Fiber speaks

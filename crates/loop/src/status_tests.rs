@@ -7,6 +7,142 @@ use serde_json::{Value, json};
 
 use super::Fold;
 
+fn progress_subject(w: &mut World, call: &Value, subject: Option<&str>) -> bool {
+    w.fold.subject(&envelope(
+        "status_subject",
+        0,
+        None,
+        None,
+        None,
+        &json!({"call": call, "subject": subject}),
+    ))
+}
+
+#[test]
+fn turns_count_each_turn_started_that_carries_a_turn_id() {
+    let mut w = world();
+    assert_eq!(w.status().turns, Some(0));
+    w.prompt("first");
+    assert_eq!(w.status().turns, Some(1));
+    w.prompt("second");
+    assert_eq!(w.status().turns, Some(2));
+    w.call("a1", "read");
+    assert_eq!(w.status().turns, Some(2));
+    w.feed("turn_started", None, &prompt("without an id"));
+    assert_eq!(w.status().turns, Some(2));
+    let line = envelope(
+        "turn_started",
+        w.ts + 1,
+        Some("t_third"),
+        None,
+        Some(w.ts + 1),
+        &prompt("third"),
+    );
+    assert!(w.fold.observe(&line));
+    assert_eq!(w.status().turns, Some(3));
+}
+
+#[test]
+fn progress_counts_requests_and_keeps_the_start_and_last_step() {
+    let mut w = world();
+    w.start();
+    assert_eq!(w.status().started, 1001);
+    assert_eq!(w.status().calls, 0);
+    assert_eq!(w.status().step, None);
+    w.call("a1", "read");
+    assert_eq!(w.status().calls, 1);
+    assert_eq!(w.status().step.as_deref(), Some("read"));
+    w.call("a2", "shell");
+    assert_eq!(w.status().calls, 2);
+    assert_eq!(w.status().step.as_deref(), Some("shell"));
+    w.feed(
+        "rewound",
+        None,
+        &json!({"new_session_id": "s_new", "seq": 1, "jobs": []}),
+    );
+    assert_eq!(w.status().calls, 2);
+}
+
+#[test]
+fn progress_subjects_join_only_nonempty_subjects_and_stay_on_one_line() {
+    let call = json!({"name": "shell", "arguments": {}});
+    for (subject, expected) in [
+        (Some("ls -la"), "shell ls -la"),
+        (Some(""), "shell"),
+        (None, "shell"),
+        (Some("ls\n-la\r"), "shell ls -la "),
+        (Some("ls\r\n-la"), "shell ls -la"),
+    ] {
+        let mut w = world();
+        w.call("a1", "shell");
+        progress_subject(&mut w, &call, subject);
+        assert_eq!(w.status().step.as_deref(), Some(expected));
+        assert!(!progress_subject(&mut w, &call, subject));
+    }
+}
+
+#[test]
+fn progress_a_subject_only_updates_the_latest_request() {
+    let mut w = world();
+    w.call("a1", "read");
+    w.call("a2", "shell");
+    assert!(!progress_subject(
+        &mut w,
+        &json!({"name": "read", "arguments": {}}),
+        Some("app.rs")
+    ));
+    assert_eq!(w.status().step.as_deref(), Some("shell"));
+    assert!(progress_subject(
+        &mut w,
+        &json!({"name": "shell", "arguments": {}}),
+        Some("ls -la")
+    ));
+    assert_eq!(w.status().step.as_deref(), Some("shell ls -la"));
+}
+
+#[test]
+fn progress_a_subject_before_its_request_is_held_across_other_requests() {
+    let mut w = world();
+    let read = json!({"name": "read", "arguments": {}});
+    let shell = json!({"name": "shell", "arguments": {}});
+    assert!(!progress_subject(&mut w, &read, Some("app.rs")));
+    assert!(!progress_subject(&mut w, &shell, Some("ls -la")));
+    assert_eq!(w.status().step, None);
+    w.call("a1", "read");
+    assert_eq!(w.status().step.as_deref(), Some("read"));
+    w.call("a2", "shell");
+    assert_eq!(w.status().step.as_deref(), Some("shell ls -la"));
+    assert_eq!(w.status().calls, 2);
+    assert!(!progress_subject(&mut w, &shell, Some("ls -la")));
+    w.call("a3", "shell");
+    assert_eq!(w.status().step.as_deref(), Some("shell ls -la"));
+    assert_eq!(w.status().calls, 3);
+}
+
+#[test]
+fn progress_a_subject_before_the_first_request_is_applied() {
+    let mut w = world();
+    assert!(!progress_subject(
+        &mut w,
+        &json!({"name": "shell", "arguments": {}}),
+        Some("ls -la")
+    ));
+    assert_eq!(w.status().step, None);
+    w.call("a1", "shell");
+    assert_eq!(w.status().step.as_deref(), Some("shell ls -la"));
+}
+
+#[test]
+fn progress_a_malformed_subject_is_skipped() {
+    let mut w = world();
+    w.call("a1", "shell");
+    assert!(
+        !w.fold
+            .subject(&envelope("status_subject", 0, None, None, None, &json!({})))
+    );
+    assert_eq!(w.status().step.as_deref(), Some("shell"));
+}
+
 /// The longest a wait in these tests lasts before it fails.
 const DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -66,7 +202,7 @@ impl World {
     /// changed.
     fn feed(&mut self, kind: &str, action: Option<&str>, payload: &Value) -> bool {
         self.ts += 1;
-        let line = envelope(kind, self.ts, action, Some(self.ts), payload);
+        let line = envelope(kind, self.ts, None, action, Some(self.ts), payload);
         self.fold.observe(&line)
     }
 
@@ -83,7 +219,16 @@ impl World {
     }
 
     fn prompt(&mut self, text: &str) {
-        self.feed("turn_started", None, &prompt(text));
+        self.ts += 1;
+        let line = envelope(
+            "turn_started",
+            self.ts,
+            Some(&format!("t_{}", self.ts)),
+            None,
+            Some(self.ts),
+            &prompt(text),
+        );
+        self.fold.observe(&line);
     }
 
     fn call(&mut self, action: &str, tool: &str) {
@@ -131,6 +276,7 @@ impl World {
 fn envelope(
     kind: &str,
     ts: u64,
+    turn: Option<&str>,
     action: Option<&str>,
     seq: Option<u64>,
     payload: &Value,
@@ -142,6 +288,9 @@ fn envelope(
         "schema_version": 1,
         "payload": payload,
     });
+    if let Some(turn) = turn {
+        line["turn_id"] = json!(turn);
+    }
     if let Some(action) = action {
         line["action_id"] = json!(action);
     }
@@ -340,6 +489,41 @@ fn the_model_and_window_follow_the_preamble_and_a_switch() {
     let s = w.status();
     assert_eq!(s.model, "fake/next");
     assert_eq!(s.context.unwrap().window, 1000);
+}
+
+#[test]
+fn the_thinking_level_follows_the_preamble_and_a_switch() {
+    let mut w = world();
+    assert_eq!(w.status().thinking, None);
+    let mut preamble = json!({
+        "reason": "start", "model": "fake/m", "thinking": "high", "context_window": 1000,
+        "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+    });
+    w.feed("preamble_built", None, &preamble);
+    assert_eq!(w.status().thinking.as_deref(), Some("high"));
+    let before = json!({"model": "fake/m", "thinking": "high", "cache_lifetime": "5m"});
+    let after = json!({"model": "fake/n", "thinking": "low", "cache_lifetime": "5m"});
+    w.feed(
+        "model_changed",
+        None,
+        &json!({"before": before, "after": after, "source": "driver"}),
+    );
+    assert_eq!(w.status().thinking.as_deref(), Some("low"));
+    preamble.as_object_mut().unwrap().remove("thinking");
+    w.feed("preamble_built", None, &preamble);
+    assert_eq!(w.status().thinking, None);
+    w.feed(
+        "preamble_built",
+        None,
+        &json!({
+            "reason": "start", "model": "fake/m", "thinking": "high", "context_window": 1000,
+            "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": []
+        }),
+    );
+    w.feed("model_changed", None, &json!({
+        "before": before, "after": {"model": "fake/n", "cache_lifetime": "5m"}, "source": "driver"
+    }));
+    assert_eq!(w.status().thinking, None);
 }
 
 #[test]
@@ -753,16 +937,25 @@ fn an_ephemeral_delta_and_an_unknown_or_unreadable_line_change_nothing() {
     let delta = envelope(
         "assistant_message_delta",
         5000,
+        None,
         Some("a1"),
         None,
         &json!({"text": "hi"}),
     );
     assert!(!w.fold.observe(&delta));
-    let unknown = envelope("from_the_future", 5001, None, Some(90), &json!({"x": 1}));
+    let unknown = envelope(
+        "from_the_future",
+        5001,
+        None,
+        None,
+        Some(90),
+        &json!({"x": 1}),
+    );
     assert!(!w.fold.observe(&unknown));
     let unreadable = envelope(
         "turn_started",
         5002,
+        None,
         None,
         Some(91),
         &json!({"input": "no"}),
@@ -932,14 +1125,14 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
     let since = w.status().since;
     *w.count.lock().unwrap() = 2;
     w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    let line = envelope("clients", w.ts, None, None, None, &json!({"count": 2}));
     assert!(w.fold.observe(&line));
     let s = w.status();
     assert_eq!(s.clients, 2);
     assert_eq!(s.since, since);
     // The same count again changes nothing.
     w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    let line = envelope("clients", w.ts, None, None, None, &json!({"count": 2}));
     assert!(!w.fold.observe(&line));
 }
 
@@ -1079,6 +1272,7 @@ fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
     let delta = envelope(
         "assistant_message_delta",
         5000,
+        None,
         Some("a1"),
         None,
         &json!({"text": "hi"}),
@@ -1368,7 +1562,7 @@ fn an_ephemeral_retry_notice_is_read_and_another_ephemeral_line_is_not() {
     let mut w = world();
     w.start();
     w.prompt("go");
-    let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, payload);
+    let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, None, payload);
     let delta = ephemeral("assistant_message_delta", &json!({"text": "hi"}));
     assert!(!w.fold.observe(&delta));
     assert_eq!(w.status().state, SessionState::Streaming);

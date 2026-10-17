@@ -1,11 +1,10 @@
 ---
 source: crates/tui/src/changed_files_view_tests.rs
-assertion_line: 380
 expression: screen(&app_with_files())
 ---
  Changed files  diff against HEAD                                    Esc returns
-src/a.rs  +4 −2
-src/b.rs  +1 −0
+src/a.rs · +4 −2
+src/b.rs · +1 −0
 
 
 

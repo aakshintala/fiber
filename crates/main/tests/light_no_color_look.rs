@@ -51,7 +51,7 @@ fn light_run() -> (Setup, Run, Grid) {
     support::write_json(
         &setup.home().join("config.json"),
         &serde_json::json!({"model": "scripted/s.json", "tui": {"theme": "light",
-            "rail": {"shown": false}}, "hub": {"idle_exit_ms": 1000}}),
+            "rail": {"shown": false}}, "hub": {"idle_exit_ms": 200}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &[("TERM_PROGRAM", "ghostty")]);
     // The end of the first frame proves the input reader runs before
@@ -230,7 +230,7 @@ fn no_color_run() -> (Setup, Run) {
     );
     support::write_json(
         &setup.home().join("config.json"),
-        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
     );
     let env: Vec<(&str, &str)> = [("NO_COLOR", "1")].into_iter().chain(TRUECOLOUR).collect();
     let mut run = Run::spawn(&setup, 160, 48, &[], &env);

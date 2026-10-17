@@ -62,6 +62,27 @@ fn prepare_adds_the_configured_recorded_and_reviewer_references() {
 }
 
 #[test]
+fn prepare_adds_the_configured_delegate_reference() {
+    for (role, expected) in [
+        (r#"roles.delegate="fiber:scripted/d.json""#, vec!["d.json"]),
+        (
+            r#"roles.delegate={"model":"fiber:scripted/d.json"}"#,
+            vec!["d.json"],
+        ),
+        (r#"roles.delegate="fiber:openrouter/m""#, vec![]),
+        (r#"roles.delegate={"model":"fiber:openrouter/m"}"#, vec![]),
+        (r#"roles.delegate="claude:scripted/d.json""#, vec![]),
+        (r#"roles.delegate="scripted/d.json""#, vec![]),
+    ] {
+        let root = fakes::TempDir::new("fiber-scripted-delegate");
+        let config = config(root.path(), root.path(), &[role]);
+        let mut providers = Providers::default();
+        prepare(&mut providers, &config, None);
+        assert_eq!(scripted_ids(&providers), expected, "{role}");
+    }
+}
+
+#[test]
 fn prepare_adds_nothing_for_other_references() {
     let root = fakes::TempDir::new("fiber-scripted-prepare");
     let config = config(

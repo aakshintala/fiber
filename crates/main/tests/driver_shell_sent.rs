@@ -291,10 +291,26 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
 
     // The shell still blocks when the released turn ends and `close`
-    // settles the loop: it ends after the settle.
-    client.send(
-        r#"{"id":"c_shell","command":"shell","args":{"command":"tail -f /dev/null","send":true}}"#,
-    );
+    // settles the loop: it ends after the settle. The marker runs first
+    // in its command, so waiting for it proves the shell started before
+    // `close` is sent and the settle path is the one under test.
+    let marker = setup.workspace().join("shell.started");
+    let shell = json!({
+        "id": "c_shell",
+        "command": "shell",
+        "args": {"command": format!("touch {} && tail -f /dev/null", shell_quote(&marker)), "send": true},
+    })
+    .to_string();
+    client.send(&shell);
+    loop {
+        if marker.exists() {
+            break;
+        }
+        if setup.deadline.left().is_zero() {
+            panic!("waited until the deadline for the sent shell to start");
+        }
+        std::thread::yield_now();
+    }
     client.send(r#"{"id":"c_close","command":"close"}"#);
     server.release();
     let answer = recv_answer(&client, "c_shell", "the shell answer after settle");

@@ -8,7 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -1275,12 +1275,128 @@ fn two_listeners_take_distinct_ids_and_unlistening_the_second_ends_only_that_one
     );
 }
 
+/// How long one EOF poll waits before retrying: a poll pause, not a deadline.
+/// The outer `Deadline::after(DEADLINE)` still bounds the wait.
+const EOF_POLL: Duration = Duration::from_millis(100);
+
+/// Reads EOF from `read`, retrying after a lost shutdown wake-up.
+/// A shutdown's wake-up can be lost, and the read then ends only at its
+/// timeout, so each
+/// `WouldBlock` or `TimedOut` reads again; any other answer, data included,
+/// returns at once. At most `DEADLINE / EOF_POLL` polls: the caller's own
+/// deadline already bounds the wait, and the count only stops this thread
+/// after the test gave up.
+fn read_until_eof<R: Read>(read: &mut R) -> std::io::Result<usize> {
+    let polls = DEADLINE.as_millis() / EOF_POLL.as_millis();
+    let mut buf = [0; 1];
+    let mut waited: u128 = 0;
+    loop {
+        match read.read(&mut buf) {
+            Err(error)
+                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
+            {
+                waited += 1;
+                if waited >= polls {
+                    return Err(error);
+                }
+            }
+            answered => return answered,
+        }
+    }
+}
+
+/// One scripted answer of [`ScriptedRead::read`].
+#[derive(Clone, Copy)]
+enum ReadAnswer {
+    /// Fail with this error kind.
+    Fail(ErrorKind),
+    /// Report this many bytes read.
+    Ok(usize),
+}
+
+/// A `Read` answering each call from `script` in order and counting the
+/// calls, so a test pins how many times `read_until_eof` read.
+struct ScriptedRead {
+    script: Vec<ReadAnswer>,
+    calls: usize,
+}
+
+impl Read for ScriptedRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let at = self.calls;
+        self.calls += 1;
+        assert!(at < self.script.len(), "read past the end of the script");
+        match self.script[at] {
+            ReadAnswer::Fail(kind) => Err(std::io::Error::new(kind, "scripted")),
+            ReadAnswer::Ok(n) => {
+                buf[..n].fill(0);
+                Ok(n)
+            }
+        }
+    }
+}
+
+#[test]
+fn read_until_eof_retries_a_would_block_before_eof() {
+    let mut read = ScriptedRead {
+        script: vec![ReadAnswer::Fail(ErrorKind::WouldBlock), ReadAnswer::Ok(0)],
+        calls: 0,
+    };
+    assert!(matches!(read_until_eof(&mut read), Ok(0)));
+    assert_eq!(read.calls, 2, "one missed wake-up, then EOF");
+}
+
+#[test]
+fn read_until_eof_retries_a_timeout_before_eof() {
+    let mut read = ScriptedRead {
+        script: vec![ReadAnswer::Fail(ErrorKind::TimedOut), ReadAnswer::Ok(0)],
+        calls: 0,
+    };
+    assert!(matches!(read_until_eof(&mut read), Ok(0)));
+    assert_eq!(read.calls, 2, "one missed wake-up, then EOF");
+}
+
+#[test]
+fn read_until_eof_returns_data_without_retry() {
+    let mut read = ScriptedRead {
+        script: vec![ReadAnswer::Ok(1)],
+        calls: 0,
+    };
+    assert!(matches!(read_until_eof(&mut read), Ok(1)));
+    assert_eq!(read.calls, 1, "data is not a missed wake-up");
+}
+
+#[test]
+fn read_until_eof_returns_a_non_timeout_error_at_once() {
+    let mut read = ScriptedRead {
+        script: vec![ReadAnswer::Fail(ErrorKind::ConnectionReset)],
+        calls: 0,
+    };
+    let error = read_until_eof(&mut read).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ConnectionReset);
+    assert_eq!(read.calls, 1, "a reset is not a missed wake-up");
+}
+
+#[test]
+fn read_until_eof_stops_polling_after_its_tick_count() {
+    let polls = usize::try_from(DEADLINE.as_millis() / EOF_POLL.as_millis()).unwrap();
+    let mut read = ScriptedRead {
+        script: vec![ReadAnswer::Fail(ErrorKind::WouldBlock); polls + 8],
+        calls: 0,
+    };
+    let error = read_until_eof(&mut read).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::WouldBlock);
+    assert_eq!(
+        read.calls, polls,
+        "exactly DEADLINE / EOF_POLL polls, then the timeout error"
+    );
+}
+
 #[test]
 fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
     let clock = FakeClock::new();
     let attention = Arc::new(Attention::new(Arc::clone(&clock) as Arc<dyn Clock>));
     let (writer, far) = UnixStream::pair().unwrap();
-    far.set_read_timeout(Some(DEADLINE)).unwrap();
     let (writer_closer, writer_retired) = (closer_for(&writer), closer_for(&writer));
     let kept = Arc::new(Mutex::new(writer));
     // Held by the test: the writer cannot dequeue, so the bound fires
@@ -1317,9 +1433,9 @@ fn one_unlisten_closes_and_joins_a_retired_writer_before_overflow_shutdown() {
     });
     let (eof_tx, eof_rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut buf = [0; 1];
+        far.set_read_timeout(Some(EOF_POLL)).unwrap();
         eof_tx
-            .send(BufReader::new(far).read(&mut buf))
+            .send(read_until_eof(&mut BufReader::new(far)))
             .unwrap_or(());
     });
     // EOF proves unlisten used the retired closer. The writer still cannot

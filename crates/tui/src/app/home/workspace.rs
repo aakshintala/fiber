@@ -198,9 +198,8 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return Effect::None;
         };
-        let project = home.launch.project.clone();
         let mut list = vec![home.launch.workspace.display().to_string()];
-        for row in home.sessions.shown(&project, false) {
+        for row in home.sessions.all() {
             if list.len() == PICKER_CAP {
                 break;
             }

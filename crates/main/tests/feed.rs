@@ -34,12 +34,8 @@ fn rows(home: &Path) -> Vec<Value> {
 /// The project key of `workspace`: the name of its `projects/<key>`
 /// directory.
 fn project_key(home: &Path, workspace: &Path) -> String {
-    log::sessions_dir(home, &doors::project(workspace))
-        .parent()
-        .and_then(Path::file_name)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned()
+    let _ = home;
+    log::project_key(&doors::project(workspace))
 }
 
 /// The `session_id` on the first stdout line of a run.
@@ -445,7 +441,7 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
             "kind": "session_status", "session_id": id, "ts": 5, "schema_version": 1,
             "payload": {
                 "name": "doomed", "workspace": workspace, "project": "-w", "model": "fake/m",
-                "state": "streaming", "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
+                "state": "streaming", "started": 0, "calls": 0, "since": 1, "delegates": 0, "jobs": 0, "clients": 0,
                 "spend": {
                     "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
                     "cost": 0.0, "subscription_cost": 0.0,

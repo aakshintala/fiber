@@ -12,6 +12,7 @@ use contract::tool::ServerRecord;
 use fakes::Deadline;
 use serde_json::json;
 
+use crate::error::McpError;
 use crate::server_json::ListedTool;
 use crate::slot::{Run, Served, State};
 use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started};
@@ -419,7 +420,8 @@ fn stop_stops_a_lazily_started_server_and_ignores_a_never_started_one() {
         .parse()
         .expect("a pid");
     setup.stop(started.servers);
-    setup.await_reaped(pid);
+    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 
 #[test]
@@ -749,7 +751,12 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
     let Run::Failed(failed) = outcome else {
         panic!("a call using the replaced server fails as unavailable");
     };
-    assert_eq!(failed.error.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(
+        failed.error,
+        McpError::ServerUnavailable {
+            server: "fx".to_owned()
+        }
+    );
     assert!(
         failed.records.is_empty(),
         "the restart's records belong to its call"
@@ -1377,7 +1384,7 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
     let server = fakes::within("the serve", WITHIN, move || match serving.run("ask") {
         Run::Call(server, _) => server,
         Run::Removed(_) => panic!("the server still lists ask"),
-        Run::Failed(failed) => panic!("the server runs: {}", failed.error.message),
+        Run::Failed(failed) => panic!("the server runs: {}", failed.error),
     });
     let (ask, seen) = crate::elicit::tests::FakeAsk::scripted(
         "a_9",

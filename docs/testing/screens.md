@@ -1,0 +1,56 @@
+# Testing screens
+
+How a terminal UI screen is tested. It is part of `docs/testing.md`.
+
+## Screens
+
+
+The terminal UI is tested by feeding a sequence of events to its drawing code
+and comparing the whole in-memory screen (ratatui's `TestBackend`) against a
+stored snapshot. CI never writes a snapshot: a changed screen fails and shows
+the difference, and an accepted change appears in the pull request.
+
+Input is tested the same way: key presses are fed to the TUI's input handling,
+and the test asserts the commands it sends to the session.
+
+A few tests run the real binary in a pseudo-terminal, for what memory cannot
+show: raw mode, resize, the terminal restored on exit, and two journeys that
+cross features: from a prompt through an approval, a resize and a quit, and
+from a turn through a quit, a resume and a new answer.
+
+The binary-level tests in `crates/main/tests` that assert on the terminal
+UI's screen use one driver, `crates/main/tests/support/pty.rs`. It feeds
+the bytes it reads into a `vt100` parser, which rebuilds the screen as a
+grid, and the test asserts on that grid: its text, its rows, each cell's
+colours and attributes, the cursor position, and the alternate-screen and
+hidden-cursor flags. Each wait is a predicate over the grid with one named
+deadline; a wait the terminal ends before failing shows the last grid.
+The driver takes a grid snapshot for a wait only when no synchronized
+output block (mode 2026) is open, so a wait sees whole frames and never a
+mix of the old frame and the new one; a stream without mode 2026 snapshots
+after each read.
+The terminal is 120 by 32 unless a test picks the size its layout needs
+(the look tests use 160 by 48). The driver pins `TERM` to
+`xterm-256color` and answers the binary's capability queries for a fixed
+dark terminal.
+
+Bytes that never reach the cells, such as the window title, the OSC 9
+desktop notification, a bell and the mode-enable sequences, are waited
+for on the raw output instead. Such a wait searches from an offset the
+test took before the input that causes the bytes, never from an earlier
+match, so it does not depend on the order in which two markers arrive.
+
+A screen predicate checks every cell property its assertions read, so a
+partial redraw can't satisfy it. A test sends input only after output the
+terminal already emits once it is ready for that input, such as the
+mode-enable sequences or the end of the first frame, never after a grid
+match alone. That signal is existing output: the shipped binary gets no
+test-only switch (`docs/testing.md`, "Levels").
+
+The driver reads the terminal on a thread from the first frame to end of
+file, and takes the markers it waits for over a channel, as `watch` in
+`crates/tui/src/pty_watch.rs` does. A reader that stops after a marker
+lets the terminal's output queue fill, so the code under test blocks
+writing a frame and the test hangs on a wait it caused itself. On quit
+the driver reaps the binary, then reads to end of file, so every byte
+written before the exit is read.

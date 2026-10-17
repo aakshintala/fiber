@@ -15,6 +15,13 @@ deadline ("Waits and timeouts") is a hang guard, not a timing assertion; a
 test of how much work something does counts the work, such as scans or
 opens.
 
+Parts. Read the part a job needs:
+
+- `docs/testing/screens.md`: testing a terminal UI screen.
+- `docs/testing/fakes.md`: model calls, fakes, testing an extension, jigs, and live calls and evals.
+- `docs/testing/running.md`: running the suite, and working a flaky test.
+- `docs/testing/mutants.md`: proving a test bites.
+
 ## Levels
 
 Tests sit at three levels. Each proves something the others cannot.
@@ -122,55 +129,7 @@ production values. Deadlines Fiber keeps itself stay on the injected clock.
 
 ### Screens
 
-The terminal UI is tested by feeding a sequence of events to its drawing code
-and comparing the whole in-memory screen (ratatui's `TestBackend`) against a
-stored snapshot. CI never writes a snapshot: a changed screen fails and shows
-the difference, and an accepted change appears in the pull request.
-
-Input is tested the same way: key presses are fed to the TUI's input handling,
-and the test asserts the commands it sends to the session.
-
-A few tests run the real binary in a pseudo-terminal, for what memory cannot
-show: raw mode, resize, the terminal restored on exit, and two journeys that
-cross features: from a prompt through an approval, a resize and a quit, and
-from a turn through a quit, a resume and a new answer.
-
-The binary-level tests in `crates/main/tests` that assert on the terminal
-UI's screen use one driver, `crates/main/tests/support/pty.rs`. It feeds
-the bytes it reads into a `vt100` parser, which rebuilds the screen as a
-grid, and the test asserts on that grid: its text, its rows, each cell's
-colours and attributes, the cursor position, and the alternate-screen and
-hidden-cursor flags. Each wait is a predicate over the grid with one named
-deadline; a wait the terminal ends before failing shows the last grid.
-The driver takes a grid snapshot for a wait only when no synchronized
-output block (mode 2026) is open, so a wait sees whole frames and never a
-mix of the old frame and the new one; a stream without mode 2026 snapshots
-after each read.
-The terminal is 120 by 32 unless a test picks the size its layout needs
-(the look tests use 160 by 48). The driver pins `TERM` to
-`xterm-256color` and answers the binary's capability queries for a fixed
-dark terminal.
-
-Bytes that never reach the cells, such as the window title, the OSC 9
-desktop notification, a bell and the mode-enable sequences, are waited
-for on the raw output instead. Such a wait searches from an offset the
-test took before the input that causes the bytes, never from an earlier
-match, so it does not depend on the order in which two markers arrive.
-
-A screen predicate checks every cell property its assertions read, so a
-partial redraw can't satisfy it. A test sends input only after output the
-terminal already emits once it is ready for that input, such as the
-mode-enable sequences or the end of the first frame, never after a grid
-match alone. That signal is existing output: the shipped binary gets no
-test-only switch ("Levels").
-
-The driver reads the terminal on a thread from the first frame to end of
-file, and takes the markers it waits for over a channel, as `watch` in
-`crates/tui/src/pty_watch.rs` does. A reader that stops after a marker
-lets the terminal's output queue fill, so the code under test blocks
-writing a frame and the test hangs on a wait it caused itself. On quit
-the driver reaps the binary, then reads to end of file, so every byte
-written before the exit is read.
+In `docs/testing/screens.md`.
 
 ### Invariants
 
@@ -201,338 +160,34 @@ tool result.
 
 ## Model calls
 
-Nothing in CI calls a live provider or the public network. Provider bytes in
-tests come from two sources:
-
-- **Recorded streams.** Real responses from each protocol, captured with live
-  keys by the `provider` crate's `record` jig ("Jigs") and checked in. They
-  are replayed byte for byte against the provider crate's decoders. A recording keeps response bytes only,
-  never request headers or keys. It is re-recorded when a vendor change is
-  suspected. The probe recordings in `research/*-probe/raw/` do not
-  share one shape. Among them: the stream's bytes in a JSON wrapper's
-  `raw_sse` (`anthropic-messages-probe`) or `body` (`opencode-probe`), or in a
-  `.sse` file (`opencode-probe`); the stream as parsed `events`, each an event
-  name and its data (`codex-responses-probe`); or a non-streamed response
-  object (`openai-responses-probe`). A test serves the bytes where a probe
-  kept them, and otherwise rebuilds the stream from what the probe kept.
-- **Scripted streams.** Hand-written in the real wire format, for scenarios a
-  recording cannot produce on demand, such as a tool call, then a 429, then
-  text. A local fake server serves them to the binary and to cross-crate tests.
-  A script is a list of responses, each a status, headers and body bytes,
-  served one per request in order.
-
-The fake server binds a free local port and returns its address, which a
-test puts in a provider definition's base URL. It also records every request
-it receives, and tests assert on it: the path, the headers with each
-credential replaced by its fingerprint, and the body bytes. This is
-how a test proves the prompt-cache rule that "two requests built from the same
-inputs are the same bytes" (`docs/prompt-cache.md`), across turns, resume and
-fork.
-
-Every first-party provider extension is tested in Fiber's CI, loaded into
-the built binary by local path. What it declares for the wire (base URLs,
-compatibility flags, headers) is tested as part of its protocol, against the
-vendor's recorded streams and against scripted streams on the fake server,
-because that is the native protocol's decoding and request shaping, which is
-Fiber's own Rust. Its Lua functions (`models()`, `quota()`, `credential()`,
-`sign()`, `cost()`) are tested as an extension, with `fiber extension test` and
-scripted host calls ("Testing an extension"). A protocol change that breaks a
-shipped provider fails the pull request that caused it.
+In `docs/testing/fakes.md`.
 
 ## Fakes
 
-Anything outside Fiber that a test needs is a shared fake. A Fiber delegate
-is a real child session process, because it is Fiber. The fakes are:
-
-- a provider server serving recorded and scripted streams, and recording
-  requests
-- one shared HTTP/1.1 server core in `fakes`, which the provider server,
-  the OAuth token endpoint, the CONNECT proxy and the gated streamable-HTTP
-  fake all build on: each request is read within one bound on the injected
-  clock, and the test synchronises on pauses at the read request, before
-  the response and between the pieces of a stream; closing a connection
-  with unread bytes on its socket resets it instead of ending the reply
-  with FIN, so a server that closes after a fixed body discards the bytes
-  already there with `Connection::drain_socket` before it replies
-- MCP servers for both transports, stdio and streamable HTTP
-- child processes that misbehave on purpose: ignore SIGTERM, leave descendants,
-  escape their process group
-- a fixture Lua extension that registers a tool, a provider and each hook
-- a scripted foreign harness, standing in for a delegate that is not Fiber
-- a local OAuth token endpoint
-- a refused address, loopback port 1: a connect is reset, and a bind of port 0
-  never draws it, so no concurrent listener can take it
-- a second client on a session's socket
-- a fake clock, whose time moves only when the test advances it to a named
-  park through `advance_when_parked`, naming the expected park and the advance
-  separately; `advance_marked` marks each thread's latest park, so
-  `await_parked_since` waits for that thread's next park after the advance
-  even when an event woke it out of its park before the advance
-- a counting allocator, which counts the blocks of 1 MiB or more a thread
-  holds at once, and the bytes it allocated and has not freed, from the
-  scope's start and never below 0; each block of 64 KiB or more takes a
-  slot in a fixed table of 64, following the block through every `realloc`,
-  so a test can read the peak without its output buffer; a block made
-  before the scope and freed inside it lowers the total; `fakes` only
-  exports it, and each test binary that measures installs it as its own
-  global allocator and holds nothing else
-
-The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
-is a test-only dependency of the crates that use it (`docs/architecture.md`,
-"The call rules").
-
-The concrete scenarios each area needs are that area's acceptance criteria,
-written when its implementation tickets are.
+In `docs/testing/fakes.md`.
 
 ## Testing an extension
 
-Fiber tests its own extensions only with tooling it ships to everyone. The
-`fakes` crate tests Fiber's own Rust: the protocol decoders, the log writer,
-the loop's edge cases. Anything that tests an extension, first-party or not,
-uses what every author has, so that tooling is always good enough for a real
-extension and first-party code gets no private path.
-
-The shipped tooling has three parts:
-
-- **The `scripted` provider.** A built-in provider whose model is a script
-  file: steps such as reply with this text, call this tool with these
-  arguments, fail with this error, stream slowly. A session names it like any
-  model, so it is a provider, not a test switch, and nothing in the loop knows
-  a test is running. Replies are served in order, never matched to the
-  request, so an extension that changes the prompt still gets its scripted
-  replies. It bypasses the vendor decoders, which the fake server tests
-  (`docs/model-routing.md`, "The scripted provider").
-- **Test cases.** A session case gives a script and prompt, then checks the
-  complete ordered durable event stream and selected fields. A call case
-  invokes a provider function and checks its return or error. Both can script
-  host calls. See `docs/extensions.md`, "Testing an extension", for the case
-  format.
-- **A runner, `fiber extension test [<path>]`.** It runs an extension's cases
-  against the built binary in a temporary `FIBER_HOME` and exits non-zero when
-  any case fails (`docs/invocation.md`). While the runner drives a session, a
-  case may script the extension's host calls (a `host.http` reply, a
-  `host.exec` result) and advance a fake clock, so timers fire when the case
-  says, not when the wall clock does. These exist only under the runner, as
-  its documented feature; a session started any other way has neither.
-
-Fiber's CI runs `fiber extension test` for every first-party package that has
-cases whenever the binary-level tests run (`docs/ci.md`, "Selection"). A change
-to a package, or to Fiber under it, that breaks one of its cases fails the pull
-request that caused it.
+In `docs/testing/fakes.md`.
 
 ## Jigs
 
-A jig runs one layer on its own, so an agent building or diagnosing that
-layer can see what it makes of a given input without writing a throwaway
-program or waiting on a test.
-
-- **A jig is a Cargo example in its layer's crate**, run as
-  `cargo run -p <crate> --example <jig> -- <args>`. It can use only what its
-  crate may depend on, so what it shows is that layer alone. It may use
-  `fakes`, as a test-only dependency. It reads its arguments with
-  `std::env::args`.
-- **A test runs the jig's built binary.** `cargo test` builds the crate's
-  examples, so a jig test starts `target/<profile>/examples/<jig>` (found
-  from `std::env::current_exe`) directly. It never runs `cargo run`, which
-  would wait on the build directory's lock inside the test's deadline.
-- **Its own logic is tested from shared support.** Code in a jig that a
-  test checks without running the binary, such as its argument parsing,
-  lives in a support file under the crate's `tests/support/`. The jig
-  includes that file with `#[path]` (`docs/code-quality.md`, "Size"), and
-  the test calls it directly. A jig is never marked `test = true`, because
-  `cargo test` then builds it as a test harness instead of the binary jig
-  tests run.
-- **It never ships.** No release binary contains a jig, and the shipped
-  `fiber` gains no switch for one. A jig that people need becomes a `fiber`
-  subcommand through its area's ticket, with the tests a feature carries.
-- **It is gated.** The tests and clippy compile every example, so a jig
-  that stops building fails `scripts/check`.
-- **It adds no fixture format.** It reads the files its layer already reads,
-  and what it saves for a test is a format tests already replay: a recorded
-  stream (the response bytes), an events file (JSON lines, the session log's
-  format), or a session directory. A bug a jig reproduces ships its test
-  ("What a change ships with"), built from the file the jig used or saved.
-
-A crate's first implementation ticket ships the jigs listed for it:
-
-| Crate | Jig | What it does |
-|---|---|---|
-| `log` | `dump` | Prints a session directory's events, one per line. |
-| `log` | `check` | Checks a session directory against the invariants the directory alone shows: every line parses as an event, and `seq` has no gaps. |
-| `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
-| `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
-| `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
-| `fakes` | `provider-server` | Serves a scripted or recorded stream on a free local port, prints that address, then prints each request it receives. |
-| `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
-| `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
-| `tui` | `paging` | Generates a large session and measures the terminal paging it: the opening pass, the frames that load pages, jumps, a search of the whole log, a re-count at a new width, and appending to a running turn. |
-| `tui` | `hover` | Sends motion reports through the terminal's screen over an events file and prints the frames, bytes and time per report. |
-| `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
-| `loop` | `review` | Prints the reviewer's stage inputs and handoff selection requests for a session directory, including unreplayable calls. |
-| `extensions` | `pin_check` | Times checking a repository's declared paths against `pinned.json`, cold and warm, in one process. |
-| `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
-
-`contract` has no jig: it holds types, not behaviour. A jig not in this table
-is added to it by the ticket that builds it.
+In `docs/testing/fakes.md`.
 
 ## Live calls and evals
 
-Tests that need live credentials are opt-in by environment variable and never
-run in CI.
-
-A live test asserts the outcome, the fields under test, and the order of the
-kinds it relies on (the turn's start first, its `text_completed` before its
-`turn_completed`, `turn_completed` last), not the complete ordered list "Event
-streams" requires: a real model's stream varies in its deltas and reasoning
-events. The complete list is pinned by the same scenario against the fake
-provider.
-
-An eval measures the model plus Fiber's prompting as a pass rate over many
-runs. It is a development instrument for prompts and tool definitions. No eval
-gates a merge or a release.
+In `docs/testing/fakes.md`.
 
 ## Proving a test bites
 
-A test that passes with its feature removed proves nothing. CI checks this on
-every pull request with mutation testing: `cargo-mutants --in-diff` makes small
-breaking edits to the code the diff changed, such as replacing a function body
-with a default or flipping a comparison, and runs the mutated crate's tests
-against each one. An edit that no test notices fails CI. Only the mutated
-crate's own tests run, so a test in another crate, the binary's included,
-kills none of its mutants: each behaviour a crate exposes is tested in
-that crate. Selection writes the
-diff's full mutant list to its job summary on every pull request event, drafts
-included, and prints it to the job's log
-(readable as soon as Selection finishes, before the run ends):
-`gh api --allow-escape-sequences repos/aakshintala/fiber/actions/jobs/<id>/logs`,
-with the id from `gh run view <run> -R aakshintala/fiber --json jobs`
-(`gh run view --log` waits for the whole run; the run's summary page shows the
-list in a browser), so a lane maps each mutant to a test before CI runs the shards.
-
-A function is extracted and tested alone only where a surviving mutant would
-signal the wrong process or lose data, such as the `kill(-1)` refusal
-("Running tests"). Elsewhere a mutant that changes no behaviour a consumer
-sees takes an exemption in the code, with a written reason, instead of a test
-that pins it. The exemption goes on a function, since an exemption on a
-statement or block is not reliably honoured. It is written
-`#[cfg_attr(false, mutants::skip)]`, with the reason in a comment above it:
-cargo-mutants silently ignores the attribute when it carries a `reason`
-argument. How many runners share the
-mutants is CI's to set.
-
-Mutants run on Linux, so code compiled only on macOS, or on any platform other
-than Linux, is never built there, and every mutant of it would pass unnoticed.
-A function gated that way is exempted the same way, with the reason that
-mutants run on Linux, where it is not compiled. The macOS test job still runs
-it, so its tests must reach it.
-
-Code is written so a mutant fails fast. A loop that steps an index by hand can
-spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
-a timeout; walk with an iterator instead. Code also avoids forms that leave a mutant no
-test can catch. Disjoint flags are combined with a method such as `union`,
-not `|`: cargo-mutants swaps `|` for `^`, which gives the same value when no
-bit overlaps. A test reaches the code under test
-from outside, through a test seam such as a fake writer or the injected clock. A
-`#[cfg(test)]` hook inside a production function is used only where no outside
-seam can reach the behaviour, such as a race's pause point ("Waits and
-timeouts"), and the plan that needs one says why.
-
-cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
-in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
-timeout, not as caught. A mutant can turn a wait that returns
-early into one that runs out its whole bound, as a flipped comparison in a
-`wait_timeout_while` predicate does, so the deadlines one test can run out in
-turn must add up to well under that timeout.
-
-A bug fix must also show that its test reproduces the bug. A pull request
-where any issue its body resolves is labelled `bug` starts with a red commit:
-the reproducing test and any new signature or test seam it needs, without the
-fix (`docs/workflow.md`, "The pull request"). CI runs the tests the red commit adds or changes at the red commit, and
-every test the pull request adds or changes at the head. The red commit must
-build, at least one of its tests must fail there, and all of them must pass
-at the head.
-A pull request whose every changed file is a docs file, as "Selection"
-defines it, passes the check with a message saying so: the doc was wrong and
-the code was right, so no test can show the bug.
-
-Diff-scoped mutation testing has two known limits. It cannot see a change in
-one place leaving other code under-tested. A pull request that changes only
-test code runs no mutants, so a rewritten test could lose its teeth unnoticed
-until the next code change in that crate runs mutants against it.
+In `docs/testing/mutants.md`.
 
 ## Running tests
 
-Tests run under cargo-nextest. Each test runs in its own process and is killed
-past its timeout. `cargo test` is not a substitute: it runs a crate's tests as
-threads of one process, and a child process one test spawns holds the file
-locks another test holds until the child execs, so lock-release and
-extension-load tests fail there and pass under nextest. A process per test
-does not contain what the test starts: every test that starts a process, at
-any level, runs it in its own process group, and reaps the group on every
-path, including failure and timeout, with SIGKILL through the guarded helper
-in `fakes` (`fakes::process_group::kill_group`, `Watchdog`), because the
-fixtures ignore SIGTERM on purpose ("Fakes"). A binary-level test's
-watchdog, started beside Fiber, kills Fiber's process group when the test
-process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
-A filter that matches no
-tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
-"0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
+In `docs/testing/running.md`.
 
-`scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
-fails the run when a process still carries it after the tests, listing each
-leak's PID and command. The scan only reports: reaping stays the test's job,
-above.
-A test that clears a child's environment puts `FIBER_CHECK_RUN`
-back (`fakes::check_run`), so `fiber` and the processes it starts carry
-the nonce. The exception is the case processes of `fiber extension test`,
-which Fiber starts with a cleared environment. A shell-tool command gets
-the nonce through the session's environment: `fiber ask` passes its
-caller's, and a hub a test starts gets no `SHELL`, so it uses its
-inherited environment (`docs/invocation.md`, "A session's environment").
-When the selection includes `main`, `scripts/test-leak-probe` leaks a
-process through the shell tool under `fiber ask`, with its own nonce, and
-requires the scan to name its PID.
-On macOS `ps` withholds the environment of some processes, such as
-`sh` and `sleep`, so the nonce scan cannot name them. After it the scan
-reads the user's processes reparented to init that started after
-`scripts/check` began: one whose executable is under this worktree's
-`target/` fails the check and is named, and one whose command is `sh`,
-`bash` or `sleep` is listed in a warning that says it may belong to another
-run, without changing the exit status. Neither case sends a signal. An
-orphan that is neither is still invisible on macOS: it is caught by the
-test's own reap above, not the scan.
+## Waits and timeouts
 
-The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
-
-A test that runs a command, directly or through a scripted tool call, uses
-only the shells above and the standard Unix tools every runner has, such as
-`grep`, `sed` and `awk`. `rg`, `jq` and other tools a developer installs are
-absent on the Linux runners, and a scripted call to one fails there.
-
-A test never depends on the length of a temporary path: macOS's are long and
-Linux's short. A test that needs a line cut makes the line long enough to cut
-on any temporary path.
-
-The tests need a user other than root: root bypasses file modes, so the tests
-that deny a file or socket by mode fail with a message saying so.
-
-Every portable test runs on all three release targets. A test that applies to
-one platform is compiled only for that platform, never skipped at runtime. CI
-reports the number of tests run on each target, so an empty suite cannot pass.
-
-Each test uses its own temporary directory and checks only its own processes
-and files, never a machine-wide count.
-
-Every process-group signal in a test goes through the guarded helper in
-`fakes`, which refuses a group id of 1 or less: `kill(-1)` signals every
-process the user owns. Code that signals a process or group refuses an id of
-1 or less the same way, and `scripts/check` fails on a signal sent anywhere
-else. A test of that refusal passes the probe signal `0`, or
-tests the refusal as a function that signals nothing, so a mutant that removes
-the check sends nothing. Mutation testing runs in CI only, never on a
-developer machine.
-
-### Waits and timeouts
 
 A test waits for the signal that proves the operation it needs: a socket
 accepting a connection, an MCP server's tools listed, an artifact finished and
@@ -610,26 +265,9 @@ or uses a checked-in fixture. A test whose subject is direct execution, such as
 a `PATH` lookup or the shebang line, keeps the executable file and passes a
 `cargo nextest run --stress-count` run.
 
-### Flaky tests
+## Flaky tests
 
-A failed binary-level test retries once. The binary-level tests are the test
-binaries in `crates/main/tests/`; no other test retries, including the unit
-tests in `crates/main/src/`. A pass on retry does not block the
-merge. CI opens a flake issue naming the test and its first failure, or
-comments on the open one. The issue's title is `Flaky test: ` followed by
-the test as nextest prints it. Within one report job a test title files or
-comments once; a repeat is skipped. On a pull request run the report reads
-the failing file from the panic path: when main changed that file since
-the run's tested base it files nothing and notes the stale base in the
-summary, and when the pull request itself changed that file it comments on
-the pull request instead of filing. A failure with no panic path, or any
-failure on a push run, files as usual. A flake issue closes when the test
-is rewritten to be deterministic, never by rerunning. A failure on a
-commit that does not contain the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
-reopens the closed issue nor counts against the fix.
-
-Crate-level and cross-crate tests never retry: they are deterministic, so a
-failure there is signal.
+In `docs/testing/running.md`.
 
 ## What a change ships with
 

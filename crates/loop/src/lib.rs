@@ -120,6 +120,7 @@ pub struct Model {
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
+    status_tap: Option<status::Tap>,
     diag: diag::SessionDiag,
     provider: Arc<dyn Provider>,
     /// The model `provider` reaches, and how its calls are priced.
@@ -510,6 +511,7 @@ impl Loop {
             Arc::clone(log.clock()),
         );
         Ok(Self {
+            status_tap: None,
             log,
             diag,
             provider,

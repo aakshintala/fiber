@@ -74,9 +74,11 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
     session.inbox.send(delivery("say hi")).unwrap();
     let finished = run(session.looped.take().unwrap());
     let (_watcher, seen) = statuses_until(watcher, idle_named("say hi"));
-    // The first status is the one written at the start: nothing has run.
+    // The first status is written before any work, and still includes turns at zero.
     assert_eq!(seen[0].payload["state"], "idle");
     assert_eq!(seen[0].payload["name"], "");
+    assert_eq!(seen[0].payload["turns"], 0);
+    assert_eq!(seen.last().unwrap().payload["turns"], 1);
     let order = states(&seen);
     assert_eq!(order.last(), Some(&"idle"));
     let streaming = order.iter().position(|s| *s == "streaming").unwrap();
@@ -97,6 +99,7 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
             session.workspace.display().to_string()
         );
         assert_eq!(line.payload["model"], MODEL);
+        assert!(!line.payload.contains_key("thinking"));
         assert_eq!(line.payload["delegates"], 0);
         assert_eq!(line.payload["jobs"], 0);
     }
@@ -111,6 +114,76 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         .map(|line| line.kind)
         .collect();
     assert!(!kinds.iter().any(|k| k == "session_status"));
+}
+
+#[test]
+fn a_session_with_a_thinking_level_names_it_in_its_status() {
+    let mut session = Session::with_thinking(
+        vec![Scripted::text("Done.")],
+        Some(contract::ThinkingLevel::High),
+    );
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, idle_named("go"));
+    assert_eq!(seen.last().unwrap().payload["thinking"], "high");
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
+}
+
+#[test]
+fn two_calls_report_their_classified_subject_and_session_start() {
+    let weather = Arc::new(TestTool::reads("weather", "sunny"));
+    let mut session = Session::with_tools(
+        vec![
+            tool_call_reply("", &["weather"]),
+            tool_call_reply("", &["shell"]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![
+            weather as Arc<dyn Tool>,
+            support::shell(Some("ls -la"), None),
+        ],
+    );
+    session.rules.set(contract::rules::StandingRules {
+        global: vec![contract::rules::Rule {
+            decision: contract::rules::RuleDecision::Allow,
+            tool: "shell".into(),
+            prefix: "ls".into(),
+            added: None,
+            session_id: None,
+        }],
+        project: Vec::new(),
+    });
+    let started = log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind == "session_started")
+        .unwrap()
+        .ts;
+    let watcher = session.log.watch();
+    session.inbox.send(delivery("go")).unwrap();
+    let finished = run(session.looped.take().unwrap());
+    let (_watcher, seen) = statuses_until(watcher, |line| {
+        line.payload["calls"] == 2 && line.payload["state"] == "idle"
+    });
+    assert_eq!(seen[0].payload["calls"], 0);
+    assert!(!seen[0].payload.contains_key("step"));
+    let first = seen.iter().find(|line| line.payload["calls"] == 1).unwrap();
+    assert_eq!(first.payload["step"], "weather");
+    assert_eq!(seen.last().unwrap().payload["step"], "shell ls -la");
+    for line in seen {
+        assert_eq!(line.payload["started"], started);
+    }
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("close ended the loop")
+        .unwrap();
 }
 
 #[test]
@@ -188,6 +261,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     let finished = run(resumed);
     let (mut lines, seen) = statuses_until(lines, |_| true);
     assert_eq!(seen[0].payload["name"], "say hi");
+    assert_eq!(seen[0].payload["turns"], 1);
     assert_eq!(seen[0].payload["state"], "idle");
     drop(inbox);
     Deadline::after(DEADLINE)

@@ -32,7 +32,7 @@ pub struct OfferedItem {
     /// The version, for an extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The diff against the copy approved before, when the content changed.
+    /// The diff against the newest copy approved before that is still kept, when the content changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
 }

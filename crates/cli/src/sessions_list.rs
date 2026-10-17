@@ -7,10 +7,12 @@
 use std::io::{self, BufReader, Write};
 
 use contract::ErrorCode;
-use contract::events::{SessionState, SessionStatus, WaitingKind};
+use contract::events::{SessionState, WaitingKind};
 use contract::shapes::Failure;
+use contract::shapes::Usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use support::text::one_line;
 
 use crate::sessions::request;
 use crate::table::pad;
@@ -18,6 +20,65 @@ use crate::{failed, finish, write_line};
 
 /// The `id` of the one command `fiber sessions` sends.
 const LIST_ID: &str = "c_sessions";
+
+/// Only the status fields this list prints. Flattening `SessionState`
+/// here would buffer every ignored field, including delegate progress,
+/// before reading the state. Read its tag and associated fields directly.
+#[derive(Deserialize)]
+#[serde(try_from = "StatusFields")]
+struct ListStatus {
+    name: String,
+    state: SessionState,
+    spend: Usage,
+}
+
+#[derive(Deserialize)]
+struct StatusFields {
+    name: String,
+    state: State,
+    tool: Option<Value>,
+    waiting: Option<Value>,
+    spend: Usage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum State {
+    Streaming,
+    Tool,
+    Retrying,
+    Waiting,
+    Jobs,
+    Idle,
+}
+
+impl TryFrom<StatusFields> for ListStatus {
+    type Error = serde_json::Error;
+
+    fn try_from(fields: StatusFields) -> Result<Self, Self::Error> {
+        let state = match fields.state {
+            State::Streaming => SessionState::Streaming,
+            State::Tool => SessionState::Tool {
+                tool: serde_json::from_value(fields.tool.ok_or_else(|| {
+                    <serde_json::Error as serde::de::Error>::missing_field("tool")
+                })?)?,
+            },
+            State::Retrying => SessionState::Retrying,
+            State::Waiting => SessionState::Waiting {
+                waiting: serde_json::from_value(fields.waiting.ok_or_else(|| {
+                    <serde_json::Error as serde::de::Error>::missing_field("waiting")
+                })?)?,
+            },
+            State::Jobs => SessionState::Jobs,
+            State::Idle => SessionState::Idle,
+        };
+        Ok(Self {
+            name: fields.name,
+            state,
+            spend: fields.spend,
+        })
+    }
+}
 
 /// The hub's answer to `sessions`.
 #[derive(Deserialize)]
@@ -30,7 +91,7 @@ struct Answer {
 #[derive(Deserialize)]
 struct Live {
     session_id: String,
-    status: SessionStatus,
+    status: ListStatus,
 }
 
 /// An exited session's `recent.jsonl` row.
@@ -40,7 +101,7 @@ struct Exited {
     name: String,
     how: String,
     #[serde(default)]
-    status: Option<SessionStatus>,
+    status: Option<ListStatus>,
 }
 
 /// One printed row. `--json` prints it as is, its fields in this order.
@@ -129,11 +190,6 @@ fn rows(answer: Answer) -> Vec<Row> {
     live.chain(exited).collect()
 }
 
-/// One text cell: each embedded line break is one space.
-fn one_line(cell: &str) -> String {
-    cell.replace("\r\n", " ").replace(['\r', '\n'], " ")
-}
-
 /// The `state` word a live session's status names.
 fn state_word(state: &SessionState) -> &'static str {
     match state {
@@ -148,7 +204,7 @@ fn state_word(state: &SessionState) -> &'static str {
 
 /// What the session waits on: `approval: <summary>` or
 /// `question: <summary>` or `offer: <summary>`.
-fn waiting(status: &SessionStatus) -> Option<String> {
+fn waiting(status: &ListStatus) -> Option<String> {
     match &status.state {
         SessionState::Waiting { waiting } => {
             let kind = match waiting.kind {
@@ -168,7 +224,7 @@ fn waiting(status: &SessionStatus) -> Option<String> {
 
 /// The session's spend in US dollars: its billed cost, 0 when unknown,
 /// plus its subscription cost; 0 with no status.
-fn spend(status: Option<&SessionStatus>) -> f64 {
+fn spend(status: Option<&ListStatus>) -> f64 {
     status.map_or(0.0, |status| {
         status.spend.cost.unwrap_or(0.0) + status.spend.subscription_cost
     })

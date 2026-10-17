@@ -9,10 +9,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use contract::SessionId;
-use contract::clock::Clock;
+use contract::clock::{Clock, utc_time};
 use contract::events::VariablesSource;
+use extensions::{Quota, QuotaEntry, Window, WindowUse};
+
+use crate::switch::quota::{ModelQuotaRead, QuotaView};
 
 static DEPTH: OnceLock<u32> = OnceLock::new();
 
@@ -57,6 +61,8 @@ pub(crate) struct Delegates {
     steer: jobs::Steer,
     /// Reads the child's log boundary for a resume.
     last_seq: jobs::LastSeq,
+    /// Renders the quota section of `delegate_models` on every call.
+    quota: Option<ModelQuotaRead>,
 }
 
 impl Delegates {
@@ -93,6 +99,16 @@ impl Delegates {
             watch,
             steer,
             last_seq,
+            quota: None,
+        }
+    }
+
+    /// Wires the model-facing quota reader: `models()` renders its snapshot
+    /// on every call. Without it the quota section reads `Quota: none`.
+    pub(crate) fn with_quota(self, quota: ModelQuotaRead) -> Self {
+        Self {
+            quota: Some(quota),
+            ..self
         }
     }
 
@@ -139,10 +155,15 @@ impl Delegates {
     }
 
     /// The `delegate_models` tool this session declares: the catalogue
-    /// built with the session's resolver.
+    /// built with the session's resolver, with the quota section appended.
     pub(crate) fn models(&self) -> jobs::DelegateModels {
+        let quota = self.quota.clone();
         jobs::DelegateModels {
             catalogue: Arc::clone(&self.resolve.catalogue),
+            quota: Arc::new(move || match quota {
+                Some(ref reader) => quota_text(&reader()),
+                None => String::from("Quota: none"),
+            }),
         }
     }
 }
@@ -163,9 +184,14 @@ pub(crate) fn resolver(
     let config = config.clone();
     let listed = providers.clone();
     let read = config.clone();
+    let credential_providers = providers.clone();
+    let credential_config = config.clone();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
         catalogue: Arc::from(catalogue(&listed, &read)),
+        credential: Arc::new(move |argument| {
+            credential_for(&credential_providers, &credential_config, argument)
+        }),
     }
 }
 
@@ -182,6 +208,160 @@ fn lookup(
             .map_err(|reason| format!("Role {argument:?} maps to {target:?}: {reason}"));
     }
     resolve_reference(providers, config, argument)
+}
+
+/// A role's credential label as configured now: the object's string
+/// `credential`, whatever its `model` is. `None` for a string role, an
+/// object without one, a non-string `credential`, or a non-role argument.
+/// A repository's role names no credential: its winning source is the
+/// repository layer, and its `credential` is ignored, so it reads as
+/// `None` too (`docs/configuration.md`, `roles."<name>"`).
+fn role_credential(config: &config::Config, name: &str) -> Option<String> {
+    let key = format!("roles.{}", config::path::display(&[name.to_owned()]));
+    let (value, source) = config.get(&key, None)?;
+    if matches!(source, config::Source::Repository(_)) {
+        return None;
+    }
+    value.get("credential")?.as_str().map(str::to_owned)
+}
+
+/// The credential label the `model` argument's delegate runs under, for
+/// the `credential` closure: the role's label when it names one the
+/// provider has, `None` for a full reference or a role without one. A
+/// label that names no credential fails with `credential_missing`, naming
+/// the labels the provider has; a scripted provider takes no label, so
+/// any label asked for one fails the same way. The model sees only role
+/// names, never labels: the label never reaches the catalogue.
+fn credential_for(
+    providers: &extensions::Providers,
+    config: &config::Config,
+    argument: &str,
+) -> Result<Option<String>, String> {
+    let Some(label) = role_credential(config, argument) else {
+        return Ok(None);
+    };
+    let Some(target) = role_target(config, argument) else {
+        return Ok(None);
+    };
+    let rest = target.strip_prefix("fiber:").unwrap_or(&target);
+    let Ok(resolved) = providers.resolve(rest) else {
+        return Ok(None);
+    };
+    if let Err(failure) = crate::scripted::label(resolved.provider, Some(&label)) {
+        return Err(failure.message);
+    }
+    let labels = config.credentials().labels(resolved.provider);
+    if labels.contains(&label) {
+        Ok(Some(label))
+    } else {
+        Err(crate::credential::no_label(&resolved.provider.name, &label, &labels).message)
+    }
+}
+
+/// The quota section `delegate_models` appends to the catalogue: one line
+/// per provider credential label, sorted by provider then credential
+/// (`docs/tools.md`, "What the model sees"). A loading view renders the
+/// single `Quota: loading` line before any per-label entry; a loaded view
+/// with no credentialed label renders `Quota: none`.
+fn quota_text(view: &QuotaView) -> String {
+    let labels = match view {
+        QuotaView::Loading => return String::from("Quota: loading"),
+        QuotaView::Loaded(labels) if labels.is_empty() => return String::from("Quota: none"),
+        QuotaView::Loaded(labels) => labels,
+    };
+    let mut rows = labels.clone();
+    rows.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
+    let mut text = String::from("Quota:");
+    for row in &rows {
+        text.push_str(&format!(
+            "\n{}/{}: {}",
+            row.provider,
+            row.credential,
+            quota_entry(&row.entry, row.pending)
+        ));
+    }
+    text
+}
+
+/// What the model sees for one credential label: its value, `no quota
+/// reported` for a provider without `quota()`, `unreachable` with the
+/// last value and its age where there is one, or `no value yet` while
+/// its first fetch is still in flight.
+fn quota_entry(entry: &QuotaEntry, pending: bool) -> String {
+    match entry {
+        QuotaEntry::Reported(quota) => quota_value(quota),
+        QuotaEntry::NoQuota => String::from("no quota reported"),
+        QuotaEntry::Unreachable {
+            last: Some((quota, age)),
+        } => format!(
+            "unreachable (last: {}, {} ago)",
+            quota_value(quota),
+            quota_age(*age)
+        ),
+        QuotaEntry::Unreachable { last: None } if pending => String::from("no value yet"),
+        QuotaEntry::Unreachable { last: None } => String::from("unreachable"),
+    }
+}
+
+/// A fetched quota value: its windows joined with `, `, or its credit
+/// remaining with the limit where the vendor reports one. An empty window
+/// list reads as a provider with nothing to report.
+fn quota_value(quota: &Quota) -> String {
+    match quota {
+        Quota::Windows(windows) if windows.is_empty() => String::from("no quota reported"),
+        Quota::Windows(windows) => windows
+            .iter()
+            .map(quota_window)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Quota::Credit { remaining, limit } => match limit {
+            Some(limit) => format!("credit {remaining} remaining of {limit}"),
+            None => format!("credit {remaining} remaining"),
+        },
+    }
+}
+
+/// One usage window: its name and percent used with the reset time where
+/// the provider reports one, or as reset once the reset time has passed.
+fn quota_window(window: &Window) -> String {
+    match &window.used {
+        WindowUse::Percent { used, resets_at } => {
+            let percent = used.round();
+            match resets_at {
+                Some(at) => format!(
+                    "{} {percent}% used (resets {})",
+                    window.name,
+                    reset_time(*at)
+                ),
+                None => format!("{} {percent}% used", window.name),
+            }
+        }
+        WindowUse::Reset => format!("{} reset", window.name),
+    }
+}
+
+/// A reset time in UTC: reset times are built from the epoch plus a
+/// duration when quota is parsed, so a failure reads as the epoch.
+fn reset_time(at: std::time::SystemTime) -> String {
+    utc_time(
+        at.duration_since(UNIX_EPOCH)
+            .map(|past| past.as_secs())
+            .unwrap_or(0),
+    )
+}
+
+/// An unreachable age in the largest whole unit that fits.
+fn quota_age(age: std::time::Duration) -> String {
+    let secs = age.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
 }
 
 /// A role's target reference as configured now: a string value is the
@@ -334,6 +514,21 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         command.args(["--resume", &format!("--prompt={}", launched.prompt)]);
     } else {
         command.args(["--model", &launched.model, "--prompt", &launched.prompt]);
+        // A role naming a credential label runs the child under it: the
+        // label travels as a run override, so the child's `preamble_built`
+        // records it. The value is a JSON string, so a label that parses
+        // as JSON still arrives as a string. Nothing for no label, and
+        // nothing on a resume, which continues the recorded session.
+        if let Some(label) = launched.credential.as_deref() {
+            let provider = launched.model.split('/').next().unwrap_or_default();
+            let key = config::path::display(&[
+                "providers".to_owned(),
+                provider.to_owned(),
+                "credential".to_owned(),
+            ]);
+            let value = serde_json::Value::String(label.to_owned());
+            command.args(["-c", &format!("{key}={value}")]);
+        }
     }
     command.args([
         "--parent",

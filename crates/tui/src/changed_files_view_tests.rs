@@ -121,6 +121,23 @@ fn app_with_diff() -> App {
 }
 
 #[test]
+fn a_file_row_is_its_path_bold_then_dim_dot_added_and_removed() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let frame = frame(&changes(&[("src/a.rs", 4, 2)]), None, List::default());
+    assert_eq!(
+        frame.rows[0],
+        [
+            ("src/a.rs".to_owned(), None, Ink::Heading),
+            (" · ".to_owned(), None, Ink::Muted),
+            ("+4".to_owned(), None, Ink::Role(Role::Added)),
+            (" ".to_owned(), None, Ink::Plain),
+            ("−2".to_owned(), None, Ink::Role(Role::Removed)),
+        ]
+    );
+}
+
+#[test]
 fn ranked_orders_by_changed_lines_then_path() {
     let changes = changes(&[
         ("z.rs", 5, 1),
@@ -323,8 +340,8 @@ fn frames_cover_list_reading_diff_empty_and_failed_answers() {
     let changes = changes(&[("src/a.rs", 4, 2), ("src/b.rs", 1, 0)]);
     let list = frame(&changes, None, List::default());
     assert_eq!(list.title, "Changed files");
-    assert_eq!(row(&list, 0), "src/a.rs  +4 −2");
-    assert_eq!(row(&list, 1), "src/b.rs  +1 −0");
+    assert_eq!(row(&list, 0), "src/a.rs · +4 −2");
+    assert_eq!(row(&list, 1), "src/b.rs · +1 −0");
     assert_eq!(list.below, ["2 files changed  +5 −2"]);
     assert_eq!(list.footer, "↑↓ move · Enter show diff · Esc close");
 

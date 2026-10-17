@@ -35,6 +35,17 @@ pub enum Label {
     ToolOutput,
 }
 
+impl Label {
+    /// The `--json` `label` wire word for this hit kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Label::Message => "message",
+            Label::ToolInput => "tool_input",
+            Label::ToolOutput => "tool_output",
+        }
+    }
+}
+
 /// One place the text was found. It never carries a whole event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
@@ -80,3 +91,7 @@ pub trait Scan: Send + Sync {
     /// had found.
     fn scan(&self, query: &Query, cancel: &dyn Cancel) -> Found;
 }
+
+#[cfg(test)]
+#[path = "session_search_tests.rs"]
+mod tests;

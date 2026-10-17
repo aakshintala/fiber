@@ -232,25 +232,12 @@ impl fmt::Debug for Foreground {
 
 /// The output file could not be created. Nothing was recorded.
 #[derive(Debug, thiserror::Error)]
-pub enum OpenError {
-    /// Creating the file failed.
-    #[error("the job's output file {path} could not be created: {source}")]
-    Io {
-        /// The file that could not be created.
-        path: PathBuf,
-        /// The filesystem error.
-        source: std::io::Error,
-    },
-}
-
-impl OpenError {
-    /// The stable code (`docs/errors.md`). The output file could not be
-    /// created, which is the tool's failure.
-    pub fn code(&self) -> ErrorCode {
-        match self {
-            Self::Io { .. } => ErrorCode::ToolError,
-        }
-    }
+#[error("the job's output file {path} could not be created: {source}")]
+pub struct OpenError {
+    /// The file that could not be created.
+    pub path: PathBuf,
+    /// The filesystem error.
+    pub source: std::io::Error,
 }
 
 /// One durable job line a call returns. The loop writes them, in order,

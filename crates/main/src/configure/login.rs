@@ -16,11 +16,16 @@ use tui::{BrowserLogin, ConfigureError, LoginKind, LoginShow, LoginTarget, Store
 /// nothing writes to stderr under the TUI.
 struct ShownBrowser {
     shown: Arc<dyn LoginShow>,
+    method: extensions::LoginMethod,
+    cancel: Arc<cli::LoginCancel>,
 }
 
 impl extensions::Browser for ShownBrowser {
     fn open(&self, url: &str) {
         self.shown.open(url);
+        if self.method == extensions::LoginMethod::Device {
+            self.cancel.cancel();
+        }
     }
 
     fn show(&self, url: &str, code: &str) {
@@ -39,7 +44,8 @@ struct SeamLogin {
     name: String,
     browser: Arc<dyn extensions::Browser>,
     clock: Arc<dyn Clock>,
-    cancel: cli::LoginCancel,
+    cancel: Arc<cli::LoginCancel>,
+    method: extensions::LoginMethod,
 }
 
 impl BrowserLogin for SeamLogin {
@@ -50,7 +56,7 @@ impl BrowserLogin for SeamLogin {
             &providers,
             &self.name,
             None,
-            extensions::LoginMethod::Browser,
+            self.method,
             Arc::clone(&self.browser),
             Arc::clone(&self.clock),
             &self.cancel,
@@ -73,13 +79,20 @@ pub(super) fn browser_login(
     name: &str,
     shown: Arc<dyn LoginShow>,
     clock: Arc<dyn Clock>,
+    method: extensions::LoginMethod,
 ) -> Arc<dyn BrowserLogin> {
+    let cancel = Arc::new(cli::LoginCancel::default());
     Arc::new(SeamLogin {
         home: home.to_path_buf(),
         name: name.to_owned(),
-        browser: Arc::new(ShownBrowser { shown }),
+        browser: Arc::new(ShownBrowser {
+            shown,
+            method,
+            cancel: cancel.clone(),
+        }),
         clock,
-        cancel: cli::LoginCancel::default(),
+        cancel,
+        method,
     })
 }
 

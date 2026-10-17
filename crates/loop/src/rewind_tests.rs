@@ -11,8 +11,12 @@
 use std::fs;
 use std::path::Path;
 
-use contract::events::{Event, ToolCallRequested, ToolCallStarted};
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::events::{
+    Empty, Environment, Event, FiberStarted, HandoffCompleted, HandoffStarted, HandoffTrigger,
+    InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested, ToolCallStarted,
+    TurnStarted, Variables, VariablesSource,
+};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
 use fakes::NoRules;
 use serde_json::{Value, json};
@@ -797,4 +801,689 @@ fn latest_name_is_none_when_the_log_cannot_be_read() {
     let file = root.path().join("s_file");
     std::fs::write(&file, "not a directory").unwrap();
     assert!(latest_name(&file).is_none());
+}
+
+use super::command::Target;
+use crate::handoff::Carry;
+/// Fold tests for a handoff inherited by position (`docs/events.md`,
+/// "Rewind"): a handoff completed in the old session at or before the
+/// point applies to the new session, and one after it does not. The logs
+/// below are hand-written in the shape a live handoff writes: a turn's
+/// input, `handoff_started`, the note's text, `handoff_completed` naming
+/// the note's action, then the `opening_message`.
+use contract::{ErrorCode, TurnId};
+
+const HA: &str = "s_aaaaaaaaaaaaaaaa";
+const HB: &str = "s_bbbbbbbbbbbbbbbb";
+
+fn handoff_envelope(
+    session: &str,
+    seq: u64,
+    turn: Option<&str>,
+    action: Option<&str>,
+    event: &Event,
+) -> Envelope {
+    Envelope {
+        kind: event.kind().to_owned(),
+        session_id: SessionId(session.to_owned()),
+        ts: 1_759_150_000_000 + seq,
+        schema_version: SCHEMA_VERSION,
+        turn_id: turn.map(|turn| TurnId(turn.to_owned())),
+        action_id: action.map(|action| ActionId(action.to_owned())),
+        seq: Some(Seq(seq)),
+        payload: event.payload().unwrap(),
+    }
+}
+
+fn handoff_session_started(from: Option<(&str, u64)>) -> Event {
+    Event::SessionStarted(contract::events::SessionStarted {
+        workspace: "/w".to_owned(),
+        variables: Variables {
+            path: "/usr/bin".to_owned(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: from.map(|(session, seq)| Point {
+            session_id: SessionId(session.to_owned()),
+            seq: Seq(seq),
+        }),
+        rewind: None,
+        worktree: None,
+    })
+}
+
+fn handoff_turn(text: &str) -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text {
+                text: text.to_owned(),
+            }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: None,
+            },
+            changed_by: None,
+        }],
+    })
+}
+
+fn handoff_step() -> Event {
+    Event::StepStarted(Empty {})
+}
+
+fn handoff_begun() -> Event {
+    Event::HandoffStarted(HandoffStarted {
+        trigger: HandoffTrigger::Auto,
+    })
+}
+
+fn handoff_note_text(text: &str) -> Event {
+    Event::TextCompleted(TextCompleted {
+        text: text.to_owned(),
+        provider_item: None,
+    })
+}
+
+fn handoff_done(outcome: Outcome, note: Option<&str>) -> Event {
+    Event::HandoffCompleted(HandoffCompleted {
+        outcome,
+        error: None,
+        note: note.map(|action| Note::Actions {
+            note: vec![ActionId(action.to_owned())],
+        }),
+        tokens_before: 101,
+        instructions: None,
+    })
+}
+
+fn handoff_opening() -> Event {
+    Event::OpeningMessage(OpeningMessage {
+        environment: Environment {
+            date: "2023-11-14".to_owned(),
+            os: "test-os".to_owned(),
+            arch: "test-arch".to_owned(),
+            shell: "/bin/sh".to_owned(),
+            workspace: "/w".to_owned(),
+            git: None,
+            session_log: "/w/sessions/s_aaaaaaaaaaaaaaaa/events.jsonl".to_owned(),
+        },
+        instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
+        skills: Vec::new(),
+    })
+}
+
+/// The old session: turn 1, a handoff turn 2 carrying "the handoff note",
+/// then turn 3. The handoff turn's `turn_started` is seq 3, its completion
+/// seq 6, the opening seq 7.
+fn handoff_log() -> Vec<Envelope> {
+    vec![
+        handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+        handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+        handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+        handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+        handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+        handoff_envelope(
+            HA,
+            5,
+            Some("t_2"),
+            Some("a_note"),
+            &handoff_note_text("the handoff note"),
+        ),
+        handoff_envelope(
+            HA,
+            6,
+            Some("t_2"),
+            None,
+            &handoff_done(Outcome::Completed, Some("a_note")),
+        ),
+        handoff_envelope(HA, 7, None, None, &handoff_opening()),
+        handoff_envelope(HA, 8, Some("t_2"), None, &handoff_step()),
+        handoff_envelope(HA, 9, Some("t_3"), None, &handoff_turn("three")),
+        handoff_envelope(HA, 10, Some("t_3"), None, &handoff_step()),
+    ]
+}
+
+fn write_chain(sessions: &Path, session: &str, lines: &[Envelope]) {
+    let dir = sessions.join(session);
+    fs::create_dir_all(&dir).unwrap();
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(&serde_json::to_string(line).unwrap());
+        text.push('\n');
+    }
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+/// Parent A holding the handoff log, child B forked from A at `at`: the
+/// fold of B to its first line, and the window's rendered conversation.
+fn folded_at(sessions: &Path, at: u64) -> (crate::resume::Resumed, Vec<contract::provider::Input>) {
+    write_chain(sessions, HA, &handoff_log());
+    write_chain(
+        sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, at))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    let log = log::Log::open(
+        sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    (folded, conversation)
+}
+
+fn user_input(text: &str) -> contract::provider::Input {
+    contract::provider::Input::User {
+        text: text.to_owned(),
+        images: Vec::new(),
+    }
+}
+
+#[test]
+fn a_handoff_before_the_point_applies_to_the_fork() {
+    let home = fakes::TempDir::new("loop-handoff-before");
+    let sessions = home.path().join("sessions");
+    // Past the opening message, at a step boundary: the handoff is at or
+    // before the point, so the fork inherits it.
+    let (folded, conversation) = folded_at(&sessions, 8);
+    // The window is turn 2's `turn_started` in the parent segment, and no
+    // job or session log preceded it, so the seed is the default.
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    // The carried input, then the note, under the new opening message.
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("two"));
+    assert_eq!(conversation[2], user_input("the handoff note"));
+}
+
+#[test]
+fn a_handoff_after_the_point_does_not_apply_to_the_fork() {
+    let home = fakes::TempDir::new("loop-handoff-after");
+    let sessions = home.path().join("sessions");
+    // At turn 1's closing step, before the handoff turn: the handoff is
+    // after the point, so the fork keeps the earlier context.
+    let (folded, conversation) = folded_at(&sessions, 2);
+    assert_eq!(folded.window, (0, 0));
+    assert_eq!(folded.seed, Carry::default());
+    // The conversation the same lines render with the handoff lines past
+    // the point deleted: turn 1's input alone, with no note anywhere.
+    let kept: Vec<Envelope> = handoff_log()
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= 2))
+        .collect();
+    assert_eq!(
+        conversation,
+        crate::conversation::rebuild(&kept, "fake/model-1").unwrap()
+    );
+    assert_eq!(conversation, [user_input("one")]);
+}
+
+#[test]
+fn a_point_on_the_handoffs_completion_applies_it() {
+    let home = fakes::TempDir::new("loop-handoff-point");
+    let sessions = home.path().join("sessions");
+    // The point is inclusive: folded at the `handoff_completed` line
+    // itself, the handoff applies.
+    let (folded, conversation) = folded_at(&sessions, 6);
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    // The carried input and the note, with no opening message: that line
+    // is past the point.
+    assert_eq!(
+        conversation,
+        [user_input("two"), user_input("the handoff note")]
+    );
+    // One line earlier, on the note's own line, it does not: the
+    // completion is past the point, so the window stays at the chain's
+    // start and the note line is truncated back off it.
+    let (earlier, before) = folded_at(&sessions, 5);
+    assert_eq!(earlier.window, (0, 0));
+    assert_eq!(earlier.seed, Carry::default());
+    assert_eq!(before, [user_input("one"), user_input("two")]);
+}
+
+#[test]
+fn the_command_door_refuses_the_handoffs_completion_line() {
+    let home = fakes::TempDir::new("loop-handoff-door");
+    let sessions = home.path().join("sessions");
+    write_chain(&sessions, HA, &handoff_log());
+    let dir = sessions.join(HA);
+    let lines = log::read(&dir).unwrap();
+    let target = Target {
+        session: SessionId(HA.to_owned()),
+        dir: dir.clone(),
+        bound: None,
+    };
+    // The line after the completion is the opening message, so the
+    // completion names no step boundary.
+    let refused = super::command::point_for(&lines, &target, Some(Seq(6))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NotStepBoundary);
+    // Neither does the note's own line: a handoff's lines are next.
+    let refused = super::command::point_for(&lines, &target, Some(Seq(5))).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NotStepBoundary);
+    // A real boundary still opens: the step the handoff turn started.
+    assert_eq!(
+        super::command::point_for(&lines, &target, Some(Seq(2))).unwrap(),
+        2
+    );
+}
+
+#[test]
+fn a_handoff_started_with_no_completion_does_not_apply() {
+    // The process died mid-handoff: `handoff_started` and the note's text
+    // are logged, then a new process's `fiber_started`, and the turn went
+    // on. With no `handoff_completed` before the point, the handoff did
+    // not take effect.
+    let home = fakes::TempDir::new("loop-handoff-unfinished");
+    let sessions = home.path().join("sessions");
+    let died = Event::FiberStarted(FiberStarted {
+        version: "0.0.1".to_owned(),
+        resumed: false,
+    });
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_note"),
+                &handoff_note_text("the lost note"),
+            ),
+            handoff_envelope(HA, 6, None, None, &died),
+            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 0));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    // The open window closes at the new process: the note lines never
+    // stay, and the context is what it was before the handoff.
+    assert_eq!(
+        conversation,
+        [user_input("one"), user_input("two"), user_input("three")]
+    );
+}
+
+#[test]
+fn a_handoff_with_another_outcome_does_not_apply() {
+    // The handoff failed: its completion names the note's action, but the
+    // outcome is not `completed`, so the fork keeps the earlier context.
+    let home = fakes::TempDir::new("loop-handoff-failed");
+    let sessions = home.path().join("sessions");
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_note"),
+                &handoff_note_text("the failed note"),
+            ),
+            handoff_envelope(
+                HA,
+                6,
+                Some("t_2"),
+                None,
+                &handoff_done(Outcome::Failed, Some("a_note")),
+            ),
+            handoff_envelope(HA, 7, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 8, Some("t_3"), None, &handoff_turn("three")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 0));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(
+        conversation,
+        [user_input("one"), user_input("two"), user_input("three")]
+    );
+    assert!(
+        conversation.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the failed note"))),
+        "no note reaches the fork: {conversation:?}"
+    );
+}
+
+const HC: &str = "s_cccccccccccccccc";
+
+/// A chain A -> B -> C with the handoff in the middle segment B: the fold
+/// of C to its first line, and the window's rendered conversation. B is
+/// forked from A at 1; C is forked from B at `at`.
+fn folded_chain(
+    sessions: &Path,
+    at: u64,
+) -> (crate::resume::Resumed, Vec<contract::provider::Input>) {
+    write_chain(
+        sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_a1"), None, &handoff_turn("a-one")),
+        ],
+    );
+    write_chain(
+        sessions,
+        HB,
+        &[
+            handoff_envelope(HB, 0, None, None, &handoff_session_started(Some((HA, 1)))),
+            handoff_envelope(HB, 1, Some("t_b1"), None, &handoff_turn("b-one")),
+            handoff_envelope(HB, 2, Some("t_b1"), None, &handoff_step()),
+            handoff_envelope(HB, 3, Some("t_b2"), None, &handoff_turn("b-two")),
+            handoff_envelope(HB, 4, Some("t_b2"), None, &handoff_begun()),
+            handoff_envelope(
+                HB,
+                5,
+                Some("t_b2"),
+                Some("a_mid"),
+                &handoff_note_text("the middle note"),
+            ),
+            handoff_envelope(
+                HB,
+                6,
+                Some("t_b2"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_mid")),
+            ),
+            handoff_envelope(HB, 7, None, None, &handoff_opening()),
+            handoff_envelope(HB, 8, Some("t_b2"), None, &handoff_step()),
+            handoff_envelope(HB, 9, Some("t_b3"), None, &handoff_turn("b-three")),
+        ],
+    );
+    write_chain(
+        sessions,
+        HC,
+        &[handoff_envelope(
+            HC,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HB, at))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HC), Seq(0)).unwrap();
+    let log = log::Log::open(
+        sessions,
+        SessionId(HC.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    (folded, conversation)
+}
+
+#[test]
+fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
+    let home = fakes::TempDir::new("loop-handoff-middle");
+    let sessions = home.path().join("sessions");
+    // C continues B past the handoff: the window names B's segment and the
+    // handoff turn's start there.
+    let (folded, conversation) = folded_chain(&sessions, 8);
+    assert_eq!(folded.window, (1, 3));
+    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("b-two"));
+    assert_eq!(conversation[2], user_input("the middle note"));
+    // C continued before the handoff instead: the handoff is after the
+    // point, so the window stays at the chain's start.
+    let (earlier, before) = folded_chain(&sessions, 2);
+    assert_eq!(earlier.window, (0, 0));
+    assert_eq!(earlier.seed, Carry::default());
+    assert_eq!(before, [user_input("a-one"), user_input("b-one")]);
+}
+
+#[test]
+fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
+    // Two completed handoffs with the fork between them: the first moves
+    // the window, the second is past the point and changes nothing.
+    let home = fakes::TempDir::new("loop-two-handoffs");
+    let sessions = home.path().join("sessions");
+    write_chain(
+        &sessions,
+        HA,
+        &[
+            handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+            handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+            handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+            handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+            handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                5,
+                Some("t_2"),
+                Some("a_first"),
+                &handoff_note_text("the first note"),
+            ),
+            handoff_envelope(
+                HA,
+                6,
+                Some("t_2"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_first")),
+            ),
+            handoff_envelope(HA, 7, None, None, &handoff_opening()),
+            handoff_envelope(HA, 8, Some("t_2"), None, &handoff_step()),
+            handoff_envelope(HA, 9, Some("t_3"), None, &handoff_turn("three")),
+            handoff_envelope(HA, 10, Some("t_3"), None, &handoff_begun()),
+            handoff_envelope(
+                HA,
+                11,
+                Some("t_3"),
+                Some("a_second"),
+                &handoff_note_text("the second note"),
+            ),
+            handoff_envelope(
+                HA,
+                12,
+                Some("t_3"),
+                None,
+                &handoff_done(Outcome::Completed, Some("a_second")),
+            ),
+            handoff_envelope(HA, 13, None, None, &handoff_opening()),
+            handoff_envelope(HA, 14, Some("t_3"), None, &handoff_step()),
+            handoff_envelope(HA, 15, Some("t_4"), None, &handoff_turn("four")),
+        ],
+    );
+    write_chain(
+        &sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, 8))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        &sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    // The first handoff's context only: its opening, the carried input
+    // and its note, with no line of the second.
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the first opening renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("two"));
+    assert_eq!(conversation[2], user_input("the first note"));
+    assert!(
+        conversation.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the second note") || text.contains("three"))),
+        "nothing past the point reaches the fork: {conversation:?}"
+    );
+}
+
+fn handoff_hook_context(text: &str) -> Event {
+    Event::ContextAdded(contract::events::ContextAdded {
+        text: text.to_owned(),
+        extension: "fiber.test/session-start".to_owned(),
+        hook: "session_start".to_owned(),
+    })
+}
+
+/// The old session with a `session_start` hook context after the handoff's
+/// opening message, then a third turn. The opening is seq 7, the context
+/// seq 8.
+fn hook_context_log() -> Vec<Envelope> {
+    vec![
+        handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+        handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+        handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+        handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+        handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+        handoff_envelope(
+            HA,
+            5,
+            Some("t_2"),
+            Some("a_note"),
+            &handoff_note_text("the handoff note"),
+        ),
+        handoff_envelope(
+            HA,
+            6,
+            Some("t_2"),
+            None,
+            &handoff_done(Outcome::Completed, Some("a_note")),
+        ),
+        handoff_envelope(HA, 7, None, None, &handoff_opening()),
+        handoff_envelope(HA, 8, None, None, &handoff_hook_context("the hook context")),
+        handoff_envelope(HA, 9, Some("t_2"), None, &handoff_step()),
+        handoff_envelope(HA, 10, Some("t_3"), None, &handoff_turn("three")),
+    ]
+}
+
+fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Input> {
+    write_chain(sessions, HA, &hook_context_log());
+    write_chain(
+        sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, at))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    crate::conversation::rebuild(&lines, "fake/model-1").unwrap()
+}
+
+#[test]
+fn a_hook_context_after_the_handoffs_opening_is_inherited() {
+    let home = fakes::TempDir::new("loop-hook-context");
+    let sessions = home.path().join("sessions");
+    // Past the hook context: it sits between the opening message and the
+    // carried input, as a live rebuild of the old log renders it.
+    let conversation = folded_hook_context(&sessions, 9);
+    assert_eq!(conversation.len(), 4);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("the hook context"));
+    assert_eq!(conversation[2], user_input("two"));
+    assert_eq!(conversation[3], user_input("the handoff note"));
+    // On the opening message's own line: the handoff applies but the
+    // context after it does not.
+    let earlier = folded_hook_context(&sessions, 7);
+    assert_eq!(earlier.len(), 3);
+    assert!(
+        matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message still renders first: {earlier:?}"
+    );
+    assert_eq!(earlier[1], user_input("two"));
+    assert_eq!(earlier[2], user_input("the handoff note"));
+    assert!(
+        earlier.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the hook context"))),
+        "the context past the point stays out: {earlier:?}"
+    );
 }

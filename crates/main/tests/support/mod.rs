@@ -150,25 +150,26 @@ pub(crate) fn bounded<T: Send + 'static>(
     fakes::within(what, deadline.left(), work)
 }
 
-/// `fakes::kill_group` bounded by `deadline.cleanup()`: it sends a signal,
-/// it does not wait on the code under test.
+/// Sends `signal` to process group `group` through `fakes::kill_group`: a
+/// kill(2) call that starts no process, so it runs directly with no bound.
+/// It keeps its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
-pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -> io::Result<bool> {
-    fakes::within(
-        &format!("kill -{signal} of process group {group}"),
-        deadline.cleanup(),
-        move || fakes::kill_group(group, signal),
-    )
+pub(crate) fn kill_group(
+    _deadline: Deadline,
+    group: u32,
+    signal: &'static str,
+) -> io::Result<bool> {
+    fakes::kill_group(group, signal)
 }
 
-/// `fakes::kill_pid` bounded by `deadline.cleanup()`.
+/// Sends `signal` to process `pid` through `fakes::kill_pid`: a kill(2)
+/// call that starts no process, so it runs directly with no bound. It
+/// keeps its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
-pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
-    fakes::within(
-        &format!("kill -{signal} of pid {pid}"),
-        deadline.cleanup(),
-        move || fakes::kill_pid(pid, signal),
-    )
+pub(crate) fn kill_pid(_deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
+    fakes::kill_pid(pid, signal)
 }
 
 /// `fakes::kill_matching` bounded by `deadline.cleanup()`.
@@ -182,10 +183,13 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     )
 }
 
-/// Whether any process remains in process group `group`.
+/// Whether any process remains in process group `group`, probed directly:
+/// a kill(2) call starts no process, so it runs with no bound. It keeps
+/// its deadline so every signal site reads the same.
+// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
 #[track_caller]
-pub(crate) fn group_alive(deadline: Deadline, group: u32) -> bool {
-    kill_group(deadline, group, "0").unwrap()
+pub(crate) fn group_alive(_deadline: Deadline, group: u32) -> bool {
+    fakes::kill_group(group, "0").unwrap()
 }
 
 /// For `Drop` impls: sends `signal` to `group` on a thread and returns at
@@ -1213,4 +1217,54 @@ pub(crate) fn read_kinds() -> Vec<&'static str> {
         "fiber_exited",
     ]);
     kinds
+}
+
+/// The Session card once its `cost` row is drawn: the row is absent only
+/// when spend is `Some(0.0)` with no budget, so a wait that supplies panel
+/// coordinates for a later write, or that snapshots the card, holds until
+/// the row lands (`crates/tui/src/view/panel.rs`, `session_rows`). The
+/// `cost` label draws only with the row: `cost on subscription` draws
+/// without it, so its `cost` prefix does not count. `left` is the panel's
+/// first column: a `cost` elsewhere (a conversation echo, another card)
+/// does not count.
+pub(crate) fn session_cost_drawn(grid: &pty::Grid, left: u16) -> bool {
+    let (width, _) = grid.size();
+    (0..grid.rows.len()).any(|row| {
+        let Some(y) = u16::try_from(row).ok() else {
+            return false;
+        };
+        (left..width.saturating_sub(3)).any(|x| {
+            // Four cells spell `cost`: `x + 3` stays below `width`, so no
+            // cell read leaves the grid.
+            let spells = ["c", "o", "s", "t"]
+                .iter()
+                .zip(0..4u16)
+                .all(|(want, dx)| grid.cell(x + dx, y).symbol == *want);
+            // A whole word: the cells around the match hold no word char.
+            let before_ok = x == 0
+                || grid
+                    .cell(x - 1, y)
+                    .symbol
+                    .chars()
+                    .last()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            let after_ok = x + 4 >= width
+                || grid
+                    .cell(x + 4, y)
+                    .symbol
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+            // The label ends there: the subscription label continues
+            // ` on subscription`, with its value always after it, so
+            // sixteen cells fit while the row is the subscription one;
+            // `&&` short-circuits the cell reads otherwise.
+            let continued = width - x >= 20
+                && " on subscription"
+                    .chars()
+                    .zip(4..20u16)
+                    .all(|(want, dx)| grid.cell(x + dx, y).symbol == want.to_string());
+            spells && before_ok && after_ok && !continued
+        })
+    })
 }

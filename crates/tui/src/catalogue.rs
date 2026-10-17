@@ -9,17 +9,41 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
 
-/// A model's rebuild price in integer micro-dollars per million
-/// tokens, so `ModelEntry` keeps `Eq`. Example: `cache_write: 3.75`
-/// gives `micros_per_mtok: 3_750_000`.
+/// A model's prices in integer micro-dollars per million tokens, so
+/// `ModelEntry` keeps `Eq`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
-    /// The base price: the `cache_write` price, or `input` when the
-    /// model names none.
+    /// The rebuild rate: `cache_write`, or `input` when the model names none.
     pub micros_per_mtok: u64,
-    /// Higher input sizes, each with its own price: (`input_tokens_above`,
-    /// micros per million tokens), ascending by size.
-    pub tiers: Vec<(u64, u64)>,
+    /// The input price.
+    pub input: u64,
+    /// The output price.
+    pub output: u64,
+    /// Higher input sizes, ascending by `input_tokens_above`.
+    pub tiers: Vec<PriceTier>,
+}
+
+/// One size tier's prices, in micro-dollars per million tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceTier {
+    /// Input tokens above which this tier's prices apply.
+    pub input_tokens_above: u64,
+    /// The rebuild rate: `cache_write` when above zero, else `input`.
+    pub micros_per_mtok: u64,
+    /// The input price, in micro-dollars per million tokens.
+    pub input: u64,
+    /// The output price, in micro-dollars per million tokens.
+    pub output: u64,
+}
+
+impl Price {
+    /// The last tier whose threshold the whole input exceeds.
+    pub(crate) fn tier_at(&self, tokens: u64) -> Option<&PriceTier> {
+        self.tiers
+            .iter()
+            .rev()
+            .find(|tier| tier.input_tokens_above < tokens)
+    }
 }
 
 /// One model of one installed provider, as the picker lists it.
@@ -41,7 +65,7 @@ pub struct ModelEntry {
     pub configured: Option<String>,
     /// The role names marking this model.
     pub roles: Vec<String>,
-    /// The model's rebuild price, when its provider data names one.
+    /// The model's prices, when its provider data names a cost.
     pub price: Option<Price>,
 }
 

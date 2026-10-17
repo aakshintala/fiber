@@ -89,7 +89,7 @@ fn live(session: &str, name: &str, workspace: &str) -> Line {
             "name": name,
             "workspace": workspace,
             "project": "-w",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "state": "idle",
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},

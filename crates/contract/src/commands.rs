@@ -113,6 +113,8 @@ pub enum Command {
     Commands,
     /// Answers with every skill discovery found, switched-off and shadowed ones included.
     Skills,
+    /// Answers with each provider credential label's cached quota.
+    Quota,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
     /// Answers with a page of an artifact's full output.
@@ -133,6 +135,11 @@ pub enum Command {
     Command(RunCommand),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
     Close(CloseArgs),
+    /// A command this Fiber does not build: never sent by a client type,
+    /// answered `unknown_command` with the line's own command name.
+    #[serde(other)]
+    #[serde(skip_serializing)]
+    Unknown,
 }
 
 /// A content part a client sends. An image is sent as its bytes; Fiber writes

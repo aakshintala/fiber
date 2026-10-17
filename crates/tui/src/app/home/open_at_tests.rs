@@ -103,7 +103,7 @@ fn status(session: &str) -> Line {
             "workspace": "/w",
             "project": "-w",
             "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -138,7 +138,12 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
 /// The keys of the rows home draws.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

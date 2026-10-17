@@ -1,7 +1,9 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
 //! `sessions`, `delete`, `directories`, `read_file`, `pairing_code`, `devices`
-//! and `revoke`, and the relay to session sockets. Every connection also hears
+//! and `revoke`, the machine's `configure`, `read_config`, `write_config`,
+//! `search_files`, `device_login`, `device_login_result` and `device_login_cancel`,
+//! and the relay to session sockets. Every connection also hears
 //! `attention` and `device_changed` (`crate::attention`) after its hello.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
@@ -52,6 +54,7 @@ pub(crate) struct Hub {
     pub(crate) feed: Arc<Feed>,
     /// Pending pairing codes and authenticated connections.
     pub(crate) pairing: crate::pairing::Pairing,
+    pub(crate) machine: Option<Arc<dyn crate::Machine>>,
     next_client: AtomicU64,
     /// The open connections and the idle timer, under one lock.
     conns: Mutex<Conns>,
@@ -159,6 +162,7 @@ impl Hub {
             diag,
             feed,
             pairing: crate::pairing::Pairing::new(),
+            machine: None,
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
@@ -198,6 +202,12 @@ impl Hub {
     /// shared capture, and every other caller keeps the published default.
     pub(crate) fn with_environments(mut self, environments: Arc<crate::Environments>) -> Self {
         self.environments = environments;
+        self
+    }
+
+    /// Supplies configuration on this hub's machine.
+    pub(crate) fn with_machine(mut self, machine: Arc<dyn crate::Machine>) -> Self {
+        self.machine = Some(machine);
         self
     }
 
@@ -516,13 +526,21 @@ fn serve_from(
     hub.pairing.announce_owed(&hub, &who);
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
-    let mut fed = None;
+    let mut remote = Remote::default();
     loop {
         buf.clear();
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                on_command(&buf, &hub, &writer, &feed_closer, &relays, &mut fed, &who);
+                on_command(
+                    &buf,
+                    &hub,
+                    &writer,
+                    &feed_closer,
+                    &relays,
+                    &who,
+                    &mut remote,
+                );
             }
         }
     }
@@ -539,6 +557,8 @@ fn serve_from(
     // half-closed already disconnected the socket, and shutting down a
     // disconnected read half fails without unblocking anything.
     read.get_ref().shutdown(Shutdown::Write).unwrap_or(());
+    let fed = remote.fed.take();
+    drop(remote);
     if let Some(fed) = fed {
         hub.feed.unsubscribe(fed);
     }
@@ -571,14 +591,21 @@ fn disconnect(hub: &Hub, n: u64) {
     hub.release(n);
 }
 
+#[derive(Default)]
+struct Remote {
+    search: crate::file_search::Search,
+    login: crate::device_login::Login,
+    fed: Option<u64>,
+}
+
 fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     closer: &crate::feed::Closer,
     relays: &Arc<Mutex<Relays>>,
-    fed: &mut Option<u64>,
     who: &crate::pairing::Who,
+    remote: &mut Remote,
 ) {
     if who.revoked() {
         return;
@@ -601,6 +628,36 @@ fn on_command(
         return;
     }
     match line.command.as_str() {
+        "device_login" if hub.machine.is_some() => {
+            remote.login.start(&line.id, &line.args, hub, writer)
+        }
+        "device_login_result" if hub.machine.is_some() => {
+            remote.login.result(&line.id, &line.args, hub, writer)
+        }
+        "device_login_cancel" if hub.machine.is_some() => {
+            remote.login.cancel(&line.id, &line.args, hub, writer)
+        }
+        "search_files" if hub.machine.is_some() => {
+            remote.search.submit(&line.id, &line.args, hub, writer)
+        }
+        "configure" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_configure(hub, &line.args),
+        ),
+        "read_config" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_read_config(hub, &line.args),
+        ),
+        "write_config" if hub.machine.is_some() => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::machine::on_write_config(hub, &line.args),
+        ),
         "pairing_code" => match hub.pairing.mint(hub, who, &line.args) {
             Ok(crate::pairing::Outcome::Done(result)) => {
                 accept_result(writer, hub, &line.id, result)
@@ -631,7 +688,7 @@ fn on_command(
             &line.id,
             crate::prompt_history::answer(&hub.home, &line.args).map(Some),
         ),
-        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, fed),
+        "feed" => on_feed(&line.id, &line.args, hub, writer, closer, &mut remote.fed),
         "dismiss" => answer(writer, hub, &line.id, hub.feed.dismiss(&line.args)),
         "recent" => answer(writer, hub, &line.id, hub.feed.recent(&line.args)),
         "sessions" => {
@@ -992,6 +1049,25 @@ fn contains_null(value: &Value) -> bool {
         Value::Object(map) => map.values().any(contains_null),
         Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
     }
+}
+
+pub(crate) fn spawn(
+    hub: &Hub,
+    name: &str,
+    run: impl FnOnce() + Send + 'static,
+) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = hub;
+    #[cfg(test)]
+    if lock(&hub.fail_spawn).as_deref() == Some(name) {
+        return Err(std::io::Error::other(format!(
+            "the test refused to spawn {name}"
+        )));
+    }
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(run)
+        .map(|_| ())
 }
 
 pub(crate) fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {

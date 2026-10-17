@@ -177,7 +177,7 @@ fn status(session: &str) -> Line {
             "workspace": "/w",
             "project": "-w",
             "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -219,7 +219,12 @@ fn commands(lines: Vec<String>) -> Vec<serde_json::Value> {
 /// The rows home draws, as lines.
 fn rows(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(_, line, _)| line).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -229,12 +234,104 @@ fn listed(app: &App) -> Vec<String> {
         .as_ref()
         .map(|home| {
             home.sessions
-                .shown(&home.launch.project, false)
+                .all()
                 .iter()
                 .map(|row| crate::home::line(row, &home.launch.project))
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[test]
+fn home_screen_header_counts_follow_the_state_order() {
+    let mut app = home();
+    app.on_line(live("s_wait", "waiting", "/w", "-w", json!({"state":"waiting", "waiting":{"request_id":"r_1", "kind":"approval", "summary":"approve"}})));
+    app.on_line(live(
+        "s_work",
+        "working",
+        "/other",
+        "-other",
+        json!({"state":"streaming"}),
+    ));
+    app.on_line(live(
+        "s_retry",
+        "retrying",
+        "/w",
+        "-w",
+        json!({"state":"retrying"}),
+    ));
+    app.on_line(live(
+        "s_crash",
+        "crashed",
+        "/w",
+        "-w",
+        json!({"state":"idle"}),
+    ));
+    app.on_line(left("s_crash", "crashed"));
+    app.on_line(live(
+        "s_ready",
+        "ready",
+        "/w",
+        "-w",
+        json!({"state":"idle"}),
+    ));
+    let screen = app.home_screen().unwrap();
+    assert_eq!(
+        screen
+            .header
+            .counts
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "1 waiting on you",
+            "1 working",
+            "1 retrying",
+            "1 crashed",
+            "1 ready"
+        ]
+    );
+    assert_eq!(screen.header.spend.as_deref(), Some("$0.00 live"));
+}
+
+#[test]
+fn home_screen_header_says_no_sessions_yet_without_live_rows() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &[("s_old", "exited")]);
+    let screen = app.home_screen().unwrap();
+    assert!(screen.header.counts.is_empty());
+    assert_eq!(screen.header.spend, None);
+    assert!(!screen.empty);
+}
+
+#[test]
+fn section_header_counts_live_spend_and_waiting() {
+    let mut app = home();
+    app.on_line(live("s_wait", "waiting", "/w", "-w", json!({"state":"waiting", "waiting":{"request_id":"r_1", "kind":"approval", "summary":"approve"}, "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.25,"subscription_cost":0.0}})));
+    app.on_line(live("s_other", "other", "/w", "-w", json!({"state":"streaming", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":0.10,"subscription_cost":0.0}})));
+    let screen = app.home_screen().unwrap();
+    let crate::home::ListLine::Head {
+        live,
+        spend,
+        waiting,
+        ..
+    } = &screen.list[0]
+    else {
+        panic!("project head")
+    };
+    assert_eq!((*live, spend.as_str(), *waiting), (2, "$1.35", 1));
+}
+
+#[test]
+fn the_header_spend_is_the_sum_of_the_live_rows() {
+    let mut app = home();
+    app.on_line(live("s_a", "a", "/w", "-w", json!({"state":"streaming", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":1.25,"subscription_cost":0.0}})));
+    app.on_line(live("s_b", "b", "/other", "-other", json!({"state":"idle", "spend":{"tokens":{"input":1,"cache_read":0,"cache_write":{},"output":2},"cost":2.10,"subscription_cost":0.0}})));
+    assert_eq!(
+        app.home_screen().unwrap().header.spend.as_deref(),
+        Some("$3.35 live")
+    );
 }
 
 #[test]
@@ -401,7 +498,7 @@ fn answers_and_a_left_fill_and_mark_the_list() {
             "how": "crashed",
         }]}),
     ));
-    assert_eq!(rows(&app), ["○  fix the parser", "✗  old work"]);
+    assert_eq!(rows(&app), ["○  fix the parser", "○  old work"]);
 }
 
 #[test]
@@ -447,8 +544,23 @@ fn start_names_the_launch_workspace() {
 /// The keys of the rows home draws, in order.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// The first hidden exited row's key for `project`.
+fn more_key(app: &App, project: &str) -> Option<u64> {
+    let home = app.home.as_ref()?;
+    home.sessions
+        .sections(&home.launch.project)
+        .into_iter()
+        .find(|section| section.project == project)
+        .and_then(|section| section.exited.get(section.shown_exited).map(|row| row.key))
 }
 
 /// Opens the row with `key`, with the parsed lines going out.
@@ -479,7 +591,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
         "name": name,
         "workspace": workspace,
         "project": project,
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -560,6 +672,18 @@ fn exited(session: &str, name: &str) -> Value {
         "ts": 0,
         "project": "-w",
         "workspace": "/w",
+        "name": name,
+        "how": "exited",
+    })
+}
+
+/// One exited recent row in `workspace` and `project`.
+fn exited_in(session: &str, name: &str, workspace: &str, project: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": project,
+        "workspace": workspace,
         "name": name,
         "how": "exited",
     })
@@ -660,20 +784,15 @@ fn enter_on_a_focused_live_row_subscribes_full_asks_commands_and_attaches() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Shift+Tab focuses the last stop: the second row's ✕, and k steps
-    // back to its line.
-    let now = fakes::clock::FakeClock::new().now();
-    app.on_key(Key::BackTab, now);
+    // Focus the second row directly: keyboard traversal now ends at the
+    // chip row, while this test checks Enter on a focused live row.
     let row = keys(&app)[1];
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Stop(row)))
-    );
-    assert_eq!(app.on_key(Key::Char('k'), now), Effect::None);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(row)));
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
     );
+    let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter opens the row");
     };
@@ -1491,12 +1610,11 @@ fn two_rows(app: &mut App) {
 }
 
 #[test]
-fn down_in_an_empty_box_focuses_the_first_row() {
+fn home_arrows_focus_the_list_and_entry_bar() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // ↓ focuses the chip row first, and a second ↓ the first row.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
@@ -1505,17 +1623,26 @@ fn down_in_an_empty_box_focuses_the_first_row() {
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
     );
-    // Esc returns focus to the input box, and ↓ ↓ focuses the first row
-    // again.
-    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.focused(), None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
 }
 
@@ -1605,17 +1732,17 @@ fn down_on_the_conversation_screen_is_unchanged() {
 }
 
 #[test]
-fn down_twice_moves_to_the_second_row() {
+fn up_and_j_walk_the_row_stops() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Workspace))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -1634,7 +1761,93 @@ fn down_twice_moves_to_the_second_row() {
 }
 
 #[test]
-fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
+fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let rows = [
+        exited_in("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
+        exited_in("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
+        exited_in("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
+    ];
+    assert!(
+        app.on_line(accepted(&recent, json!({"sessions": rows})))
+            .is_empty()
+    );
+    let (_, targets) = drawn_frame(&app);
+    let entries: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(entries.len(), 3, "all three exited rows draw");
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[2])))
+    );
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[1])))
+    );
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Start(entries[2])))
+    );
+}
+
+#[test]
+fn j_from_the_last_list_row_clears_focus_without_skipping() {
+    let mut app = home();
+    linked(&mut app);
+    for (session, name, workspace, project) in [
+        ("s_aaaaaaaaaaaaaaaa", "alpha", "/work/alpha", "alpha"),
+        ("s_bbbbbbbbbbbbbbbb", "beta", "/work/beta", "beta"),
+        ("s_cccccccccccccccc", "gamma", "/work/gamma", "gamma"),
+    ] {
+        app.on_line(live(
+            session,
+            name,
+            workspace,
+            project,
+            json!({"state": "idle"}),
+        ));
+        app.on_line(left(session, "crashed"));
+    }
+    let (_, targets) = drawn_frame(&app);
+    let mut entries: Vec<u64> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Entry(key)) = target.id {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.dedup();
+    assert_eq!(entries.len(), 3, "all three crashed rows draw");
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(entries[2])))
+    );
+    assert_eq!(app.on_key(Key::Char('j'), now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn up_focuses_the_last_loaded_row_and_scrolls() {
     let mut app = home();
     linked(&mut app);
     for n in 0..15u8 {
@@ -1647,24 +1860,14 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
             json!({"state": "idle"}),
         ));
     }
-    assert_eq!(keys(&app).len(), 15);
+    let all = keys(&app);
+    assert_eq!(all.len(), 15);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // Nine rows fit under the four-row logo's box: one chip step and
-    // eight row steps reach the ninth row, and the next ↓ moves below
-    // the fold to the tenth.
-    for _ in 0..10 {
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    let shown = keys(&app);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[8])))
-    );
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(shown[9])))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(all[14])))
     );
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -1679,48 +1882,43 @@ fn down_on_the_last_drawn_row_focuses_the_next_and_scrolls() {
             }
         })
         .collect();
-    assert_eq!(drawn.last(), Some(&shown[9]));
-    assert!(!drawn.contains(&shown[0]));
+    assert!(drawn.contains(&all[14]));
+    assert!(!drawn.contains(&all[0]));
 }
 
 #[test]
-fn down_on_the_last_row_of_the_list_does_nothing() {
+fn down_on_the_last_row_of_the_list_focuses_the_entry_bar() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
-    // ↓ on the last row stays on its line, never its ✕.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
     );
 }
 
 #[test]
-fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
+fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame() {
     let mut app = home();
-    linked(&mut app);
+    let (_, recent) = linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
-        "fix the parser",
+        "current work",
         "/w",
         "-w",
         json!({"state": "streaming"}),
     ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
     // The conversation frame first, as the loop draws it.
     drawn(&mut app);
     assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
@@ -1729,10 +1927,18 @@ fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    let row = keys(&app)[0];
+    let exited = *keys(&app)
+        .get(1)
+        .expect("the exited row follows the live row");
+    let row = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.by_key(exited))
+        .unwrap_or_else(|| panic!("the exited row is present"));
+    assert_eq!(row.left, Some(crate::home::Left::Exited));
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(row)))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(exited)))
     );
     let now = fakes::clock::FakeClock::new().now();
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
@@ -1743,7 +1949,7 @@ fn slash_resume_from_a_session_focuses_the_list_after_the_home_frame() {
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
         .collect();
     assert_eq!(lines[0]["command"], "subscribe");
-    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
 }
 
 #[test]
@@ -1771,8 +1977,7 @@ fn y_on_a_focused_row_copies_its_line() {
     ));
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.on_key(Key::Char('y'), now),
         Effect::Copy("✓  fix the parser".to_owned())
@@ -1934,6 +2139,62 @@ fn ctrl_c_passes_through_the_picker() {
 }
 
 #[test]
+fn clicking_plus_chooses_that_projects_workspace_and_focuses_the_entry_bar() {
+    let mut app = git_home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "other project work",
+        "/other",
+        "-other",
+        json!({"state": "idle", "git": {"branch": "main"}}),
+    ));
+    let key = app
+        .home_screen()
+        .and_then(|screen| {
+            screen.list.into_iter().find_map(|line| match line {
+                crate::home::ListLine::Head {
+                    name,
+                    start: Some(key),
+                    ..
+                } if name == "other" => Some(key),
+                crate::home::ListLine::Head { .. }
+                | crate::home::ListLine::Live { .. }
+                | crate::home::ListLine::ExitedHead { .. }
+                | crate::home::ListLine::Exited { .. }
+                | crate::home::ListLine::More { .. } => None,
+            })
+        })
+        .unwrap_or_else(|| panic!("the other project's plus target"));
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == crate::mouse::TargetId::Home(Spot::Start(key)) })
+    );
+    app.drawn(&targets);
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
+    assert!(chips(&app).contains(&"[x] new worktree".to_owned()));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Worktree));
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::Home(Spot::Start(key))),
+        Effect::None
+    );
+    assert_eq!(app.focused(), None, "the entry bar has focus");
+    assert!(chips(&app).contains(&"[ ] new worktree".to_owned()));
+
+    let Effect::Send(lines) = enter_text(&mut app, "hi") else {
+        panic!("Enter sends the start");
+    };
+    let start = commands(lines)[0].clone();
+    assert_eq!(start["command"], "start");
+    assert_eq!(start["args"]["workspace"], "/other");
+    assert!(start["args"].get("worktree").is_none());
+}
+
+#[test]
 fn start_names_the_chosen_workspace() {
     let mut app = home();
     three_workspaces(&mut app);
@@ -2017,159 +2278,19 @@ fn waiting(session: &str, name: &str, workspace: &str, project: &str) -> Line {
     )
 }
 
-/// The scope toggle home draws, if any.
-fn toggle(app: &App) -> Option<String> {
-    app.home_screen().and_then(|screen| screen.toggle)
-}
-
 #[test]
-fn scoped_rows_keep_only_the_launch_project() {
-    let mut app = git_home();
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    app.on_line(live(
-        "s_bbbbbbbbbbbbbbbb",
-        "away",
-        "/lens",
-        "-other",
-        json!({"state": "idle"}),
-    ));
-    assert_eq!(rows(&app), ["✓  here"]);
-}
-
-#[test]
-fn recent_names_the_project_only_when_scoped() {
+fn the_first_recent_page_names_no_project() {
     let mut app = git_home();
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines[1]["args"], json!({"project": "-w"}));
-    let mut plain = home();
-    let lines = commands(plain.on_line(hello()));
-    assert!(lines[1].get("args").is_none());
-}
-
-#[test]
-fn the_toggle_shows_only_inside_git_with_rows_hidden_or_everything_shown() {
-    // Outside git, rows hiding elsewhere show no toggle.
-    let mut plain = home();
-    linked(&mut plain);
-    plain.on_line(live(
-        "s_bbbbbbbbbbbbbbbb",
-        "away",
-        "/lens",
-        "-other",
-        json!({"state": "idle"}),
-    ));
-    assert_eq!(toggle(&plain), None);
-    // Inside git with nothing hidden: no toggle while scoped.
-    let mut app = git_home();
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    assert_eq!(toggle(&app), None);
-    // A row waiting in another project shows the toggle with its count.
-    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
-    assert_eq!(
-        toggle(&app),
-        Some("1 waiting in other projects · show all".to_owned())
-    );
-    // Showing everything shows how to scope back down.
-    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
-    assert_eq!(toggle(&app), Some("show this project only".to_owned()));
-}
-
-#[test]
-fn the_toggle_flips_the_scope_and_asks_recent_again() {
-    let mut app = git_home();
-    let mut out = commands(app.on_line(hello()));
-    let first = out.remove(1)["id"]
+    let id = lines[1]["id"]
         .as_str()
-        .unwrap_or_else(|| panic!("recent id"))
-        .to_owned();
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    app.on_line(live(
-        "s_bbbbbbbbbbbbbbbb",
-        "away",
-        "/lens",
-        "-other",
-        json!({"state": "idle"}),
-    ));
-    assert_eq!(rows(&app), ["✓  here"]);
-    let Effect::Send(lines) = app.home_click(Spot::Toggle) else {
-        panic!("the toggle asks recent again");
-    };
-    assert_eq!(lines.len(), 1);
-    let second: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(second["command"], "recent");
-    assert!(second.get("args").is_none());
-    assert_ne!(second["id"], first);
-    assert_eq!(rows(&app), ["✓  here", "✓  away  lens"]);
-    // Back to the launch project only, naming it again.
-    let Effect::Send(lines) = app.home_click(Spot::Toggle) else {
-        panic!("the toggle asks recent again");
-    };
-    let third: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(third["command"], "recent");
-    assert_eq!(third["args"], json!({"project": "-w"}));
-    assert_eq!(rows(&app), ["✓  here"]);
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(lines[1], json!({"id": id, "command": "recent"}));
 }
 
 #[test]
-fn only_the_latest_recent_answer_fills_the_list() {
+fn down_from_the_last_row_asks_the_next_page_before_the_last_loaded_recent_row() {
     let mut app = git_home();
-    let mut out = commands(app.on_line(hello()));
-    let first = out.remove(1)["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("recent id"))
-        .to_owned();
-    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
-    // The answer to the older `recent` changes nothing.
-    assert!(
-        app.on_line(accepted(
-            &first,
-            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "stale")]})
-        ))
-        .is_empty()
-    );
-    assert!(rows(&app).is_empty());
-}
-
-/// Focuses the last row home draws, through the frame's own targets.
-fn focus_last(app: &mut App) {
-    drawn(app);
-    let now = fakes::clock::FakeClock::new().now();
-    let last = keys(app)
-        .into_iter()
-        .last()
-        .unwrap_or_else(|| panic!("a row"));
-    for _ in 0..6 {
-        if app.focused() == Some(crate::mouse::TargetId::Home(Spot::Entry(last))) {
-            return;
-        }
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    panic!("the last row never focused");
-}
-
-#[test]
-fn down_on_the_last_recent_row_asks_the_next_page() {
-    let mut app = home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
@@ -2222,30 +2343,7 @@ fn no_page_is_asked_from_a_feed_row() {
 }
 
 #[test]
-fn none_while_one_is_in_flight() {
-    let mut app = git_home();
-    let (_, recent) = linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
-    assert!(matches!(app.home_click(Spot::Toggle), Effect::Send(_)));
-    focus_last(&mut app);
-    let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.recent_ask.is_some())
-    );
-}
-
-#[test]
-fn none_after_an_empty_page() {
+fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
@@ -2273,14 +2371,162 @@ fn none_after_an_empty_page() {
     assert!(app.home.as_ref().is_some_and(|home| !home.sessions.more()));
     // ↓ returns nothing with focus on the row's line.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn enter_on_more_expands_in_place_and_focuses_the_first_revealed_row() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| { target.id == crate::mouse::TargetId::Home(Spot::More(key)) })
+    );
+    app.drawn(&targets);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+        Some(crate::mouse::TargetId::Home(Spot::Entry(key)))
+    );
+    let screen = app.home_screen().unwrap();
+    assert!(screen.list.iter().any(|line| matches!(
+        line,
+        crate::home::ListLine::Exited { key: shown, .. } if *shown == key
+    )));
+    assert!(
+        !screen
+            .list
+            .iter()
+            .any(|line| matches!(line, crate::home::ListLine::More { .. }))
     );
 }
 
 #[test]
-fn slash_resume_focuses_the_toggle_when_it_heads_the_list() {
+fn a_click_on_more_expands_the_same_project_only() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let rows = [
+        ("s_aaaaaaaaaaaaaaaa", "a1", "/w", "-w"),
+        ("s_bbbbbbbbbbbbbbbb", "a2", "/w", "-w"),
+        ("s_cccccccccccccccc", "a3", "/w", "-w"),
+        ("s_dddddddddddddddd", "a4", "/w", "-w"),
+        ("s_eeeeeeeeeeeeeeee", "b1", "/other", "-other"),
+        ("s_ffffffffffffffff", "b2", "/other", "-other"),
+        ("s_1111111111111111", "b3", "/other", "-other"),
+        ("s_2222222222222222", "b4", "/other", "-other"),
+    ]
+    .into_iter()
+    .map(|(id, name, workspace, project)| exited_in(id, name, workspace, project))
+    .collect::<Vec<_>>();
+    assert!(
+        app.on_line(accepted(&recent, json!({"sessions": rows})))
+            .is_empty()
+    );
+    let first_hidden = more_key(&app, "-w").expect("first project has more");
+    let second_hidden = more_key(&app, "-other").expect("second project has more");
+    assert_eq!(app.home_click(Spot::More(first_hidden)), Effect::None);
+    let screen = app.home_screen().unwrap();
+    let shown = screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            crate::home::ListLine::Head { .. }
+            | crate::home::ListLine::Live { .. }
+            | crate::home::ListLine::ExitedHead { .. }
+            | crate::home::ListLine::More { .. } => None,
+            crate::home::ListLine::Exited { key, .. } => Some(*key),
+        })
+        .collect::<Vec<_>>();
+    assert!(shown.contains(&first_hidden));
+    assert!(!shown.contains(&second_hidden));
+    assert_eq!(
+        screen
+            .list
+            .iter()
+            .filter_map(|line| match line {
+                crate::home::ListLine::Head { .. }
+                | crate::home::ListLine::Live { .. }
+                | crate::home::ListLine::ExitedHead { .. }
+                | crate::home::ListLine::Exited { .. } => None,
+                crate::home::ListLine::More { key, .. } => Some(*key),
+            })
+            .collect::<Vec<_>>(),
+        [second_hidden]
+    );
+}
+
+#[test]
+fn y_on_more_copies_its_label() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_key(Key::Char('y'), now),
+        Effect::Copy("… 1 more".to_owned())
+    );
+}
+
+#[test]
+fn y_on_more_copies_a_positive_count_but_not_zero() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+            ("s_eeeeeeeeeeeeeeee", "fifth"),
+        ],
+    );
+    let key = more_key(&app, "-w").expect("two rows are hidden");
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_key(Key::Char('y'), now),
+        Effect::Copy("… 2 more".to_owned())
+    );
+
+    app.home.as_mut().unwrap().sessions.expand("-w");
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
+}
+
+#[test]
+fn slash_resume_with_live_rows_but_no_exited_rows_leaves_the_box_focused() {
     let mut app = git_home();
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
@@ -2299,10 +2545,7 @@ fn slash_resume_focuses_the_toggle_when_it_heads_the_list() {
     let mut buf = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Toggle))
-    );
+    assert_eq!(app.focused(), None);
 }
 
 /// The blocker lines home draws above the box.
@@ -2414,129 +2657,6 @@ fn the_feed_arriving_keeps_them() {
 }
 
 #[test]
-fn toggle_with_the_link_down_flips_scope_but_sends_nothing() {
-    let mut app = git_home();
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
-    assert_eq!(rows(&app), ["✓  here"]);
-    app.disconnected();
-    assert_eq!(app.home_click(Spot::Toggle), Effect::None);
-    assert_eq!(rows(&app).len(), 2);
-    assert_eq!(toggle(&app), Some("show this project only".to_owned()));
-}
-
-#[test]
-fn down_in_an_empty_box_focuses_the_toggle_when_it_shows() {
-    let mut app = git_home();
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        json!({"state": "idle"}),
-    ));
-    app.on_line(waiting("s_bbbbbbbbbbbbbbbb", "away", "/lens", "-other"));
-    drawn(&mut app);
-    let now = fakes::clock::FakeClock::new().now();
-    // ↓ focuses the chip row, and a second ↓ the first row; the toggle
-    // is reached with k.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Workspace))
-    );
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    assert_eq!(app.on_key(Key::Char('k'), now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Toggle))
-    );
-}
-
-/// The foot home draws.
-fn foot(app: &App) -> String {
-    app.home_screen()
-        .map(|screen| screen.foot)
-        .unwrap_or_default()
-}
-
-/// The delete question home draws, unwrapped.
-fn question(app: &App) -> String {
-    app.home_screen()
-        .and_then(|screen| screen.question)
-        .unwrap_or_default()
-}
-
-/// The delete question's scroll offset: Up shows earlier rows, Down
-/// later ones.
-fn question_scroll(app: &App) -> usize {
-    app.home_screen()
-        .map(|screen| screen.question_scroll)
-        .unwrap_or_default()
-}
-
-/// Clicks the first row's ✕, with the parsed lines going out.
-fn stop(app: &mut App) -> Vec<Value> {
-    let key = keys(app)[0];
-    match app.home_click(Spot::Stop(key)) {
-        Effect::Send(lines) => lines
-            .iter()
-            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-            .collect(),
-        Effect::None
-        | Effect::Quit
-        | Effect::ListFiles
-        | Effect::ReadImage(_)
-        | Effect::FindPause { .. }
-        | Effect::Search { .. }
-        | Effect::Editor { .. }
-        | Effect::Exit(_)
-        | Effect::Copy(_)
-        | Effect::OpenLink(_)
-        | Effect::OpenFile(_) => panic!("the ✕ sends"),
-    }
-}
-
-/// Clicks the first row's ✕.
-fn click_stop(app: &mut App) -> Effect {
-    let key = keys(app)[0];
-    app.home_click(Spot::Stop(key))
-}
-
-/// One crashed `recent` row for `session`.
-fn crashed(session: &str, name: &str) -> Value {
-    json!({
-        "session_id": session,
-        "ts": 0,
-        "project": "-w",
-        "workspace": "/w",
-        "name": name,
-        "how": "crashed",
-    })
-}
-
-/// An exited row from `recent`, by `session`.
-fn exited_row(app: &mut App, session: &str, name: &str) {
-    let (_, recent) = linked(app);
-    app.on_line(accepted(
-        &recent,
-        json!({"sessions": [exited(session, name)]}),
-    ));
-}
-
-#[test]
 fn x_on_an_unsubscribed_live_row_sends_summary_then_close_now() {
     let mut app = home();
     two_rows(&mut app);
@@ -2578,7 +2698,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F2 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2588,7 +2708,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
-    assert_eq!(foot(&app), "↓ chips and sessions · Ctrl+C twice to quit");
+    assert_eq!(foot(&app), "↑ sessions · ↓ chips · Ctrl+C twice to quit");
 }
 
 #[test]
@@ -2599,7 +2719,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2648,8 +2768,7 @@ fn backspace_on_a_focused_exited_row_asks() {
     exited_row(&mut app, "s_aaaaaaaaaaaaaaaa", "old work");
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         question(&app),
@@ -2667,8 +2786,7 @@ fn delete_on_a_focused_crashed_row_asks() {
     ));
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
@@ -2682,12 +2800,12 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2696,13 +2814,13 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
-    app.focus = Some(crate::mouse::TargetId::Home(Spot::Toggle));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])));
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -2732,7 +2850,7 @@ fn esc_sends_nothing() {
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2784,7 +2902,7 @@ fn clicking_the_drawn_cross_keeps_the_session() {
     assert!(question(&app).is_empty(), "the question closes");
     assert_eq!(
         app.home_screen()
-            .map(|screen| screen.rows.len())
+            .map(|screen| crate::home::home_test_rows(&screen).len())
             .unwrap_or_default(),
         1,
         "the session row remains"
@@ -2829,7 +2947,7 @@ fn clicking_the_cross_on_the_cascade_question_keeps_everything() {
     assert!(question(&app).is_empty(), "the question closes");
     assert_eq!(
         app.home_screen()
-            .map(|screen| screen.rows.len())
+            .map(|screen| crate::home::home_test_rows(&screen).len())
             .unwrap_or_default(),
         1,
         "the session row remains"
@@ -3050,7 +3168,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3181,7 +3299,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -3244,7 +3362,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3274,22 +3392,25 @@ fn unreadable_rows_have_no_x() {
         &recent,
         json!({"sessions": [exited("s_cccccccccccccccc", "old work")]}),
     ));
-    // A readable row ends in a ✕, live or exited; an unreadable one has
+    // A readable live row ends in a ✕; exited and unreadable rows have
     // none.
-    let rows: Vec<(String, bool)> = app
-        .home_screen()
-        .map(|screen| {
-            screen
-                .rows
-                .into_iter()
-                .map(|(_, line, has_x)| (line, has_x))
-                .collect()
+    let screen = app.home_screen().unwrap_or_else(|| panic!("home screen"));
+    let rows = crate::home::home_test_rows(&screen);
+    let has_x: Vec<bool> = screen
+        .list
+        .iter()
+        .filter_map(|line| match line {
+            crate::home::ListLine::Live { stop, .. } => Some(*stop),
+            crate::home::ListLine::Exited { .. } => Some(false),
+            crate::home::ListLine::Head { .. }
+            | crate::home::ListLine::ExitedHead { .. }
+            | crate::home::ListLine::More { .. } => None,
         })
-        .unwrap_or_default();
+        .collect();
     assert_eq!(rows.len(), 3);
-    assert!(rows[0].1);
-    assert!(!rows[1].1);
-    assert!(rows[2].1);
+    assert!(has_x[0]);
+    assert!(!has_x[1]);
+    assert!(!has_x[2]);
 }
 
 #[test]
@@ -3355,7 +3476,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3378,7 +3499,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3388,9 +3509,10 @@ fn y_on_a_focused_x_copies_nothing() {
     two_rows(&mut app);
     drawn(&mut app);
     let now = fakes::clock::FakeClock::new().now();
-    // ↓ ↓ focuses the row, and j steps onto its ✕.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    // ↑ focuses the last row, then another ↑ reaches the first; j steps
+    // onto its ✕.
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])))
@@ -3554,7 +3676,7 @@ fn a_rejected_lower_while_home_sends_no_subscribe() {
 }
 
 #[test]
-fn down_below_the_fold_steps_into_an_unscoped_row() {
+fn home_rows_include_an_unscoped_project_below_the_fold() {
     let mut app = home();
     linked(&mut app);
     for n in 0..9u8 {
@@ -3586,62 +3708,15 @@ fn down_below_the_fold_steps_into_an_unscoped_row() {
             json!({"state": "idle"}),
         ));
     }
-    assert_eq!(keys(&app).len(), 15);
-    drawn(&mut app);
-    let now = fakes::clock::FakeClock::new().now();
-    // One chip step and nine row steps reach the ninth row, and the
-    // next ↓ moves below the fold, into the other project.
-    for _ in 0..11 {
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[9])))
-    );
-}
-
-#[test]
-fn down_below_the_fold_skips_rows_hidden_by_scope() {
-    let mut app = git_home();
-    linked(&mut app);
-    for n in 0..3u8 {
-        let session = format!("s_{n:016x}");
-        app.on_line(live(&session, "here", "/w", "-w", json!({"state": "idle"})));
-    }
-    // Another project's row hides while scoped; two more rows follow it
-    // below the fold.
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "away",
-        "/lens",
-        "-other",
-        json!({"state": "idle"}),
-    ));
-    for n in 3..5u8 {
-        let session = format!("s_{n:016x}");
-        app.on_line(live(&session, "here", "/w", "-w", json!({"state": "idle"})));
-    }
-    assert_eq!(keys(&app).len(), 5);
-    // A short screen draws the toggle and three rows.
-    let area = ratatui::layout::Rect::new(0, 0, 80, 14);
-    let mut buf = ratatui::buffer::Buffer::empty(area);
-    let targets = crate::view::render(&app, area, &mut buf, None);
-    app.drawn(&targets);
-    let now = fakes::clock::FakeClock::new().now();
-    // One chip step and three row steps reach the last drawn row.
-    for _ in 0..4 {
-        assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    }
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[2])))
-    );
-    // Below the fold the next scoped row follows: the hidden row never
-    // focuses.
-    assert_eq!(app.on_key(Key::Down, now), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[3])))
+    let screen = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("the home screen"));
+    assert_eq!(crate::home::home_test_rows(&screen).len(), 15);
+    assert!(
+        crate::home::home_test_rows(&screen)
+            .iter()
+            .any(|(_, row)| row.contains("away")),
+        "the other project's session remains visible"
     );
 }
 
@@ -3713,7 +3788,7 @@ fn an_answer_for_another_delete_keeps_the_newer_question() {
 }
 
 #[test]
-fn an_accepted_delete_in_git_scopes_its_recent_refill() {
+fn an_accepted_delete_asks_the_first_page_unscoped() {
     let mut app = git_home();
     let (_, recent) = linked(&mut app);
     app.on_line(accepted(
@@ -3732,15 +3807,14 @@ fn an_accepted_delete_in_git_scopes_its_recent_refill() {
         .as_str()
         .unwrap_or_else(|| panic!("delete id"))
         .to_owned();
-    // Scoped, the refill names the launch project again.
     let lines = commands(app.on_line(accepted(&delete, json!({}))));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "recent");
-    assert_eq!(lines[0]["args"], json!({"project": "-w"}));
+    assert!(lines[0].get("args").is_none());
 }
 
 #[test]
-fn the_next_page_in_git_names_the_launch_project() {
+fn the_next_page_in_git_is_unscoped() {
     let mut app = git_home();
     let (_, recent) = linked(&mut app);
     app.on_line(live(
@@ -3759,8 +3833,7 @@ fn the_next_page_in_git_names_the_launch_project() {
     assert_eq!(lines.len(), 1);
     let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(line["command"], "recent");
-    assert_eq!(line["args"]["before"], "s_bbbbbbbbbbbbbbbb");
-    assert_eq!(line["args"]["project"], "-w");
+    assert_eq!(line["args"], json!({"before": "s_bbbbbbbbbbbbbbbb"}));
 }
 
 /// A live `session_status` for `session` in `workspace`, in git on
@@ -3998,4 +4071,90 @@ fn start_carries_the_terminal_layer_in_overrides() {
     let args = app.start_args();
     assert_eq!(args["overrides"], json!(["model=acme/m"]));
     assert_eq!(args["worktree"], true);
+}
+
+/// Focuses the last list stop from the entry bar.
+fn focus_last(app: &mut App) {
+    drawn(app);
+    let last = keys(app)
+        .into_iter()
+        .last()
+        .unwrap_or_else(|| panic!("a row"));
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(last)))
+    );
+}
+
+/// The foot home draws.
+fn foot(app: &App) -> String {
+    app.home_screen()
+        .map(|screen| screen.foot)
+        .unwrap_or_default()
+}
+
+/// The delete question home draws, unwrapped.
+fn question(app: &App) -> String {
+    app.home_screen()
+        .and_then(|screen| screen.question)
+        .unwrap_or_default()
+}
+
+/// The delete question's scroll offset: Up shows earlier rows, Down
+/// later ones.
+fn question_scroll(app: &App) -> usize {
+    app.home_screen()
+        .map(|screen| screen.question_scroll)
+        .unwrap_or_default()
+}
+
+/// Clicks the first row's ✕, with the parsed lines going out.
+fn stop(app: &mut App) -> Vec<Value> {
+    let key = keys(app)[0];
+    match app.home_click(Spot::Stop(key)) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("the ✕ sends"),
+    }
+}
+
+/// Clicks the first row's ✕.
+fn click_stop(app: &mut App) -> Effect {
+    let key = keys(app)[0];
+    app.home_click(Spot::Stop(key))
+}
+
+/// One crashed `recent` row for `session`.
+fn crashed(session: &str, name: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": "-w",
+        "workspace": "/w",
+        "name": name,
+        "how": "crashed",
+    })
+}
+
+/// An exited row from `recent`, by `session`.
+fn exited_row(app: &mut App, session: &str, name: &str) {
+    let (_, recent) = linked(app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited(session, name)]}),
+    ));
 }

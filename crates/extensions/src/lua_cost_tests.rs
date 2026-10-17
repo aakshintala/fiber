@@ -116,21 +116,19 @@ fn a_raised_error_is_an_error() {
     assert!(matches!(err, Error::Lua { .. }), "{err:?}");
 }
 
-/// A fifo at `<dir>/go_<name>.lua`: a `require` of it blocks until the
-/// returned receiver's sender has opened it, which signals once the
-/// callback reached the `require`.
+/// An empty file at `<dir>/go_<name>.lua`: a `require` of it runs the
+/// registered observer, which signals once the callback reached the
+/// `require`, and reads empty.
 fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
     let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    std::fs::File::create(&path).unwrap();
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
+    crate::lua::observe_load(
+        path.canonicalize().unwrap(),
+        Box::new(move || match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
+        }),
+    );
     rx
 }
 

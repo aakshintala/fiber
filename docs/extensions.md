@@ -1502,7 +1502,7 @@ its repository declares that has no approval for this project and this
 content, and raises one offer listing all of it, so approving costs no
 prompt-cache rebuild. Each item shows what an install shows ("What an install
 shows"), and an item whose content changed shows the diff against the copy
-approved before. For each item the person chooses: approve, skip for this
+approved before that is still kept, or none. For each item the person chooses: approve, skip for this
 session, or never. The offer is its own event pair, `repository_code_offered`
 and `repository_code_resolved`, never an interaction a model or an extension
 raises (`docs/events.md`, "Repository code"). Any client may answer, local or

@@ -12,11 +12,14 @@ use crate::test_support::{install_extension, load};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, UNIX_EPOCH};
 
 use contract::SessionId;
 use serde_json::json;
 
-use super::{launcher, resolver, watcher};
+use super::{launcher, quota_text, resolver, watcher};
+use crate::switch::quota::{LabelQuota, QuotaView};
+use extensions::{Quota, QuotaEntry, Window, WindowUse};
 use fakes::Deadline;
 
 /// Installs a provider `fake` with a leveled model `m` and a plain model
@@ -25,6 +28,22 @@ use fakes::Deadline;
 /// that configuration.
 fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, config::Config) {
     let root = fakes::TempDir::new("fd");
+    rig_loaded(&root, roles, install, &[], None)
+}
+
+/// Loads a rig in `root`: the fake provider reads its key from the
+/// environment, so `default` is always a label it has, and `stored` are
+/// stored as `credentials/fake/<label>` on disk. `repo_roles` writes a
+/// repository-layer `{"roles": ...}` into the workspace. Callers needing
+/// the stored labels or the repository layer keep `root` alive: the label
+/// set is read from disk at call time.
+fn rig_loaded(
+    root: &fakes::TempDir,
+    roles: serde_json::Value,
+    install: bool,
+    stored: &[&str],
+    repo_roles: Option<&serde_json::Value>,
+) -> (extensions::Providers, config::Config) {
     let home = root.path().join("home");
     if install {
         install_extension(
@@ -37,7 +56,7 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
             &[(
                 "fake",
                 serde_json::from_str(
-                    r#"{"name": "fake", "models": [
+                    r#"{"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": [
             {"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
              "context_window": 1000, "thinking_levels": ["low", "high"], "thinking_default": "low"},
             {"id": "plain", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1",
@@ -50,6 +69,15 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
     } else {
         std::fs::create_dir_all(&home).unwrap();
     }
+    for label in stored {
+        config::store_credential(
+            &home,
+            "fake",
+            label,
+            &config::Secret::new(format!("{label}-key")),
+        )
+        .unwrap();
+    }
     std::fs::write(
         home.join("config.json"),
         json!({"roles": roles}).to_string(),
@@ -57,10 +85,31 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
     .unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
+    if let Some(repo_roles) = repo_roles {
+        let dir = workspace.join(".fiber");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            json!({"roles": repo_roles}).to_string(),
+        )
+        .unwrap();
+    }
     let config = load(&home, &workspace, "test", Vec::<String>::new());
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
     // `root` is dropped here; the registry and configuration were read.
     (providers, config)
+}
+
+/// A rig with `stored` labels on disk for the fake provider, whose temp
+/// dir stays alive under the caller: the label set is read from disk at
+/// call time.
+fn stored_rig(
+    roles: serde_json::Value,
+    stored: &[&str],
+) -> (fakes::TempDir, extensions::Providers, config::Config) {
+    let root = fakes::TempDir::new("fd-label");
+    let (providers, config) = rig_loaded(&root, roles, true, stored, None);
+    (root, providers, config)
 }
 
 /// Installs the `fake` provider and returns the loaded registry with
@@ -293,6 +342,7 @@ fn launched() -> jobs::Launched {
         prompt: "scan the tree".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         resume: false,
+        credential: None,
     }
 }
 
@@ -361,6 +411,7 @@ fn tool_depth() -> u32 {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            credential: Arc::new(|_| Ok(None)),
         },
     )
     .tool()
@@ -504,6 +555,7 @@ fn resumed() -> jobs::Launched {
         prompt: "- also check Y".to_owned(),
         workspace: std::path::PathBuf::from("/w"),
         resume: true,
+        credential: None,
     }
 }
 
@@ -858,6 +910,7 @@ fn message_rig() -> (super::Delegates, Arc<jobs::Registry>) {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            credential: Arc::new(|_| Ok(None)),
         },
     );
     (delegates, jobs)
@@ -889,4 +942,446 @@ fn the_session_depth_reaches_the_message_tool() {
     assert_eq!(super::depth(), 1);
     let (delegates, _jobs) = message_rig();
     assert_eq!(delegates.message().depth, 1);
+}
+
+#[test]
+fn a_role_object_with_a_stored_label_resolves_to_that_label() {
+    let (_root, providers, config) = stored_rig(
+        json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}),
+        &["work"],
+    );
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
+    assert_eq!((resolve.credential)("fast"), Ok(Some("work".to_owned())));
+}
+
+#[test]
+fn a_role_naming_a_label_the_provider_lacks_is_refused_naming_the_labels() {
+    let (_root, providers, config) = stored_rig(
+        json!({"fast": {"model": "fiber:fake/plain", "credential": "gone"}}),
+        &["work"],
+    );
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
+    // The refusal names the label asked for and every label the provider
+    // has, sorted; the model sees only role names, never labels, so the
+    // catalogue stays without it.
+    assert_eq!(
+        (resolve.credential)("fast"),
+        Err(
+            "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missing() {
+    let root = fakes::TempDir::new("fd-scripted-label");
+    let (mut providers, config) = rig_loaded(
+        &root,
+        json!({"s": {"model": "fiber:scripted/a.json", "credential": "work"}}),
+        true,
+        &["work"],
+        None,
+    );
+    // The label is stored for the scripted provider too: membership alone
+    // must not let it through.
+    config::store_credential(
+        &root.path().join("home"),
+        "scripted",
+        "work",
+        &config::Secret::new("work-key".to_owned()),
+    )
+    .unwrap();
+    providers.add_scripted("scripted/a.json");
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.lookup)("s").unwrap(), "scripted/a.json");
+    assert_eq!(
+        (resolve.credential)("s"),
+        Err(
+            "`scripted` has no credential label `work`. The labels for `scripted` are: none"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_full_reference_resolves_with_no_label() {
+    let (providers, config) = rig(json!({}));
+    let resolve = resolver(&providers, &config);
+    // A delegate started with a full reference uses the provider's
+    // configured label, so no override travels.
+    assert_eq!((resolve.credential)("fiber:fake/m"), Ok(None));
+}
+
+#[test]
+fn a_string_role_resolves_with_no_label() {
+    let (providers, config) = rig(json!({"deep": "fiber:fake/m:high"}));
+    let resolve = resolver(&providers, &config);
+    assert_eq!((resolve.credential)("deep"), Ok(None));
+}
+
+#[test]
+fn a_repository_layer_role_credential_is_ignored() {
+    let root = fakes::TempDir::new("fd-repo");
+    let (providers, config) = rig_loaded(
+        &root,
+        json!({}),
+        true,
+        &["work"],
+        Some(&json!({
+            "fast": {"model": "fiber:fake/plain", "credential": "work"},
+            "odd": {"model": "fiber:fake/plain", "credential": 5},
+        })),
+    );
+    let resolve = resolver(&providers, &config);
+    // A repository's role cannot name a credential: the label is ignored,
+    // and a non-string `credential` reads as no label too.
+    assert_eq!((resolve.credential)("fast"), Ok(None));
+    assert_eq!((resolve.credential)("odd"), Ok(None));
+    // The launch then passes no `-c`: the child reads the provider's
+    // configured label.
+    let mut launch = launched();
+    launch.credential = (resolve.credential)("fast").unwrap();
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(!argv.iter().any(|arg| arg == "-c"), "{argv:?}");
+}
+
+#[test]
+fn the_catalogue_never_prints_a_role_label() {
+    let object = rig(json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}));
+    let string = rig(json!({"fast": "fiber:fake/plain"}));
+    let labelled = resolver(&object.0, &object.1).catalogue;
+    let plain = resolver(&string.0, &string.1).catalogue;
+    assert_eq!(labelled.as_ref(), plain.as_ref());
+    assert!(!labelled.contains("work"), "{labelled}");
+}
+
+#[test]
+fn a_new_launch_with_a_credential_passes_it_as_a_run_override() {
+    let mut launch = launched();
+    launch.credential = Some("work".to_owned());
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // The override travels as one adjacent `-c` pair.
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"work\"",]),
+        "{argv:?}"
+    );
+}
+
+#[test]
+fn a_label_that_parses_as_json_is_still_a_string() {
+    let mut launch = launched();
+    launch.credential = Some("123".to_owned());
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launch)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair == ["-c", "providers.fake.credential=\"123\"",]),
+        "{argv:?}"
+    );
+}
+
+#[test]
+fn a_resume_launch_passes_no_credential_override() {
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&resumed());
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // A resume continues the recorded session: no `-c` may change its label.
+    assert!(!argv.iter().any(|arg| arg == "-c"), "{argv:?}");
+}
+
+fn quota_row(provider: &str, credential: &str, entry: QuotaEntry, pending: bool) -> LabelQuota {
+    LabelQuota {
+        provider: provider.to_owned(),
+        credential: credential.to_owned(),
+        entry,
+        pending,
+    }
+}
+
+fn window(name: &str, used: f64, resets_at: Option<u64>) -> Window {
+    Window {
+        name: name.to_owned(),
+        used: WindowUse::Percent {
+            used,
+            resets_at: resets_at.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+        },
+    }
+}
+
+#[test]
+fn quota_text_of_a_loading_view_is_quota_loading() {
+    let view = QuotaView::Loading;
+    // The loading state renders before any per-label entry.
+    assert_eq!(quota_text(&view), "Quota: loading");
+}
+
+#[test]
+fn quota_text_of_nothing_loaded_is_quota_none() {
+    let view = QuotaView::Loaded(Vec::new());
+    assert_eq!(quota_text(&view), "Quota: none");
+}
+
+#[test]
+fn a_windows_row_prints_percent_used_and_a_reset_window_prints_reset() {
+    let view = QuotaView::Loaded(vec![
+        quota_row(
+            "p",
+            "a",
+            QuotaEntry::Reported(Quota::Windows(vec![
+                window("alpha", 42.4, None),
+                Window {
+                    name: "beta".to_owned(),
+                    used: WindowUse::Reset,
+                },
+            ])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "b",
+            QuotaEntry::Reported(Quota::Windows(vec![window("w", 42.5, None)])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "c",
+            QuotaEntry::Reported(Quota::Windows(vec![window("zero", 0.0, None)])),
+            false,
+        ),
+        quota_row(
+            "p",
+            "d",
+            QuotaEntry::Reported(Quota::Windows(vec![window("full", 100.0, None)])),
+            false,
+        ),
+    ]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\np/a: alpha 42% used, beta reset\np/b: w 43% used\np/c: zero 0% used\np/d: full 100% used"
+    );
+}
+
+#[test]
+fn a_window_with_a_reset_time_prints_it_in_utc() {
+    let view = QuotaView::Loaded(vec![quota_row(
+        "p",
+        "a",
+        QuotaEntry::Reported(Quota::Windows(vec![
+            window("w", 10.0, Some(90_061)),
+            window("plain", 5.0, None),
+        ])),
+        false,
+    )]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\np/a: w 10% used (resets 1970-01-02T01:01:01Z), plain 5% used"
+    );
+}
+
+#[test]
+fn a_credit_row_prints_remaining_and_limit_or_remaining_alone() {
+    let view = QuotaView::Loaded(vec![
+        quota_row(
+            "p",
+            "a",
+            QuotaEntry::Reported(Quota::Credit {
+                remaining: 4.2,
+                limit: Some(10.0),
+            }),
+            false,
+        ),
+        quota_row(
+            "p",
+            "b",
+            QuotaEntry::Reported(Quota::Credit {
+                remaining: 4.2,
+                limit: None,
+            }),
+            false,
+        ),
+    ]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\np/a: credit 4.2 remaining of 10\np/b: credit 4.2 remaining"
+    );
+}
+
+#[test]
+fn a_no_quota_row_prints_no_quota_reported() {
+    let view = QuotaView::Loaded(vec![quota_row("p", "a", QuotaEntry::NoQuota, false)]);
+    assert_eq!(quota_text(&view), "Quota:\np/a: no quota reported");
+}
+
+#[test]
+fn an_empty_windows_report_prints_no_quota_reported() {
+    let view = QuotaView::Loaded(vec![quota_row(
+        "p",
+        "a",
+        QuotaEntry::Reported(Quota::Windows(Vec::new())),
+        false,
+    )]);
+    assert_eq!(quota_text(&view), "Quota:\np/a: no quota reported");
+}
+
+#[test]
+fn an_unreachable_row_prints_last_value_and_age_or_nothing() {
+    let last = |age: Duration| QuotaEntry::Unreachable {
+        last: Some((Quota::Windows(vec![window("primary", 80.0, None)]), age)),
+    };
+    let view = QuotaView::Loaded(vec![
+        quota_row("p", "a", last(Duration::from_secs(59)), false),
+        quota_row("p", "b", last(Duration::from_secs(60)), false),
+        quota_row("p", "c", last(Duration::from_secs(3599)), false),
+        quota_row("p", "d", last(Duration::from_secs(3600)), false),
+        quota_row("p", "e", last(Duration::from_secs(86399)), false),
+        quota_row("p", "f", last(Duration::from_secs(86400)), false),
+        quota_row("p", "g", QuotaEntry::Unreachable { last: None }, false),
+    ]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\np/a: unreachable (last: primary 80% used, 59s ago)\n\
+         p/b: unreachable (last: primary 80% used, 1m ago)\n\
+         p/c: unreachable (last: primary 80% used, 59m ago)\n\
+         p/d: unreachable (last: primary 80% used, 1h ago)\n\
+         p/e: unreachable (last: primary 80% used, 23h ago)\n\
+         p/f: unreachable (last: primary 80% used, 1d ago)\n\
+         p/g: unreachable"
+    );
+}
+
+#[test]
+fn a_pending_label_prints_no_value_yet_and_a_failed_first_fetch_prints_unreachable() {
+    let view = QuotaView::Loaded(vec![
+        quota_row("p", "a", QuotaEntry::Unreachable { last: None }, true),
+        quota_row("p", "b", QuotaEntry::Unreachable { last: None }, false),
+    ]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\np/a: no value yet\np/b: unreachable"
+    );
+}
+
+#[test]
+fn quota_rows_sort_by_provider_then_credential() {
+    let view = QuotaView::Loaded(vec![
+        quota_row("z", "b", QuotaEntry::NoQuota, false),
+        quota_row("a", "z", QuotaEntry::NoQuota, false),
+        quota_row("a", "a", QuotaEntry::NoQuota, false),
+    ]);
+    assert_eq!(
+        quota_text(&view),
+        "Quota:\na/a: no quota reported\na/z: no quota reported\nz/b: no quota reported"
+    );
+}
+
+/// One session's delegates with `catalogue`, for the models wiring tests.
+fn models_rig(catalogue: &str) -> super::Delegates {
+    let dir = fakes::TempDir::new("fiber-delegate-models");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        dir.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    super::Delegates::new(
+        dir.path().join("fiber-stub"),
+        dir.path().into(),
+        SessionId("s_parent".into()),
+        dir.path().into(),
+        dir.path().join("sessions"),
+        jobs,
+        clock,
+        jobs::Resolve {
+            lookup: Arc::new(|_| Err("unused".into())),
+            catalogue: Arc::from(catalogue.to_owned()),
+            credential: Arc::new(|_| Ok(None)),
+        },
+    )
+}
+
+fn models_text(models: &jobs::DelegateModels) -> String {
+    use contract::tool::Tool as _;
+    let output = models.run(
+        &serde_json::Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    text.clone()
+}
+
+#[test]
+fn models_without_a_reader_says_quota_none() {
+    let text = models_text(&models_rig("CAT").models());
+    assert_eq!(text, "CAT\nQuota: none");
+}
+
+#[test]
+fn models_renders_the_reader_each_call() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let reader: crate::switch::quota::ModelQuotaRead = Arc::new(move || {
+        let call = counted.fetch_add(1, Ordering::SeqCst);
+        // Alternate the quota section, so equal texts would prove caching.
+        if call == 0 {
+            QuotaView::Loading
+        } else {
+            QuotaView::Loaded(Vec::new())
+        }
+    });
+    let models = models_rig("CAT").with_quota(reader).models();
+    assert_eq!(models_text(&models), "CAT\nQuota: loading");
+    assert_eq!(models_text(&models), "CAT\nQuota: none");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn models_says_quota_loading_while_the_reader_is_held_then_lists_the_label() {
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Arc::new(Mutex::new(released));
+    let reader: crate::switch::quota::ModelQuotaRead = Arc::new(move || {
+        if released.lock().unwrap().try_recv().is_ok() {
+            QuotaView::Loaded(vec![quota_row(
+                "p",
+                "c",
+                QuotaEntry::Reported(Quota::Windows(vec![window("primary", 42.5, None)])),
+                false,
+            )])
+        } else {
+            QuotaView::Loading
+        }
+    });
+    let models = models_rig("CAT").with_quota(reader).models();
+    // The first call returns while the fake is still held: `run` never
+    // waits on the reader.
+    let (found, got) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _sent = found.send(models_text(&models));
+        });
+        let first = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&got)
+            .expect("the models call never returned");
+        assert_eq!(first, "CAT\nQuota: loading");
+    });
+    // After the release the next call lists the label's entry.
+    release.send(()).unwrap();
+    assert_eq!(models_text(&models), "CAT\nQuota:\np/c: primary 43% used");
 }

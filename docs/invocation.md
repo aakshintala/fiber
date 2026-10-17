@@ -355,6 +355,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `tools` | none |
 | `commands` | none |
 | `skills` | none |
+| `quota` | `fetch` (boolean, optional, default false) |
 | `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `artifact_page` | `path` (string, as a result's `artifact` names it), `offset` (integer, bytes, default 0) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `thinking` (string, optional) |
@@ -375,7 +376,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
-| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. Rejected `stale_request` if no turn is running and no `shell` command is. |
+| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. A `shell` that `cancel` stops before its command starts is rejected `cancelled`. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
 | `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
@@ -385,6 +386,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `artifact_page` | Answers with one page of a file under the session's `artifacts/`, starting at `offset`: at most 64 lines, the page size of history paging (`docs/tui.md`, "History and paging"), and at most 64 KiB, a longer line cut at a character boundary and continued on the next page. A client pages with `next`, so a file is never loaded whole; the terminal's call view reads a cut call's full output this way (`docs/tui.md`, "Swapped views"). The path is resolved as `read_file` resolves it ("A session's files"): outside `artifacts/` it is rejected `invalid_arguments`, and a missing file is `not_found`. An `offset` past the end of the file is rejected `invalid_arguments`. `size` is the file's size when the page is read: a file that grows is paged to that size, and one that shrinks during the read is rejected `io_failed`. `offset` and `next` count bytes; bytes that are not valid UTF-8 become `�` in `text`, and an `offset` inside a character is rejected `invalid_arguments`. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `skills` | Answers with every skill discovery found (`docs/system-prompt.md`, "Skills"), including those `skills.disabled` switches off and those another skill shadows, which `commands` leaves out: in discovery order, each skill followed by the skills it shadows. Each entry is the skill's name, its description, the path of its `SKILL.md`, its source and, for an extension's skill, the extension's name, whether its header and place let the model load it, whether `skills.disabled` switches it off, the paths of the skills it shadows, and, on a shadowed skill, the path of the skill that wins. The model can load a skill only when its header and place allow it, it is not switched off and no skill shadows it. A skill whose header is invalid is left out, as discovery leaves it out. The list is fixed when the session starts, and again when it reloads. The terminal's `/skills` view reads it (`docs/tui.md`, "Swapped views"). |
+| `quota` | Without `fetch`, answers at once with every provider credential label's cached quota and `quota.notice_at`. The first command starts loading quota providers off the request path; later commands read the same caches (`docs/tools.md`, "Fetching"). With `fetch: true`, starts a fetch for every label whose key read succeeded, whatever the cache's age, and answers once every fetch it started has ended. Each fetch keeps the 8 s timeout, so the answer comes within 8 s of the fetches starting, plus loading. A label whose fetch failed or timed out answers `unreachable`. A fetch already in flight for a label is shared (`docs/tools.md`, "Fetching"). |
 | `commands` | Answers with every `/name` the session runs: each skill and prompt template that discovery keeps and `skills.disabled` does not switch off (`docs/system-prompt.md`, "Skills"), each MCP server's prompt (`docs/mcp.md`, "Prompts and resources"), and each extension's command (`docs/extensions.md`, "Commands and screens"). Each entry is a name, a one-line description, the skill's `argument-hint`, or an MCP prompt's arguments as `<name>` when required and `[name]` when not, and a tag: `skill`, `template`, the extension's name, or the MCP server's name. The list is fixed when the session starts, and again when it reloads. A client's `/` list reads it (`docs/tui.md`, "Slash commands"). |
 | `model` | Switches model or thinking level at the next turn boundary. Takes a model reference and an optional thinking level. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model, and with the credential's own code, such as `credential_missing`, when the new model's credential cannot be read (`docs/model-routing.md`, "When a credential is missing or fails"). |
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `credential_missing` for a label the provider does not have, naming its labels, and with the credential's own code when the label's source cannot be read. |
@@ -399,7 +401,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `protocol_unsupported`, `session_has_dependents`, `usage`, `version_conflict`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -956,6 +958,13 @@ websocket for everything it does.
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
+| `search_files` | `workspace` (absolute string), `text` (string), `fresh` (boolean, optional) | Searches the hub's files, answering `rows` (at most 50 strings) or `error` (string), as the file panel does. |
+| `device_login` | `name` (string) | Runs the provider's device-code login on the hub, answering `url` and `code` (strings). |
+| `device_login_result` | none | Answers with `path` (string, relative to the hub's Fiber home) once that connection's login has stored its credential, or rejects with its failure. |
+| `device_login_cancel` | none | Cancels that connection's login and answers once nothing more can be stored. No result. |
+| `configure` | `operation` (string), plus that operation's arguments below | Reads or writes configuration on the hub's machine. Sent without `session_id`. |
+| `read_config` | `workspace` (absolute string), `path` (string) | Reads a configuration view's file as UTF-8 `text` with a content `version`. A missing file answers empty text and version `missing`. |
+| `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
@@ -966,6 +975,77 @@ Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
 first when it asks where to start one, and lists directories with
 `directories`.
+
+`search_files` runs both file-panel modes (`docs/tui.md`, "Keys") on
+the hub's machine. `~/` starts at the hub's home; `../` starts at `workspace`.
+The connection's search worker lists git's tracked files on its first
+workspace query and reuses that listing. `fresh: true` or a different
+workspace replaces it. The listing ends when the connection closes or a
+query replaces it. A client sends `fresh: true` when it opens a new panel.
+A newer query cancels the older walk and answers it `stale_request`, even
+when several queued queries were skipped. A skipped query still applies
+its `fresh` and workspace change. Other hub commands do not wait behind a
+walk. A base that cannot be read or a failed git listing answers `error`,
+not a rejection.
+
+A connection holds at most one device login. A new `device_login` cancels
+the previous one first, and disconnecting cancels it too. Each command gets
+one answer: `device_login` when the provider shows the URL and code,
+`device_login_result` when it ends, and `device_login_cancel` after cancel
+returns. An already ended login answers its result at once. A result or
+cancel with no login, or a second waiting result command, is rejected
+`stale_request`. Failure before a code is shown rejects `device_login`;
+a provider that opens a browser instead is rejected `authentication_failed`,
+saying it has no device-code form. Unknown arguments, wrong types and
+explicit `null` on these commands or `search_files` are `invalid_arguments`.
+A search worker or login thread that cannot start rejects its command
+`io_failed`; a later search can try again.
+
+The `configure` operations below use the hub's Fiber home and the project of
+`workspace` on that machine. Every `workspace` is absolute. Arguments are
+required unless marked optional; unknown keys, wrong types and explicit
+`null` are rejected `invalid_arguments`.
+
+| Operation | Arguments besides `operation` | Result |
+|---|---|---|
+| `settings` | `workspace` (string) | `rows`, the setting rows described below; client-owned `keys` and `tui` rows are omitted |
+| `set` | `workspace`, `layer`, `key`, `text` (strings) | `file` (string) and `warnings` (array of strings); `layer` is `global`, `project` or `repository`; a client-owned key is rejected `invalid_arguments` without writing |
+| `global_file` | none | `file` (string), the hub's global configuration file |
+| `rules` | `workspace` (string) | `global` and `project`, each with `file` and either `rows` or `error`; a row holds `line` (integer), `text` (string) and `rule` (the standing rule object from `docs/configuration.md`) |
+| `revoke` | `workspace`, `scope`, `text` (strings), `line` (integer) | `revoked`, either `removed` or `stale`; `scope` is `global` or `project` |
+| `login_targets` | none | `targets`, objects with `name` and `kind` (`key`, `browser` or `secret`) |
+| `store_key` | `name`, `key` (strings), `label` (string, optional) | `path` (string, relative to Fiber home) and `replaced` (boolean), as `fiber login` stores it; the key is never returned or logged |
+| `reviewer_models` | `name` (string) | `models` (array of strings), optional `selected` (string), and `notices` (array of strings), from the hub's installed provider |
+| `set_reviewer` | `name`, `id` (strings) | no result |
+| `tool_switches` | `workspace` (string) | `groups`, objects with `group`, `project` and `everywhere`; `group` is one of `{"mcp":"name"}` or `{"extension":"name"}`; each layer holds `disabled` (array of strings) and optional `enabled` (array of strings) |
+| `switch_tool` | `workspace`, `tool`, `scope` (strings), `group` (object as above), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skills_disabled` | `workspace` (string) | `project` and `everywhere` (arrays of strings) |
+| `switch_skill` | `workspace`, `name`, `scope` (strings), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
+| `skill_text` | `path` (string) | `text` (string), as the local skill view reads it |
+
+A setting row holds `key`, `layer` and `shown` (strings), and `file` (string)
+when that layer has one. `shown` is `unset`, `value`, `redacted` or `union`.
+`value` and `redacted` carry `value` (string); `union` carries `names`
+(`[name, layer]` pairs) and `own` (`[layer, json]` pairs).
+`scope` is `any` (with `repo`, a boolean), `global_only`, `repo_only` or
+`person_files`. Values are JSON text, not decoded values.
+
+`keys` and every `tui.*` key belong to the terminal that draws, including
+`/keys`, `/settings` rows for those keys and the theme picker. They stay in
+the client's Fiber home. The hub serves neither `save_keys`, themes nor
+`LoginShow`, which draws a login URL and code on the client.
+
+`read_config` and `write_config` are the Ctrl+G commands, not arbitrary file
+access. Their `path` must lexically equal the global, project or repository
+`config.json`, the global or project `rules`, or be an absolute path named
+`SKILL.md`. Both refuse text over 64 KiB with `too_large`, without cutting
+it. Non-UTF-8 files fail `io_failed`, naming the path. Versions are 16-digit
+lowercase hexadecimal content hashes, or `missing`. For configuration and
+rules, the write holds `<path>.lock` across reading, comparing and writing;
+skill files leave no lock file. A stale write says the path changed since
+it was read. A matching write stores even invalid configuration or rules:
+the client rereads the view to show its error. `read_file` remains limited
+to session artifacts.
 
 ### Remote clients
 

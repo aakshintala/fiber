@@ -22,11 +22,21 @@ pub(crate) const START_ONLY: &str =
 
 /// Adds to `providers` each scripted model the session may name: the
 /// configured `model` (which `--model` sets), the resumed session's
-/// `recorded` model and `reviewer.model`. Any other reference adds nothing.
+/// `recorded` model, `reviewer.model` and the `fiber:` references in `roles.*`.
 pub(crate) fn prepare(providers: &mut Providers, config: &Config, recorded: Option<&str>) {
     for key in ["model", "reviewer.model"] {
         if let Some((Value::String(typed), _)) = config.get(key, None) {
             providers.add_scripted(&typed);
+        }
+    }
+    if let Some(Value::Object(roles)) = config.merged(None).get("roles") {
+        for role in roles.values() {
+            let typed = role
+                .as_str()
+                .or_else(|| role.get("model").and_then(Value::as_str));
+            if let Some(typed) = typed.and_then(|typed| typed.strip_prefix("fiber:")) {
+                providers.add_scripted(typed);
+            }
         }
     }
     if let Some(typed) = recorded {

@@ -18,6 +18,45 @@ use contract::clock::Clock;
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
+#[test]
+fn quota_segments_use_short_names_colours_and_no_click_targets() {
+    use crate::app::items::testkit::{commands, hello};
+    use serde_json::json;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch(&["quota"]));
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let out = commands(app.on_line(session_line(SESSION, "clients", json!({"clients": []}))));
+    let id = out.iter().find(|v| v["command"] == "quota").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    app.on_line(session_line(SESSION, "command_accepted", json!({"command_id": id,
+        "result": {"quota": [
+            {"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 80.0}]},
+            {"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2}}
+        ], "notice_at": 80.0}})));
+    let shown = super::status(&app, 100);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].line.to_string(), "Q codex 20% · openrouter 4.20");
+    assert_eq!(
+        shown[0].line.spans[0].style,
+        crate::markdown::style(crate::markdown::Role::Muted)
+    );
+    let codex = shown[0]
+        .line
+        .spans
+        .iter()
+        .find(|s| s.content.contains("codex"))
+        .unwrap();
+    assert_eq!(
+        codex.style,
+        crate::markdown::style(crate::markdown::Role::Error)
+    );
+    assert!(shown[0].spots.is_empty());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(super::status(&app, 100).is_empty());
+}
+
 /// The launch description with `cards`, `/w`, outside git.
 fn launch(cards: &[&str]) -> Launch {
     Launch {
@@ -75,7 +114,7 @@ fn idle(session: &str, name: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": name, "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 1.5, "subscription_cost": 0.0},
@@ -91,7 +130,7 @@ fn waiting(session: &str) -> Line {
         "session_status",
         serde_json::json!({
             "name": "other", "workspace": "/w", "project": "-w",
-            "state": "waiting", "since": 0,
+            "state": "waiting", "started": 0, "calls": 0, "since": 0,
             "waiting": {"request_id": "r_1", "kind": "approval",
                 "summary": "Run cargo test"},
             "spend": {"tokens": {"input": 1, "cache_read": 0,
@@ -109,7 +148,7 @@ fn context_status(tokens: u64, window: u64) -> Line {
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
@@ -294,7 +333,7 @@ fn spend_status(cost: serde_json::Value, subscription: f64) -> Line {
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": cost, "subscription_cost": subscription},
@@ -509,7 +548,7 @@ fn narrow_100x30() {
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0,
                 "cache_write": {}, "output": 2},
                 "cost": 1.5, "subscription_cost": 0.0},
@@ -990,7 +1029,7 @@ fn full_status() -> Line {
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/Users/you/work/fiber",
-            "project": "-w", "state": "idle", "since": 0,
+            "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 900, "cache_read": 100,
                 "cache_write": {"5m": 50}, "output": 200},
                 "cost": 4.12, "subscription_cost": 0.0},
@@ -1232,7 +1271,7 @@ fn input_status(input: u64) -> Line {
         "session_status",
         serde_json::json!({
             "name": "one", "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": input, "cache_read": 0,
                 "cache_write": {}, "output": 0},
                 "cost": 0.0, "subscription_cost": 0.0},

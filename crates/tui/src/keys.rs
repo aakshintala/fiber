@@ -157,6 +157,8 @@ pub(crate) enum Event {
     Mouse(Mouse),
     /// A detection reply.
     Reply(Reply),
+    /// DEC mode 1004 focus gained (`true`) or lost (`false`).
+    Focus(bool),
 }
 
 /// The key or edit a stroke meant before rebinding: the parser's old mapping
@@ -470,6 +472,8 @@ fn parse_csi(buf: &[u8]) -> Step {
     let final_byte = *buf.get(end)?;
     let params = buf.get(2..end)?;
     let events = match final_byte {
+        b'I' if params.is_empty() => vec![Event::Focus(true)],
+        b'O' if params.is_empty() => vec![Event::Focus(false)],
         0x75 if params.first() == Some(&b'?') => {
             // Kitty flags: `CSI ? <flags> u`. Digits only: `u8`'s parser
             // would also take a leading `+`.

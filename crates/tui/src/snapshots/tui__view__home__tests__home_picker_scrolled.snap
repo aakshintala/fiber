@@ -1,29 +1,28 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 439
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    9 working · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-
-
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-
-                      Workspaces
-
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄    /repo1                              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts      /repo2
-                        /repo3
-                        /repo4
-[w]  [no model]  [th    /repo5
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    /repo6                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parser       /repo7                                                 ✕
-●  fix the parser     › /repo8                                                 ✕
-●  fix the parser                                                              ✕
-●  fix the parser     ↑↓ move · Enter open · Esc closes                        ✕
-●  fix the parser                                                              ✕
-●  fix the parser   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                   ✕
-●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
-●  fix the parser                                                              ✕
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+repo0 +  9 live · $0  Workspaces
+⌥1 ● fix the parser                                                WORKING  0s ✕
+    s_00000000000000    /w
+⌥2 ● fix the parser     /repo0                                     WORKING  0s ✕
+    s_00000000000000    /repo1
+⌥3 ● fix the parser     /repo2                                     WORKING  0s ✕
+    s_00000000000000    /repo3
+⌥4 ● fix the parser     /repo4                                     WORKING  0s ✕
+    s_00000000000000    /repo5
+⌥5 ● fix the parser     /repo6                                     WORKING  0s ✕
+    s_00000000000000    /repo7
+⌥6 ● fix the parser   › /repo8                                     WORKING  0s ✕
+    s_00000000000000
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ↑↓ move · Enter open · Esc closes     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

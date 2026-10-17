@@ -17,12 +17,13 @@ use serde_json::json;
 
 use super::{DEFAULT_STARTUP_TIMEOUT, start};
 use crate::effects::Hints;
+use crate::error::McpError;
 use crate::test_support::{FakeImages, Setup, WITHIN};
 
 #[test]
 fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
     for required in [false, true] {
-        let (reason, code, message) = super::fail_parts(
+        let (reason, error) = super::fail_parts(
             "docs",
             &crate::server::StartError::Login("detail".into()),
             Duration::from_secs(5),
@@ -30,17 +31,13 @@ fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
             true,
         );
         assert_eq!(reason, ServerFailure::NotLoggedIn);
-        assert_eq!(code, ErrorCode::McpServerUnavailable);
-        let subject = if required {
-            "The required MCP server"
-        } else {
-            "The MCP server"
-        };
         assert_eq!(
-            message,
-            format!(
-                "{subject} `docs` failed to start: detail Run `fiber mcp login docs` to log in."
-            )
+            error,
+            McpError::NotLoggedIn {
+                server: "docs".to_owned(),
+                required,
+                detail: "detail".to_owned(),
+            }
         );
     }
 }
@@ -1271,7 +1268,8 @@ fn adopt_then_stop_stops_the_adopted_server() {
     idle.servers.adopt(started.servers);
     assert_eq!(idle.servers.slots.lock().unwrap().len(), 1);
     setup.stop(idle.servers);
-    setup.await_reaped(pid);
+    assert!(fakes::pids_exit(&[pid], WITHIN), "pid {pid} to be reaped");
+    assert!(!fakes::pid_alive(pid), "pid {pid} to be reaped");
 }
 
 #[test]
@@ -1887,7 +1885,7 @@ fn the_key_follows_references_never_values() {
 #[test]
 fn a_missing_secret_names_the_file_and_the_fix() {
     for required in [false, true] {
-        let (reason, code, message) = super::fail_parts(
+        let (reason, error) = super::fail_parts(
             "docs",
             &crate::server::StartError::SecretMissing {
                 name: "mcp.docs.TOKEN".to_owned(),
@@ -1897,28 +1895,20 @@ fn a_missing_secret_names_the_file_and_the_fix() {
             false,
         );
         assert_eq!(reason, ServerFailure::StartFailed);
-        assert_eq!(code, ErrorCode::CredentialMissing);
-        let subject = if required {
-            "The required MCP server"
-        } else {
-            "The MCP server"
-        };
-        for words in [
-            subject,
-            "`docs`",
-            "credentials/mcp.docs.TOKEN",
-            "fiber mcp remove docs",
-            "fiber mcp add docs",
-            "--secret TOKEN",
-        ] {
-            assert!(message.contains(words), "{message}");
-        }
+        assert_eq!(
+            error,
+            McpError::SecretMissing {
+                server: "docs".to_owned(),
+                required,
+                name: "mcp.docs.TOKEN".to_owned(),
+            }
+        );
     }
 }
 
 #[test]
 fn an_unreadable_secret_names_the_file_without_its_value() {
-    let (reason, code, message) = super::fail_parts(
+    let (reason, error) = super::fail_parts(
         "docs",
         &crate::server::StartError::SecretUnreadable {
             name: "mcp.docs.TOKEN".to_owned(),
@@ -1929,8 +1919,13 @@ fn an_unreadable_secret_names_the_file_without_its_value() {
         false,
     );
     assert_eq!(reason, ServerFailure::StartFailed);
-    assert_eq!(code, ErrorCode::CredentialFailed);
-    for words in ["credentials/mcp.docs.TOKEN", "denied"] {
-        assert!(message.contains(words), "{message}");
-    }
+    assert_eq!(
+        error,
+        McpError::SecretUnreadable {
+            server: "docs".to_owned(),
+            required: false,
+            name: "mcp.docs.TOKEN".to_owned(),
+            why: "denied".to_owned(),
+        }
+    );
 }

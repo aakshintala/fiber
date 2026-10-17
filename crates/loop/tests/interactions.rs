@@ -51,26 +51,37 @@ use support::{
 type Make = Box<dyn Fn(&ActionId) -> Asking + Send + Sync>;
 
 /// A tool whose call makes each ask of `asks` in turn, after `before`
-/// opens when set, and returns each answer as a line of text.
+/// opens when set, holds the call open on `after` when set after the last
+/// answer, and returns each answer as a line of text.
 struct Asks {
     asks: Vec<Make>,
     before: Option<Arc<Gate>>,
+    after: Option<Arc<Gate>>,
     told: Mutex<mpsc::Sender<Answered>>,
 }
 
 impl Asks {
     fn new(asks: Vec<Make>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
-        Self::gated(asks, None)
+        Self::gated(asks, None, None)
     }
 
-    fn gated(asks: Vec<Make>, before: Option<Arc<Gate>>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
+    fn gated(
+        asks: Vec<Make>,
+        before: Option<Arc<Gate>>,
+        after: Option<Arc<Gate>>,
+    ) -> (Arc<Self>, mpsc::Receiver<Answered>) {
         let (tx, rx) = mpsc::channel();
         let tool = Self {
             asks,
             before,
+            after,
             told: Mutex::new(tx),
         };
         (Arc::new(tool), rx)
+    }
+
+    fn held(asks: Vec<Make>, after: Arc<Gate>) -> (Arc<Self>, mpsc::Receiver<Answered>) {
+        Self::gated(asks, None, Some(after))
     }
 }
 
@@ -118,6 +129,9 @@ impl Tool for Asks {
             let answered = ask.ask(make(&own));
             said.push(format!("{answered:?}"));
             let _sent = self.told.lock().unwrap().send(answered);
+        }
+        if let Some(gate) = &self.after {
+            gate.wait();
         }
         Output {
             content: vec![ContentPart::Text {
@@ -196,6 +210,37 @@ fn acked() -> (Ack, mpsc::Receiver<contract::inbox::Answer>) {
         let _sent = tx.send(answer);
     }));
     (ack, rx)
+}
+
+/// Sends `answer` to `request` and returns the ack receiver without
+/// waiting: the send half of `support::answer`, so a test can send, open a
+/// hold, then receive.
+fn send_answer(
+    session: &Session,
+    request: &str,
+    answer: ReplyAnswer,
+) -> mpsc::Receiver<contract::inbox::Answer> {
+    let (ack, acked) = acked();
+    session
+        .inbox
+        .send(Delivery::Reply(
+            Reply {
+                request_id: RequestId(request.into()),
+                answer,
+            },
+            ack,
+        ))
+        .unwrap();
+    acked
+}
+
+/// Receives an answer sent by [`send_answer`]: the receive half of
+/// `support::answer`, waiting one [`DEADLINE`] instead of hanging.
+#[track_caller]
+fn recv_answer(acked: &mpsc::Receiver<contract::inbox::Answer>) -> contract::inbox::Answer {
+    Deadline::after(DEADLINE)
+        .recv(acked)
+        .expect("the reply is answered")
 }
 
 fn yes() -> ReplyAnswer {
@@ -448,7 +493,8 @@ fn the_askers_check_rejects_a_reply_and_never_sees_a_decline() {
 
 #[test]
 fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
-    let (tool, answers) = Asks::new(vec![plain(confirm())]);
+    let hold = Arc::new(Gate::default());
+    let (tool, answers) = Asks::held(vec![plain(confirm())], Arc::clone(&hold));
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();
@@ -458,11 +504,19 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
     assert_eq!(answer(&session, &request, yes()), Ok(None));
     let wait = Deadline::after(DEADLINE);
     told(&answers, &wait);
-    rejected(&answer(&session, &request, yes()), ErrorCode::StaleRequest);
+    // The tool holds its call open until the hold releases, so the turn is
+    // still draining when the queued reply lands: the ack below comes from
+    // a drain inside the held turn, not from the test's own timing. Queue
+    // the reply first and read its ack only after opening the hold; waiting
+    // on the ack first would deadlock until DEADLINE.
+    let sent = send_answer(&session, &request, yes());
+    hold.open();
+    rejected(&recv_answer(&sent), ErrorCode::StaleRequest);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
     );
+    hold.check("after");
     let lines = session.lines();
     assert_kinds(
         &lines,
@@ -847,7 +901,7 @@ struct Toggle {
 
 impl Jobs for Toggle {
     fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError::Io {
+        Err(OpenError {
             path: PathBuf::from("jobs"),
             source: std::io::Error::other("no jobs here"),
         })
@@ -1249,7 +1303,7 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
 #[test]
 fn an_ask_after_the_cancel_is_declined_at_once() {
     let gate = Arc::new(Gate::default());
-    let (tool, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&gate)));
+    let (tool, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&gate)), None);
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();
@@ -1431,7 +1485,7 @@ fn a_log_failure_while_a_call_is_pending_releases_it() {
 fn a_log_failure_before_a_calls_first_ask_releases_it() {
     let first = Arc::new(Gate::default());
     let second = Arc::new(Gate::default());
-    let (asks, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&second)));
+    let (asks, answers) = Asks::gated(vec![plain(confirm())], Some(Arc::clone(&second)), None);
     let mut session = failing(asks, &first);
     let tap = Tap::new(&session.log);
     session.inbox.send(delivery("go")).unwrap();

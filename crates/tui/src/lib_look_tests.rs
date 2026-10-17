@@ -239,7 +239,7 @@ fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
             seq: None,
             payload: serde_json::json!({
                 "name": "fix the parser", "workspace": "/w",
-                "project": "-w", "state": "idle", "since": 0,
+                "project": "-w", "state": "idle", "started": 0, "calls": 0, "since": 0,
                 "spend": {"tokens": {"input": 1, "cache_read": 0,
                     "cache_write": {}, "output": 2},
                     "cost": 0.0, "subscription_cost": 0.0},

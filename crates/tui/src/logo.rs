@@ -4,7 +4,7 @@
 //! short for four rows, home draws the one-row logo instead.
 
 use ratatui::buffer::Buffer;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 
 use crate::theme::Role;
 
@@ -129,15 +129,13 @@ fn pixels() -> Vec<Vec<Pixel>> {
     columns
 }
 
-/// The four-row logo's width in cells: one cell per pixel column, a
-/// blank cell, and the version on the fourth row.
-pub(super) fn width_cells(version: &str) -> usize {
-    pixels().len() + 1 + crate::format::width(version)
+/// The four-row logo's width in cells: one cell per pixel column.
+pub(super) fn width_cells() -> usize {
+    pixels().len()
 }
 
-/// Draws the four-row logo at `x`, `y`: the pixel letters, with the
-/// version dim on the fourth row.
-pub(super) fn draw(buf: &mut Buffer, x: u16, y: u16, version: &str) {
+/// Draws the four-row pixel logo at `x`, `y`.
+pub(super) fn draw(buf: &mut Buffer, x: u16, y: u16) {
     let columns = pixels();
     for (at, column) in columns.iter().enumerate() {
         let col = x.saturating_add(row_as_u16(at));
@@ -166,14 +164,6 @@ pub(super) fn draw(buf: &mut Buffer, x: u16, y: u16, version: &str) {
             }
         }
     }
-    let version_x = x.saturating_add(row_as_u16(columns.len() + 1));
-    buf.set_stringn(
-        version_x,
-        y.saturating_add(3),
-        version,
-        version.len(),
-        Style::new().add_modifier(Modifier::DIM),
-    );
 }
 
 /// A pixel's mark for the half-block rule: ink or a counter is `#`.

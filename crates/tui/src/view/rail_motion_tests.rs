@@ -47,7 +47,7 @@ fn app() -> App {
 /// A `session_status` for `session` in `state` since `since`.
 fn status(session: &str, state: Value, since: u64) -> Line {
     let mut payload = json!({
-        "name": "work", "workspace": "/w", "project": "-w", "since": since,
+        "name": "work", "workspace": "/w", "project": "-w", "started": 0, "calls": 0, "since": since,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},

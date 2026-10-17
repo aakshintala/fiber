@@ -6,6 +6,7 @@
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
+mod remote;
 mod skills;
 mod tools;
 
@@ -246,7 +247,13 @@ impl tui::Configure for Seam {
         shown: std::sync::Arc<dyn tui::LoginShow>,
         clock: std::sync::Arc<dyn contract::clock::Clock>,
     ) -> std::sync::Arc<dyn tui::BrowserLogin> {
-        login::browser_login(&self.home, name, shown, clock)
+        login::browser_login(
+            &self.home,
+            name,
+            shown,
+            clock,
+            extensions::LoginMethod::Browser,
+        )
     }
 
     fn reviewer_models(

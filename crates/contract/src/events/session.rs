@@ -361,11 +361,25 @@ pub struct SessionStatus {
     pub parent: Option<SessionId>,
     /// The model reference in use.
     pub model: String,
+    /// The thinking level in use, as on `preamble_built`; absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     /// What the session is doing, with the keys that state carries.
     #[serde(flatten)]
     pub state: SessionState,
     /// When this state began, as `ts`.
     pub since: u64,
+    /// When the session started, as `ts`.
+    pub started: u64,
+    /// Tool calls the session has made so far.
+    pub calls: u64,
+    /// Turns the session has run so far, counted as the usage view counts them.
+    /// The writer always sets this; clients draw no turn count when it is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
+    /// The latest call's tool name and subject, after the first call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
     /// Present in a git repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<Git>,

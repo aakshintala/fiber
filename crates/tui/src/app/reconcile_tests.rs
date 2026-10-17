@@ -70,7 +70,7 @@ fn live(session: &str, name: &str) -> Line {
         "session_status",
         json!({
             "name": name, "workspace": "/w", "project": "-w", "state": "idle",
-            "since": 0,
+            "started": 0, "calls": 0, "since": 0,
             "spend": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 2},
                 "cost": 0.0, "subscription_cost": 0.0},
             "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
@@ -150,7 +150,12 @@ fn sessions_answer(id: &str, running: &[&str]) -> Line {
 /// The rows home draws.
 fn rows(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(_, line, _)| line).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

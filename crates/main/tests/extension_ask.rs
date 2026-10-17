@@ -141,22 +141,22 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
             r#"{{"id":"c_2","command":"reply","args":{{"request_id":"{request_id}","confirmed":true}}}}"#
         ), &|| setup.deadline.left())
         .unwrap();
-    let rejected = client
-        .recv_until(setup.deadline.left(), |line| {
-            line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_2"
-        })
-        .expect("the unfit reply is rejected");
+    // The request stays pending: no line up to the rejection resolves it.
+    let mut rejected = None;
+    while rejected.is_none() {
+        let line = client
+            .recv(setup.deadline.left())
+            .expect("the unfit reply is rejected");
+        assert!(
+            line["kind"] != "interaction_resolved",
+            "the request stays pending after an unfit reply"
+        );
+        if line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_2" {
+            rejected = Some(line);
+        }
+    }
+    let rejected = rejected.expect("the unfit reply is rejected");
     assert_eq!(rejected["payload"]["code"], "invalid_arguments");
-    // The request stays pending: nothing resolves it yet.
-    assert!(
-        client
-            .recv_until(
-                std::time::Duration::from_secs(2).min(setup.deadline.left()),
-                |line| { line["kind"] == "interaction_resolved" }
-            )
-            .is_none(),
-        "the request stays pending after an unfit reply"
-    );
     client
         .send_by(&format!(
             r#"{{"id":"c_3","command":"reply","args":{{"request_id":"{request_id}","answers":[{{"labels":["b"]}},{{"labels":["x"]}}]}}}}"#

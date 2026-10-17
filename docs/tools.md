@@ -1009,10 +1009,13 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   hosted search's blocks is protocol code in `anthropic-messages`,
   `openai-responses` and `google-generative-ai`.
 - Measured September 27, 2026: ChatGPT/codex, muse (only on its
-  `/v1/responses` endpoint), OpenRouter (its `openrouter:web_search` server tool, on `openai-completions`, unprobed) and OpenCode (by
-  passing Anthropic's and OpenAI's hosted tools through) host a search.
-  Databricks does not: "Code interpreter and web search tools are not
-  supported by Databricks."
+  `/v1/responses` endpoint) and OpenCode (by passing Anthropic's and
+  OpenAI's hosted tools through) host a search, and the OpenAI API, on
+  the models marked. OpenRouter documents an `openrouter:web_search`
+  server tool (on `openai-completions`) but it is unmeasured. Databricks
+  does not: "Code interpreter and web search tools are not supported by
+  Databricks." Which models accept the hosted search is
+  [research/web-tools/hosted-search.md](../research/web-tools/hosted-search.md).
 - The provider runs the search before Fiber sees it, so a hosted search is
   never reviewed and cannot be refused. It writes `tool_call_started` and
   `tool_call_completed` like any call, with the query and the result URLs.
@@ -1331,6 +1334,12 @@ Each entry is one of:
 - `no quota reported`, for a provider or harness without `quota()`
 - `unreachable`, when the fetch failed or timed out, with the last value and
   its age if there is one
+- `no value yet`, for a label whose first fetch is still in flight, with no
+  last value
+
+Until the loader has checked every provider for `quota()`, the quota
+section is the one line `Quota: loading`. Once it has, a session with no
+credentialed label reads `Quota: none`.
 
 A window whose reset time has passed shows as reset. Quota never appears in a
 tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
@@ -1348,6 +1357,18 @@ it resets. The notice is the durable event `quota_noticed`
 Each provider credential label has one cache holding its last value, when it was fetched, and
 any fetch in flight. Concurrent readers share one fetch. What the person is
 shown reads the same cache, and shows no age.
+
+The first `quota` driver command starts a loader on its own thread. It starts
+providers that have a credential label and checks whether they register
+`quota()` before reading any key. Each label's key is read once per process,
+as a model switch to that label reads it. A provider whose `quota()` is asked
+for at least one label stays loaded for the rest of the process. A provider
+without `quota()`, or whose every label's key read failed, is unloaded at once.
+A failed read reports `unreachable`, while the other labels still answer.
+Shutdown ends the reads; a read already in flight finishes and its result is
+dropped. The loader starts a quota fetch for each label whose read succeeded.
+Without `fetch`, the command answers from the caches at once, without waiting for loading,
+credential reads or fetches.
 
 A fetch runs off the request path when the cache is older than 5 minutes and
 one of these happens:

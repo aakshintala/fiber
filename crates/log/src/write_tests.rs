@@ -268,8 +268,13 @@ fn status(name: &str) -> Event {
         workspace: "/w".into(),
         parent: None,
         model: "m".into(),
+        thinking: None,
         state: SessionState::Idle,
         since: 0,
+        started: 0,
+        calls: 0,
+        turns: Some(0),
+        step: None,
         git: None,
         context: None,
         spend: Usage {

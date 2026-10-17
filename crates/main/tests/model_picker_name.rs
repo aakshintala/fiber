@@ -58,7 +58,7 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     .unwrap();
     support::write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}}),
     );
 }
 

@@ -49,7 +49,7 @@ fn shell_setup(command: &str) -> Setup {
 
 /// The config naming the workspace script, with `extra` beside the model.
 fn configure(setup: &Setup, extra: serde_json::Value) {
-    let mut config = json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}});
+    let mut config = json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}});
     if let Some(into) = config.as_object_mut()
         && let Some(from) = extra.as_object()
     {

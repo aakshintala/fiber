@@ -1592,7 +1592,9 @@ fn a_hub_batch_holds_while_folding() {
 
 /// Eighty page-shaped groups of identical turns, serialized for the
 /// jig: enough dropped pages that a search spans many fetches, each
-/// answered from the log.
+/// answered from the log. Nine single-sentence turns are the floor for
+/// one page per group at 80x10: eight turns report 72 pages, and longer
+/// replies add time without adding pages.
 fn many_groups() -> String {
     let mut seq = 0u64;
     let mut events = String::new();
@@ -1615,7 +1617,7 @@ fn many_groups() -> String {
             push(
                 "text_completed",
                 Some(&message),
-                json!({"text": "the session holds every line in order ".repeat(4)}),
+                json!({"text": "the session holds every line in order ".to_owned()}),
             );
             push(
                 "assistant_message_completed",

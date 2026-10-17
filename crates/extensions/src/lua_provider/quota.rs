@@ -368,6 +368,34 @@ impl LuaProvider {
         });
     }
 
+    /// Reads the cache at once, starting a fetch when due. The caller must
+    /// already know this provider registers `quota()`. Never parks or calls
+    /// Lua on the caller's thread; a first fetch reads unreachable until it
+    /// supplies a value.
+    pub fn quota_now(self: &Arc<Self>, pair: &CredentialPair, key: Option<&Secret>) -> QuotaEntry {
+        self.refresh_quota(pair, key);
+        let mut states = lock(&self.quotas.state);
+        let clock = self.extension.clock();
+        let now = clock.now();
+        let cache = states.entry(pair.clone()).or_default();
+        expire_overdue(cache, now, &self.quotas.parker);
+        entry(cache, now, clock.wall())
+    }
+
+    /// Whether `pair`'s first fetch is still in flight with no last value:
+    /// true when nothing was ever fetched and the last fetch did not fail,
+    /// after expiring an overdue flight. Never waits and never calls Lua;
+    /// the caller reads it before `quota_now`, so a value landing between
+    /// the two reads shows the value, never `unreachable`
+    /// (`docs/tools.md`, "What the model sees").
+    pub fn quota_pending(self: &Arc<Self>, pair: &CredentialPair) -> bool {
+        let mut states = lock(&self.quotas.state);
+        let now = self.extension.clock().now();
+        let cache = states.entry(pair.clone()).or_default();
+        expire_overdue(cache, now, &self.quotas.parker);
+        cache.fetched.is_none() && !cache.failed
+    }
+
     /// What the model sees for `pair`: no quota when the package registers
     /// none, else the cache, fetching with `key` when due and waiting for
     /// the flight in

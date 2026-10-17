@@ -3,7 +3,7 @@
 
 use super::super::super::{App, Effect};
 use crate::catalogue::{Catalogue, ModelEntry};
-use crate::home::{Launch, Spot};
+use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
 use crate::mouse::TargetId;
@@ -125,7 +125,8 @@ fn is_chip_names_the_chip_row() {
     for stop in [
         Spot::Entry(0),
         Spot::Stop(0),
-        Spot::Toggle,
+        Spot::Start(0),
+        Spot::More(0),
         Spot::Pick(0),
         Spot::Quit(crate::home::QuitChoice::Stay),
     ] {
@@ -149,7 +150,7 @@ fn chips(app: &App) -> Vec<String> {
 }
 
 #[test]
-fn left_and_right_move_between_chips_and_stop_at_the_ends() {
+fn left_and_right_stop_at_the_ends_of_the_chip_row() {
     // Inside git the row holds four chips.
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
@@ -181,7 +182,18 @@ fn left_and_right_move_between_chips_and_stop_at_the_ends() {
 }
 
 #[test]
-fn up_from_a_chip_returns_to_the_entry_bar_and_down_comes_back_to_the_same_chip() {
+fn up_from_a_chip_returns_to_the_entry_bar() {
+    let mut app = home_with(Some("acme/m1"));
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn down_from_the_entry_bar_focuses_the_chip_focused_last() {
     let mut app = home_with(Some("acme/m1"));
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
@@ -244,28 +256,26 @@ fn accepted(id: &str, result: serde_json::Value) -> crate::link::Line {
     })
 }
 
+/// Loads a prompt into the recall list and selects it without using home ↑.
+fn seed_recalled_prompt(app: &mut App, prompt: &str) {
+    let Effect::Send(lines) = app.open_search() else {
+        panic!("opening prompt search asks for its page");
+    };
+    let id: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+    let result = serde_json::json!({"prompts": [{"session_id": "s_previous",
+        "content": [{"type": "text", "text": prompt}]}]});
+    app.on_line(accepted(id["id"].as_str().unwrap(), result));
+    assert!(app.close_search());
+    assert_eq!(app.recall_key(&Key::Up), Some(Effect::None));
+    assert_eq!(app.input().expand(), prompt);
+}
+
 #[test]
 fn down_while_browsing_a_recalled_prompt_stays_in_recall() {
     let mut app = home_with(Some("acme/m1"));
-    app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    }));
+    linked(&mut app);
+    seed_recalled_prompt(&mut app, "hi");
     drawn(&mut app);
-    // ↑ asks the first `prompt_history` page.
-    let Effect::Send(lines) = app.on_key(Key::Up, now()) else {
-        panic!("Up asks the first page");
-    };
-    let id: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
-    let result = serde_json::json!({"prompts": [{"session_id": "s_aaaaaaaaaaaaaaaa",
-        "content": [{"type": "text", "text": "hi"}]}]});
-    assert!(
-        app.on_line(accepted(id["id"].as_str().unwrap(), result))
-            .is_empty()
-    );
-    assert_eq!(app.input().expand(), "hi");
     // ↓ browses newer, back to the empty draft, and stays in the box.
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.focused(), None);
@@ -427,7 +437,7 @@ fn live(
         "name": name,
         "workspace": workspace,
         "project": project,
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -450,6 +460,19 @@ fn live(
 
 /// Links the app: the feed and recent ids, both waiting for their
 /// answers.
+/// A hub `session_left` for `session`, ending `how`.
+fn left(session: &str, how: &str) -> crate::link::Line {
+    crate::link::Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session, "how": how})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
 fn linked(app: &mut App) -> (String, String) {
     let lines = app.on_line(hello());
     assert_eq!(lines.len(), 2);
@@ -466,7 +489,12 @@ fn linked(app: &mut App) -> (String, String) {
 /// The rows home draws, as keys top to bottom.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -498,48 +526,214 @@ fn drawn_at(app: &mut App, width: u16, height: u16) {
 }
 
 #[test]
-fn second_down_focuses_the_first_row_and_down_moves_down_the_rows() {
+fn up_from_an_empty_entry_bar_focuses_the_last_row_and_recalls_no_prompt() {
     let mut app = home_with(Some("acme/m1"));
-    two_rows(&mut app);
+    linked(&mut app);
+    seed_recalled_prompt(&mut app, "previous answer");
+    for _ in 0.."previous answer".len() {
+        assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    }
+    assert!(app.input().expand().is_empty());
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current row",
+        "/w",
+        "-w",
+        serde_json::json!({"state": "idle"}),
+    ));
     drawn(&mut app);
-    // The chip row comes first, then the rows, row to row, never a ✕.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     assert_eq!(
         app.focused(),
         Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
-    // Past the last row ↓ stays: the last answer was empty, so no page
-    // is asked.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
+    assert!(app.input().expand().is_empty());
 }
 
 #[test]
-fn up_from_the_first_row_returns_to_the_chip_focused_last() {
+fn up_on_the_entry_bar_with_no_rows_does_nothing() {
+    let mut app = home_with(Some("acme/m1"));
+    linked(&mut app);
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn up_keeps_the_box_with_a_multiline_draft() {
+    let mut app = home_with(Some("acme/m1"));
+    type_text(&mut app, "a");
+    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
+    type_text(&mut app, "b");
+    let before = app.input().cursor(20);
+    assert_eq!(before.0, 1);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.input().cursor(20).0, 0);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn up_keeps_the_box_with_completions() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert!(app.completions().is_some());
+}
+
+#[test]
+fn up_keeps_the_box_browsing_a_recalled_prompt() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    seed_recalled_prompt(&mut app, "previous answer");
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.input().expand(), "previous answer");
+}
+
+#[test]
+fn entry_up_keeps_an_empty_box_for_completions_without_recall() {
+    let mut app = home_with(Some("acme/m1"));
+    let _effect = app.open_search();
+    assert!(app.draft.is_empty());
+    assert!(app.completions().is_some());
+    assert!(!app.recall_browsing());
+    assert_eq!(app.entry_up(), None);
+}
+
+#[test]
+fn entry_up_keeps_an_empty_box_for_recall_without_completions() {
+    let mut app = home_with(Some("acme/m1"));
+    app.history.browse_empty_for_test();
+    assert!(app.draft.is_empty());
+    assert!(app.completions().is_none());
+    assert!(app.recall_browsing());
+    assert_eq!(app.entry_up(), None);
+}
+
+#[test]
+fn down_from_the_last_row_focuses_the_entry_bar() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_edit(Edit::Right), Effect::None);
-    assert_eq!(app.on_edit(Edit::Right), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(press(&mut app, "up"), Effect::None);
     assert_eq!(
         app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
+        Some(TargetId::Home(Spot::Entry(keys(&app)[1])))
     );
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Model)));
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn up_from_the_first_row_stays_on_it() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    drawn(&mut app);
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    let first = keys(&app)[0];
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(first))));
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(first))));
+}
+
+#[test]
+fn down_walks_live_then_exited_rows_across_sections_and_more() {
+    let mut app = home_with(Some("acme/m1"));
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "live alpha",
+        "/work/alpha",
+        "alpha",
+        serde_json::json!({"state": "streaming"}),
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        "live beta",
+        "/work/beta",
+        "beta",
+        serde_json::json!({"state": "idle"}),
+    ));
+    for (id, name) in [
+        ("s_0000000000000001", "old 1"),
+        ("s_0000000000000002", "old 2"),
+        ("s_0000000000000003", "old 3"),
+        ("s_0000000000000004", "old 4"),
+    ] {
+        app.on_line(live(
+            id,
+            name,
+            "/work/alpha",
+            "alpha",
+            serde_json::json!({"state": "idle"}),
+        ));
+        app.on_line(left(id, "exited"));
+    }
+    drawn(&mut app);
+
+    let (stops, labels): (Vec<_>, Vec<_>) = app
+        .home_screen()
+        .expect("home screen")
+        .list
+        .into_iter()
+        .filter_map(|line| match line {
+            ListLine::Live { key, name, .. } | ListLine::Exited { key, name, .. } => {
+                Some((Spot::Entry(key), name))
+            }
+            ListLine::More { key, count } => Some((Spot::More(key), format!("… {count} more"))),
+            ListLine::Head { .. } | ListLine::ExitedHead { .. } => None,
+        })
+        .unzip();
+    assert_eq!(
+        labels,
+        [
+            "live alpha",
+            "old 4",
+            "old 3",
+            "old 2",
+            "… 1 more",
+            "live beta"
+        ]
+    );
+    let start = app
+        .home_screen()
+        .and_then(|screen| {
+            screen.list.into_iter().find_map(|line| match line {
+                ListLine::Head {
+                    start: Some(key), ..
+                } => Some(key),
+                ListLine::Head { start: None, .. }
+                | ListLine::Live { .. }
+                | ListLine::ExitedHead { .. }
+                | ListLine::Exited { .. }
+                | ListLine::More { .. } => None,
+            })
+        })
+        .expect("workspace-bearing project header");
+    app.focus = Some(TargetId::Home(Spot::Start(start)));
+    assert!(!app.home_owns_arrows());
+    app.focus = None;
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(app.focused(), stops.last().copied().map(TargetId::Home));
+    for expected in stops.iter().rev().skip(1) {
+        assert_eq!(press(&mut app, "up"), Effect::None);
+        assert_eq!(app.focused(), Some(TargetId::Home(*expected)));
+    }
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(stops[0])));
+    for expected in stops.iter().skip(1) {
+        assert_eq!(press(&mut app, "down"), Effect::None);
+        assert_eq!(app.focused(), Some(TargetId::Home(*expected)));
+    }
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), None);
 }
 
 #[test]
@@ -547,8 +741,8 @@ fn arrows_from_a_cross_move_by_its_row() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
     // j steps onto the row's ✕, where ↓ moves by its row.
     assert_eq!(app.on_key(Key::Char('j'), now()), Effect::None);
     assert_eq!(
@@ -571,7 +765,48 @@ fn arrows_from_a_cross_move_by_its_row() {
         Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
     );
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
+    );
+}
+
+#[test]
+fn down_on_the_last_chip_leaves_focus_where_it_is() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    type_text(&mut app, "draft");
+    drawn(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    for _ in 0..3 {
+        assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    }
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
+    assert_eq!(app.input().expand(), "draft");
+    for _ in 0..3 {
+        assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    }
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert_eq!(app.input().expand(), "draft");
+}
+
+#[test]
+fn typing_while_a_row_is_focused_goes_to_the_entry_bar() {
+    let mut app = home_with(Some("acme/m1"));
+    two_rows(&mut app);
+    drawn(&mut app);
+    assert_eq!(press(&mut app, "up"), Effect::None);
+    assert!(matches!(
+        app.focused(),
+        Some(TargetId::Home(Spot::Entry(_)))
+    ));
+    assert_eq!(press(&mut app, "x"), Effect::None);
+    assert_eq!(app.focused(), None);
+    assert_eq!(app.input().expand(), "x");
 }
 
 #[test]
@@ -584,81 +819,19 @@ fn down_on_the_chip_row_with_no_session_does_nothing() {
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    // Every row scoped away: the toggle shows, yet ↓ does nothing.
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "away",
-        "/lens",
-        "-other",
-        serde_json::json!({"state": "idle"}),
-    ));
-    drawn(&mut app);
-    assert!(
-        app.home_screen()
-            .is_some_and(|screen| screen.toggle.is_some())
-    );
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
 #[test]
-fn down_on_a_chip_skips_the_toggle_to_the_first_row() {
-    let mut app = home_with(Some("acme/m1"));
-    linked(&mut app);
-    app.on_line(live(
-        "s_aaaaaaaaaaaaaaaa",
-        "here",
-        "/w",
-        "-w",
-        serde_json::json!({"state": "idle"}),
-    ));
-    app.on_line(live(
-        "s_bbbbbbbbbbbbbbbb",
-        "away",
-        "/lens",
-        "-other",
-        serde_json::json!({"state": "idle"}),
-    ));
-    drawn(&mut app);
-    assert!(
-        app.home_screen()
-            .is_some_and(|screen| screen.toggle.is_some())
-    );
-    // ↓ skips the toggle to the first row.
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    // k from the first row reaches the toggle, ↓ skips back past it,
-    // and ↑ on it returns to the chip.
-    assert_eq!(app.on_key(Key::Char('k'), now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Toggle)));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    assert_eq!(app.on_key(Key::Char('k'), now()), Effect::None);
-    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-}
-
-#[test]
-fn shift_tab_reaches_the_last_cross() {
+fn shift_tab_reaches_the_last_chip() {
     let mut app = home_with(Some("acme/m1"));
     two_rows(&mut app);
     drawn(&mut app);
     assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Stop(keys(&app)[1])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Thinking)));
 }
 
 #[test]
-fn down_below_the_fold_and_up_while_scrolled_follow_the_rows() {
+fn up_and_down_below_the_fold_follow_the_rows() {
     let mut app = home_with(Some("acme/m1"));
     linked(&mut app);
     for n in 0..15u8 {
@@ -671,22 +844,32 @@ fn down_below_the_fold_and_up_while_scrolled_follow_the_rows() {
             serde_json::json!({"state": "idle"}),
         ));
     }
-    assert_eq!(keys(&app).len(), 15);
+    let expected = keys(&app);
+    assert_eq!(expected.len(), 15);
     drawn(&mut app);
-    // One chip step and nine row steps reach the ninth row; the next ↓
-    // moves below the fold to the tenth, pending until the next frame.
-    for _ in 0..10 {
-        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    }
-    let shown = keys(&app);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[8]))));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[9]))));
-    drawn(&mut app);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[9]))));
-    // ↑ while scrolled steps back up the rows.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(shown[8]))));
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(Spot::Entry(expected[14])))
+    );
+    drawn(&mut app);
+    for key in expected.iter().rev().skip(1) {
+        assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+        assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(*key))));
+        drawn(&mut app);
+    }
+    assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(Spot::Entry(expected[0])))
+    );
+    for key in expected.iter().skip(1) {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+        assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(*key))));
+        drawn(&mut app);
+    }
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(app.focused(), None);
 }
 
 #[test]
@@ -861,7 +1044,7 @@ fn rebound_recall_prompt_leaves_up_on_a_chip_to_home() {
 }
 
 #[test]
-fn rebound_focus_next_prev_leaves_down_on_a_row_to_home() {
+fn rebound_focus_next_prev_leaves_arrows_on_the_list() {
     let mut app = home_with(Some("acme/m1"));
     keyed(
         &mut app,
@@ -869,25 +1052,15 @@ fn rebound_focus_next_prev_leaves_down_on_a_row_to_home() {
     );
     two_rows(&mut app);
     drawn(&mut app);
-    assert_eq!(press(&mut app, "down"), Effect::None);
-    assert_eq!(press(&mut app, "down"), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
-    // ↓ and ↑ still walk the list from a row and back to the chip.
-    assert_eq!(press(&mut app, "down"), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[1])))
-    );
+    let rows = keys(&app);
     assert_eq!(press(&mut app, "up"), Effect::None);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Home(Spot::Entry(keys(&app)[0])))
-    );
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(rows[1]))));
     assert_eq!(press(&mut app, "up"), Effect::None);
-    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(rows[0]))));
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), Some(TargetId::Home(Spot::Entry(rows[1]))));
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(app.focused(), None);
 }
 
 #[test]

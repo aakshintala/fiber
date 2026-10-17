@@ -620,7 +620,7 @@ pub(crate) fn status(name: &str, workspace: &str, state: &str, parent: Option<&s
     });
     let mut payload = serde_json::json!({
         "name": name, "workspace": workspace, "project": "-w", "model": "p/m", "state": state,
-        "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
+        "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "clients": 0,
     });
     if state == "waiting" {
         payload["waiting"] = serde_json::json!({
@@ -806,4 +806,138 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
         cv.notify_all();
     }
     hold(&mut read);
+}
+
+/// Records machine calls and answers configuration operations from a script.
+#[derive(Default)]
+pub(crate) struct FakeMachine {
+    pub(crate) calls: Mutex<Vec<Value>>,
+    pub(crate) answers: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
+    pub(crate) search_gate: Mutex<Option<Arc<SearchGate>>>,
+    pub(crate) logins: Mutex<std::collections::VecDeque<Arc<FakeLogin>>>,
+}
+
+pub(crate) struct SearchGate {
+    pub(crate) started: std::sync::mpsc::Sender<String>,
+    pub(crate) release: Mutex<std::sync::mpsc::Receiver<()>>,
+    pub(crate) ignore_cancel: bool,
+    pub(crate) cancelled: std::sync::atomic::AtomicBool,
+}
+struct FakeSearch(Option<Arc<SearchGate>>);
+impl crate::FileSearch for FakeSearch {
+    fn search(
+        &mut self,
+        text: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<Result<Vec<String>, String>> {
+        if let Some(gate) = &self.0 {
+            drop(gate.started.send(text.to_owned()));
+            lock(&gate.release).recv().unwrap_or(());
+            gate.cancelled
+                .store(cancelled(), std::sync::atomic::Ordering::SeqCst);
+            if gate.ignore_cancel {
+                return Some(Ok(vec![text.to_owned()]));
+            }
+        }
+        if cancelled() {
+            None
+        } else {
+            Some(Ok(vec![text.to_owned()]))
+        }
+    }
+}
+pub(crate) struct FakeLogin {
+    pub(crate) shows: bool,
+    pub(crate) outcome: Result<String, Failure>,
+    pub(crate) hold_cancel: bool,
+    pub(crate) waiting: std::sync::mpsc::Sender<()>,
+    pub(crate) gate: Mutex<std::sync::mpsc::Receiver<()>>,
+    pub(crate) release: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    pub(crate) cancelled: std::sync::mpsc::Sender<()>,
+    pub(crate) stopped: std::sync::atomic::AtomicBool,
+}
+use crate::ShowCode;
+struct FakeDeviceLogin {
+    script: Option<Arc<FakeLogin>>,
+    shown: ShowCode,
+}
+impl crate::DeviceLogin for FakeDeviceLogin {
+    fn run(&self) -> Result<String, Failure> {
+        let Some(script) = self.script.as_ref() else {
+            return Err(Failure {
+                code: contract::ErrorCode::Usage,
+                message: "no scripted login".into(),
+                provider: None,
+                retry_after_ms: None,
+            });
+        };
+        if script.shows {
+            (self.shown)("https://device", "CODE");
+        }
+        script.waiting.send(()).unwrap_or(());
+        lock(&script.gate).recv().unwrap_or(());
+        if script.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(Failure {
+                code: contract::ErrorCode::AuthenticationFailed,
+                message: "cancelled".into(),
+                provider: None,
+                retry_after_ms: None,
+            })
+        } else {
+            script.outcome.clone()
+        }
+    }
+    fn cancel(&self) {
+        if let Some(script) = &self.script {
+            script
+                .stopped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            script.cancelled.send(()).unwrap_or(());
+            if let Some(release) = lock(&script.release).take()
+                && !script.hold_cancel
+            {
+                release.send(()).unwrap_or(());
+            }
+        }
+    }
+}
+impl crate::Machine for FakeMachine {
+    fn device_login(
+        &self,
+        _name: &str,
+        shown: ShowCode,
+        _clock: Arc<dyn contract::clock::Clock>,
+    ) -> Arc<dyn crate::DeviceLogin> {
+        Arc::new(FakeDeviceLogin {
+            script: lock(&self.logins).pop_front(),
+            shown,
+        })
+    }
+    fn file_search(&self, workspace: &Path, home: Option<&Path>) -> Box<dyn crate::FileSearch> {
+        lock(&self.calls).push(serde_json::json!({"search":[workspace, home]}));
+        Box::new(FakeSearch(lock(&self.search_gate).clone()))
+    }
+    fn configure(
+        &self,
+        operation: &str,
+        args: &serde_json::Map<String, Value>,
+        _clock: Arc<dyn contract::clock::Clock>,
+    ) -> Result<Option<Value>, Failure> {
+        lock(&self.calls).push(serde_json::json!({"operation":operation,"args":args}));
+        lock(&self.answers).pop_front().unwrap_or(Ok(None))
+    }
+    fn read_config(&self, workspace: &Path, path: &Path) -> Result<(String, String), Failure> {
+        lock(&self.calls).push(serde_json::json!({"read":[workspace,path]}));
+        Ok(("text".to_owned(), "version".to_owned()))
+    }
+    fn write_config(
+        &self,
+        workspace: &Path,
+        path: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure> {
+        lock(&self.calls).push(serde_json::json!({"write":[workspace,path,text,version]}));
+        Ok(())
+    }
 }

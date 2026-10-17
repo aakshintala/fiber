@@ -132,10 +132,10 @@ pub(super) fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    sooner(
-                        wait_deadline(policy, progress.timeout_at, progress.move_at),
-                        held_until,
-                    ),
+                    wait_deadline(policy, progress.timeout_at, progress.move_at)
+                        .into_iter()
+                        .chain(held_until)
+                        .min(),
                     view.reaped,
                     true,
                     view.seq,
@@ -160,7 +160,7 @@ pub(super) fn pump(
                         clock,
                         &progress.shared,
                         cancel,
-                        sooner(Some(kill_at), held_until),
+                        Some(kill_at).into_iter().chain(held_until).min(),
                         true,
                         false,
                         view.seq,
@@ -205,8 +205,8 @@ pub(super) fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    sooner(Some(until), held_until),
-                    poll_while_occupied(progress.seen_empty),
+                    Some(until).into_iter().chain(held_until).min(),
+                    !progress.seen_empty,
                     false,
                     view.seq,
                 );
@@ -290,33 +290,12 @@ pub(super) fn park(
         poll.then_some(support::group::GROUP_POLL),
         &shared.cv,
         lock(&shared.inner),
-        |guard| already_woken(guard.seq, seen, wake_on_cancel, cancel.is_cancelled()),
+        |guard| guard.seq != seen || (wake_on_cancel && cancel.is_cancelled()),
     );
-}
-
-/// The sequence moved, or a cancel should wake a run that is still going.
-/// During the grace and the drain `wake_on_cancel` is false, so a cancel
-/// that already fired does not spin the loop.
-pub(super) fn already_woken(seq: u64, seen: u64, wake_on_cancel: bool, cancelled: bool) -> bool {
-    seq != seen || (wake_on_cancel && cancelled)
-}
-
-/// Poll the group while it may still be occupied. Once it has been seen
-/// empty, no further check is needed.
-pub(super) fn poll_while_occupied(seen_empty: bool) -> bool {
-    !seen_empty
 }
 
 fn timeout_due(clock: &dyn Clock, at: Option<Instant>) -> bool {
     at.is_some_and(|at| clock.now() >= at)
-}
-
-/// The earlier of two optional instants.
-pub(super) fn sooner(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (one, other) => one.or(other),
-    }
 }
 
 fn after(clock: &dyn Clock, delay: Duration) -> Instant {

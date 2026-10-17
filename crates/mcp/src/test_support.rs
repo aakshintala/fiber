@@ -406,14 +406,6 @@ impl Setup {
                 >= count
         });
     }
-
-    /// Waits until `kill -0` fails for `pid`: the child was reaped.
-    #[track_caller]
-    pub(crate) fn await_reaped(&self, pid: u32) {
-        await_until(&format!("pid {pid} to be reaped"), move || {
-            !fakes::kill_pid(pid, "0").expect("probe")
-        });
-    }
 }
 
 /// One fake image child: records the bytes each call was given and answers

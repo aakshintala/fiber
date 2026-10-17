@@ -26,7 +26,7 @@ use fakes::Deadline;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
-use fakes::{CancelToken, Recorder, Watchdog, kill_group, kill_pid};
+use fakes::{CancelToken, Recorder, Watchdog, group_alive, kill_group, kill_pid, pid_alive};
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
@@ -84,14 +84,6 @@ fn run_on(
         DEADLINE,
         move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
     )
-}
-
-fn group_alive(group: u32) -> bool {
-    kill_group(group, "0").unwrap()
-}
-
-fn pid_alive(pid: u32) -> bool {
-    kill_pid(pid, "0").unwrap()
 }
 
 const LIFELINE: Duration = Duration::from_secs(2);
@@ -248,16 +240,16 @@ fn a_nonzero_exit_is_nonzero_exit() {
 
 #[test]
 fn a_signal_fiber_did_not_send_is_signal() {
-    let dir = fakes::TempDir::new("fiber-shell-segv");
-    let output = run(dir.path(), "kill -SEGV $$");
+    let dir = fakes::TempDir::new("fiber-shell-usr1");
+    let output = run(dir.path(), "kill -USR1 $$");
     assert_eq!(code(&output), Some(ErrorCode::Signal));
     assert!(
-        text(&output).contains("Killed by SIGSEGV."),
+        text(&output).contains("Killed by SIGUSR1."),
         "{}",
         text(&output)
     );
     let process = output.process.unwrap();
-    assert_eq!(process.signal.as_deref(), Some("SIGSEGV"));
+    assert_eq!(process.signal.as_deref(), Some("SIGUSR1"));
     assert!(!process.timed_out);
     assert!(process.exit_code.is_none());
 }

@@ -375,5 +375,7 @@ fn spawn_failed(path: &Path, source: io::Error) -> Error {
 mod tests;
 
 mod create;
+mod list;
 
 pub use create::{Created, commits_beyond, create, recreate};
+pub use list::{Listed, list};

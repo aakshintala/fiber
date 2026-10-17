@@ -264,7 +264,11 @@ fn resume_session(
     // A recreated worktree is the session's workspace: configuration
     // reads from there, as a new session's does. A kept worktree keeps
     // the launch directory, as today.
+    // The create line's opener is taken before the hold is rebuilt, so
+    // the later `resumed_session` opens the same slot `end` reads.
+    let mut opened: Option<doors::WorktreeOpener> = None;
     if let Held::Made(isolation) = held {
+        opened = Some(isolation.opener());
         let path = isolation.path().to_path_buf();
         if let Err(source) = std::env::set_current_dir(&path) {
             drop(log);
@@ -300,6 +304,7 @@ fn resume_session(
         signals,
         fiber,
         Arc::clone(&reads),
+        opened,
     );
     finish(
         move || {
@@ -336,6 +341,7 @@ fn resumed_session(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
     reads: Arc<crate::switch::Reads>,
+    opened: Option<doors::WorktreeOpener>,
 ) -> Result<i32, Failure> {
     let folded = match r#loop::resumed(dir) {
         Ok(folded) => folded,
@@ -413,6 +419,12 @@ fn resumed_session(
     } else {
         None
     };
+    // The recreated worktree's create line opens here, before the
+    // session file attaches: a kept present worktree has no opener, so
+    // it writes none.
+    if let (Some(timing), Some(opened)) = (&timing, &opened) {
+        opened(timing);
+    }
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was. Every configured stdio server starts too.
@@ -441,6 +453,7 @@ fn resumed_session(
             "the session directory has no parent",
         ));
     };
+    let (quota, model_quota) = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -450,7 +463,8 @@ fn resumed_session(
         Arc::clone(&jobs),
         Arc::clone(&clock),
         resolve,
-    );
+    )
+    .with_quota(model_quota);
     crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
@@ -534,6 +548,7 @@ fn resumed_session(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
+    session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,

@@ -43,7 +43,7 @@ pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
-pub use emit::Recorder;
+pub use emit::{EventLog, Recorder};
 pub use finished::finished;
 pub use gated_http::GatedHttp;
 pub use locks::{FakeLock, NoLock};
@@ -57,8 +57,8 @@ pub use handoff::no_note;
 pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
-    WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,
-    pids_exit, try_matching_exits,
+    WATCHDOG_SCRIPT, group_alive, group_empties, kill_group, kill_matching, kill_pid, matching,
+    matching_exits, pid_alive, pids_exit, try_matching_exits,
 };
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use raw_http_server::RawHttpServer;

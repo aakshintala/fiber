@@ -50,7 +50,7 @@ fn form_setup() -> Setup {
     write_json(&setup.workspace().join("s.json"), &form_script());
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000},
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
             "tui": {"rail": {"shown": false}}}),
     );
     setup

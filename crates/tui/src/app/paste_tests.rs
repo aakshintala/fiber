@@ -475,7 +475,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
         "name": name,
         "workspace": workspace,
         "project": project,
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -526,7 +526,12 @@ fn exited(session: &str, name: &str) -> Value {
 /// The home rows' keys, in order.
 fn row_keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

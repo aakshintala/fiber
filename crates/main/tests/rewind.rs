@@ -1168,3 +1168,171 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     sessions_guard.wait_gone();
     hubbed.finish();
 }
+
+#[test]
+fn a_rewind_inherits_a_handoff_by_position() {
+    // A handoff completed in the old session applies to a rewind at or
+    // past it, and not to one before it (`docs/events.md`, "Rewind"). The
+    // handoff is the person's: turn 2 runs, the `handoff` command carries
+    // on, and turn 3 answers from the new context.
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        hello(),
+        hello(),
+        text_reply("The note."),
+        hello(),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("h1_start", "h1_sub", "one");
+    let client = hubbed.client();
+    hubbed.prompt("h1_p2", &old, "two");
+
+    client.send(&command("h1_hand", Some(&old), "handoff", json!({})));
+    until_ack(client, "the handoff acknowledgement", "h1_hand");
+    until(client, "the handoff turn_completed", |line| {
+        line["kind"] == "turn_completed" && line["session_id"] == old
+    });
+    hubbed.prompt("h1_p3", &old, "three");
+
+    // The old log holds the completed handoff in turn 2, and turn 3 runs
+    // from its context.
+    let old_log = session_log(&setup, &old);
+    let kinds: Vec<&str> = old_log
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    let completed = kinds
+        .iter()
+        .position(|kind| *kind == "handoff_completed")
+        .unwrap();
+    assert_eq!(old_log[completed]["payload"]["outcome"], "completed");
+    assert_eq!(kinds[completed + 1], "opening_message");
+    let starts = turn_starts(&old_log);
+    assert!(starts.len() >= 3, "{kinds:?}");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4, "two turns, the note, the third turn");
+    let third: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    let input = third["input"].as_array().unwrap();
+    // The handoff turn began as the command and held no message from the
+    // person, so the new context is the opening message and the note.
+    assert_eq!(input.len(), 3, "{input:?}");
+    assert!(
+        input[1].to_string().contains("The note."),
+        "the handoff note: {input:?}"
+    );
+    assert!(
+        input[2].to_string().contains("three"),
+        "the new prompt: {input:?}"
+    );
+
+    // Past the handoff, at the default point: the new session's next
+    // request carries the handoff's context, then the note, then the
+    // prompt, with the old request's other keys.
+    client.send(&rewind("h1_rw_after", &old, json!({})));
+    let ack = until_ack(client, "the after rewind acknowledgement", "h1_rw_after");
+    let after = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .expect("the rewind answers with a session id")
+        .to_owned();
+    until(client, "the after session's start", |line| {
+        line["session_id"] == after && line["kind"] == "session_started"
+    });
+    hubbed.prompt("h1_p4", &after, "four");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5);
+    let past: Value = serde_json::from_slice(&requests[4].body).unwrap();
+    for key in third
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|key| key.as_str() != "input")
+    {
+        assert_eq!(
+            serde_json::to_string(&past[key]).unwrap(),
+            serde_json::to_string(&third[key]).unwrap(),
+            "the {key} matches byte for byte"
+        );
+    }
+    let past_input = past["input"].as_array().unwrap();
+    // Turn 3's prompt is past the point: the shared prefix is the handoff's
+    // context, then the rewind note, then the new prompt.
+    let k = input.len() - 1;
+    assert_eq!(past_input.len(), k + 2, "{past_input:?}");
+    for (index, item) in input[..k].iter().enumerate() {
+        assert_eq!(
+            serde_json::to_string(&past_input[index]).unwrap(),
+            serde_json::to_string(item).unwrap(),
+            "input[{index}] matches byte for byte"
+        );
+    }
+    assert!(
+        past_input[k].to_string().contains("rewound to this point"),
+        "input[{k}] is the note: {}",
+        past_input[k]
+    );
+    assert!(
+        past_input[k + 1].to_string().contains("four"),
+        "input[{k}] is the new prompt: {}",
+        past_input[k + 1]
+    );
+
+    // Before the handoff, at turn 2's start minus one: no handoff note
+    // reaches the new session.
+    client.send(&rewind(
+        "h1_rw_before",
+        &old,
+        json!({"from_session_id": old, "seq": starts[1] - 1}),
+    ));
+    let ack = until_ack(client, "the before rewind acknowledgement", "h1_rw_before");
+    let before = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .expect("the rewind answers with a session id")
+        .to_owned();
+    until(client, "the before session's start", |line| {
+        line["session_id"] == before && line["kind"] == "session_started"
+    });
+    hubbed.prompt("h1_p5", &before, "five");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 6);
+    let earlier: Value = serde_json::from_slice(&requests[5].body).unwrap();
+    let earlier_input = earlier["input"].as_array().unwrap();
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let second_input = second["input"].as_array().unwrap();
+    // Turn 2's prompt is past the point: the shared prefix is the history
+    // before it, then the rewind note, then the new prompt.
+    let k = second_input.len() - 1;
+    assert_eq!(earlier_input.len(), k + 2, "{earlier_input:?}");
+    for (index, item) in second_input[..k].iter().enumerate() {
+        assert_eq!(
+            serde_json::to_string(&earlier_input[index]).unwrap(),
+            serde_json::to_string(item).unwrap(),
+            "input[{index}] matches byte for byte"
+        );
+    }
+    assert!(
+        earlier_input
+            .iter()
+            .all(|item| !item.to_string().contains("The note.")),
+        "no handoff note reaches the rewound session: {earlier_input:?}"
+    );
+    assert!(
+        earlier_input[k]
+            .to_string()
+            .contains("rewound to this point"),
+        "the note follows the history: {}",
+        earlier_input[k]
+    );
+    assert!(
+        earlier_input[k + 1].to_string().contains("five"),
+        "the new prompt is last: {}",
+        earlier_input[k + 1]
+    );
+
+    hubbed.close("h1_close_after", &after);
+    hubbed.close("h1_close_before", &before);
+    hubbed.finish();
+}

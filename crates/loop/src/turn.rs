@@ -15,6 +15,7 @@ impl Loop {
     /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> Result<(), Error> {
         let status = status::spawn(&self);
+        self.status_tap = status.as_ref().map(status::Status::tap);
         let result = loop {
             match self.turn() {
                 Ok(Some(_)) => {}

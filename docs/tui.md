@@ -205,7 +205,8 @@ puts it aside", both dim.
 
 Home lists every project, in the rail's order: the launch project first, then
 the others in the order their first session started. Each project is a
-section, and the sections scroll when they outgrow the screen:
+section, and the sections scroll when they outgrow the screen. When the
+list is one row tall, it shows the focused row's first line.
 
 - **The section's header** is the project's name, bold in the accent colour,
   and a "+" that starts a session in that project, as on the rail; then, dim,
@@ -447,7 +448,23 @@ cut with "…". The cards draw:
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
 - **Quota.** "extension" dim in the title. Each limit is its name dim with
   the share left right-aligned, and a bar of ▆ under it in `accent`, or in
-  `error` with the share when little is left.
+  `error` with the share when little is left. A window shows `100 -
+  percent_used`, floored at zero, as a rounded whole percent. A credit with
+  a positive limit shows remaining divided by limit, clamped to 0–100%.
+  The figure and bar use `error` at or past `quota.notice_at` percent used
+  (default 80). A reset window says "reset" with a full `accent` bar.
+  A credit without a positive limit shows remaining to two decimals, with
+  no bar or `error` colour. The bar fills to the share left, rounded to
+  the nearest cell, with at least one cell for any positive share.
+  Each name is the provider and window name, or "credit". The credential
+  label follows the provider only when it has more than one label.
+  An unreachable label shows its last value without age, or nothing when
+  it has none. With no rows, the card draws nothing.
+  The terminal asks for cached quota on attach, on focus-in (DEC mode
+  1004), and at each attached session's busy-to-settled turn end. A
+  keypress asks only once the last answer is at least 5 minutes old
+  (`docs/tools.md`, "Fetching"). At most one query is in flight; a turn
+  end during it is not held. A rejection stops queries until reattach.
 
 With the rail hidden and sessions waiting, the Session card ends with "! N
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
@@ -460,7 +477,7 @@ never from `details`, which has no fixed shape a client may rely on
 
 ⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
-file's diff. The same views back `/model`, `/context`, `/usage` and `/tools`.
+file's diff, or the quota view. The same views back `/model`, `/context`, `/usage`, `/tools` and `/quota`.
 
 There is no built-in task list
 ([Task list](https://github.com/aakshintala/fiber/issues/56)).
@@ -479,6 +496,19 @@ session's `session_status` (`docs/events.md`), which the session updates when
 it starts and after each turn.
 
 ### Swapped views
+
+A remote terminal's configuration views show the hub's machine: its
+settings, rules, credentials, tool switches and skill switches and text.
+`keys` and every `tui.*` key belong to the client instead, including `/keys`,
+their `/settings` rows and the theme picker.
+
+For a hub-owned file, Ctrl+G fetches its text and opens a temporary copy in
+the client's editor. On return, the hub writes it only if its version still
+matches. Otherwise the view says the file changed and nothing is written.
+The view then rereads the hub's file, showing any configuration or rules
+error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
+`/settings` and `/skills` in the list below describe the local editor; this
+paragraph replaces them on a remote terminal.
 
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
@@ -522,9 +552,9 @@ a click on it returns too. The views are:
   <command> · <elapsed> · <id>". The last row is "a row opens that item's
   view", dim.
 - **The model picker:** models by provider with roles marked, a chip for each
-  thinking level the model supports, and the size of the prompt-cache rebuild
-  a switch costs. Choosing a model saves the global `model`, and choosing a
-  level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
+  thinking level the model supports, each model's input and output prices,
+  and what a switch to it costs to rebuild the prompt cache. Choosing a model
+  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
@@ -548,8 +578,19 @@ a click on it returns too. The views are:
   `attention` while its list refreshes. Each model takes two rows. The first
   is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
   "● current" bold in `accent` on the session's model, "· scoped" dim on a
-  scoped model while every model shows, and the rebuild cost dim at the
-  right end ("~84k tokens · $0.31", "—" for the current model). The second,
+  scoped model while every model shows, then its input and output prices per
+  million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
+  and nothing for a model whose provider data names no cost. A model priced
+  by request size shows the prices of the tier the session's last call falls
+  in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
+  `docs/model-routing.md`, "Cost"), and its base prices before the session's
+  first call. On a screen too narrow for 60 columns inside the picker, the
+  prices are left out. Once the session has made a call, the switch cost is
+  dim at the right end: the prompt-cache rebuild a switch to that model costs
+  at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
+  at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
+  the current model). On home and before the session's first call, no row
+  shows a switch cost. The second,
   indented four columns, is "thinking" dim and the model's levels, or "fixed
   thinking" dim for a model with none. On the focused model the levels are in
   `attention`, its saved level bold, and the chosen chip bold in brackets
@@ -566,6 +607,17 @@ a click on it returns too. The views are:
   "By turn", "By model" and "By delegate" are bold headings, then one row
   each: "turn 3 · 120k in · 15k out · $1.35 billed · $0.00 subscription".
   The last row is "budget left $17.90 of $20.00", dim.
+- **The quota view,** `/quota`: one row per entry of the `quota` answer
+  (`docs/events.md`), in its order, with the same name, figure and bar as
+  the panel card. The top row reads "Quota" bold, "  /quota" dim and
+  "Esc returns" dim, right-aligned. Each window's reset time follows its
+  bar, dim ("resets in 3h12m"). An unreachable entry shows its last value
+  and "unreachable" in `error`, or "unreachable" alone when it has no
+  last value. With no entries, one dim line reads "No provider reports
+  quota". While the fetch is in flight, the top row shows "fetching" dim.
+  Opening the view sends `quota` with `fetch: true`.
+  The view draws the cached answer at once and redraws on the fetch's
+  answer, which also updates the panel card.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -606,8 +658,9 @@ a click on it returns too. The views are:
   still focused.
 - **Search results:** every match with its surrounding lines ("Search").
   The first row is "3 of 5 · ⌕ <query>". Each match is the lines around it
-  under a path row ending in `turn N`, dim, right-aligned, the
-  match on the `match` tint and the
+  under a row with the file of the tool call it sits in, ending in `turn N`,
+  dim and right-aligned. A match with no such file has `turn N` alone.
+  The match is on the `match` tint and the
   current match on `match_current`. The last row is "Enter jumps to the
   match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
@@ -627,13 +680,15 @@ a click on it returns too. The views are:
   Each shows the prefix it allows, when and from which session it was added,
   and a ✕ that revokes it. Revoking deletes the line and applies to the next
   call judged. Ctrl+G opens the rules file (`docs/permissions.md`,
-  "Remembering a decision"). "Global" and "This project" are bold headings;
+  "Remembering a decision"); on a remote terminal it opens the hub's file
+  instead ("Swapped views"). "Global" and "This project" are bold headings;
   a rule's row is "allow shell:git status · added 2d ago in review #688 · "
   and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
 - **`/settings`:** the configuration keys, their effective values and the
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
-  costs. Ctrl+G opens the file. The keys are a table of aligned columns:
+  costs. Ctrl+G opens the file; on a remote terminal it opens the hub's file
+  instead ("Swapped views"). The keys are a table of aligned columns:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
@@ -654,7 +709,8 @@ a click on it returns too. The views are:
   switched off. A switch turns a skill off or on for this project or
   everywhere, writing `skills.disabled` in that layer; the change reaches the
   model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills"). A row is "review · checks a diff
+  file (`docs/system-prompt.md`, "Skills"); on a remote terminal it opens the
+  hub's copy instead ("Swapped views"). A row is "review · checks a diff
   · repo · seen · this project " and its switch, then " · everywhere " and
   its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
   last row is "Enter shows the text · Ctrl+G opens its file", dim.
@@ -700,7 +756,7 @@ Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
-area. Clicking any other segment opens its card's view.
+area. Clicking any other segment opens its card's view, the Quota segment the quota view.
 
 The status line sits on the `panel` tint, one column in, with segments joined
 by a dim "  │  ". Each card's segments are short forms of its rows: the working
@@ -711,6 +767,10 @@ context breakdown; the cost and "cache" dim with its share; "tools N" dim and
 any down server in `error`; "±" dim, "N files" and the `added` and `removed`
 totals; "◆" in `secondary` before the delegates; "⚙" in `attention` before
 the jobs; and "Q" dim before the quota, with a limit nearly spent in `error`.
+The Quota segment joins each short name and figure with a dim " · ". A
+short name is the provider, with its credential label when it has more than
+one. The window name follows only when that label has more than one
+window. With no quota rows, there is no Quota segment.
 With the rail hidden and sessions waiting, the first row opens with "N
 waiting" in `attention`.
 
@@ -1244,8 +1304,10 @@ the lines around it. Each match's first row ends with `turn N`, dim and
 right-aligned, where N is the number of the turn the match is in, counted
 from 1 as the usage view counts turns; a match outside any turn, or a row
 too narrow to hold it after the path, has no label, and the path is never
-cut for it. Enter, or a click on a row, jumps to that match in the
-conversation and closes the view.
+cut for it. A match's path is the file of the tool call it sits in; a match
+with no such file, in a prompt, a reply or another call, has no path, and
+its row is `turn N` alone. Enter, or a click on a row, jumps to that match
+in the conversation and closes the view.
 
 Search is Ctrl+F, and Cmd+F where the terminal forwards it. Ghostty binds
 `super+f=start_search` by default; the line that frees it is:
@@ -1321,6 +1383,9 @@ what it started keeps running.
   one enters it and keeps the panel open on the new base, choosing a file inserts
   its path and closes the panel, and a base that cannot be read says why.
   Each keystroke cancels the last search, in either mode.
+  A remote terminal searches the hub's machine in both modes: `~/` is the
+  hub's home and `../` starts at the workspace there. The path listing stays
+  on the hub; only the ranked rows reach the terminal.
 
 ### Moving through the conversation
 
@@ -1609,6 +1674,10 @@ opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers 
 "Providers", each tagged `browser` for OAuth or `key` for an API key, then
 the extension credentials under "Secrets", the first row focused.
 
+On a remote terminal, login runs on the hub and stores its credential in the
+hub's Fiber home. OAuth always uses the device-code step below; Esc cancels
+the hub's login. The reviewer step lists the hub's models.
+
 Once a provider is picked, each step replaces the whole overlay; nothing is
 added under the list. The title is the provider's name and the list is not
 drawn. The steps keep the provider list's height and share one width, so the
@@ -1684,7 +1753,9 @@ Each can be turned off: `tui.attention.notification`, `tui.attention.bell` and
 
 ## Mouse and hover
 
-Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Hover
+Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Mode
+1004, focus reporting, is also on for Quota queries ("The panel"); restore
+turns it off. Hover
 highlights the click target under the pointer. The highlight is instant, with
 no transition. A frame redraws only the rows that changed.
 

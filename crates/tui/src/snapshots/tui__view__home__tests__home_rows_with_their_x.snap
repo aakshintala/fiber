@@ -2,27 +2,27 @@
 source: crates/tui/src/home_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    1 working · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+w +  1 live · $0.00
+⌥1 ● fix the parser                                                WORKING  0s ✕
+    s_aaaaaaaaaaaaaaaa · $0.00
+  exited · 1
+   ○ tidy docs                               s_bbbbbbbbbbbbbbbb · $0.00 · 0s ago
+  1 live · $0.00
+⌥2 ? s_cccccccccccccccc                                          CANNOT ATTACH
+    s_cccccccccccccccc · $0.00
 
 
 
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
+
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts
-
-
-[w]  [no model]  [thinking: default]  Enter starts a session
+▌ › █? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parser                                                              ✕
-○  tidy docs                                                                   ✕
-?  s_cccccccccccccccc  cannot attach
-
-
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

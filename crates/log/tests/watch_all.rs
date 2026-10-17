@@ -331,7 +331,7 @@ fn watch_all_seeded_over_lines_larger_than_a_page_yields_the_log_then_seeds_then
     let status = event(
         "session_status",
         serde_json::json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1,
+            "state": "idle", "started": 0, "calls": 0, "since": 1,
             "spend": {"tokens": tokens, "cost": 0.0, "subscription_cost": 0.0},
             "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
     );

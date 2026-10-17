@@ -45,16 +45,9 @@ pub struct StandingRules {
 }
 
 /// Why the rules could not be read: the message names the file and line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
 pub struct RulesError(pub String);
-
-impl std::fmt::Display for RulesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RulesError {}
 
 /// Reads the standing rules and remembers an approval.
 pub trait Rules: Send + Sync {

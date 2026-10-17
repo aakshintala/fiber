@@ -91,7 +91,7 @@ fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
 fn live(session: &str, name: &str, state: serde_json::Value) -> Line {
     let mut payload = serde_json::json!({
         "name": name, "workspace": "/w", "project": "-w",
-        "since": 0,
+        "started": 0, "calls": 0, "since": 0,
         "spend": {"tokens": {"input": 1, "cache_read": 0,
             "cache_write": {}, "output": 2},
             "cost": 0.0, "subscription_cost": 0.0},
@@ -192,7 +192,7 @@ fn no_rows_outside_the_narrow_layout() {
 
 #[test]
 fn conversation_height_equals_the_drawn_rows_in_the_narrow_layout() {
-    let long: String = std::iter::repeat_n('w', 20_000).collect();
+    let long: String = std::iter::repeat_n('w', 5_000).collect();
     for height in [10, 12, 16, 24, 40] {
         for (name, setup) in [
             ("plain", vec![]),

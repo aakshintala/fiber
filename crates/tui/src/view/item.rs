@@ -16,9 +16,8 @@ use crate::mouse::{Target, TargetId};
 /// The header's rows: the breadcrumb and the status row.
 pub(crate) const ITEM_HEADER_ROWS: usize = 2;
 
-/// Draws the item view's header into `area`'s top rows: the breadcrumb
-/// with its ✕, then the status row with the stop target while the item
-/// runs.
+/// Draws the item view's header: the whole breadcrumb row returns,
+/// then the status row has the stop target while the item runs.
 pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let Some(view) = app.item_view() else {
         return;
@@ -26,11 +25,8 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
     if area.height == 0 || area.width == 0 {
         return;
     }
-    // The breadcrumb: "<parent> › ◆ <description>", with a ✕ at the right
-    // edge closing the view.
     let crumb = format!("{} › {} {}", view.parent, view.kind_glyph, view.description);
-    let cross_x = area.right().saturating_sub(1);
-    let crumb_width = usize::from(area.width).saturating_sub(1);
+    let crumb_width = usize::from(area.width);
     buf.set_stringn(
         area.x,
         area.y,
@@ -38,17 +34,16 @@ pub(crate) fn draw_header(app: &App, area: Rect, buf: &mut Buffer, targets: &mut
         crumb_width,
         Style::default(),
     );
-    buf.set_string(cross_x, area.y, "✕", Style::default());
     targets.push(Target {
         id: TargetId::Item(Spot::Close),
-        rect: Rect::new(cross_x, area.y, 1, 1),
+        rect: Rect::new(area.x, area.y, area.width, 1),
     });
     if area.height < 2 {
         return;
     }
     // The status row: glyph and word, harness, model, calls, elapsed time
     // and session, with the stop target while the item runs.
-    let elapsed = elapsed_ms(app, &view);
+    let elapsed = elapsed_ms(app, view.started_ts, view.completed_ts);
     let calls = view
         .calls
         .map_or("—".to_owned(), |calls| format!("{calls} calls"));
@@ -134,17 +129,15 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
 /// the frame's wall time while it runs, frozen at the completion's `ts`
 /// after. While the item runs the next whole second is asked for, so the
 /// row ticks without any other wake.
-fn elapsed_ms(app: &App, view: &crate::app::items::ItemView) -> u64 {
-    if let Some(completed) = view.completed_ts {
-        return completed.saturating_sub(view.started_ts);
+pub(crate) fn elapsed_ms(app: &App, started_ts: u64, completed_ts: Option<u64>) -> u64 {
+    if let Some(completed) = completed_ts {
+        return completed.saturating_sub(started_ts);
     }
     let Some(wall) = app.motion().wall_ms() else {
         return 0;
     };
-    let elapsed = wall.saturating_sub(view.started_ts);
-    let next = view
-        .started_ts
-        .checked_add((elapsed / 1000).saturating_add(1).saturating_mul(1000));
+    let elapsed = wall.saturating_sub(started_ts);
+    let next = started_ts.checked_add((elapsed / 1000).saturating_add(1).saturating_mul(1000));
     if let Some(next) = next {
         app.motion().ask_wall(next);
     }
