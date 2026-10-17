@@ -93,7 +93,7 @@ pub(crate) fn judge(
 }
 
 /// Network-only calls with a complete, known host list need no reviewer.
-pub(crate) fn known_network(effects: &Effects, known: &crate::known_hosts::KnownHosts) -> bool {
+fn known_network(effects: &Effects, known: &crate::known_hosts::KnownHosts) -> bool {
     !effects.declared.effects.is_empty()
         && effects
             .declared

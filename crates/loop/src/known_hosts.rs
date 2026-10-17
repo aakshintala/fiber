@@ -9,6 +9,7 @@ use contract::shapes::{ContentPart, Origin};
 type Host = (String, u16);
 
 /// The URL's host and port, normalised to the scheme's default port when absent.
+// debt: host_of mirrors crates/tools/src/web_fetch/target.rs host_and_port, ceiling: two parsers, upgrade trigger: a shared normaliser in contract, or a cross-crate test, once the fast path changes
 fn host_of(url: &str) -> Option<Host> {
     let (scheme, rest) = url.split_once("://")?;
     let default = if scheme.eq_ignore_ascii_case("https") {
@@ -92,7 +93,12 @@ impl KnownHosts {
             }
             Event::OpeningMessage(opening) => {
                 for file in &opening.instruction_files {
-                    self.hosts.extend(named_in(&file.content));
+                    if !self.changed_paths.contains(&file.path) {
+                        self.instruction_hosts
+                            .entry(file.path.clone())
+                            .or_default()
+                            .extend(named_in(&file.content));
+                    }
                 }
             }
             Event::InstructionFile(file) => {

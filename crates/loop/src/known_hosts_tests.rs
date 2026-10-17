@@ -309,7 +309,6 @@ fn later_changes_remove_all_instruction_versions_but_keep_other_sources() {
     assert!(!known.all_known(&["https://first.test/".into()]));
     assert!(known.all_known(&[
         "https://second.test/".into(),
-        "https://opening.test/".into(),
         "https://surfaced.test/".into(),
         "https://result.test/".into(),
     ]));
@@ -319,7 +318,34 @@ fn later_changes_remove_all_instruction_versions_but_keep_other_sources() {
     ));
     assert!(!known.all_known(&["https://second.test/".into()]));
     assert!(!known.all_known(&["https://own.test/".into()]));
-    assert!(known.all_known(&["https://opening.test/".into()]));
+    assert!(!known.all_known(&["https://opening.test/".into()]));
+}
+
+#[test]
+fn opening_instruction_files_exclude_changed_paths_before_and_after_opening() {
+    let opening = event(
+        "opening_message",
+        json!({"environment":{"workspace":"/", "os":"linux", "arch":"x86_64", "shell":"sh", "session_log":"/log", "date":"2026-10-17"}, "instruction_files":[{"path":"AGENTS.md", "content":"https://opening.test/"}, {"path":"other/AGENTS.md", "content":"https://other.test/"}], "skills":[]}),
+    );
+    for change in [
+        event(
+            "tool_call_completed",
+            json!({"status":"completed", "content":[], "changes":[{"path":"AGENTS.md", "added":1, "removed":0}]}),
+        ),
+        event(
+            "instruction_file",
+            json!({"path":"AGENTS.md", "reason":"own_edit", "content":"https://own.test/", "sent":"full"}),
+        ),
+    ] {
+        let mut known = KnownHosts::default();
+        known.fold(&opening);
+        assert!(known.all_known(&["https://opening.test/".into()]));
+        known.fold(&change);
+        assert!(!known.all_known(&["https://opening.test/".into()]));
+        known.fold(&opening);
+        assert!(!known.all_known(&["https://opening.test/".into()]));
+        assert!(known.all_known(&["https://other.test/".into()]));
+    }
 }
 
 #[test]
