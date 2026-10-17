@@ -297,14 +297,20 @@ fn ask(
                 ));
             }
             Ok(wrote) => sent += wrote,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(error) => {
+                // `!=`, not a `WouldBlock` match guard: the guard's
+                // always-wait mutant no test can reach on a connected
+                // socket, while this form's flipped comparison fails the
+                // send-buffer test below.
+                if error.kind() != io::ErrorKind::WouldBlock {
+                    return Err(lost(error));
+                }
                 if clock.now() >= deadline {
                     return Err(late());
                 }
                 before_wait();
                 wait_clock(clock, deadline, stream.as_fd(), PollFlags::OUT);
             }
-            Err(error) => return Err(lost(error)),
         }
     }
     let mut pending = Vec::new();
@@ -324,14 +330,20 @@ fn ask(
             Ok(read) => {
                 pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(error) => {
+                // `!=`, not a `WouldBlock` match guard: the guard's
+                // always-wait mutant no test can reach on a connected
+                // socket, while this form's flipped comparison fails the
+                // silent-hub deadline tests.
+                if error.kind() != io::ErrorKind::WouldBlock {
+                    return Err(lost(error));
+                }
                 if clock.now() >= deadline {
                     return Err(late());
                 }
                 before_wait();
                 wait_clock(clock, deadline, stream.as_fd(), PollFlags::IN);
             }
-            Err(error) => return Err(lost(error)),
         }
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();

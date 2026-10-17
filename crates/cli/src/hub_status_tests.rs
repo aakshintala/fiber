@@ -11,7 +11,8 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -346,6 +347,89 @@ fn an_answer_in_two_writes_inside_the_deadline_is_read() {
     go.send(()).unwrap();
     let status = Deadline::after(DEADLINE).recv(&result).unwrap().unwrap();
     assert_eq!(status.version.as_deref(), Some("1.2.3"));
+}
+
+#[test]
+fn a_full_send_buffer_waits_for_room_instead_of_failing() {
+    // The request fits one small write, so a full send buffer is the only
+    // way the write waits: shrink the buffer, flood it, then ask. The
+    // wait parks on the fake clock; draining and answering before the
+    // advance orders every step with pause points, never timing.
+    let (mut worker_side, mut peer) = UnixStream::pair().unwrap();
+    rustix::net::sockopt::set_socket_send_buffer_size(worker_side.as_fd(), 4096).unwrap();
+    worker_side.set_nonblocking(true).unwrap();
+    let flood = [0x70u8; 65536];
+    loop {
+        match worker_side.write(&flood) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("flooding the send buffer: {error}"),
+        }
+    }
+    peer.set_nonblocking(true).unwrap();
+    let clock = Arc::new(FakeClock::new());
+    let origin = clock.origin();
+    let due = origin + ANSWER;
+    let (waits_tx, waits) = mpsc::channel();
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        ids_tx.send(thread::current().id()).unwrap_or(());
+        let mut before_read = || {};
+        let mut before_wait = || waits_tx.send(()).unwrap_or(());
+        let worker: &FakeClock = &worker_clock;
+        done_tx
+            .send(super::ask(
+                &worker_side,
+                due,
+                ANSWER,
+                worker,
+                &mut before_read,
+                &mut before_wait,
+            ))
+            .unwrap_or(());
+    });
+    let id = Deadline::after(DEADLINE)
+        .recv(&ids)
+        .expect("the asker reports its thread");
+    // The write waits for room: drain the flood, then answer on the freed
+    // connection before the clock moves.
+    Deadline::after(DEADLINE)
+        .recv(&waits)
+        .expect("the write waits for room");
+    let mut drained = Vec::new();
+    let mut piece = [0u8; 65536];
+    loop {
+        match peer.read(&mut piece) {
+            Ok(0) => break,
+            Ok(n) => drained.extend_from_slice(&piece[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("draining the flood: {error}"),
+        }
+    }
+    assert!(!drained.is_empty(), "the flood reached the peer");
+    peer.write_all(accepted("c_status", "9.9.9", 7).as_bytes())
+        .unwrap();
+    clock.advance_when_parked(
+        Some(due),
+        Some(id),
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
+    let reply = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the answer arrives")
+        .expect("a reply");
+    assert_eq!(reply.version, "9.9.9");
+    assert_eq!(reply.clients, 7);
+    // The request went out whole once the buffer had room.
+    peer.set_nonblocking(false).unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let mut line = String::new();
+    BufReader::new(&peer).read_line(&mut line).unwrap();
+    let request: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(request, json!({"id": "c_status", "command": "status"}));
 }
 
 #[test]
