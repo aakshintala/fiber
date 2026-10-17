@@ -862,10 +862,21 @@ fn fitted_count_joins_a_fitting_glyph_after_a_hard_cut() {
 #[test]
 fn fitted_count_joins_a_glyph_exactly_filling_inner() {
     // The boundary of the wider-than-`inner` rule: a glyph exactly as
-    // wide as `inner` opens the fresh piece instead of standing alone,
-    // so the zero-width mark joins it and the line is two pieces, not
-    // three. Kills `width > inner` to `==` and to `>=`.
+    // wide as `inner` opens the fresh piece instead of standing alone.
+    // The combining mark clusters into `b`, so this is two glyphs and
+    // two pieces.
     assert_eq!(super::fitted_count(&Line::raw("ab\u{301}"), 1), 2);
+}
+
+#[test]
+fn fitted_count_lets_a_zero_width_glyph_join_a_fresh_piece_at_the_width_limit() {
+    // `b` overflows the window, so it opens a fresh piece exactly as
+    // wide as `inner`; the zero-width space is a grapheme of its own
+    // (a combining mark would cluster into `b`) and joins that piece.
+    // Standing `b` alone would make three pieces.
+    let line = Line::raw("ab\u{200B}");
+    assert_eq!(super::fitted_count(&line, 1), 2);
+    assert_eq!(super::fitted_count(&line, 1), planned(&line, 1));
 }
 
 #[test]
