@@ -437,6 +437,12 @@ impl Runner {
             // starts while one is outstanding.
             let launch = {
                 let mut fold = lock(&fold);
+                // The watcher may have folded between the take above and
+                // this lock: a result older than this read must not decide
+                // the launch, so no watch starts after `fiber_exited`.
+                if fold.result == Some(WatchResult::Exited) {
+                    exited_seen = true;
+                }
                 if exited_seen || fold.outstanding || self.clock.now() < next_retry {
                     false
                 } else {
