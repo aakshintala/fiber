@@ -367,6 +367,10 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
         }
     }
     peer.set_nonblocking(true).unwrap();
+    // Before the worker can exit: a read timeout set after its end
+    // closes is refused, so it goes on while the pair is whole. It only
+    // bounds the final request read below.
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
     let clock = Arc::new(FakeClock::new());
     let origin = clock.origin();
     let due = origin + ANSWER;
@@ -425,7 +429,6 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     assert_eq!(reply.clients, 7);
     // The request went out whole once the buffer had room.
     peer.set_nonblocking(false).unwrap();
-    peer.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut line = String::new();
     BufReader::new(&peer).read_line(&mut line).unwrap();
     let request: Value = serde_json::from_str(&line).unwrap();
