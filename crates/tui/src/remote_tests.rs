@@ -186,7 +186,7 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
 
 #[test]
 fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
-    for key in ["keys.quit", "tui.hover", "\"tui\".x", "keys"] {
+    for key in ["keys.quit", "tui.hover", "\"tui\".x", "\"tui\"", "keys"] {
         assert!(client_owned(key), "{key}");
     }
     for key in ["model", "tuix.y", "models.\"tui/x\".thinking", "", "\"tui"] {
@@ -199,11 +199,9 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
         file: None,
         scope: WriteScope::GlobalOnly,
     };
-    let local = Arc::new(Fake::new(vec![
-        row("keys.quit"),
-        row("model"),
-        row("tui.hover"),
-    ]));
+    let mut local = Fake::new(vec![row("keys.quit"), row("model"), row("tui.hover")]);
+    local.themes = vec!["client-night".into(), "client-day".into()];
+    let local = Arc::new(local);
     let hub = Hub::new(Arc::clone(&local));
     let rows=hub.call("settings",json!({"workspace":"/remote/ws"}),json!({"rows":[{"key":"model","layer":"global","shown":"value","value":"\"hub/m\"","scope":"global_only"},{"key":"tui.hover","layer":"global","shown":"value","value":"false","scope":"global_only"},{"key":"extra","layer":"default","shown":"unset","scope":"global_only"}]}),|r|r.settings(Path::new("/remote/ws"))).unwrap();
     assert_eq!(
@@ -219,9 +217,21 @@ fn ownership_and_settings_merge_keep_the_clients_rows_on_the_client() {
             .unwrap();
     }
     assert_eq!(support::lock(&local.writes).len(), 2);
-    hub.remote.themes(Path::new("/remote/ws"));
-    hub.remote.theme(Path::new("/remote/ws"), "default");
-    hub.remote.save_keys(&[]).unwrap();
+    assert_eq!(hub.remote.themes(Path::new("/remote/ws")), local.themes);
+    assert!(matches!(
+        hub.remote.theme(Path::new("/remote/ws"), "light"),
+        crate::ThemeSetting::Light
+    ));
+    let edits = vec![KeyEdit {
+        id: "quit".into(),
+        keys: Some(vec!["ctrl+q".into()]),
+    }];
+    hub.remote.save_keys(&edits).unwrap();
+    assert_eq!(*support::lock(&local.keys_saved), [edits]);
+    *support::lock(&local.refuse) = Some("client keys are read-only".into());
+    let error = hub.remote.save_keys(&[]).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.message, "client keys are read-only");
     assert!(hub.lines.try_recv().is_err());
 }
 

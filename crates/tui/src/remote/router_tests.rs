@@ -69,6 +69,22 @@ fn routes_each_answer_once_and_forgets_it() {
 }
 
 #[test]
+fn global_cache_accepts_only_the_current_attached_connection() {
+    let router = Router::new();
+    let (client, _hub) = UnixStream::pair().unwrap();
+    router.attach(client);
+    router.cache_global(0, "/stale/config.json".into());
+    assert_eq!(router.cached_global(), None);
+    router.cache_global(1, "/current/config.json".into());
+    assert_eq!(router.cached_global(), Some("/current/config.json".into()));
+    router.detach();
+    router.cache_global(1, "/detached/config.json".into());
+    assert_eq!(router.cached_global(), None);
+    router.cache_global(0, "/stale-detached/config.json".into());
+    assert_eq!(router.cached_global(), None);
+}
+
+#[test]
 fn epochs_reject_a_result_on_another_connection() {
     let deadline = Deadline::start();
     let router = Router::new();

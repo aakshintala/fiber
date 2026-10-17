@@ -183,6 +183,10 @@ impl Router {
         let epoch = self.write(Some(epoch), command, args, Answer::Wait(tx))?;
         Ok(Pending { epoch, rx })
     }
+    // Mutating cfg(test) waiter accounting changes no consumer-visible result.
+    // docs/testing/mutants.md requires a function-scoped exemption rather than
+    // a test pinning that instrumentation; attach and cancellation are tested.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn wait_link(&self, cancel: &Cancel) -> Result<(), AskError> {
         let mut state = support::lock(&self.state);
         loop {
