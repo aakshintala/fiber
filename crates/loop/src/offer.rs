@@ -101,9 +101,9 @@ pub(crate) struct State {
     noted: Vec<Key>,
     /// What the session loads once its offer step has run, before its
     /// first preamble.
-    load: Option<LoadApproved>,
+    pub(crate) load: Option<LoadApproved>,
     /// The load ran in this process.
-    loaded: bool,
+    pub(crate) loaded: bool,
     /// The step ran in this process.
     done: bool,
 }
@@ -353,6 +353,7 @@ impl Loop {
                 | Delivery::Message(_)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
+                | Delivery::Reload(..)
                 | Delivery::Credential(..)
                 | Delivery::Rewind(..)
                 | Delivery::Job(_)

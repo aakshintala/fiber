@@ -462,7 +462,7 @@ fn an_unknown_name_reads_as_unknown_and_refuses_args() {
         parse(r#"{"id":"c","command":"frob","args":{"x":1}}"#).is_err(),
         "frob with args"
     );
-    // The unbuilt `reload` still reads as itself beside `Unknown`.
+    // The built-in `reload` reads as itself beside `Unknown`.
     assert_eq!(
         parse(r#"{"id":"c","command":"reload"}"#).unwrap().command,
         Command::Reload

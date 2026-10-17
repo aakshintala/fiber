@@ -127,14 +127,38 @@ impl Loop {
     /// The opening message and its notices follow `preamble_built`, before
     /// `turn_started`.
     pub(crate) fn ensure_preamble(&mut self) -> Result<bool, Error> {
-        if self.preamble.is_some() {
-            return Ok(false);
+        if self.load_after_reload {
+            self.load_after_reload = false;
+            let held = self.tools.len();
+            self.load_approved()?;
+            if self.tools.len() != held {
+                self.preamble = None;
+            }
         }
-        // The post-offer load runs once per process, after the offer step
-        // and before the first build: the turn path and `finish_suspended`
-        // both run `offer` before this. A rewound loop's logged preamble
-        // returned above, so no rebuild in that process runs the load.
-        self.load_approved()?;
+        if self.preamble.is_none() {
+            // The post-offer load runs only after the offer step. A reload
+            // builds without it and marks that load due for the first turn.
+            self.load_approved()?;
+            let large = self.construct_preamble()?;
+            let opened = self.ensure_opening()?;
+            if let Some(notice) = large {
+                self.append_early(&Event::Notice(notice))?;
+            }
+            return Ok(opened);
+        }
+        self.ensure_opening()
+    }
+
+    /// Builds the preamble without writing an opening or running the
+    /// post-offer load, so a reload can build before the first turn.
+    pub(crate) fn build_preamble(&mut self) -> Result<(), Error> {
+        if let Some(notice) = self.construct_preamble()? {
+            self.append_early(&Event::Notice(notice))?;
+        }
+        Ok(())
+    }
+
+    fn construct_preamble(&mut self) -> Result<Option<contract::events::Notice>, Error> {
         // The first actual construction in the process owns the one
         // `startup.preamble` scope; a same-session rebuild stays silent.
         // The latch is marked before the build, so a construction that
@@ -180,11 +204,7 @@ impl Loop {
         drop(_timer);
         #[cfg(test)]
         crate::timing_tests::preamble_exit(self.log.clock().as_ref());
-        let opened = self.ensure_opening()?;
-        if let Some(notice) = large {
-            self.append_early(&Event::Notice(notice))?;
-        }
-        Ok(opened)
+        Ok(large)
     }
 
     /// Writes the opening message and its notices, once per session: after

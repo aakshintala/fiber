@@ -82,6 +82,64 @@ fn write(place: &Path, entry: &str, text: &str) -> PathBuf {
 }
 
 #[test]
+fn reload_sends_only_changed_descriptions_and_keeps_the_last_sent_baseline() {
+    for description in ["d", "different", "d  d", "d d"] {
+        let tree = Tree::new();
+        let place = tree.top().join(".agents/skills");
+        skill(&place, "a", "a", "d d");
+        let live = tree.set();
+        open(&live, &tree);
+        let collected = crate::opening::collect(&tree.inputs(), &tree.top());
+        let resumed = tree.set();
+        resumed
+            .resumed(&[line(
+                "opening_message",
+                &Event::OpeningMessage(collected.message),
+            )])
+            .unwrap();
+        skill(&place, "a", "a", description);
+        assert!(live.check().changed.is_none());
+        assert!(resumed.check().changed.is_none());
+        for set in [&live, &resumed] {
+            let changed = set.reload_check().changed;
+            if description == "d d" {
+                assert!(changed.is_none());
+            } else {
+                let changed = changed.unwrap();
+                assert_eq!(changed.added.len(), 1);
+                assert_eq!(changed.added[0].name, "a");
+                assert_eq!(changed.added[0].description, description);
+                assert!(changed.removed.is_empty());
+            }
+            assert!(set.reload_check().changed.is_none());
+        }
+    }
+}
+
+#[test]
+fn reload_reports_added_removed_and_disabled_skills_from_new_inputs() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    skill(&place, "a", "a", "d");
+    skill(&place, "off", "off", "d");
+    let set = tree.set();
+    open(&set, &tree);
+    std::fs::remove_dir_all(place.join("a")).unwrap();
+    let added = skill(&place, "b", "b", "new");
+    let mut inputs = tree.inputs();
+    inputs.skills_disabled = vec!["off".into()];
+    set.reloaded(inputs);
+    let changed = set.reload_check().changed.unwrap();
+    assert_eq!(changed.added.len(), 1);
+    assert_eq!(changed.added[0].name, "b");
+    assert_eq!(changed.added[0].description, "new");
+    assert_eq!(changed.removed, ["a", "off"]);
+    assert_eq!(set.command("b"), Some(added));
+    assert!(set.command("off").is_none());
+    assert!(set.reload_check().changed.is_none());
+}
+
+#[test]
 fn a_lookup_before_opened_reads_once_and_misses_a_later_skill() {
     let tree = Tree::new();
     let path = skill(&tree.top().join(".agents/skills"), "tdd", "tdd", "d");

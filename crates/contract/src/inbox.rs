@@ -116,6 +116,8 @@ pub enum Delivery {
     Model(crate::commands::ModelArgs, Ack),
     /// Switches the credential label at the next turn boundary.
     Credential(crate::commands::CredentialArgs, Ack),
+    /// Re-reads the session's configuration and declares its tools again.
+    Reload(Ack),
     /// The person's `name` command: written as `session_named` by
     /// `person` at the drain that takes it, then acknowledged `Ok(None)`.
     /// Refused `closing` while a shutdown settles and after `rewound`; a
