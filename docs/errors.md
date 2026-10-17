@@ -265,7 +265,7 @@ the lines that carry it.
 | `authentication_failed` | exit, extension call, model call, turn, driver command (`rewind`), hub command | the provider rejected the credential, an OAuth refresh was rejected, or a login was needed with nobody attached, or `fiber mcp login` got no callback in time, or the server's discovery, registration or token exchange failed, or a listed hub refused the client's device token; or a hub login was cancelled before it started or at its store commit, with nothing stored, or the provider has no device-code form |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
-| `budget_exceeded` | turn, extension call | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget"); an extension's `host.model` call at the cap raises it to the extension without failing the turn (`docs/extensions.md`, "Host calls") |
+| `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `cache_rebuild` | notice | the terminal rebuilt its completion cache after a model switch (`docs/tui.md`, "Notices") |
 | `cancelled` | driver command | a `cancel` stopped a `shell` before its command started (`docs/invocation.md`, "Driver commands") |
