@@ -2087,6 +2087,131 @@ mod tests {
         assert!(t.contains("Esc closes"));
     }
 
+    /// The picker rows the frame draws at `cols`: their count, width and
+    /// left margin, from the picker's own content, not from the frame.
+    fn picker_geom(c: &Look, cols: usize) -> (usize, usize, usize) {
+        let prows = picker(
+            c.fleet.wsel,
+            cols,
+            &picker_root(&c.fleet.ws),
+            c.remote_rows.unwrap_or(RECENTS),
+            c.fleet.ws != NO_WORKSPACE,
+        );
+        let pw = crate::width(&prows[0].spans);
+        (prows.len(), pw, crate::panel::x_for(pw, cols))
+    }
+
+    /// The screen rows carrying picker content: rows where a placed row
+    /// exactly matches a non-blank picker row, placed at the picker's
+    /// own width. Background rows are full width, so none matches.
+    fn picker_rows(c: &Look, cols: usize, rows: usize) -> (usize, usize) {
+        let prows = picker(
+            c.fleet.wsel,
+            cols,
+            &picker_root(&c.fleet.ws),
+            c.remote_rows.unwrap_or(RECENTS),
+            c.fleet.ws != NO_WORKSPACE,
+        );
+        let texts: Vec<String> = prows
+            .into_iter()
+            .map(|r| {
+                r.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        let pw = picker_geom(c, cols).1;
+        let fr = frame(c, cols, rows, false);
+        let mut ys = vec![];
+        for (y, ps) in fr.screen.iter().enumerate() {
+            for p in ps {
+                let t: String = p
+                    .row
+                    .spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>();
+                if p.w as usize == pw && texts.iter().any(|x| x == &t) {
+                    ys.push(y);
+                    break;
+                }
+            }
+        }
+        (*ys.iter().min().unwrap(), *ys.iter().max().unwrap())
+    }
+
+    #[test]
+    fn picker_sits_above_input_box_at_80x24() {
+        for name in ["full-picker", "full-remote-picker"] {
+            let open = crate::cases::lookup(CASES, name).unwrap();
+            // The closed frame is the same case with the picker shut:
+            // every row but the picker's own is identical by construction.
+            let mut closed = crate::cases::lookup(CASES, name).unwrap();
+            closed.fleet.wpick = None;
+            let (cols, rows) = (80usize, 24usize);
+            let box_top = rows - 1 - BOX_H;
+            assert_eq!(box_top, 18, "input box moved");
+            let (ph, pw, px0) = picker_geom(&open, cols);
+            // 80x24 exercises the rule's second arm: centred, the picker
+            // would cover the box's top row.
+            assert!(
+                (rows - ph) / 2 + ph > box_top,
+                "{name}: fixture no longer covers the box: ph={ph}"
+            );
+            let (first, last) = picker_rows(&open, cols, rows);
+            assert_eq!(last - first + 1, ph, "{name}: picker cut off: ph={ph}");
+            assert_eq!(
+                last,
+                box_top - 1,
+                "{name}: bottom edge not above the box: ph={ph}"
+            );
+            let open_text = text(&open, cols as u16, rows as u16);
+            let open_lines: Vec<&str> = open_text.split('\n').collect();
+            let closed_text = text(&closed, cols as u16, rows as u16);
+            let closed_lines: Vec<&str> = closed_text.split('\n').collect();
+            // The input box and the foot hint are unchanged by the picker.
+            for y in box_top..rows {
+                assert_eq!(
+                    open_lines[y], closed_lines[y],
+                    "{name}: box row {y} changed by the picker"
+                );
+            }
+            // Beside the picker the sessions show through.
+            let ob = buffer(&open, cols as u16, rows as u16);
+            let cb = buffer(&closed, cols as u16, rows as u16);
+            for y in first..=last {
+                for x in 0..cols as u16 {
+                    if (px0 as u16..(px0 + pw) as u16).contains(&x) {
+                        continue;
+                    }
+                    assert_eq!(
+                        ob[(x, y as u16)].symbol(),
+                        cb[(x, y as u16)].symbol(),
+                        "{name}: cell ({x},{y}) beside the picker differs"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picker_is_centred_at_160x48() {
+        for name in ["full-picker", "full-remote-picker"] {
+            let c = crate::cases::lookup(CASES, name).unwrap();
+            let (cols, rows) = (160usize, 48usize);
+            let (ph, _, _) = picker_geom(&c, cols);
+            let (first, last) = picker_rows(&c, cols, rows);
+            assert_eq!(last - first + 1, ph, "{name}: picker cut off: ph={ph}");
+            assert_eq!(
+                first,
+                (rows - ph) / 2,
+                "{name}: picker not centred: ph={ph}"
+            );
+        }
+    }
+
     fn remote_frame(name: &str, recents: &[&str]) {
         let c = crate::cases::lookup(CASES, name).unwrap();
         let t = text(&c, 160, 48);
