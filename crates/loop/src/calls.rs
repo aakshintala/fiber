@@ -107,8 +107,13 @@ impl Answered {
     /// `request_id` answered: a remembered session grant rides `grant`, a
     /// remembered project rule rides `rule`, and a rule that could not be
     /// saved rides `reason`.
-    pub(crate) fn allow(self, request_id: RequestId) -> PermissionResolved {
+    pub(crate) fn allow(
+        self,
+        request_id: RequestId,
+        hosts: Option<Vec<String>>,
+    ) -> PermissionResolved {
         PermissionResolved {
+            hosts,
             grant: self.grant,
             rule: self.rule,
             ..resolved(
@@ -518,7 +523,7 @@ impl Loop {
             &prepared.effects,
             &rules,
             &self.grants,
-            &crate::known_hosts::KnownHosts::default(),
+            &self.known_hosts,
             &self.workspace,
             &self.prompt.home,
             &self.credentials,
@@ -605,7 +610,7 @@ impl Loop {
             step,
         };
         self.append(&Event::PermissionRequested(request.clone()), turn, Some(id))?;
-        self.await_answer(id, turn, tool, &request)
+        self.await_answer(id, turn, tool, &request, effects.hosts.clone())
     }
 
     /// Denies a call no person can answer (`docs/permissions.md`,
@@ -713,7 +718,7 @@ impl Loop {
             settle,
             servers,
             spilled,
-            hosts_surfaced: _,
+            hosts_surfaced,
         } = output;
         // The call's output reached `finish`: its turn entry leaves the
         // map, so the map holds only calls whose output has not.
@@ -806,6 +811,7 @@ impl Loop {
                 kept: shaped.kept,
                 content: shaped.content,
                 changed_by: shaped.changed_by,
+                hosts_surfaced,
                 ..completed(String::new(), None)
             },
             shaped.state,

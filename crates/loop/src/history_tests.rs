@@ -858,3 +858,115 @@ fn an_unreadable_name_line_fails_the_resume() {
         panic!("the unreadable name line read");
     };
 }
+
+#[test]
+fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
+    use contract::events::{InstructionFile, InstructionReason, InstructionSent};
+    let (_home, sessions) = sessions("known-hosts");
+    let named = |url: &str| {
+        Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: url.into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: None,
+                },
+                changed_by: None,
+            }],
+        })
+    };
+    let mut allowed =
+        crate::completion::resolved(None, Decision::Allow, DecidedBy::Reviewer, None, None);
+    allowed.hosts = Some(vec!["https://allowed.test/".into()]);
+    let mut surfaced = crate::completion::completed("https://page-only.test/".into(), None);
+    surfaced.hosts_surfaced = vec!["https://surfaced.test/".into()];
+    let parent = vec![
+        started("/w", None),
+        named("https://person.test/"),
+        Event::InstructionFile(InstructionFile {
+            path: "AGENTS.md".into(),
+            reason: InstructionReason::OwnEdit,
+            extension: None,
+            content: Some("https://instructions.test/".into()),
+            sent: InstructionSent::Full,
+        }),
+        Event::ToolCallCompleted(surfaced),
+        Event::PermissionResolved(allowed),
+        named("https://after.test/"),
+    ];
+    let lines: Vec<_> = parent
+        .iter()
+        .enumerate()
+        .map(|(seq, event)| envelope(A, u64::try_from(seq).unwrap(), None, None, event))
+        .collect();
+    write_log(&sessions, A, &lines);
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 4)))),
+            envelope(B, 1, None, None, &named("https://child.test/")),
+        ],
+    );
+    let child = resumed(&sessions.join(B)).unwrap();
+    let fork = forked(&sessions.join(A), Seq(4)).unwrap();
+    for hosts in [&child.known_hosts, &fork.known_hosts] {
+        assert!(hosts.all_known(&[
+            "https://person.test/".into(),
+            "https://instructions.test/".into(),
+            "https://surfaced.test/".into(),
+            "https://allowed.test/".into()
+        ]));
+        assert!(!hosts.all_known(&["https://after.test/".into()]));
+        assert!(!hosts.all_known(&["https://page-only.test/".into()]));
+    }
+    assert!(child.known_hosts.all_known(&["https://child.test/".into()]));
+    assert!(!fork.known_hosts.all_known(&["https://child.test/".into()]));
+    assert!(
+        !forked(&sessions.join(A), Seq(3))
+            .unwrap()
+            .known_hosts
+            .all_known(&["https://allowed.test/".into()])
+    );
+    assert!(
+        forked(&sessions.join(A), Seq(5))
+            .unwrap()
+            .known_hosts
+            .all_known(&["https://after.test/".into()])
+    );
+}
+
+#[test]
+fn known_hosts_history_skips_results_without_a_surfaced_list_before_deserializing() {
+    let (_home, sessions) = sessions("known-hosts-unparsed");
+    let mut result = envelope(
+        A,
+        1,
+        None,
+        None,
+        &Event::ToolCallCompleted(crate::completion::completed(
+            "https://page.test/".into(),
+            None,
+        )),
+    );
+    result
+        .payload
+        .insert("content".into(), json!({"not":"content parts"}));
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            result.clone(),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(!folded.known_hosts.all_known(&["https://page.test/".into()]));
+    result.payload.insert("hosts_surfaced".into(), json!([]));
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None)), result],
+    );
+    assert!(resumed(&sessions.join(A)).is_err());
+}

@@ -35,6 +35,7 @@ impl Loop {
         turn: &TurnId,
         tool: &str,
         request: &PermissionRequested,
+        hosts: Option<Vec<String>>,
     ) -> Result<Asked, Error> {
         let request_id = request.request_id.clone();
         let offer = match &request.step {
@@ -132,7 +133,7 @@ impl Loop {
                             return Ok(Asked::Deny(denied("person", text)));
                         }
                         Decision::Allow => {
-                            self.decided(id, turn, answered.allow(request_id))?;
+                            self.decided(id, turn, answered.allow(request_id, hosts))?;
                             return Ok(Asked::Allow);
                         }
                     }

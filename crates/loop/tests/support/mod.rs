@@ -222,6 +222,8 @@ pub(crate) struct TestTool {
     /// allows, and still meets the credential deny and the standing deny
     /// and ask rules.
     pub(crate) always_reviewed: bool,
+    /// Complete network host declaration, or unknown.
+    pub(crate) hosts: Option<Vec<String>>,
     /// What a call returns.
     pub(crate) output: Output,
     pub(crate) bound: Bound,
@@ -264,6 +266,7 @@ impl TestTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
             output: Output {
                 content: vec![ContentPart::Text { text: text.into() }],
                 ..Output::default()
@@ -325,7 +328,7 @@ impl Tool for TestTool {
             subject: self.subject.clone(),
             prefix: self.prefix.clone(),
             always_reviewed: self.always_reviewed,
-            hosts: None,
+            hosts: self.hosts.clone(),
         })
     }
 

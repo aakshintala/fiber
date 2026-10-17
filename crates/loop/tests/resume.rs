@@ -4797,3 +4797,138 @@ fn a_person_name_before_a_handoff_still_pins_the_session() {
     assert_eq!(done.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(done[0].payload["error"]["code"], "name_pinned");
 }
+
+#[test]
+fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
+    use contract::events::{InstructionFile, InstructionReason, InstructionSent};
+    use contract::shapes::Effect;
+    let names = ["person", "instructions", "surfaced", "allowed", "unknown"];
+    let calls: Vec<_> = names.iter().map(|name| (*name, support::paris())).collect();
+    let mut history = History::new(vec![
+        support::calls_reply("", &calls),
+        Scripted::text("Done."),
+    ]);
+    history.write(user_turn("Read https://person.test/"), None);
+    history.write(
+        Event::InstructionFile(InstructionFile {
+            path: "AGENTS.md".into(),
+            reason: InstructionReason::OwnEdit,
+            extension: None,
+            content: Some("https://instructions.test/".into()),
+            sent: InstructionSent::Full,
+        }),
+        None,
+    );
+    let mut surfaced = completed_event("Page text https://unknown.test/");
+    if let Event::ToolCallCompleted(result) = &mut surfaced {
+        result.hosts_surfaced = vec!["https://surfaced.test/".into()];
+    }
+    history.write(surfaced, Some("source"));
+    history.write(
+        Event::PermissionResolved(PermissionResolved {
+            request_id: None,
+            decision: Decision::Allow,
+            decided_by: DecidedBy::Person,
+            reason: None,
+            feedback: None,
+            grant: None,
+            rule: None,
+            reviewer: None,
+            call: None,
+            hosts: Some(vec!["https://allowed.test/".into()]),
+        }),
+        Some("earlier"),
+    );
+    history.write(
+        Event::TurnCompleted(contract::events::TurnCompleted {
+            outcome: contract::events::TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        }),
+        None,
+    );
+    history.freeze();
+    let tools: Vec<_> = names
+        .iter()
+        .map(|name| {
+            let mut tool =
+                support::TestTool::declaring(name, "Fetched.", vec![Effect::Network], None);
+            tool.hosts = Some(vec![format!("https://{name}.test/path?q=1")]);
+            Arc::new(tool)
+        })
+        .collect();
+    let reviewer = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
+    let looped = history
+        .resume(
+            tools
+                .iter()
+                .map(|tool| ("builtin".into(), tool.clone() as Arc<dyn Tool>))
+                .collect(),
+        )
+        .reviewer(
+            Ok(r#loop::Reviewer {
+                provider: reviewer.clone(),
+                model: Model {
+                    reference: "fake/reviewer-1".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                thinking_levels: vec![],
+            }),
+            r#loop::BlockLimits::default(),
+        );
+    assert_eq!(
+        history.run(looped, "continue"),
+        contract::events::TurnOutcome::Completed
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(reviewer.requests().len(), 1);
+    let resolved = history
+        .new_lines()
+        .into_iter()
+        .find(|line| line.kind == "permission_resolved")
+        .unwrap();
+    assert_eq!(
+        resolved.payload["hosts"],
+        json!(["https://unknown.test/path?q=1"])
+    );
+    for tool in tools {
+        assert_eq!(tool.ran().len(), 1);
+    }
+}

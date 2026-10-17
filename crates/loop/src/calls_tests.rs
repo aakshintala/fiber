@@ -556,7 +556,7 @@ fn a_persons_allow_line_carries_what_was_remembered() {
             rule,
             reason,
         }
-        .allow(RequestId("r_1".into()))
+        .allow(RequestId("r_1".into()), None)
     };
     let grant = Grant {
         tool: "shell".into(),
