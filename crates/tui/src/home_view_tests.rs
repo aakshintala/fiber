@@ -3322,9 +3322,10 @@ fn the_reconnect_banner_draws_over_home() {
     down.next_retry();
     let shown = screen(&down, 80, 24);
     assert!(shown.contains("Connection lost · reconnecting"), "{shown}");
-    // The foot hint stays on the last row.
+    // The foot hint stays on the last row; at 80 columns only its
+    // start shows.
     let last = shown.lines().last().unwrap_or_default();
-    assert!(last.contains("Ctrl+C"), "{shown}");
+    assert!(last.contains("Enter opens the focused session"), "{shown}");
 }
 
 /// A recents-only picker still parks the cursor in the draft; with the
