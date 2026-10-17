@@ -95,7 +95,7 @@ const CASES: &[Case<Look>] = &[
         name: "full-remote-picker",
         help: "remote home before a workspace choice, with hub recents",
         check: "the dim `▣ no workspace` chip; the open `Workspaces` picker with the typed row `› ~/█` and the hub's home listing, the first `›` on the bar; a blank row, dim `── recents ──` and the hub's four recents dim; the footer `↑↓ move · Enter open`, without `Esc closes`.",
-        build: || remote(RECENTS),
+        build: || remote(HUB_RECENTS),
     },
     Case {
         name: "rail-focused",
@@ -356,6 +356,10 @@ fn projs() -> Vec<Proj> {
 }
 
 /// Recent workspaces, from `recent.jsonl`.
+/// The hub's recent workspaces on a remote home: under the hub's own
+/// home, never the local machine's.
+const HUB_RECENTS: &[&str] = &["~/src/api", "~/src/web", "~/src/infra", "~/work/deploy"];
+
 pub(crate) const RECENTS: &[&str] = &[
     "~/work/fiber",
     "~/work/fiber-worktrees",
@@ -2102,7 +2106,7 @@ mod tests {
         assert!(buf[(x as u16, y as u16)].modifier.contains(Modifier::DIM));
         assert!(t.contains("› ~/█"), "typed row missing");
         assert!(t.contains("› notes"), "first completion not focused");
-        for ws in RECENTS {
+        for ws in RECENTS.iter().chain(HUB_RECENTS) {
             assert_eq!(t.contains(ws), recents.contains(ws), "workspace {ws}");
         }
         assert_eq!(t.contains("── recents ──"), !recents.is_empty());
@@ -2115,7 +2119,7 @@ mod tests {
 
     #[test]
     fn remote_picker_has_only_hub_recents() {
-        remote_frame("full-remote-picker", RECENTS);
+        remote_frame("full-remote-picker", HUB_RECENTS);
     }
 
     #[test]

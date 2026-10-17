@@ -748,7 +748,7 @@ pub(super) fn render(
                     &picker.recents,
                     picker.focus,
                     picker.escapes,
-                    area,
+                    (area, placed.box_top),
                     buf,
                     &mut targets,
                 );
@@ -990,13 +990,16 @@ fn picker_footer(escapes: bool) -> super::overlay::Row {
 /// its cursor, the completions with the focused one on the bar, the
 /// blank row, the dim header and the dim recents, with a focused
 /// recent barred. Only the recent rows take clicks, by their index
-/// into the current recents.
+/// into the current recents. It centres over `area` while that keeps
+/// it clear of the input box's top row `box_top`; otherwise, when it
+/// fits above the box, its bottom edge sits on the row above the box.
+/// A screen too short for that keeps it centred, over the box.
 fn draw_typed_picker(
     typed: &TypedScreen,
     recents: &[String],
     focus: Option<usize>,
     escapes: bool,
-    area: Rect,
+    (area, box_top): (Rect, u16),
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
 ) {
@@ -1008,13 +1011,27 @@ fn draw_typed_picker(
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
     let info = Style::new().fg(Role::Info.color());
+    // The chrome is two edges, two pad rows, the title and its gap, and
+    // the footer's gap and row.
+    const CHROME: u16 = 8;
     let body_rows = typed_body(
         typed.completions.len(),
         recents.len(),
         focus,
         typed.missing,
-        usize::from(area.height.saturating_sub(8)),
+        usize::from(area.height.saturating_sub(CHROME)),
     );
+    let tall = super::to_u16(body_rows.len()).saturating_add(CHROME);
+    let centred_bottom = area
+        .y
+        .saturating_add(area.height.saturating_sub(tall) / 2)
+        .saturating_add(tall);
+    let fits_above = tall <= box_top.saturating_sub(area.y);
+    let place = if centred_bottom > box_top && fits_above {
+        super::overlay::Place::Across { bottom: box_top }
+    } else {
+        super::overlay::Place::Centre
+    };
     let overall = |row: &TypedRow| match row {
         TypedRow::Completion(at) => Some(*at),
         TypedRow::Recent(at) => Some(typed.completions.len().saturating_add(*at)),
@@ -1098,7 +1115,7 @@ fn draw_typed_picker(
         footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    super::overlay::draw(buf, area, &framed, place, targets);
 }
 
 /// Draws the workspace picker over `area`: `window` with the selection

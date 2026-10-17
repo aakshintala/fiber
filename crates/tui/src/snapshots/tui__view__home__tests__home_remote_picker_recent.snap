@@ -3,27 +3,27 @@ source: crates/tui/src/home_view_tests.rs
 assertion_line: 1144
 expression: remote_picker_frame(true)
 ---
-▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
-▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    4 working · $0.00 live
-▀▄ █     ▄▄█▄▄ █▀▀█ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▀▄ █▄▄▄    █   █▀▀█
+▀▄ █       █   ████   Workspaces
+▀▄ █     ▄▄█▄▄ █▀▀█
+                      › ~/█
+fiber +  4 live · $0  › notes
+⌥1 ● hub session        src                                        WORKING  0s ✕
+    s_00000000000000    work
+⌥2 ● hub session                                                   WORKING  0s ✕
+    s_00000000000000  ── recents ──
+⌥3 ● hub session        /hub/work/fiber                            WORKING  0s ✕
+    s_00000000000000    /hub/work/fiber-worktrees
+⌥4 ● hub session        /hub/work/beacon                           WORKING  0s ✕
+    s_00000000000000    /hub/work/pi-rig
 
-fiber +  4 live · $0  Workspaces
-⌥1 ● hub session                                                   WORKING  0s ✕
-    s_00000000000000  › ~/█
-⌥2 ● hub session      › notes                                      WORKING  0s ✕
-    s_00000000000000    src
-⌥3 ● hub session        work                                       WORKING  0s ✕
-    s_00000000000000
-⌥4 ● hub session      ── recents ──                                WORKING  0s ✕
-    s_00000000000000    /hub/work/fiber
-                        /hub/work/fiber-worktrees
-                        /hub/work/beacon
-                        /hub/work/pi-rig
+                      ↑↓ move · Enter open
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  ↑↓ move · Enter open                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █? for shortcuts
-▌                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▌
 ▌ [no workspace]  [test/model]  [thinking: high]  Enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
           ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit
