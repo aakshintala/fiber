@@ -264,6 +264,18 @@ fn get_equals_the_merged_value_for_every_key_shape() {
             "model",
             Some("a"),
         ),
+        // A scalar per-model entry in the top layer over an object
+        // below: the entry wipes the merge, so the key is gone. Kills
+        // reading past a scalar view.
+        (
+            vec![
+                default(),
+                repository(json!({"k": {"a": 1}})),
+                project(json!({"k": {"a": 2}, "models": {"m": 5}})),
+            ],
+            "k.a",
+            Some("m"),
+        ),
     ];
     for (layers, key, model) in &cases {
         let config = config_with(layers.clone());

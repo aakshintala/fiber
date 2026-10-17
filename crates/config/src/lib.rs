@@ -342,8 +342,9 @@ impl Config {
             return Fast::Merge;
         }
         // Below a union row's fill the merge re-creates the object, so
-        // a proper prefix of one reads what no single layer holds.
-        if keys::union_rows().any(|row| row.len() > key.len() && row.starts_with(key)) {
+        // a proper prefix of one reads what no single layer holds. The
+        // row itself needs no length check: it already returned above.
+        if keys::union_rows().any(|row| row.starts_with(key)) {
             return Fast::Merge;
         }
         // A layer whose per-model view is not an object wipes the merge,
@@ -353,7 +354,7 @@ impl Config {
             .iter()
             .map(|(_, layer)| view(layer, model))
             .collect();
-        if views.iter().any(|seen| !seen.is_object()) {
+        if !views.iter().all(|seen| seen.is_object()) {
             return Fast::Merge;
         }
         // Top-down: the first layer holding the key is the highest,
