@@ -473,17 +473,24 @@ pub(crate) fn run_new(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     extensions.answerable(!one_turn);
+    extensions.browse_with(
+        Arc::new(extensions::SystemBrowser::default()),
+        session.attended(),
+    );
     session.skills(r#loop::skills(&prompt_inputs, &workspace));
     // The session's MCP prompt rows, tagged with each server's name:
     // the `commands` answer lists them beside skills, and `/name` runs
     // them through the fetch below (`docs/mcp.md`, "Prompts and
     // resources"). Shadowed prompts join the startup notices.
     let prompt_rows = session_servers.prompts.commands();
-    let listed = r#loop::commands(&prompt_inputs, &workspace, &prompt_rows);
+    let listed = r#loop::commands(
+        &prompt_inputs,
+        &workspace,
+        &prompt_rows,
+        &extensions.commands(),
+    );
     mcp.notices.extend(listed.notices);
-    let mut all_commands = listed.rows;
-    all_commands.extend(extensions.commands());
-    session.commands(all_commands);
+    session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),

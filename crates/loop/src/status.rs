@@ -557,6 +557,7 @@ fn prompt_of(input: &[InputItem]) -> Option<String> {
         | InputItem::ShellCommand { .. }
         | InputItem::Jobs { .. }
         | InputItem::Handoff { .. }
+        | InputItem::Rewind { .. }
         | InputItem::Unknown => None,
     });
     content.map(|content| {

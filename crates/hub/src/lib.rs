@@ -158,6 +158,14 @@ pub trait Started: Send {
     /// from the `fiber_exited` line it printed last on stdout, or
     /// `io_failed` naming the session when there is none.
     fn exited(&self) -> Option<Failure>;
+
+    /// Blocks until the process has exited, then returns what [`exited`](Self::exited)
+    /// would then return. The default returns [`exited`](Self::exited) at once,
+    /// for a `Started` whose exit is already settled; one backed by a running
+    /// process overrides it.
+    fn wait_exited(&self) -> Option<Failure> {
+        self.exited()
+    }
 }
 
 /// Runs the hub in `home` in `mode` until it stops, returning the exit

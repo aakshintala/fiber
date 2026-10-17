@@ -694,7 +694,7 @@ fn kept_paths_write_no_remove_line() {
                         new_session_id: SessionId("s_ffffffffffffffff".into()),
                         seq: contract::Seq(1),
                         from_session_id: None,
-                        jobs: Vec::new(),
+                        summary: None,
                     }),
                     None,
                     None,

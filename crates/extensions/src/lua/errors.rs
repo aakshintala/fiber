@@ -14,7 +14,14 @@ pub(super) fn stopped(name: &str) -> Error {
     }
 }
 
-pub(super) fn timed_out(name: &str, target: &Target, timeout: Duration) -> Error {
+pub(super) fn timed_out(name: &str, target: &Target, timeout: Duration, login: bool) -> Error {
+    if login {
+        return Error::LoginTimedOut {
+            extension: name.to_owned(),
+            callback: target.to_string(),
+            timeout_ms: timeout_ms(timeout),
+        };
+    }
     Error::Timeout {
         extension: name.to_owned(),
         callback: target.to_string(),

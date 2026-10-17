@@ -12,10 +12,12 @@ use crate::skills as discovery;
 
 /// Every `/name` the session runs, and what shadowing left out: the
 /// skills and prompt templates discovery keeps that `skills.disabled` does
-/// not switch off, then each MCP server's prompts tagged with its name. A
-/// skill wins over an MCP prompt of the same name from every source, and
-/// between servers the first in name order wins; each loser is left out
-/// with a `skill_shadowed` notice naming it and what won, while a name in
+/// not switch off, then each MCP server's prompts tagged with its name,
+/// then each extension's commands. A skill wins over an MCP prompt and
+/// an extension command of the same name from every source, and an
+/// extension command wins over an MCP prompt of the same name; between
+/// servers the first in name order wins; each loser is left out with a
+/// `skill_shadowed` notice naming it and what won, while a name in
 /// `skills.disabled` drops its prompt without one
 /// (`docs/system-prompt.md`, "Skills").
 pub struct Commands {
@@ -29,12 +31,20 @@ pub struct Commands {
 
 /// Every `/name` the session runs: its skills and prompt templates, read
 /// from the places the opening message reads, from the repository's top
-/// level above `workspace`, then `prompts` after them. `prompts` arrives
-/// sorted by server name, so the first in name order wins a shared name
-/// (`docs/system-prompt.md`, "Skills"). Reads skill places
-/// only, writes nothing; the opening message raises discovery's notices.
+/// level above `workspace`, then `prompts` after them, then `extensions`
+/// after those. `prompts` arrives sorted by server name, so the first in
+/// name order wins a shared name (`docs/system-prompt.md`, "Skills").
+/// An extension row a skill or template shadows is left out with a
+/// `skill_shadowed` notice; an MCP prompt a kept extension row shadows is
+/// left out the same way. Reads skill places only, writes nothing; the
+/// opening message raises discovery's notices.
 #[must_use]
-pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]) -> Commands {
+pub fn commands(
+    inputs: &PromptInputs,
+    workspace: &Path,
+    prompts: &[CommandInfo],
+    extensions: &[CommandInfo],
+) -> Commands {
     let workspace = opening::canonical(workspace);
     let (chain, _) = opening::repo_chain(&workspace);
     let top = chain.first().unwrap_or(&workspace);
@@ -42,6 +52,26 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
     let mut rows = discovery::commands(&found.skills, &inputs.skills_disabled);
     let mut notices = Vec::new();
     let skills_end = rows.len();
+    let mut kept: Vec<CommandInfo> = Vec::new();
+    for ext in extensions {
+        if let Some(skill) = found
+            .skills
+            .iter()
+            .find(|found| found.listed.name == ext.name)
+            .filter(|_| rows.iter().take(skills_end).any(|row| row.name == ext.name))
+        {
+            notices.push(Notice {
+                code: ErrorCode::SkillShadowed,
+                message: format!(
+                    "The extension `{}`'s command `/{}` is shadowed by {}, which is used.",
+                    ext.tag, ext.name, skill.listed.path
+                ),
+                extension: Some(ext.tag.clone()),
+            });
+            continue;
+        }
+        kept.push(ext.clone());
+    }
     for row in prompts {
         if inputs.skills_disabled.iter().any(|off| off == &row.name) {
             continue;
@@ -58,6 +88,17 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
                     row.tag, row.name, skill.listed.path
                 ),
                 extension: None,
+            });
+            continue;
+        }
+        if let Some(kept_ext) = kept.iter().find(|kept| kept.name == row.name) {
+            notices.push(Notice {
+                code: ErrorCode::SkillShadowed,
+                message: format!(
+                    "The MCP server `{}`'s prompt `/{}` is shadowed by the extension `{}`'s command, which is used.",
+                    row.tag, row.name, kept_ext.tag
+                ),
+                extension: Some(kept_ext.tag.clone()),
             });
             continue;
         }
@@ -79,6 +120,7 @@ pub fn commands(inputs: &PromptInputs, workspace: &Path, prompts: &[CommandInfo]
         }
         rows.push(row.clone());
     }
+    rows.extend(kept);
     Commands { rows, notices }
 }
 

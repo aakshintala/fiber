@@ -191,7 +191,9 @@ pub fn reviewer_models(
     let mut temp = providers.clone();
     let run = |command: &mut Command, timeout: Duration| run_command(command, timeout, &clock);
     let mut notices: Vec<String> = temp
-        .add_lua(&owner, &lua, &config, &run)
+        .add_lua(&owner, &lua, &config, &run, &|name| {
+            std::env::var(name).ok()
+        })
         .into_iter()
         .map(|notice| redacted(notice.code, name, &owner))
         .collect();

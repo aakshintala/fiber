@@ -183,7 +183,8 @@ fn run(
     notices.extend(loading);
     let extensions = load(&config);
     notices.extend(extensions.notices());
-    notices.extend(providers.add_session(&extensions, &config, run));
+    notices
+        .extend(providers.add_session(&extensions, &config, run, &|name| std::env::var(name).ok()));
     notices.extend(
         providers
             .fill_placeholders(&config, &|name| std::env::var(name).ok())
@@ -313,6 +314,7 @@ fn refresh_named(
         config,
         Some(config::refresh_after(config)),
         run,
+        &|name| std::env::var(name).ok(),
     ) {
         let _ignored = handle.join();
     }

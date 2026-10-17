@@ -1148,7 +1148,9 @@ fn stale_lists_checks_the_age_before_the_credential() {
         std::sync::Arc::new(NoLock),
         None,
     );
-    providers.add_session(&loaded, &config, &fakes::children::grouped_output);
+    providers.add_session(&loaded, &config, &fakes::children::grouped_output, &|_| {
+        None
+    });
     let calls = std::cell::RefCell::new(Vec::new());
     let run = &|command: &mut std::process::Command, timeout: Duration| {
         calls.borrow_mut().push(

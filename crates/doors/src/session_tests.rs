@@ -3255,7 +3255,6 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
             rewind: Some(Rewind {
                 summary: None,
                 note: "n".into(),
-                jobs: Vec::new(),
             }),
             worktree: None,
         })
@@ -3333,7 +3332,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
             seq: contract::Seq(5),
             from_session_id: None,
-            jobs: Vec::new(),
+            summary: None,
         }),
     ] {
         log.append(&event, None, None).unwrap();

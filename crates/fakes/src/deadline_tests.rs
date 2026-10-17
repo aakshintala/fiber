@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::clock::FakeClock;
 
-use super::{Deadline, WAITS};
+use super::{BUDGET, CLEANUP, Deadline, WAITS};
 
 /// A fake clock that lives as long as the test process, as a deadline's
 /// clock must.
@@ -133,6 +133,13 @@ fn recv_or_fail_names_the_wait_at_the_callers_line() {
         message.contains("waited until the deadline for"),
         "{message}"
     );
+}
+
+#[test]
+fn the_bounds_keep_their_order_and_fit_nextests_kill() {
+    assert!(WAITS < CLEANUP && CLEANUP < BUDGET);
+    assert!(BUDGET * 2 <= Duration::from_secs(120));
+    assert!(BUDGET.saturating_sub(CLEANUP) >= Duration::from_secs(10));
 }
 
 #[test]

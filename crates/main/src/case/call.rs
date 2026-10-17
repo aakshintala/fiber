@@ -1,5 +1,6 @@
 //! Direct calls to a package's Lua provider (`docs/testing.md`, "Testing an extension").
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -195,7 +196,7 @@ fn invoke(
                 })),
             }
         }
-        Ready::Models => match provider.list_models() {
+        Ready::Models(arg) => match provider.list_models(&arg) {
             Ok((_, returned)) => Ok(returned),
             Err(error) => Err(json!({
                 "code": error.code(),
@@ -248,7 +249,8 @@ fn invoke(
                 .map_err(|error| {
                     let code = match &error {
                         contract::signing::Error::Credential { code, .. } => code.clone(),
-                        contract::signing::Error::Unattended { .. } => {
+                        contract::signing::Error::Unattended { .. }
+                        | contract::signing::Error::LoginTimedOut { .. } => {
                             contract::ErrorCode::AuthenticationFailed
                         }
                         contract::signing::Error::Failed(_)
@@ -396,12 +398,12 @@ fn provider_extension(
     })
 }
 
-/// A validated provider call: `cost` and `quota` carry their args, and
-/// `models` takes none.
+/// A validated provider call: `cost`, `quota` and `models` carry their
+/// args.
 #[derive(Debug)]
 enum Ready {
     Cost(CostArgs),
-    Models,
+    Models(extensions::ModelsArg),
     Quota {
         label: Option<String>,
         key: Option<String>,
@@ -423,7 +425,7 @@ impl Ready {
         match self {
             Ready::Credential(label) | Ready::Login { label, .. } => label.as_deref(),
             Ready::Quota { label, .. } => label.as_deref(),
-            Ready::Cost(_) | Ready::Models | Ready::Sign { .. } => None,
+            Ready::Cost(_) | Ready::Models(_) | Ready::Sign { .. } => None,
         }
     }
 }
@@ -433,7 +435,7 @@ impl Ready {
 fn ready(call: &Call) -> Result<Ready, String> {
     match call.function.as_str() {
         "cost" => cost_args(&call.arg).map(Ready::Cost),
-        "models" => models_args(&call.arg).map(|()| Ready::Models),
+        "models" => models_args(&call.arg).map(Ready::Models),
         "quota" => quota_args(&call.arg),
         "credential" | "login" | "sign" => credential_args(call),
         _ => Err(format!(
@@ -510,13 +512,41 @@ fn credential_args(call: &Call) -> Result<Ready, String> {
     }
 }
 
-/// `models` takes no argument: exactly `{}`.
-fn models_args(value: &Value) -> Result<(), String> {
-    if value.as_object().is_some_and(|map| map.is_empty()) {
-        Ok(())
-    } else {
-        Err("call.arg: models expects {}".to_owned())
+/// `models` takes an object with only an optional `key` and
+/// `placeholders`, as `quota` takes `key`: what `models()` receives. A
+/// null key is no key; `placeholders` maps each name to its host.
+fn models_args(value: &Value) -> Result<extensions::ModelsArg, String> {
+    let map = value
+        .as_object()
+        .ok_or("call.arg: models expects an object")?;
+    if map
+        .keys()
+        .any(|key| !["key", "placeholders"].contains(&key.as_str()))
+    {
+        return Err("call.arg: models takes only key and placeholders".to_owned());
     }
+    let key = match map.get("key") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(key)) => Some(Secret::new(key.clone())),
+        Some(_) => return Err("call.arg.key: expected a string or null".to_owned()),
+    };
+    let placeholders = match map.get("placeholders") {
+        None => BTreeMap::new(),
+        Some(Value::Object(placeholders)) => {
+            let mut hosts = BTreeMap::new();
+            for (name, host) in placeholders {
+                let Some(host) = host.as_str() else {
+                    return Err("call.arg.placeholders: expected an object of strings".to_owned());
+                };
+                hosts.insert(name.clone(), host.to_owned());
+            }
+            hosts
+        }
+        Some(_) => {
+            return Err("call.arg.placeholders: expected an object of strings".to_owned());
+        }
+    };
+    Ok(extensions::ModelsArg { key, placeholders })
 }
 
 /// `quota` takes an object with only an optional `label` and `key`, as

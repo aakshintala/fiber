@@ -1685,7 +1685,7 @@ mod window {
     }
 
     #[test]
-    fn a_job_a_rewind_handed_on_or_started_twice_is_orphaned_at_most_once() {
+    fn a_job_started_twice_is_orphaned_at_most_once() {
         let session = Session::new();
         session.write(&job_started("j_1"), None, None);
         session.write(&job_started("j_1"), None, None);
@@ -1695,7 +1695,7 @@ mod window {
                 new_session_id: SessionId("s_2".into()),
                 seq: contract::Seq(0),
                 from_session_id: None,
-                jobs: vec![JobId("j_2".into())],
+                summary: None,
             }),
             None,
             None,
@@ -1703,12 +1703,14 @@ mod window {
 
         let folded = resumed(&session.dir()).unwrap();
 
+        // A `rewound` settles no job: both jobs are still owed their
+        // orphaned ends.
         let orphans: Vec<&str> = folded
             .orphans
             .iter()
             .map(|job| job.job_id.0.as_str())
             .collect();
-        assert_eq!(orphans, ["j_1"]);
+        assert_eq!(orphans, ["j_1", "j_2"]);
     }
 
     /// A line whose envelope reads and whose payload does not.

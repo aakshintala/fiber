@@ -38,6 +38,11 @@ impl Clients {
         }
     }
 
+    /// The full-client count at this call, including after emissions are sealed.
+    pub(super) fn count(&self) -> u32 {
+        lock(&self.state).0
+    }
+
     /// Seals `clients` lines: no later attach or detach emits one.
     pub(super) fn seal(&self) {
         lock(&self.state).1 = true;

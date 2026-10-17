@@ -18,7 +18,7 @@ use common::{Setup, pair, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::signing::SignRequest;
-use extensions::{CredentialPair, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{CredentialPair, LuaExtension, LuaProvider, ModelsArg, REFRESH_BEFORE};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer};
@@ -342,7 +342,7 @@ fn refresh_outside_credential_is_refused() {
     let oauth = provider(&extension, "oauth");
     let err = within({
         let oauth = Arc::clone(&oauth);
-        move || oauth.models()
+        move || oauth.models(&ModelsArg::default())
     })
     .unwrap_err();
     let text = err.to_string();

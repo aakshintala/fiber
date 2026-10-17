@@ -108,6 +108,8 @@ codes! {
     IoFailed,
     /// A log line that cannot be encoded, or does not parse.
     LogCorrupt,
+    /// A login a person must finish; the message holds the URL and any device code.
+    LoginUrl,
     /// A command line Fiber could not read.
     Malformed,
     /// A cancelled call the server may still act on.

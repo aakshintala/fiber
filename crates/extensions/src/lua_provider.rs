@@ -27,9 +27,11 @@ use crate::host::sha256_hex;
 use crate::{Error, LuaExtension};
 
 mod login;
+mod models_arg;
 mod quota;
 
 pub use login::{LoggedIn, LoginMethod, StoredLogin};
+pub use models_arg::ModelsArg;
 pub use quota::{Quota, QuotaEntry, Window, WindowUse};
 
 /// How long before its expiry a token is refreshed.
@@ -282,15 +284,16 @@ impl LuaProvider {
     }
 
     /// The provider's models: the list this process last discovered, else
-    /// the cached copy, else what `models()` returns now.
-    pub fn models(&self) -> Result<Vec<ModelData>, Error> {
+    /// the cached copy, else what `models()` returns now. `arg` is what
+    /// `models()` receives when it runs.
+    pub fn models(&self, arg: &ModelsArg) -> Result<Vec<ModelData>, Error> {
         if let Some(models) = lock(&self.models).clone() {
             return Ok(models);
         }
         if let Some(cached) = config::read_model_cache(self.extension.home(), &self.name)? {
             return Ok(lock(&self.models).get_or_insert(cached).clone());
         }
-        self.discover()
+        self.discover(arg)
     }
 
     /// Whether a cached model list waits on disk: what [`LuaProvider::models`]
@@ -330,10 +333,12 @@ impl LuaProvider {
     /// and a provider already refreshing is not started again. The age is
     /// re-read under the lock, so a refresh that finished between the
     /// first check and the lock is skipped too. A failing `models()` keeps
-    /// the old cache (`docs/model-routing.md`, "Model discovery").
+    /// the old cache (`docs/model-routing.md`, "Model discovery"). `arg`
+    /// moves into the thread: what `models()` receives.
     pub fn refresh(
         self: &Arc<Self>,
         max_age: Option<Duration>,
+        arg: ModelsArg,
     ) -> Option<JoinHandle<Result<Vec<ModelData>, Error>>> {
         if self.fresh(max_age) {
             return None;
@@ -366,7 +371,7 @@ impl LuaProvider {
             // Held until the cache is written: dropping the file
             // releases the lock.
             let _held = lock;
-            this.discover()
+            this.discover(&arg)
         }))
     }
 
@@ -391,17 +396,36 @@ impl LuaProvider {
 
     /// Calls `models()` and parses what it returned, without writing the
     /// cache or storing anything. A return that is not a model list is
-    /// `Error::BadReturn` with callback `<provider>.models`.
-    pub fn list_models(&self) -> Result<(Vec<ModelData>, Value), Error> {
-        let returned = self.call("models", Value::Null)?;
+    /// `Error::BadReturn` with callback `<provider>.models`. A failure
+    /// carrying the argument's key is redacted: no failure text from
+    /// `list_models` holds the key (`docs/errors.md`, "The shape").
+    pub fn list_models(&self, arg: &ModelsArg) -> Result<(Vec<ModelData>, Value), Error> {
+        let returned = self.call("models", arg.to_value());
+        let redact = |message: &str| match &arg.key {
+            Some(key) => redact_values(message, std::slice::from_ref(key)),
+            None => message.to_owned(),
+        };
+        let returned = match returned {
+            Ok(returned) => returned,
+            Err(Error::Lua { extension, message }) => {
+                return Err(Error::Lua {
+                    extension,
+                    message: redact(&message),
+                });
+            }
+            Err(error) => return Err(error),
+        };
         let models: Vec<ModelData> = serde_json::from_value(returned.clone()).map_err(|e| {
-            self.bad_return("models", format!("something other than a model list: {e}"))
+            self.bad_return(
+                "models",
+                redact(&format!("something other than a model list: {e}")),
+            )
         })?;
         Ok((models, returned))
     }
 
-    fn discover(&self) -> Result<Vec<ModelData>, Error> {
-        let (models, returned) = self.list_models()?;
+    fn discover(&self, arg: &ModelsArg) -> Result<Vec<ModelData>, Error> {
+        let (models, returned) = self.list_models(arg)?;
         config::write_model_cache(self.extension.home(), &self.name, &returned)?;
         *lock(&self.models) = Some(models.clone());
         Ok(models)
@@ -548,6 +572,8 @@ impl LuaProvider {
             let message = detail(&e);
             if matches!(e, Error::Unattended { .. }) {
                 signing::Error::Unattended { message }
+            } else if matches!(e, Error::LoginTimedOut { .. }) {
+                signing::Error::LoginTimedOut { message }
             } else {
                 signing::Error::Credential {
                     code: e.code(),
@@ -679,6 +705,7 @@ impl LuaProvider {
             Error::RefreshRejected { .. }
                 | Error::RefreshUnreachable { .. }
                 | Error::Unattended { .. }
+                | Error::LoginTimedOut { .. }
         ) {
             e
         } else {
@@ -845,6 +872,9 @@ fn redact_signing_error(error: signing::Error, values: &[Secret]) -> signing::Er
             message: redact(message),
         },
         signing::Error::Unattended { message } => signing::Error::Unattended {
+            message: redact(message),
+        },
+        signing::Error::LoginTimedOut { message } => signing::Error::LoginTimedOut {
             message: redact(message),
         },
     }

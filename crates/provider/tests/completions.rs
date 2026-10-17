@@ -975,6 +975,7 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
             anthropic: true,
             cache_key_field: Some("session_id".into()),
             thinking_budget: false,
+            bearer: false,
         }
     );
     assert_eq!(

@@ -1091,14 +1091,13 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
 
 - Each turn is one row, "before: <prompt>". The chosen turn opens into every
   step boundary: after the person's message and after each step, with the
-  step's summary. The default is the start of the latest turn.
+  step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
-  that may have changed files, and that none of it is undone. Each job started
-  since that still runs has stop, the default, or adopt. Jobs started before
-  the point are listed as adopted with the session.
+  that may have changed files, and that none of it is undone. It lists every
+  job that still runs, all of which stop.
 - An optional summary, then Rewind. The conversation is cut at the point, and a
   ⟲ line names the new session and says what was not restored and which jobs
-  stopped or were adopted. The new session waits for a prompt.
+  stopped. The new session waits for a prompt.
 - `session_held` shows as the error in place of the Rewind button.
 - `summary_failed` shows the reason with three choices: retry, rewind without
   a summary, or cancel.
@@ -1650,10 +1649,7 @@ The rest of the list is the session's answer to the `commands` driver command
 and extension commands, each with the tag the answer gives. The terminal sends
 `commands` when it attaches to a session and again after each `reloaded`, and
 fills the list from the answer to the latest one it sent; until that answer
-arrives, the list holds the commands above only. A skill or prompt template
-named like a command above is left out. An extension command whose manifest
-names that command in `replaces` takes its row instead, and runs in its place
-(`docs/extensions.md`, "What a package holds"). An extension's commands run
+arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 
