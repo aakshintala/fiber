@@ -137,6 +137,9 @@ pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
 /// only: delegates' rows, rows whose directory is gone and sessions in
 /// `running` are skipped; with `project`, only that key. The page starts
 /// after `before`'s row.
+///
+/// For tests: production answers through [`page_with_total`].
+#[cfg(test)]
 pub(crate) fn page(
     home: &Path,
     before: Option<&str>,
@@ -187,6 +190,9 @@ fn total_of(listed: &[RecentRow], running: &BTreeSet<String>) -> usize {
 
 /// How many exited sessions a query matches: the same rows `page`
 /// pages through, with no page limit.
+///
+/// For tests: production answers through [`page_with_total`]..
+#[cfg(test)]
 pub(crate) fn count(home: &Path, project: Option<&str>, running: &BTreeSet<String>) -> usize {
     total_of(&listed(home, project), running)
 }
