@@ -442,6 +442,11 @@ impl Shared {
     /// resize lands before the chunk's bytes parse, so the first frame
     /// after a resize draws at the new size; then the chunk is appended,
     /// parsed, and snapshotted unless a synchronized-output block is open.
+    /// When `LOOK_DIFF_GRID` names a path, each snapshot also overwrites
+    /// that path with the raw output bytes read so far, so the last write
+    /// is the final screen wait; unset, no file is written. The write
+    /// failure is ignored: a bad path surfaces as a missing dump where
+    /// the dump is read, never as a look-test failure.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
@@ -451,6 +456,9 @@ impl Shared {
         self.sync_through(bytes);
         if !self.sync_open {
             self.grid = Grid::of(&self.parser);
+            if let Some(path) = std::env::var_os("LOOK_DIFF_GRID") {
+                let _ = std::fs::write(path, &self.output);
+            }
         }
     }
 
