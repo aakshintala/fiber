@@ -1724,6 +1724,32 @@ fn failed_summary_tool_calls_are_absent_on_resume_too() {
 }
 
 #[test]
+fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
+    let mut session = run_a_with_tail(vec![calls_reply("discard", &[("write_file", paris())])]);
+    let last = session.provider.requests().last().unwrap().clone();
+    let (rw, answer) = rewind(args(None, None, true, vec![]));
+    let looped = session.looped.take().unwrap();
+    let tx = take_inbox(&mut session);
+    drop(drive_closed(looped, tx, vec![rw]));
+    assert_eq!(rejected(answer_of(answer)).code, ErrorCode::SummaryFailed);
+    let (looped, tx, provider) = resume_existing(&session, "s_test", vec![Scripted::text("after")]);
+    drop(run_turn(looped, &tx, "next"));
+    let request = &provider.requests()[0];
+    assert_eq!(request.previous_end, Some(last.conversation.len()));
+    let mut expected = last.conversation;
+    expected.push(Input::Assistant {
+        model: MODEL.into(),
+        text: "two-done".into(),
+        provider_item: None,
+    });
+    expected.push(Input::User {
+        text: "next".into(),
+        images: vec![],
+    });
+    assert_eq!(request.conversation, expected);
+}
+
+#[test]
 fn a_failed_summary_reuses_its_new_preamble_at_the_next_prompt() {
     let session = run_a();
     let before = log::read(&session.dir).unwrap().len();
@@ -1806,6 +1832,18 @@ fn the_reviewer_sees_no_failed_summary_live_or_resumed() {
         }
         let requests = reviewer.requests();
         assert_eq!(requests.len(), 1);
+        let replay = support::review::replay(
+            &support::review::ReviewArgs {
+                dir: session.dir.clone(),
+                notes: None,
+                keep_all: false,
+            },
+            std::io::Cursor::new(Vec::<u8>::new()),
+            Vec::<u8>::new(),
+        )
+        .unwrap();
+        assert_eq!(replay.requests.len(), 2);
+        assert_eq!(replay.requests[0].1.conversation, requests[0].conversation);
         let mut conversation = requests[0].conversation.clone();
         for input in &mut conversation {
             if let Input::User { text, .. } = input {

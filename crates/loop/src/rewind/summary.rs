@@ -56,13 +56,13 @@ impl Loop {
         };
         written?;
         if let Some(completed) = self.turn_start(&turn, &input)? {
-            return self.finish_summary(&turn, completed, None);
+            return self.finish_summary(&turn, completed);
         }
         let written = cancel.commit(cancel::Commit::Step, || {
             self.append(&Event::StepStarted(Empty {}), &turn, None)
         });
         let Some(written) = written else {
-            return self.finish_summary(&turn, crate::ended(TurnOutcome::Interrupted, None), None);
+            return self.finish_summary(&turn, crate::ended(TurnOutcome::Interrupted, None));
         };
         written?;
         let forked = crate::history::forked(&target.dir, Seq(point))?;
@@ -101,20 +101,19 @@ impl Loop {
                         "The preamble was not built.",
                     )),
                 ),
-                None,
             );
         };
         request.previous_end = sent;
         if let Some(completed) = self.over_budget() {
             let completed = self.budget_end(completed);
-            return self.finish_summary(&turn, completed, None);
+            return self.finish_summary(&turn, completed);
         }
         if let Some(completed) = self.model_call_allowed(&turn)? {
-            return self.finish_summary(&turn, completed, None);
+            return self.finish_summary(&turn, completed);
         }
-        let (completed, summary) = match self.call_with_retries(&request, &turn)? {
-            Attempted::Failed(failed) => (crate::ended(TurnOutcome::Failed, Some(failed)), None),
-            Attempted::Interrupted => (crate::ended(TurnOutcome::Interrupted, None), None),
+        let completed = match self.call_with_retries(&request, &turn)? {
+            Attempted::Failed(failed) => crate::ended(TurnOutcome::Failed, Some(failed)),
+            Attempted::Interrupted => crate::ended(TurnOutcome::Interrupted, None),
             Attempted::Replied {
                 reply,
                 reasoning,
@@ -156,24 +155,20 @@ impl Loop {
                 });
             }
         };
-        self.finish_summary(&turn, completed, summary)
+        self.finish_summary(&turn, completed)
     }
 
     fn finish_summary(
         &mut self,
         turn: &TurnId,
         completed: TurnCompleted,
-        summary: Option<String>,
     ) -> Result<Result<String, Failure>, Error> {
         let reason = completed
             .error
             .clone()
             .unwrap_or_else(|| failure(ErrorCode::SummaryFailed, "the summary was interrupted."));
-        let outcome = self.end_turn(turn, completed)?;
-        Ok(match (outcome, summary) {
-            (Some(TurnOutcome::Completed), Some(text)) => Ok(text),
-            _ => Err(reason),
-        })
+        self.end_turn(turn, completed)?;
+        Ok(Err(reason))
     }
 }
 
