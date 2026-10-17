@@ -594,7 +594,5 @@ fn decisions_outside_the_closed_set_or_beside_another_answer_are_refused() {
 
 #[test]
 fn a_rewind_with_an_unknown_key_is_refused() {
-    assert!(
-        parse(r#"{"id":"c","command":"rewind","args":{"adopt":["j"]}}"#).is_err()
-    );
+    assert!(parse(r#"{"id":"c","command":"rewind","args":{"adopt":["j"]}}"#).is_err());
 }

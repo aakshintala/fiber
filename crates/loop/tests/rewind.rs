@@ -346,7 +346,10 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
     // the note, and no line for a job.
     let b = run_turn(b, &tx, "next");
     drop(b);
-    assert!(provider.requests().len() >= 2, "the next turn sent a request");
+    assert!(
+        provider.requests().len() >= 2,
+        "the next turn sent a request"
+    );
     for request in provider.requests().iter().skip(1) {
         for input in &request.conversation {
             if let Input::User { text, .. } = input {

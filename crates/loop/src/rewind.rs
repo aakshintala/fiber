@@ -15,6 +15,7 @@ use crate::prompt::{fill, message};
 use crate::{Error, Loop, Preamble, Session, variables};
 
 pub(crate) mod command;
+pub(crate) mod stop;
 
 /// What the new session starts from: the point, the note, and the old
 /// session's worktree.
