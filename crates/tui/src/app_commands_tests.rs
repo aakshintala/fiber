@@ -159,6 +159,22 @@ fn answer_commands(app: &mut App, names: &[&str]) {
     assert!(app.on_line(answer).is_empty());
 }
 
+/// The session answers the `commands` a `reloaded` asks for with the
+/// given JSON rows, returning the asked id.
+fn answer_rows(app: &mut App, rows: Value) -> String {
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let id = asked["id"].as_str().unwrap_or_default().to_owned();
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"commands": rows}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    id
+}
+
 /// A turn starts on [`SESSION`].
 fn turn_starts(app: &mut App) {
     let line = session_line(
@@ -1319,4 +1335,203 @@ fn a_file_error_is_a_message_with_no_selection() {
     assert_eq!(completions.lines(), ["No files: gone"]);
     assert_eq!(completions.selected, None);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
+}
+
+#[test]
+fn an_extension_command_sends_command_with_text() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "argument_hint": "[env]",
+            "tag": "acme", "extension": true}]),
+    );
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"name": "deploy", "text": "now"}));
+    let lines = sent(enter(&mut app, "/deploy"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "deploy"}));
+    assert!(lines[0]["args"].get("text").is_none());
+}
+
+#[test]
+fn an_extension_command_sends_command_during_a_turn() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    turn_starts(&mut app);
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "deploy", "text": "now"}));
+}
+
+#[test]
+fn an_extension_model_takes_the_built_in_slot_and_dispatch() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "model", "description": "Picks a fast model.", "argument_hint": "[speed]",
+            "tag": "acme", "extension": true}]),
+    );
+    type_text(&mut app, "/model");
+    let rows = shown(&app);
+    assert_eq!(rows.first().cloned(), Some("/model [speed]  Picks a fast model.  acme".to_owned()), "{rows:?}");
+    assert!(rows.iter().all(|row| *row != "/model  Opens the model picker.  command"), "{rows:?}");
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "model"}));
+    assert!(app.keymap().is_none());
+}
+
+#[test]
+fn a_skill_named_like_a_built_in_keeps_the_built_in() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "model", "description": "The model skill.", "tag": "skill"}]),
+    );
+    let lines = sent(enter(&mut app, "/model"));
+    assert_eq!(lines.len(), 0);
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn an_extension_greet_sends_command() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "greet", "description": "Greets.", "tag": "fx-ext", "extension": true}]),
+    );
+    let lines = sent(enter(&mut app, "/greet"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
+    assert_eq!(lines[0]["args"], json!({"name": "greet"}));
+}
+
+#[test]
+fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
+    let app = attached();
+    for command in ["/credential", "/rewind"] {
+        let mut app_clone = attached();
+        let _ = &app;
+        let lines = sent(enter(&mut app_clone, command));
+        assert_eq!(lines.len(), 1, "{command}");
+        assert_eq!(lines[0]["command"], "prompt", "{command}");
+        assert!(app_clone.keymap().is_none(), "{command}");
+    }
+}
+
+#[test]
+fn a_stale_commands_answer_sets_neither_rows_nor_extensions() {
+    let mut app = attached();
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let first: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let second: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": first["id"],
+            "result": {"commands": [{"name": "deploy", "description": "Deploys.",
+                "tag": "acme", "extension": true}]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": second["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let lines = sent(enter(&mut app, "/deploy"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+}
+
+#[test]
+fn home_clears_the_extension_names() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    app.on_key(Key::Char('/'), now());
+    // Going home clears the rows and names: re-attach sends prompt until
+    // a new answer arrives.
+    app.go_home();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let lines = sent(enter(&mut app, "/deploy"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+}
+
+#[test]
+fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "denied", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.draft(), "/deploy now");
+    assert_eq!(app.notice(), Some("No."));
+}
+
+#[test]
+fn an_extension_draft_with_an_image_is_a_prompt() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
+    );
+    type_text(&mut app, "/deploy now");
+    paste_image(&mut app);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+}
+
+#[test]
+fn the_unanswered_interval_shows_built_ins_only_and_sends_prompt() {
+    let mut app = attached();
+    answer_rows(
+        &mut app,
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true},
+            {"name": "tdd", "description": "Runs tdd.", "tag": "skill"}]),
+    );
+    let asked = app.on_line(reloaded(SESSION));
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    let table = table_lines();
+    type_text(&mut app, "/");
+    assert_eq!(shown(&app), table[..crate::slash::SHOWN].to_vec());
+    app.on_key(Key::CtrlC, now());
+    type_text(&mut app, "/td");
+    assert_eq!(shown(&app), ["no matches"]);
+    app.on_key(Key::CtrlC, now());
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"],
+            "result": {"commands": [{"name": "deploy", "description": "Deploys.",
+                "tag": "acme", "extension": true}]}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+    let lines = sent(enter(&mut app, "/deploy now"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "command");
 }
