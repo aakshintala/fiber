@@ -1390,6 +1390,9 @@ fiber.command("plain", {{ timeout = 5000, run = function() return "plain" end }}
 }
 
 /// Single-quotes `path` for the `sh -c` line in [`timer_init`].
+// debt: third copy across three test crates (ceiling three); upgrade
+// trigger: a fourth copy, or the next edit to any of them, moves it into
+// fakes.
 fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
@@ -1429,8 +1432,10 @@ fn serve_timer_init(
     clock: &Arc<fakes::clock::FakeClock>,
     dir: &std::path::Path,
     name: &str,
+    ready: &std::path::Path,
+    block: &std::path::Path,
 ) -> (Arc<Hub>, u64) {
-    let init = timer_init(&dir.join("ready.fifo"), &dir.join("block.fifo"));
+    let init = timer_init(ready, block);
     std::fs::write(dir.join("init.lua"), init).unwrap();
     let hub = Hub::new(clock.clone());
     hub.lock().phase = Phase::Registering { abandon_at: None };
@@ -1467,7 +1472,13 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, done) = log_pauses();
     let _guard = SettleGuard;
-    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm");
+    let (hub, armed) = serve_timer_init(
+        &clock,
+        dir.path(),
+        "arm",
+        &dir.path().join("ready.fifo"),
+        &dir.path().join("block.fifo"),
+    );
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
@@ -1490,7 +1501,7 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
 /// release still lets the child read end-of-file and exit instead of
 /// hanging the run.
 struct HoldExec {
-    file: Option<std::fs::File>,
+    file: std::fs::File,
 }
 
 impl HoldExec {
@@ -1502,23 +1513,15 @@ impl HoldExec {
             .write(true)
             .open(block)
             .unwrap();
-        Self { file: Some(file) }
+        Self { file }
     }
 
     /// Wakes the child's `read` with a line and closes the end.
     fn release(mut self) {
         use std::io::Write as _;
-        if let Some(mut file) = self.file.take() {
-            match writeln!(file) {
-                Ok(()) | Err(_) => {}
-            }
+        match writeln!(&mut self.file) {
+            Ok(()) | Err(_) => {}
         }
-    }
-}
-
-impl Drop for HoldExec {
-    fn drop(&mut self) {
-        drop(self.file.take());
     }
 }
 
@@ -1547,7 +1550,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         block.display()
     );
     let hold = HoldExec::hold(&block);
-    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec");
+    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
@@ -1598,7 +1601,13 @@ fn a_finished_command_records_no_timer_done() {
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, _done) = log_pauses();
     let _guard = SettleGuard;
-    let (hub, plain) = serve_timer_init(&clock, dir.path(), "plain");
+    let (hub, plain) = serve_timer_init(
+        &clock,
+        dir.path(),
+        "plain",
+        &dir.path().join("ready.fifo"),
+        &dir.path().join("block.fifo"),
+    );
     wait_returned(&hub, plain);
     assert!(
         timer_done(&log).is_empty(),
