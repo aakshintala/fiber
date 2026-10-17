@@ -120,7 +120,14 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
 /// The foot home draws.
 fn foot(app: &App) -> String {
     app.home_screen()
-        .map(|screen| screen.foot)
+        .map(|screen| {
+            screen
+                .foot
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
         .unwrap_or_default()
 }
 

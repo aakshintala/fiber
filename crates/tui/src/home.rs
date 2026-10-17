@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use contract::events::{SessionState, SessionStatus, WaitingKind};
 use contract::{Envelope, SessionId};
+use ratatui::text::Line;
 use serde_json::Value;
 
 /// A click target on home: one row's line, by the key [`Sessions`]
@@ -249,8 +250,9 @@ pub(crate) struct HomeScreen {
     /// The workspace picker above the box: its current recents,
     /// the focused row, and the typed path once a key opens its row.
     pub(crate) picker: Option<PickerScreen>,
-    /// The foot hint, or the quit hint while Ctrl+C is armed.
-    pub(crate) foot: String,
+    /// The foot hint, or the quit hint while Ctrl+C is armed: each
+    /// key bold, its label and every joiner dim.
+    pub(crate) foot: Line<'static>,
     /// The delete question, unwrapped: the frame wraps its head naming
     /// the session and everything `--cascade` adds, and its body
     /// scrolls past the frame.

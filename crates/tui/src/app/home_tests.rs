@@ -2822,7 +2822,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑ sessions · ↓ chips · F2 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2832,7 +2832,10 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
     app.set_keys(crate::KeysSetup { user });
-    assert_eq!(foot(&app), "↑ sessions · ↓ chips · Ctrl+C twice to quit");
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · Ctrl+C twice to quit"
+    );
 }
 
 #[test]
@@ -4215,7 +4218,14 @@ fn focus_last(app: &mut App) {
 /// The foot home draws.
 fn foot(app: &App) -> String {
     app.home_screen()
-        .map(|screen| screen.foot)
+        .map(|screen| {
+            screen
+                .foot
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
         .unwrap_or_default()
 }
 
@@ -4281,4 +4291,192 @@ fn exited_row(app: &mut App, session: &str, name: &str) {
         &recent,
         json!({"sessions": [exited(session, name)]}),
     ));
+}
+
+#[test]
+fn the_foot_names_the_default_keys() {
+    let app = home();
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_bolds_each_key_and_dims_the_rest() {
+    let app = home();
+    let screen = app.home_screen().expect("home draws");
+    let bold: Vec<String> = screen
+        .foot
+        .spans
+        .iter()
+        .filter(|span| {
+            span.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        })
+        .map(|span| span.content.to_string())
+        .collect();
+    assert_eq!(bold, ["Enter", "↑↓", "Delete", "F1", "Ctrl+C"]);
+    for span in &screen.foot.spans {
+        if bold.contains(&span.content.to_string()) {
+            assert!(
+                !span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::DIM),
+                "keys are bold, not dim: {}",
+                span.content
+            );
+        } else {
+            assert!(
+                span.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::DIM),
+                "labels and joiners are dim: {}",
+                span.content
+            );
+            assert!(
+                !span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD),
+                "only keys are bold: {}",
+                span.content
+            );
+        }
+    }
+}
+
+#[test]
+fn the_foot_uses_rebound_labels_in_their_slots() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!("f2"));
+    user.insert("open_focused".to_owned(), json!("ctrl+o"));
+    user.insert("toggle_ledgers".to_owned(), json!([]));
+    user.insert("delete_session".to_owned(), json!("x"));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+    );
+    let screen = app.home_screen().expect("home draws");
+    let bold: Vec<String> = screen
+        .foot
+        .spans
+        .iter()
+        .filter(|span| {
+            span.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        })
+        .map(|span| span.content.to_string())
+        .collect();
+    assert_eq!(bold, ["Ctrl+O", "↑↓", "x", "F2", "Ctrl+C"]);
+}
+
+#[test]
+fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("delete_session".to_owned(), json!(["f7", "f8"]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_open_focused_out_when_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("open_focused".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_delete_session_out_when_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("delete_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    user.insert("open_focused".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "↑↓ move · Delete deletes an exited one · Ctrl+C twice to quit"
+    );
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    user.insert("delete_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Ctrl+C twice to quit"
+    );
+    let mut user = serde_json::Map::new();
+    user.insert("open_focused".to_owned(), json!([]));
+    user.insert("delete_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "↑↓ move · F1 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_with_nothing_bound_shows_only_move_and_quit() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    user.insert("open_focused".to_owned(), json!([]));
+    user.insert("delete_session".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(foot(&app), "↑↓ move · Ctrl+C twice to quit");
+}
+
+#[test]
+fn the_foot_never_mentions_going_back_to_a_session() {
+    let app = home();
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn the_foot_shows_the_plain_quit_hint_while_armed() {
+    let mut app = home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlC, now);
+    let screen = app.home_screen().expect("home draws");
+    assert_eq!(screen.foot.spans.len(), 1);
+    let span = &screen.foot.spans[0];
+    assert_eq!(span.content.as_ref(), crate::app::QUIT_HINT);
+    assert!(
+        !span
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert!(
+        !span
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
 }
