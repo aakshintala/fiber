@@ -36,9 +36,9 @@ fn a_message_quotes_its_text_parts_in_order_before_later_text() {
     let message = line(
         "turn_started",
         json!({"input":[{
-        "type":"message", "command_id":"c", "origin":"driver",
+        "type":"message", "command_id":"c", "source":"driver",
         "content":[{"type":"text","text":"first"}, {"type":"text","text":"second"}]
-    }, {"type":"message", "command_id":"d", "origin":"driver", "content":[{"type":"text","text":"later message"}]}]}),
+    }, {"type":"message", "command_id":"d", "source":"driver", "content":[{"type":"text","text":"later message"}]}]}),
     );
     assert_eq!(
         excerpt(&[message, text("later reply")]),
@@ -140,7 +140,7 @@ fn blank_reply_text_and_empty_messages_are_skipped() {
     );
     let message = line(
         "turn_started",
-        json!({"input":[{"type":"message", "command_id":"c", "origin":"driver", "content":[]}]}),
+        json!({"input":[{"type":"message", "command_id":"c", "source":"driver", "content":[]}]}),
     );
     assert_eq!(excerpt(&[message, text("usable")]), Some("usable".into()));
 }
