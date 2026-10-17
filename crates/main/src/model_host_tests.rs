@@ -1042,9 +1042,37 @@ impl ModelCall for BlockingCall {
     fn run(&self, _sink: &mut dyn FnMut(contract::provider::Delta)) -> Result<Reply, CallError> {
         let _sent = self.entered.send(());
         let (lock, changed) = &*self.shared;
+        // Bounded by the wall clock: a run the watcher never cancels ends
+        // here instead of holding its thread past the test's own deadline.
+        // Expiry reports a failure the test never expects, so a mutant that
+        // never watches still fails the test instead of hanging it.
+        let wall = Deadline::after(WAIT);
         let mut released = lock.lock().unwrap();
         while !*released {
-            released = changed.wait(released).unwrap();
+            let remaining = wall.left();
+            if remaining.is_zero() {
+                break;
+            }
+            let (guard, waited) = changed.wait_timeout(released, remaining).unwrap();
+            released = guard;
+            if waited.timed_out() {
+                break;
+            }
+        }
+        if !*released {
+            return Err(CallError::Failed {
+                failure: Failure {
+                    message: "the blocking test provider was never released".to_owned(),
+                    code: ErrorCode::ExtensionFailed,
+                    retry_after_ms: None,
+                    provider: None,
+                },
+                should_retry: Some(false),
+                usage: Box::new(CallUsage::unnamed(InputSize {
+                    bytes: 1000,
+                    media: false,
+                })),
+            });
         }
         Err(CallError::Cancelled {
             usage: Box::new(CallUsage::unnamed(InputSize {
