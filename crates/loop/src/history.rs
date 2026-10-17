@@ -168,8 +168,11 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     if !line.is_durable() || !FOLDED.contains(&line.kind.as_str()) {
         return Ok(());
     }
-    // Most results carry no host list; do not deserialize their content.
-    if line.kind == "tool_call_completed" && !line.payload.contains_key("hosts_surfaced") {
+    // Results without host lists or file changes cannot affect known hosts.
+    if line.kind == "tool_call_completed"
+        && !line.payload.contains_key("hosts_surfaced")
+        && !line.payload.contains_key("changes")
+    {
         return Ok(());
     }
     let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {

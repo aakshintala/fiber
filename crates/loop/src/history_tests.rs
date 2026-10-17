@@ -970,12 +970,24 @@ fn known_hosts_resume_and_fork_keep_changes_without_surfaced_hosts() {
     write_log(&sessions, A, &lines);
 
     let before = forked(&sessions.join(A), Seq(1)).unwrap();
-    assert!(before.known_hosts.all_known(&["https://instructions.test/".into()]));
+    assert!(
+        before
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
     let after = forked(&sessions.join(A), Seq(2)).unwrap();
-    assert!(!after.known_hosts.all_known(&["https://instructions.test/".into()]));
+    assert!(
+        !after
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
     let resumed = resumed(&sessions.join(A)).unwrap();
     let fork = forked(&sessions.join(A), Seq(3)).unwrap();
-    assert!(!resumed.known_hosts.all_known(&["https://instructions.test/".into()]));
+    assert!(
+        !resumed
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
     assert_eq!(resumed.known_hosts, fork.known_hosts);
 }
 
