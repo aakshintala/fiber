@@ -40,6 +40,7 @@ pub(crate) fn resolved(
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     }
 }
 
@@ -86,6 +87,7 @@ pub(crate) fn completed(text: String, error: Option<Failure>) -> ToolCallComplet
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     }
 }
 

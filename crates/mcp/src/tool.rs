@@ -110,6 +110,7 @@ impl McpTool {
                 subject: Some(String::new()),
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             },
             call: Call::new(server, tool, target),
         }

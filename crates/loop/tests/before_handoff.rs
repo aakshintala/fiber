@@ -891,6 +891,7 @@ impl Tool for TripTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

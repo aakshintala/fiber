@@ -443,6 +443,7 @@ fn judged(subject: &str) -> Effects {
         subject: Some(subject.into()),
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     }
 }
 
@@ -472,6 +473,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &judged("npm test --watch"),
         &standing,
         &looped.grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         home.path(),
         &credentials,
@@ -554,7 +556,7 @@ fn a_persons_allow_line_carries_what_was_remembered() {
             rule,
             reason,
         }
-        .allow(RequestId("r_1".into()))
+        .allow(RequestId("r_1".into()), None)
     };
     let grant = Grant {
         tool: "shell".into(),
@@ -698,6 +700,7 @@ fn reads() -> Effects {
         subject: Some(String::new()),
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     }
 }
 

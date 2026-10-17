@@ -27,6 +27,7 @@ fn call(effects: Vec<Effect>, paths: Option<Vec<&str>>, subject: Option<&str>) -
         subject: subject.map(str::to_owned),
         prefix: None,
         always_reviewed: false,
+        hosts: None,
     }
 }
 
@@ -171,6 +172,7 @@ fn the_credential_deny_runs_before_a_standing_allow() {
         &effects,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -199,6 +201,7 @@ fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
         &call(vec![Effect::Reads], None, Some("")),
         &standing,
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -229,6 +232,7 @@ fn a_standing_ask_beats_a_fast_path_and_an_allow() {
         &call(vec![Effect::Reads], None, Some("")),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -250,6 +254,7 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
         &call(vec![Effect::Reads], None, Some("")),
         &standing,
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -280,6 +285,7 @@ fn a_markdown_write_in_the_memory_data_directories_takes_the_fast_path() {
             &effects,
             &rules(Vec::new(), Vec::new()),
             &[],
+            &crate::known_hosts::KnownHosts::default(),
             &workspace,
             &home,
             &credentials,
@@ -300,6 +306,7 @@ fn a_standing_deny_beats_the_data_directory_fast_path() {
         &effects,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -326,6 +333,7 @@ fn a_standing_ask_beats_the_data_directory_fast_path() {
         &effects,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -353,6 +361,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
         &effects,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -379,6 +388,7 @@ fn the_credential_deny_beats_the_data_directory_fast_path() {
             &effects,
             &empty_rules(),
             &[],
+            &crate::known_hosts::KnownHosts::default(),
             &workspace,
             &home,
             &credentials,
@@ -406,6 +416,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &effects,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -423,6 +434,7 @@ fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_all
         &effects,
         &standing,
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -447,6 +459,7 @@ fn a_session_grant_beats_a_standing_allow() {
         &call(vec![Effect::Executes], None, Some("npm test --watch")),
         &standing,
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -467,6 +480,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &effects,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -490,6 +504,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &effects,
         &empty_rules(),
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -522,6 +537,7 @@ fn a_grant_matches_only_its_tool_and_prefix() {
             &effects,
             &empty_rules(),
             &[grant],
+            &crate::known_hosts::KnownHosts::default(),
             &workspace,
             &home,
             &credentials,
@@ -539,6 +555,7 @@ fn no_match_on_an_executes_call_is_review() {
         &call(vec![Effect::Executes], None, None),
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -559,6 +576,7 @@ fn a_call_no_rule_can_match_matches_no_deny() {
         &call(vec![Effect::Executes], None, None),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -579,6 +597,7 @@ fn at_the_same_step_the_project_rule_is_used() {
         &call(vec![Effect::Reads], None, Some("project")),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -602,6 +621,7 @@ fn a_global_deny_beats_a_project_allow() {
         &call(vec![Effect::Executes], None, Some("npm test")),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -631,12 +651,14 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         };
         judge(
             "read",
             &effects,
             &empty_rules(),
             &[],
+            &crate::known_hosts::KnownHosts::default(),
             &workspace,
             &home,
             &credentials,
@@ -759,6 +781,7 @@ fn a_read_of_fiber_home_is_denied_before_the_read_fast_path() {
         &call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some("")),
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -797,6 +820,7 @@ fn an_unreadable_rules_file_denies_at_step_two() {
         &call(vec![Effect::Reads], None, Some("")),
         &error,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -825,6 +849,7 @@ fn a_credential_path_is_denied_even_when_the_rules_are_unreadable() {
         &effects,
         &error,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -954,6 +979,7 @@ fn an_always_reviewed_call_skips_a_session_grant() {
         &plain,
         &empty_rules(),
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -968,6 +994,7 @@ fn an_always_reviewed_call_skips_a_session_grant() {
         &reviewed(plain),
         &empty_rules(),
         &grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -989,6 +1016,7 @@ fn an_always_reviewed_call_skips_a_standing_allow() {
         &plain,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1003,6 +1031,7 @@ fn an_always_reviewed_call_skips_a_standing_allow() {
         &reviewed(plain),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1021,6 +1050,7 @@ fn an_always_reviewed_markdown_write_skips_the_data_directory_fast_path() {
         &plain,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1032,6 +1062,7 @@ fn an_always_reviewed_markdown_write_skips_the_data_directory_fast_path() {
         &reviewed(plain),
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1049,6 +1080,7 @@ fn an_always_reviewed_read_skips_the_read_fast_path() {
         &plain,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1060,6 +1092,7 @@ fn an_always_reviewed_read_skips_the_read_fast_path() {
         &reviewed(plain),
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1080,6 +1113,7 @@ fn an_always_reviewed_call_still_meets_the_credential_deny() {
         &plain,
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1097,6 +1131,7 @@ fn an_always_reviewed_call_still_meets_the_credential_deny() {
         &reviewed(plain),
         &empty_rules(),
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1124,6 +1159,7 @@ fn an_always_reviewed_call_still_meets_a_standing_deny() {
         &plain,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1141,6 +1177,7 @@ fn an_always_reviewed_call_still_meets_a_standing_deny() {
         &reviewed(plain),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1168,6 +1205,7 @@ fn an_always_reviewed_call_still_meets_a_standing_ask() {
         &plain,
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
@@ -1179,10 +1217,101 @@ fn an_always_reviewed_call_still_meets_a_standing_ask() {
         &reviewed(plain),
         &standing,
         &[],
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         &home,
         &credentials,
         &[],
     );
     assert!(matches!(verdict, Verdict::Ask(_)));
+}
+
+#[test]
+fn permission_known_network_fast_path_respects_declared_hosts_and_prior_steps() {
+    use crate::known_hosts::KnownHosts;
+    let mut known = KnownHosts::default();
+    known.fold(&contract::events::Event::PermissionResolved(
+        contract::events::PermissionResolved {
+            hosts: Some(vec!["https://example.com/".into()]),
+            ..crate::completion::resolved(None, Decision::Allow, DecidedBy::Person, None, None)
+        },
+    ));
+    let (_root, workspace, home, credentials) = dirs();
+    let judge_call = |effects: &Effects, standing: &Result<StandingRules, RulesError>| {
+        judge(
+            "lookup",
+            effects,
+            standing,
+            &[],
+            &known,
+            &workspace,
+            &home,
+            &credentials,
+            &[],
+        )
+    };
+    for hosts in [
+        Some(vec![]),
+        Some(vec!["https://EXAMPLE.com/a?q=1".into()]),
+        Some(vec!["https://example.com/b?other=2".into()]),
+    ] {
+        let mut effects = call(vec![Effect::Network], None, Some("url"));
+        effects.hosts = hosts;
+        assert!(matches!(
+            judge_call(&effects, &empty_rules()),
+            Verdict::Allow(None)
+        ));
+        effects.always_reviewed = true;
+        assert!(matches!(
+            judge_call(&effects, &empty_rules()),
+            Verdict::Review
+        ));
+        effects.always_reviewed = false;
+        assert!(matches!(
+            judge_call(
+                &effects,
+                &rules(vec![rule(RuleDecision::Deny, "lookup", "url")], vec![])
+            ),
+            Verdict::Deny {
+                by: DecidedBy::StandingRule,
+                reason: "standing_rule",
+                ..
+            }
+        ));
+        assert!(matches!(
+            judge_call(
+                &effects,
+                &rules(vec![rule(RuleDecision::Ask, "lookup", "url")], vec![])
+            ),
+            Verdict::Ask(_)
+        ));
+    }
+    for hosts in [
+        None,
+        Some(vec!["https://unknown.test/".into()]),
+        Some(vec![
+            "https://example.com/".into(),
+            "https://unknown.test/".into(),
+        ]),
+        Some(vec!["bare.test".into()]),
+    ] {
+        let mut effects = call(vec![Effect::Network], None, Some("url"));
+        effects.hosts = hosts;
+        assert!(matches!(
+            judge_call(&effects, &empty_rules()),
+            Verdict::Review
+        ));
+    }
+    for declared in [
+        vec![Effect::Network, Effect::Reads],
+        vec![Effect::Network, Effect::Writes],
+        vec![Effect::Network, Effect::Executes],
+    ] {
+        let mut effects = call(declared, None, Some("url"));
+        effects.hosts = Some(vec!["https://example.com/".into()]);
+        assert!(matches!(
+            judge_call(&effects, &empty_rules()),
+            Verdict::Review
+        ));
+    }
 }

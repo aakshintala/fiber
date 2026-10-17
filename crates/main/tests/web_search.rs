@@ -139,24 +139,9 @@ fn echo_backend(backend: &str, prefix: &str) -> String {
     )
 }
 
-/// Installs one echo backend and allows `web_search` by standing rule, so
-/// the network call runs unreviewed.
+/// Installs one echo backend; its search takes the network fast path.
 fn echo_setup(short: &str, backend: &str, prefix: &str, setup: &Setup) {
     setup.lua(short, &echo_backend(backend, prefix));
-    allow_web_search(setup);
-}
-
-/// A standing allow for `web_search`, so the backend call runs without a
-/// person to review it.
-fn allow_web_search(setup: &Setup) {
-    fs::write(
-        setup.home().join("rules"),
-        format!(
-            "{}\n",
-            json!({"decision": "allow", "tool": "web_search", "prefix": ""})
-        ),
-    )
-    .unwrap();
 }
 
 /// Overwrites the session's `config.json` with `model` and `web_search`.
@@ -165,7 +150,7 @@ fn write_config(setup: &Setup, config: &Value) {
 }
 
 /// The complete event kinds of a run whose model calls `web_search` once
-/// (allowed by the standing rule, so `permission_resolved` names it) then
+/// (allowed by the network fast path) then
 /// answers `Hello.`: one `assistant_message_delta`, as this file's `hello`
 /// streams one text fragment.
 fn search_call_kinds() -> Vec<&'static str> {
@@ -181,7 +166,6 @@ fn search_call_kinds() -> Vec<&'static str> {
         "tool_call_requested",
         "usage_recorded",
         "assistant_message_completed",
-        "permission_resolved",
         "tool_call_started",
         "tool_call_completed",
         "step_started",
@@ -399,7 +383,6 @@ fn two_backends_with_the_setting_run_the_named_one() {
     setup.provider(&server);
     setup.lua("one", &echo_backend("one", "one"));
     setup.lua("two", &echo_backend("two", "two"));
-    allow_web_search(&setup);
     write_config(
         &setup,
         &json!({"model": "fake/m", "web_search": {"backend": "two"}}),
@@ -455,7 +438,6 @@ fn a_backend_past_its_timeout_fails_and_the_turn_ends() {
         "searcher",
         "fiber.search_backend(\"brave\", { timeout = 50, run = function() while true do end end })\n",
     );
-    allow_web_search(&setup);
     let run = ask(&setup, "search the web for rust");
     assert_eq!(run.kinds(), search_call_kinds());
 
@@ -483,7 +465,6 @@ fn a_result_past_the_default_cap_is_cut_to_its_start() {
            end \
            return results end })\n",
     );
-    allow_web_search(&setup);
     let run = ask(&setup, "search the web for rust");
     assert_eq!(run.kinds(), search_call_kinds());
 
@@ -548,4 +529,90 @@ fn a_resumed_session_lists_the_backend_search() {
     assert_eq!(second.kinds(), resumed_hello_kinds());
     let row = second.sent_tool("web_search");
     assert_eq!(row["registered_by"], "builtin");
+}
+
+fn result_page() -> ProviderServer {
+    ProviderServer::start([fakes::Response {
+        status: 200,
+        headers: vec![("content-type".into(), "text/plain".into())],
+        body: b"search result page".to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap()
+}
+
+#[test]
+fn backend_search_surfaces_a_host_for_the_next_fetch_without_review() {
+    let setup = Setup::new_with_fm_root();
+    let site = result_page();
+    let url = format!("{}/doc", site.url());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "search",
+            "web_search",
+            &json!({"query":"rust"}),
+        )]),
+        stream(&[function_call("fetch", "web_fetch", &json!({"url":url}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.lua(
+        "searcher",
+        &echo_backend("brave", "T").replace("https://example.com/1", &url),
+    );
+    let run = ask(&setup, "search the web then read the result");
+    let mut expected = search_call_kinds();
+    expected.splice(
+        13..13,
+        [
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert_eq!(run.kinds(), expected);
+    let results = run.all("tool_call_completed");
+    assert_eq!(results[0]["payload"]["hosts_surfaced"], json!([url]));
+    assert_eq!(results[1]["payload"]["status"], "completed");
+    assert_eq!(site.requests().len(), 1);
+    assert_eq!(site.requests()[0].path, "/doc");
+}
+
+#[test]
+fn hosted_search_surfaces_a_host_before_a_fetch_in_the_same_reply() {
+    let setup = Setup::new_with_fm_root();
+    let site = result_page();
+    let url = format!("{}/doc", site.url());
+    let hosted = json!({"type":"response.output_item.done", "item":{"type":"web_search_call", "id":"ws_search", "status":"completed", "action":{"type":"search", "query":"rust", "sources":[{"url":url}]}}});
+    let server = ProviderServer::start([
+        stream(&[
+            hosted,
+            function_call("fetch", "web_fetch", &json!({"url":url})),
+        ]),
+        hello(),
+    ])
+    .unwrap();
+    install_hosted_model(&setup, &server);
+    let run = ask(&setup, "search the web then read the result");
+    let mut expected = search_call_kinds();
+    expected.splice(
+        8..8,
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert_eq!(run.kinds(), expected);
+    let results = run.all("tool_call_completed");
+    assert_eq!(results[0]["payload"]["hosts_surfaced"], json!([url]));
+    assert_eq!(results[1]["payload"]["status"], "completed");
+    assert_eq!(site.requests().len(), 1);
+    assert_eq!(site.requests()[0].path, "/doc");
 }

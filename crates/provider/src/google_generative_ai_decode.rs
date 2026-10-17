@@ -481,6 +481,7 @@ fn place_grounding(actions: &mut [ReplyAction], grounding: &Value) {
         hosted.completed.content = vec![ContentPart::Text {
             text: urls.join("\n"),
         }];
+        hosted.completed.hosts_surfaced = urls.into_iter().map(str::to_owned).collect();
     }
 }
 

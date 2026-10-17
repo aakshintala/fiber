@@ -65,6 +65,7 @@ impl Tool for EchoTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

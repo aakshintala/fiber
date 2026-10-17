@@ -111,6 +111,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   tool that changes files sets it, an extension's included.
 - `artifact`: the path to the full output, present when the result was cut or
   when an `after_tool` hook returned text for the artifact.
+- `hosts_surfaced`: the hosts the result surfaced, as `http` or `https` URLs,
+  such as a search's result URLs ("What a tool declares"). Those hosts become
+  known in the session ("Web fetch and web search", "Effects"). An `after_tool`
+  hook that rewrites `content` leaves it as the tool returned it.
 - `kept`: on a cut result, the byte ranges of the full output that `content`
   holds ("Bounded results"), so a client marks the edges of the model's view
   without reading the cut notice. The ranges index the text or raw stream the
@@ -1083,6 +1087,11 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   in the session, or was the host of a fetch a reviewer or a person allowed in
   the session. A host named only inside a fetched page is not known: otherwise an
   injected page could name its own host.
+- An instruction file the session's own calls changed makes no host known, in
+  any version: a file a `changes` entry names, or one logged with `own_edit`
+  (`docs/events.md`, `instruction_file`). Otherwise the model could write a
+  fetched page's URL into `AGENTS.md` on the writes fast path and make its
+  host known.
 - A host is named only by an `http` or `https` URL; a bare domain is not.
   Hosts match case-insensitively and exactly, with the port (the scheme's
   default when absent), so a subdomain is a different host. The result URLs of

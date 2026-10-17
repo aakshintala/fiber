@@ -70,6 +70,7 @@ impl Tool for ExecTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

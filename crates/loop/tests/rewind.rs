@@ -2598,6 +2598,7 @@ impl contract::tool::Tool for SendRewind {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -3345,4 +3346,132 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
         }),
         "no handoff note reaches the rewound session"
     );
+}
+
+#[test]
+fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
+    let mut parent = Session::new(vec![Scripted::text("one"), Scripted::text("two")], None);
+    parent
+        .inbox
+        .send(delivery("Read https://before.test/"))
+        .unwrap();
+    assert_eq!(parent.turn(), Some(TurnOutcome::Completed));
+    let at = log::read(&parent.dir).unwrap().last().unwrap().seq.unwrap();
+    parent
+        .inbox
+        .send(delivery("Read https://after.test/"))
+        .unwrap();
+    assert_eq!(parent.turn(), Some(TurnOutcome::Completed));
+    let home = parent.dir.parent().unwrap().to_path_buf();
+    let child_log =
+        Arc::new(Log::create(&home, SessionId(B_ID.into()), parent.clock.clone()).unwrap());
+    let tools: Vec<_> = ["before", "after"]
+        .into_iter()
+        .map(|name| {
+            let mut tool = TestTool::declaring(
+                name,
+                "Fetched.",
+                vec![contract::shapes::Effect::Network],
+                None,
+            );
+            tool.hosts = Some(vec![format!("https://{name}.test/")]);
+            Arc::new(tool)
+        })
+        .collect();
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        calls_reply("", &[("before", paris()), ("after", paris())]),
+        Scripted::text("Done."),
+    ]));
+    let reviewer = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
+    let (tx, rx) = mpsc::channel();
+    let child = Loop::rewound(
+        r#loop::Session {
+            log: child_log.clone(),
+            provider,
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                child_log.dir().join("events.jsonl").display().to_string(),
+                parent.clock.clone(),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: tools
+                .iter()
+                .map(|tool| ("builtin".into(), tool.clone() as Arc<dyn Tool>))
+                .collect(),
+            permissions: Permissions {
+                workspace: parent.workspace.display().to_string(),
+                credentials: parent.credentials.clone(),
+                credential_files: vec![],
+                rules: parent.rules.clone(),
+            },
+        },
+        Rewound {
+            from: Point {
+                session_id: SessionId("s_test".into()),
+                seq: at,
+            },
+            note: rewind_note(&parent.dir, at).unwrap(),
+            summary: None,
+            worktree: None,
+            name: None,
+        },
+    )
+    .unwrap()
+    .reviewer(
+        Ok(r#loop::Reviewer {
+            provider: reviewer.clone(),
+            model: Model {
+                reference: "fake/reviewer-1".into(),
+                cost: None,
+                subscription: false,
+            },
+            cache_lifetime: contract::events::CacheLifetime::OneHour,
+            context_window: fakes::CONTEXT_WINDOW,
+            thinking_levels: vec![],
+        }),
+        r#loop::BlockLimits::default(),
+    );
+    let _child = run_turn(child, &tx, "continue");
+    let lines = log::read(child_log.dir()).unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(reviewer.requests().len(), 1);
+    let resolved = lines
+        .iter()
+        .find(|line| line.kind == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved.payload["hosts"], json!(["https://after.test/"]));
+    for tool in tools {
+        assert_eq!(tool.ran().len(), 1);
+    }
 }

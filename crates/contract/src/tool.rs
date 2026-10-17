@@ -189,6 +189,10 @@ pub struct Effects {
     /// allows, and still meets the credential deny and the standing deny
     /// and ask rules.
     pub always_reviewed: bool,
+    /// Network hosts contacted, each named by an HTTP(S) URL
+    /// (`docs/tools.md`, "What a tool declares"). `None` is unknown;
+    /// an empty list contacts no host the model chose.
+    pub hosts: Option<Vec<String>>,
 }
 
 /// Why an effects function could not classify a call. Either way the call
@@ -212,6 +216,9 @@ pub enum EffectsError {
 /// parts, such as images, are kept).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Output {
+    /// Hosts surfaced by this result, each named by an HTTP(S) URL
+    /// (`docs/tools.md`, "What a tool declares").
+    pub hosts_surfaced: Vec<String>,
     /// Text and image parts for the model, before any cut.
     pub content: Vec<ContentPart>,
     /// Set when the call failed.

@@ -113,6 +113,7 @@ impl Loop {
             model,
             conversation,
             reviewed,
+            known_hosts,
             changes,
             handoff,
             diag,
@@ -123,6 +124,7 @@ impl Loop {
             reviewed,
             had: &mut changes.had,
             carry: &mut handoff.carry,
+            known: known_hosts,
         };
         let mut emit = |event: &Event, action: &ActionId| {
             transcript.write(log, &model.reference, event, Some(turn), Some(action))
