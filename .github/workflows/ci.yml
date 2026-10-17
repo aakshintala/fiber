@@ -631,9 +631,9 @@ jobs:
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
       # PROBE (see #2360; dropped before merge): traces the musl jigs'
-      # scale-16 re-count mmap calls with strace -k for head and base and
-      # prints, per side, the total mmap count, the top 15 call sites with
-      # their request sizes, and the head-minus-base table. It only
+      # scale-16 re-count mmap calls with call stacks for head and base
+      # and prints, per side, the total mmap count, the top 15 call sites
+      # with their request sizes, and the head-minus-base table. It only
       # reports, never fails; a missing jig reports unavailable.
       - name: Probe the paging re-count mmap call sites
         if: always()
@@ -641,6 +641,7 @@ jobs:
           tmp=$RUNNER_TEMP/probe-mmap
           mkdir -p "$tmp" || true
           df -h "$tmp" || true
+          uname -r || true
           if ! command -v strace >/dev/null 2>&1; then
             echo "probe-mmap: strace not installed; installing"
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
@@ -648,17 +649,47 @@ jobs:
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS install -y --no-install-recommends strace || true
           fi
+          if ! command -v perf >/dev/null 2>&1; then
+            echo "probe-mmap: perf not installed; installing"
+            # shellcheck disable=SC2086 # APT_OPTS is a list of options
+            sudo apt-get $APT_OPTS update || true
+            # shellcheck disable=SC2086 # APT_OPTS is a list of options
+            sudo apt-get $APT_OPTS install -y --no-install-recommends linux-tools-common linux-tools-generic || true
+          fi
           strace -V 2>&1 | grep version || true
-          echo "probe-mmap: tracer is strace -k; build flag CARGO_PROFILE_RELEASE_DEBUG=line-tables-only on the probe builds only; the release profile files stay unchanged"
-          # strace -k summarizer, read from the trace file: one TOTAL line,
-          # one SITE line per call site, one LEN line per site and request
-          # size. The mmap call line gives the len argument; the ">" lines
-          # after it give the stack. The call site is the first user-space
-          # frame with a symbol and file:line where present, else the first
-          # frame. State is keyed by pid, since -f interleaves threads.
-          # Run-specific paths are normalized away so head and base sites
-          # match.
-          straceawk='
+          perf --version || true
+          sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
+          echo "probe-mmap: build flag CARGO_PROFILE_RELEASE_DEBUG=line-tables-only on the probe builds only; the release profile files stay unchanged"
+          # perf script summarizer: one TOTAL line, one SITE line per call
+          # site, one LEN line per site and request size. The call site is
+          # the nearest stack frame in the jig or with a Rust source line,
+          # else the nearest frame. Run-specific paths and load addresses
+          # are normalized away so head and base sites match. The first
+          # lines also land in SAMPLE.
+          perfawk='
+          NR <= 30 {
+            print > SAMPLE
+          }
+          function emit(   k, p) {
+            if (cur == "") {
+              return
+            }
+            if (site == "") {
+              site = first
+            }
+            if (site == "") {
+              site = "(unresolved)"
+            }
+            gsub(/@@@/, "@ @", site)
+            site = normpath(site)
+            site = substr(site, 1, 200)
+            scount[site]++
+            lcount[site SUBSEP curlen]++
+            cur = ""
+            site = ""
+            first = ""
+            have = 0
+          }
           function normpath(s,   i) {
             if (JIGPATH == "") {
               return s
@@ -668,60 +699,114 @@ jobs:
             }
             return s
           }
-          function emit(p,   s) {
-            if (cur[p] == "") {
-              return
+          /sys_enter_mmap:/ {
+            emit()
+            total++
+            curlen = "?"
+            if (match($0, /len (0x[0-9a-fA-F]+|[0-9]+)/)) {
+              curlen = substr($0, RSTART + 4, RLENGTH - 4)
             }
-            if (site[p] != "") {
-              s = site[p]
-            } else if (first[p] != "") {
-              s = first[p]
-            } else {
-              s = "(unresolved)"
+            cur = curlen
+            next
+          }
+          /^[[:space:]]+[0-9a-fA-F][0-9a-fA-F]*[[:space:]]/ {
+            if (cur != "") {
+              frame = $0
+              sub(/^[[:space:]]+[0-9a-fA-F]+[[:space:]]+/, "", frame)
+              gsub(/^[[:space:]]+/, "", frame)
+              if (first == "") {
+                first = frame
+              }
+              if (!have && (index(frame, JIG) > 0 || frame ~ /\.rs:[0-9]+/)) {
+                site = frame
+                have = 1
+              }
             }
-            gsub(/@@@/, "@ @", s)
-            s = normpath(s)
-            s = substr(s, 1, 200)
-            scount[s]++
-            lcount[s SUBSEP curlen[p]]++
-            cur[p] = ""
-            site[p] = ""
-            first[p] = ""
-            have[p] = 0
+            next
+          }
+          /^[[:space:]]*$/ {
+            emit()
+            next
           }
           {
-            pid = ""
-            line = $0
-            if (match(line, /^[[:space:]]*[0-9]+[[:space:]]+/)) {
-              pid = substr(line, RSTART, RLENGTH)
-              gsub(/[^0-9]/, "", pid)
-              line = substr(line, RSTART + RLENGTH)
+            next
+          }
+          END {
+            emit()
+            print "TOTAL@@@" (total + 0)
+            for (s in scount) {
+              printf "SITE@@@%d@@@%s\n", scount[s], s
             }
+            for (k in lcount) {
+              split(k, p, SUBSEP)
+              printf "LEN@@@%s@@@%s@@@%d\n", p[1], p[2], lcount[k]
+            }
+          }
+          '
+          # strace -k summarizer, same output shape as perfawk: the call
+          # line gives the len, the ">" lines after it give the stack.
+          straceawk='
+          NR <= 30 {
+            print > SAMPLE
+          }
+          function emit(   k, p) {
+            if (cur == "") {
+              return
+            }
+            if (site == "") {
+              site = first
+            }
+            if (site == "") {
+              site = "(unresolved)"
+            }
+            gsub(/@@@/, "@ @", site)
+            site = normpath(site)
+            site = substr(site, 1, 200)
+            scount[site]++
+            lcount[site SUBSEP curlen]++
+            cur = ""
+            site = ""
+            first = ""
+            have = 0
+          }
+          function normpath(s,   i) {
+            if (JIGPATH == "") {
+              return s
+            }
+            while ((i = index(s, JIGPATH)) > 0) {
+              s = substr(s, 1, i - 1) "<jig>" substr(s, i + length(JIGPATH))
+            }
+            return s
+          }
+          {
+            line = $0
+            sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
             sub(/^[[:space:]]+/, "", line)
-            if (match(line, /^mmap[0-9_]*\(/)) {
-              emit(pid)
-              total++
-              call = substr(line, RSTART)
-              curlen[pid] = "?"
-              if (match(call, /^mmap[0-9_]*\([^,]*,[[:space:]]*[0-9]+/)) {
-                s = substr(call, RSTART, RLENGTH)
-                sub(/.*,[[:space:]]*/, "", s)
-                curlen[pid] = s
+            if (line ~ /^mmap[0-9_]*/) {
+              if (line ~ /^mmap[0-9_]*\(/) {
+                emit()
+                total++
+                curlen = "?"
+                if (match(line, /mmap[0-9_]*\([^,]*,[[:space:]]*[0-9]+/)) {
+                  s = substr(line, RSTART, RLENGTH)
+                  sub(/.*,[[:space:]]*/, "", s)
+                  curlen = s
+                }
+                cur = curlen
               }
-              cur[pid] = "x"
               next
             }
             if (line ~ /^>/) {
-              if (cur[pid] != "") {
+              if (cur != "") {
                 frame = line
                 sub(/^>[[:space:]]*/, "", frame)
                 sub(/[[:space:]]*\[0x[0-9a-fA-F]+\][[:space:]]*$/, "", frame)
-                if (first[pid] == "") {
-                  first[pid] = frame
+                if (first == "") {
+                  first = frame
                 }
-                if (!have[pid] && (index(frame, JIG) > 0 || frame ~ /\.rs:[0-9]+/)) {
-                  site[pid] = frame
-                  have[pid] = 1
+                if (!have && (index(frame, JIG) > 0 || frame ~ /\.rs:[0-9]+/)) {
+                  site = frame
+                  have = 1
                 }
               }
               next
@@ -729,16 +814,14 @@ jobs:
             next
           }
           END {
-            for (p in cur) {
-              emit(p)
-            }
+            emit()
             print "TOTAL@@@" (total + 0)
             for (s in scount) {
               printf "SITE@@@%d@@@%s\n", scount[s], s
             }
             for (k in lcount) {
-              split(k, parts, SUBSEP)
-              printf "LEN@@@%s@@@%s@@@%d\n", parts[1], parts[2], lcount[k]
+              split(k, p, SUBSEP)
+              printf "LEN@@@%s@@@%s@@@%d\n", p[1], p[2], lcount[k]
             }
           }
           '
@@ -778,19 +861,53 @@ jobs:
           fi
           file "$tmp/probe-head-paging" || true
           file "$tmp/probe-base-paging" || true
-          echo "probe-mmap: head jig src=$head_src"
-          echo "probe-mmap: base jig src=$base_src"
+          echo "probe-mmap: head jig=$tmp/probe-head-paging src=$head_src"
+          echo "probe-mmap: base jig=$tmp/probe-base-paging src=$base_src"
           df -h "$tmp" || true
-          # Traces one scale-16 run of the jig at $1 (side $2) with
-          # strace -k into a trace file under $RUNNER_TEMP, then summarizes
-          # that file into counts. Each trace is bounded by timeout 900; a
-          # timeout still leaves a partial trace file, which the summary
-          # reads. At most the first 20 raw trace lines reach the log, for
-          # format checking; the trace files are read with grep and awk.
-          trace_side() {
-            echo "probe-mmap: $2 trace cmd: strace -k -f -e trace=mmap -o <file> -- <jig> 16 160 48"
+          # Traces one scale-16 run of the jig at $1 (side $2) with perf
+          # and writes the counts file. Prefers source-line fields.
+          trace_perf() {
+            data="$tmp/$2-perf.data"
+            echo "probe-mmap: $2 trace cmd: perf record -e syscalls:sys_enter_mmap --call-graph dwarf -o <data> -- <jig> 16 160 48"
             if [ ! -x "$1" ]; then
-              echo "probe-mmap: $2 no jig; unavailable"
+              echo "probe-mmap: $2 perf: no jig; unavailable"
+              return 0
+            fi
+            : > "$tmp/$2-counts.txt" || true
+            if timeout 900 perf record -e syscalls:sys_enter_mmap --call-graph dwarf -o "$data" \
+              -- "$1" 16 160 48 > "$tmp/$2-jig.log" 2>&1; then
+              echo "probe-mmap: $2 perf record finished"
+            else
+              echo "probe-mmap: $2 perf record exited nonzero; attempting whatever it recorded"
+            fi
+            grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-mmap: $2 re-count: /" || true
+            if [ -s "$data" ]; then
+              jigbase=$(basename "$1")
+              perf script -i "$data" -F +srcline 2>/dev/null | \
+                awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-script-sample.txt" "$perfawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
+              total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$2-counts.txt" 2>/dev/null | sed -n '1p' || true)
+              if [ -z "${total:-}" ] || [ "$total" = 0 ]; then
+                echo "probe-mmap: $2 perf +srcline gave no events; retrying perf script with default fields"
+                perf script -i "$data" 2>/dev/null | \
+                  awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-script-sample.txt" "$perfawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
+                echo "probe-mmap: $2 tracer is perf with default fields" > "$tmp/$2-tracer.txt" || true
+              else
+                echo "probe-mmap: $2 tracer is perf with source-line fields" > "$tmp/$2-tracer.txt" || true
+              fi
+            else
+              echo "probe-mmap: $2 perf recorded no data"
+            fi
+            rm -f "$data" || true
+            df -h "$tmp" || true
+            return 0
+          }
+          # Traces one scale-16 run of the jig at $1 (side $2) with
+          # strace -k, streaming the trace into the summarizer so no
+          # gigabyte trace file ever lands on disk.
+          trace_strace() {
+            echo "probe-mmap: $2 trace cmd: strace -k -f -e trace=mmap -- <jig> 16 160 48"
+            if [ ! -x "$1" ]; then
+              echo "probe-mmap: $2 strace: no jig; unavailable"
               return 0
             fi
             if ! command -v strace >/dev/null 2>&1; then
@@ -798,55 +915,61 @@ jobs:
               return 0
             fi
             jigbase=$(basename "$1")
-            if timeout 900 strace -k -f -e trace=mmap -o "$tmp/$2-mmap.log" -- \
-              "$1" 16 160 48 >"$tmp/$2-jig.log" 2>&1; then
-              echo "probe-mmap: $2 trace finished"
-            else
-              echo "probe-mmap: $2 trace exited nonzero (a 124 is the timeout); summarizing the partial trace"
-            fi
+            timeout 900 strace -k -f -e trace=mmap -- "$1" 16 160 48 2>&1 >"$tmp/$2-jig.log" | \
+              awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-strace-sample.txt" "$straceawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
             grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-mmap: $2 re-count: /" || true
-            echo "probe-mmap: $2 trace sample, first raw lines for format checking"
-            sed -n '1,20p' "$tmp/$2-mmap.log" 2>/dev/null | sed "s/^/probe-mmap: $2 raw: /" || true
-            awk -v JIG="$jigbase" -v JIGPATH="$1" "$straceawk" "$tmp/$2-mmap.log" > "$tmp/$2-counts.txt" 2>/dev/null || true
-            rm -f "$tmp/$2-mmap.log" || true
-            df -h "$tmp" || true
+            echo "probe-mmap: $2 tracer is strace -k" > "$tmp/$2-tracer.txt" || true
+            return 0
+          }
+          # Probes side $2 with the jig at $1: perf first, strace -k when
+          # perf is missing or records no mmap events.
+          probe_side() {
+            if command -v perf >/dev/null 2>&1; then
+              trace_perf "$1" "$2"
+            else
+              echo "probe-mmap: $2 perf missing; using strace -k"
+              : > "$tmp/$2-counts.txt" || true
+            fi
+            total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$2-counts.txt" 2>/dev/null | sed -n '1p' || true)
+            if [ -z "${total:-}" ] || [ "$total" = 0 ]; then
+              echo "probe-mmap: $2 perf gave no mmap events; falling back to strace -k"
+              trace_strace "$1" "$2"
+            fi
             return 0
           }
           # Prints the total and the top 15 call sites with request sizes
-          # (min, max, most common) for side $1 from its counts file.
+          # for side $1 from its counts file.
           report_side() {
             f="$tmp/$1-counts.txt"
+            tracer=$(sed -n '1p' "$tmp/$1-tracer.txt" 2>/dev/null || true)
             total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$f" 2>/dev/null | sed -n '1p' || true)
-            echo "probe-mmap: $1 total=${total:-unknown}"
+            echo "probe-mmap: $1 ${tracer:-tracer unknown} total mmap=${total:-unknown}"
             awk -F'@@@' '$1=="SITE" {printf "%012d@@@%s\n", $2, $3}' "$f" 2>/dev/null | sort -r | sed -n '1,15p' > "$tmp/$1-top.txt" || true
             rank=0
             while IFS= read -r line; do
               [ -n "$line" ] || continue
               rank=$((rank + 1))
-              count=$(printf '%s' "$line" | awk -F'@@@' '{print $1+0}' || true)
+              count=$(printf '%s' "$line" | awk -F'@@@' '{print $2+0}' || true)
               site=$(printf '%s' "$line" | sed 's/^[^@]*@@@//' || true)
-              stats=$(awk -F'@@@' -v S="$site" '$1=="LEN" && $2==S {print $3, $4+0}' "$f" 2>/dev/null | awk '
-                $1 ~ /^[0-9]+$/ { c[$1] += $2 }
-                END {
-                  seen = 0
-                  for (l in c) {
-                    n = l + 0
-                    if (seen == 0 || n < min) { min = n }
-                    if (seen == 0 || n > max) { max = n }
-                    if (seen == 0 || c[l] > best) { best = c[l]; mode = l }
-                    seen = 1
-                  }
-                  if (seen == 0) { print "?..? mode=?" }
-                  else { printf "%d..%d mode=%s", min, max, mode }
-                }' || true)
-              echo "probe-mmap: $1 site rank=$rank count=$count len=$stats site=$site"
+              echo "probe-mmap: $1 site rank=$rank count=$count site=$site"
+              awk -F'@@@' -v S="$site" '$1=="LEN" && $2==S {printf "%012d@@@%s\n", $4, $3}' "$f" 2>/dev/null | \
+                sort -r | sed -n '1,5p' > "$tmp/$1-lens.txt" || true
+              while IFS= read -r llen; do
+                [ -n "$llen" ] || continue
+                lcount=$(printf '%s' "$llen" | awk -F'@@@' '{print $1+0}' || true)
+                len=$(printf '%s' "$llen" | sed 's/^[^@]*@@@//' || true)
+                echo "probe-mmap: $1 site rank=$rank len=$len count=$lcount"
+              done < "$tmp/$1-lens.txt" || true
             done < "$tmp/$1-top.txt" || true
             return 0
           }
-          # Head and base run one after the other, never in parallel.
-          trace_side "$tmp/probe-head-paging" head
+          probe_side "$tmp/probe-head-paging" head
+          probe_side "$tmp/probe-base-paging" base
+          echo "probe-mmap: head trace sample, first lines"
+          cat "$tmp/head-script-sample.txt" 2>/dev/null || cat "$tmp/head-strace-sample.txt" 2>/dev/null || true
+          echo "probe-mmap: base trace sample, first lines"
+          cat "$tmp/base-script-sample.txt" 2>/dev/null || cat "$tmp/base-strace-sample.txt" 2>/dev/null || true
           report_side head
-          trace_side "$tmp/probe-base-paging" base
           report_side base
           # The head-minus-base table over the union of both top-15 sets.
           {
