@@ -1094,6 +1094,30 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // `clients` is set aside: written when the connection attaches, with
+    // no position against the session's other lines (`docs/testing.md`,
+    // "Event streams"); one attach writes exactly one.
+    assert_eq!(
+        kinds(&out)
+            .into_iter()
+            .filter(|kind| *kind != "clients")
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "extension_ui",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        kinds(&out)
+            .iter()
+            .filter(|kind| **kind == "clients")
+            .count(),
+        1
+    );
     let notices: Vec<&Value> = out
         .iter()
         .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "skill_shadowed")

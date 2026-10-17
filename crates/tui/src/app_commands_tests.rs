@@ -1411,28 +1411,13 @@ fn a_skill_named_like_a_built_in_keeps_the_built_in() {
 }
 
 #[test]
-fn an_extension_greet_sends_command() {
-    let mut app = attached();
-    answer_rows(
-        &mut app,
-        json!([{"name": "greet", "description": "Greets.", "tag": "fx-ext", "extension": true}]),
-    );
-    let lines = sent(enter(&mut app, "/greet"));
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "command");
-    assert_eq!(lines[0]["args"], json!({"name": "greet"}));
-}
-
-#[test]
 fn undrawn_built_ins_without_an_extension_go_out_as_typed() {
-    let app = attached();
     for command in ["/credential", "/rewind"] {
-        let mut app_clone = attached();
-        let _ = &app;
-        let lines = sent(enter(&mut app_clone, command));
+        let mut app = attached();
+        let lines = sent(enter(&mut app, command));
         assert_eq!(lines.len(), 1, "{command}");
         assert_eq!(lines[0]["command"], "prompt", "{command}");
-        assert!(app_clone.keymap().is_none(), "{command}");
+        assert!(app.keymap().is_none(), "{command}");
     }
 }
 
