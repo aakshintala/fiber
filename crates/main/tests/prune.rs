@@ -574,15 +574,10 @@ fn a_running_session_keeps_its_worktree_under_force() {
 fn declare_hook(dir: &Path, script: &str) {
     fs::create_dir_all(dir.join("scripts")).unwrap();
     fs::write(dir.join("scripts/fmt.sh"), script).unwrap();
-    fs::set_permissions(
-        dir.join("scripts/fmt.sh"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
     fs::create_dir_all(dir.join(".fiber/config")).unwrap();
     fs::write(
         dir.join(".fiber/config/hooks.json"),
-        r#"{"hooks":{"fmt":{"point":"after_tool","command":"scripts/fmt.sh"}}}"#,
+        r#"{"hooks":{"fmt":{"point":"after_tool","command":"sh","args":["scripts/fmt.sh"]}}}"#,
     )
     .unwrap();
 }
