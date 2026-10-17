@@ -26,7 +26,7 @@ scan_leaks=0
 # processes owned by the user with ppid 1 that started after this time.
 check_start=$(date +%s)
 export FIBER_CHECK_START=$check_start
-trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && echo "scripts/check: full output in $log"; echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
+trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -130,8 +130,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-bug-red
   echo "== class-data self-test"
   scripts/test-class-data
-  echo "== cargo clippy --all-targets -- -D warnings"
-  cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
+  echo "== cargo clippy -q --all-targets -- -D warnings"
+  cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so
   # the EXIT trap's scan names only this run's leaked processes. uuidgen
   # ships on Linux CI and macOS; the fallback needs only bash and date.
@@ -171,13 +171,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
     # The full output goes to the log; the console keeps only the summary,
     # so a passing run stays short. A failure prints everything, since the
     # failing test's name and output are what the failure needs.
-    if cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1; then
-      grep -E "test result" "$log" || true
-    else
-      doctest_rc=$?
-      cat "$log"
-      exit $doctest_rc
-    fi
+    cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1 || { doctest_rc=$?; cat "$log"; exit $doctest_rc; }
+    grep "test result" "$log" || true
     doctests=$(count '[0-9]+ passed')
   fi
   echo "tests run: $nextest under nextest, $doctests doc-tests"
