@@ -231,6 +231,15 @@ fn a_failed_credential_or_sign_keeps_its_text_apart_from_fiber_s_sentence() {
             Some("init.lua:3: boom"),
         ),
         (
+            "login timed out",
+            SignError::LoginTimedOut {
+                message: "init.lua:3: boom".into(),
+            },
+            ErrorCode::AuthenticationFailed,
+            "acme's credential() failed: the login did not finish in time. Run `fiber login acme`.",
+            Some("init.lua:3: boom"),
+        ),
+        (
             "unreachable refresh",
             SignError::Credential {
                 code: ErrorCode::ConnectionFailed,

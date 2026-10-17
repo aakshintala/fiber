@@ -91,9 +91,10 @@ impl Error {
             // A credential failure carries its own code: a failed `sign()`
             // is `credential_failed`, a failed refresh keeps its own.
             Self::Sign(contract::signing::Error::Credential { code, .. }) => code.clone(),
-            Self::Sign(contract::signing::Error::Unattended { .. }) => {
-                ErrorCode::AuthenticationFailed
-            }
+            Self::Sign(
+                contract::signing::Error::Unattended { .. }
+                | contract::signing::Error::LoginTimedOut { .. },
+            ) => ErrorCode::AuthenticationFailed,
             Self::Sign(_) => ErrorCode::CredentialFailed,
         }
     }
@@ -136,7 +137,8 @@ impl Error {
             Self::Sign(
                 contract::signing::Error::Failed(text)
                 | contract::signing::Error::Credential { message: text, .. }
-                | contract::signing::Error::Unattended { message: text },
+                | contract::signing::Error::Unattended { message: text }
+                | contract::signing::Error::LoginTimedOut { message: text },
             ) => (None, Some((None, secrets.redact(text)))),
             Self::Connection(_)
             | Self::Stalled { .. }
@@ -208,6 +210,10 @@ fn sign_sentence(provider: &str, error: &contract::signing::Error, secrets: &Sec
     use contract::signing::Error as Sign;
     match error {
         Sign::Failed(_) => format!("{provider}'s sign() failed."),
+        Sign::LoginTimedOut { .. } => format!(
+            "{provider}'s credential() failed: the login did not finish in time. Run \
+             `fiber login {provider}`."
+        ),
         Sign::Unattended { .. } => format!(
             "{provider}'s credential() failed: logging in needs a person, and nobody is attached. \
              Run `fiber login {provider}`."

@@ -375,7 +375,14 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   statuses its `pending` lists, as well as `authorization_pending`. With
   nobody attached to answer, `open`, `show`, `callback` and `poll` fail with
   `authentication_failed` before they open, show, listen or send
-  anything (`docs/model-routing.md`, "Keys, tokens and OAuth").
+  anything (`docs/model-routing.md`, "Keys, tokens and OAuth"). Somebody is
+  attached while a `full` connection is, as `clients` counts them
+  (`docs/events.md`); a `summary` connection and `fiber ask` never are. Each
+  helper asks just before it acts. `open` and `show` also send the URL, and
+  `show` the code, to every attached client as a `notice` with code
+  `login_url`, so a person on another machine can finish a device-code login.
+  A `credential()` still waiting in `callback`, or between `poll` requests,
+  when its timeout passes fails with `authentication_failed`.
 - **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,

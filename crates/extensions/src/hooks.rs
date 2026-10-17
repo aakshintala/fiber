@@ -74,6 +74,10 @@ pub struct SessionExtensions {
     /// order: the extension's name beside its provider.
     lua_providers: Vec<(String, Arc<LuaProvider>)>,
     provider_vms: Mutex<BTreeMap<String, Weak<LuaExtension>>>,
+    browser: Arc<crate::attend::SessionBrowser>,
+    emitter: Mutex<Option<Arc<dyn contract::emit::Emit>>>,
+    #[cfg(test)]
+    late_pause: Mutex<Option<LatePause>>,
     /// The names of extensions refused for an undeclared Lua registration,
     /// in load order. A data refusal is not listed: `Providers::load`
     /// never admitted that data.
@@ -103,6 +107,16 @@ pub struct SessionExtensions {
     /// from what is installed and `web_search.backend`.
     search_backend: Option<Arc<dyn SearchBackend>>,
 }
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LatePoint {
+    Stored,
+    Cleared,
+    Read,
+}
+#[cfg(test)]
+type LatePause = Arc<dyn Fn(LatePoint) + Send + Sync>;
 
 struct Started {
     name: String,
@@ -280,6 +294,7 @@ impl SessionExtensions {
                 ) {
                     Ok((extension, mut ignored)) => {
                         session.notices.append(&mut ignored);
+                        let extension = extension.with_browser(session.browser.clone());
                         Arc::new(match &host {
                             Some(script) => extension.with_host_script(Arc::clone(script)),
                             None => extension,
@@ -459,10 +474,8 @@ impl SessionExtensions {
     }
 
     /// Every live VM handle diagnostics attached to: the hook VMs and
-    /// every live weak provider VM. Test-only: no public API exposes VM
-    /// handles, and attachment is otherwise observable only through HTTP
-    /// observation, which a later task adds.
-    #[cfg(test)]
+    /// every live weak provider VM. Collect under the weak-map lock, then
+    /// release it before attaching a sink or sealing a VM.
     pub(crate) fn attached_vms(&self) -> Vec<Arc<LuaExtension>> {
         let mut vms: Vec<Arc<LuaExtension>> = self.lua.iter().map(Arc::clone).collect();
         let provider_vms: Vec<Weak<LuaExtension>> = self
@@ -580,8 +593,33 @@ impl SessionExtensions {
     /// Hands the ephemeral emitter to every extension's `host.status`,
     /// `host.widget` and `host.emit`.
     pub fn emit_to(&self, emit: Arc<dyn contract::emit::Emit>) {
-        for extension in &self.lua {
+        {
+            *self.emitter.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&emit));
+        }
+        #[cfg(test)]
+        self.at_late(LatePoint::Stored);
+        for extension in self.attached_vms() {
             extension.set_emit(Arc::clone(&emit));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_at_late(&self, pause: LatePause) {
+        *self
+            .late_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(pause);
+    }
+
+    #[cfg(test)]
+    fn at_late(&self, point: LatePoint) {
+        let pause = self
+            .late_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(pause) = pause {
+            pause(point);
         }
     }
 

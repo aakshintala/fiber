@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
@@ -123,6 +124,7 @@ pub(crate) struct Gate {
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
     clients: ClientCounts,
+    one_turn: AtomicBool,
     /// The live connections, their writers, and whether the session stopped.
     pub(crate) conns: Conns,
 }
@@ -241,6 +243,17 @@ impl Session {
         run(waiting)
     }
 
+    /// Whether a person can answer now: a full connection is attached, except
+    /// in `fiber ask`. Holds the gate weakly; a gate that is gone reads false.
+    pub fn attended(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move || {
+            gate.upgrade().is_some_and(|gate| {
+                !gate.one_turn.load(Ordering::SeqCst) && gate.clients.count() > 0
+            })
+        })
+    }
+
     /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
     /// loop finishes that turn and exits. A client attached to the socket
     /// neither keeps the session alive nor starts a second turn. When the
@@ -253,6 +266,7 @@ impl Session {
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
+        self.gate.one_turn.store(true, Ordering::SeqCst);
         let (done, rejection) = mpsc::channel();
         let ack = Ack(Box::new(move |answer| {
             if let Err(rejection) = answer {
@@ -718,6 +732,7 @@ fn open_in(
         #[cfg(test)]
         probe: Mutex::new(None),
         clients: ClientCounts::new(),
+        one_turn: AtomicBool::new(false),
         conns: Conns::new(),
     });
     // The session's `Arc<Gate>` keeps this subscription alive: the weak

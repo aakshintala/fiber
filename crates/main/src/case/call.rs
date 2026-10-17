@@ -249,7 +249,8 @@ fn invoke(
                 .map_err(|error| {
                     let code = match &error {
                         contract::signing::Error::Credential { code, .. } => code.clone(),
-                        contract::signing::Error::Unattended { .. } => {
+                        contract::signing::Error::Unattended { .. }
+                        | contract::signing::Error::LoginTimedOut { .. } => {
                             contract::ErrorCode::AuthenticationFailed
                         }
                         contract::signing::Error::Failed(_)

@@ -481,6 +481,10 @@ pub(crate) fn run_new(
         id.clone(),
     )));
     extensions.answerable(!one_turn);
+    extensions.browse_with(
+        Arc::new(extensions::SystemBrowser::default()),
+        session.attended(),
+    );
     session.skills(r#loop::skills(&prompt_inputs, &workspace));
     // The session's MCP prompt rows, tagged with each server's name:
     // the `commands` answer lists them beside skills, and `/name` runs

@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::extension_tools::LuaTool;
 use crate::{Error, host};
 
-use super::hub::{Hub, Progress};
+use super::hub::{Hub, Progress, Run};
 use super::{LuaExtension, Next, Phase, Shared, Target};
 
 /// The longest tool name a provider accepts (`docs/mcp.md`, "Tools and
@@ -420,8 +420,8 @@ impl Shared {
                 self.queue.retain(|job| job.id != id);
                 self.calls.insert(id, Progress::Cancelled);
             }
-            Some(Progress::Started { parked, .. }) => {
-                if !*parked {
+            Some(Progress::Started { run, .. }) => {
+                if matches!(run, Run::Running) {
                     self.interrupt.store(true, Ordering::SeqCst);
                 }
                 self.cancelled.insert(id);
@@ -500,9 +500,10 @@ impl Shared {
                 self.calls.remove(&id);
                 return (None, Vec::new());
             }
-            Some(Progress::Started { parked: true, .. })
-                if cancelled && matches!(self.phase, Phase::Ready(_)) =>
-            {
+            Some(Progress::Started {
+                run: Run::Parked | Run::LoginWait,
+                ..
+            }) if cancelled && matches!(self.phase, Phase::Ready(_)) => {
                 return (Some(Next::Sleep(None)), Vec::new());
             }
             _ => {}

@@ -550,6 +550,7 @@ impl DelegateMessage {
             | ErrorCode::InvalidRequest
             | ErrorCode::IoFailed
             | ErrorCode::LogCorrupt
+            | ErrorCode::LoginUrl
             | ErrorCode::Malformed
             | ErrorCode::McpCancelRequested
             | ErrorCode::McpPromptFailed

@@ -352,14 +352,20 @@ pub(super) enum Phase {
     Stopped(StopReason),
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Run {
+    Running,
+    Parked,
+    LoginWait,
+}
+
 pub(super) enum Progress {
     /// Waiting in the queue.
     Queued,
-    /// Started, with the deadline it declared. `parked` while suspended on a
-    /// host call, when the thread is free to fail it at its deadline.
+    /// Started, with its deadline and whether it is running or suspended.
     Started {
         deadline: Option<Instant>,
-        parked: bool,
+        run: Run,
     },
     Done(Result<Value, Error>),
     /// Cancelled before it returned: it ran no further.
@@ -495,7 +501,7 @@ impl Shared {
             id,
             Progress::Started {
                 deadline,
-                parked: false,
+                run: Run::Running,
             },
         );
         (
@@ -601,7 +607,7 @@ impl Shared {
         };
         if let Some(Progress::Started {
             deadline,
-            parked: false,
+            run: Run::Running,
         }) = self.calls.get(&id)
             && answers_at_deadline(target)
             && expired(*deadline, now)
@@ -631,20 +637,28 @@ impl Shared {
                 deadline: *deadline,
             });
             self.forget(id);
-            return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
+            return (
+                Next::Return(Err(timed_out(name, target, timeout, false))),
+                unsent,
+            );
         }
+        let mut login = false;
         let (until, running) = match self.calls.get(&id) {
             Some(Progress::Started {
                 deadline,
-                parked: false,
+                run: Run::Running,
             }) if answers_at_deadline(target) => {
                 // A running hook or command answers at its deadline (see above), so
                 // wake there: the grace would hold the answer on a
                 // withheld worker delivery.
                 (*deadline, true)
             }
-            Some(Progress::Started { deadline, parked }) => {
-                (deadline.and_then(|at| at.checked_add(GRACE)), !*parked)
+            Some(Progress::Started { deadline, run }) => {
+                login = matches!(run, Run::LoginWait);
+                (
+                    deadline.and_then(|at| at.checked_add(GRACE)),
+                    matches!(run, Run::Running),
+                )
             }
             _ => (asked.checked_add(timeout), false),
         };
@@ -654,7 +668,10 @@ impl Shared {
         self.forget(id);
         if !running {
             // Queued or parked, not on the thread: failing it leaves the VM up.
-            return (Next::Return(Err(timed_out(name, target, timeout))), unsent);
+            return (
+                Next::Return(Err(timed_out(name, target, timeout, login))),
+                unsent,
+            );
         }
         // debt: as in `gate`, the abandoned thread leaks until the process exits.
         unsent = self.stop(StopReason::Stopped);

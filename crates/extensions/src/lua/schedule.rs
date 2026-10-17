@@ -25,7 +25,7 @@ use super::host_calls::{Admitted, Call, admit};
 #[cfg(test)]
 use super::host_calls::{Pause, settle_hook};
 use super::hub::{
-    Hub, Job, Phase, Progress, ProviderLoad, Shared, StopReason, not_registered, timed_out,
+    Hub, Job, Phase, Progress, ProviderLoad, Run, Shared, StopReason, not_registered, timed_out,
 };
 use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
 #[cfg(test)]
@@ -277,7 +277,14 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
                 shared.calls.remove(&p.id);
                 shared.timers.end_firing(timer_id, now);
             } else {
-                shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
+                let login = matches!(
+                    shared.calls.get(&p.id),
+                    Some(Progress::Started {
+                        run: Run::LoginWait,
+                        ..
+                    })
+                );
+                shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout, login)));
             }
             hub.notify();
             // The coroutine goes with `p`; the VM frees what it held.
@@ -307,7 +314,7 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             if let Some(progress) = shared.calls.get_mut(&id) {
                 *progress = Progress::Started {
                     deadline: p.deadline,
-                    parked: false,
+                    run: Run::Running,
                 };
                 return Some(Work::Resume(p, reply.unwrap_or(Reply::Slept)));
             }
@@ -360,7 +367,7 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
                 job.id,
                 Progress::Started {
                     deadline,
-                    parked: false,
+                    run: Run::Running,
                 },
             );
             return Some(Work::Start(job, timeout, deadline));
@@ -398,6 +405,7 @@ fn park(
     wake: Option<Instant>,
     cancel: Option<Sender<()>>,
     ask: Option<contract::RequestId>,
+    run: Run,
 ) {
     parked.push(Parked {
         id,
@@ -410,10 +418,7 @@ fn park(
         ask,
     });
     if let Some(progress) = shared.calls.get_mut(&id) {
-        *progress = Progress::Started {
-            deadline,
-            parked: true,
-        };
+        *progress = Progress::Started { deadline, run };
     }
     // A hook that suspends after its caller took `Timeout` is parked, not
     // running: it ends at its own deadline without abandoning the VM.
@@ -628,6 +633,18 @@ fn settle(
         deadline,
         http,
     };
+    let run = if request.waits_on_login()
+        && matches!(
+            target,
+            Target::Provider {
+                credential: Some(super::CredentialFor::Stored(_)),
+                ..
+            }
+        ) {
+        Run::LoginWait
+    } else {
+        Run::Parked
+    };
     let admitted = admit(start, hub, shared, call, request, driver, model, &deliver);
     let (mut shared, wake, cancel, ask, unsent, spawn) = match admitted {
         Admitted::Asked {
@@ -659,6 +676,7 @@ fn settle(
         wake,
         cancel,
         ask,
+        run,
     );
     if let Some(spawn) = spawn {
         // Test-only: no public API can make the spawn fail, so the
@@ -682,6 +700,10 @@ fn settle(
         }
     }
     drop(shared);
+    #[cfg(any(test, feature = "test-hooks"))]
+    if matches!(run, Run::LoginWait) {
+        crate::login_wait_recorded(&start.name);
+    }
     hub.notify();
     drop(unsent);
 }
