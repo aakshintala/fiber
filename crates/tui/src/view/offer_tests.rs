@@ -308,3 +308,52 @@ fn a_taller_screen_shows_the_whole_offer_after_scrolling() {
     assert!(screen.starts_with(" Offer"), "{screen}");
     assert!(screen.contains("Send"), "{screen}");
 }
+
+#[test]
+fn offer_diff_uses_the_changed_files_hunk_look() {
+    use crate::theme::Role;
+    use ratatui::style::Modifier;
+    let item = json!({"kind": "extension", "name": "lint", "hash": "h", "required": true,
+        "version": "1.2.0", "summary": "extension lint 1.2.0\nfiles: index.ts",
+        "diff": "--- a/index.ts\n+++ b/index.ts\n@@ -1 +1 @@\n-old()\n+new()"});
+    let app = offered(json!([item]), 80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let screen = text(&buf);
+    assert!(!screen.contains("--- a/"), "{screen}");
+    let row_text = |y: u16| {
+        (0..80)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect::<String>()
+    };
+    let hunk = (0..24)
+        .find(|y| row_text(*y).contains("@@ -1 +1 @@"))
+        .expect("hunk row");
+    let at = row_text(hunk).find("@@ -1 +1 @@").expect("hunk text");
+    assert!(
+        (at..at + "@@ -1 +1 @@".len()).all(|x| {
+            let x = u16::try_from(x).unwrap_or(u16::MAX);
+            buf[(x, hunk)].modifier.contains(Modifier::DIM)
+        }),
+        "hunk row dim"
+    );
+    assert_eq!(buf[(4, hunk)].fg, Role::Muted.color());
+    // The pair's differing words draw in reverse video under their colour.
+    let added = (0..24)
+        .find(|y| row_text(*y).contains("+new()"))
+        .expect("added row");
+    assert!(
+        (0..80).any(|x| buf[(x, added)].modifier.contains(Modifier::REVERSED)
+            && buf[(x, added)].fg == Role::Added.color()),
+        "marked added words"
+    );
+    let removed = (0..24)
+        .find(|y| row_text(*y).contains("-old()"))
+        .expect("removed row");
+    assert!(
+        (0..80).any(|x| buf[(x, removed)].modifier.contains(Modifier::REVERSED)
+            && buf[(x, removed)].fg == Role::Removed.color()),
+        "marked removed words"
+    );
+}

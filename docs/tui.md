@@ -921,8 +921,8 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
 
 - **An edit** shows its diff in the diff format below.
 - **A read** shows the text read, with the line-number gutter starting at the
-  first line read, from `details`. **A write** shows the text written, its
-  `content` argument, numbered from 1.
+  first line read, from `details`. A write, a call whose arguments hold a
+  string `content`, shows that text, numbered from 1.
 - **A search** shows its matches grouped under each file's path, the path
   bold, line numbers in the gutter and the matched text on the `match`
   tint, from the built-in `grep`'s `details`. A search call without them,

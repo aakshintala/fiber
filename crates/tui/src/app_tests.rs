@@ -1827,3 +1827,62 @@ fn an_approval_names_its_session_by_the_session_name() {
         "{header}"
     );
 }
+
+#[test]
+fn the_more_row_is_a_focus_stop() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = app();
+    attach(&mut app, clock.now(), "s_aaaaaaaaaaaaaaaa");
+    let session = "s_aaaaaaaaaaaaaaaa";
+    app.on_line(turn_started(session, "hi"));
+    app.on_line(session_line(
+        session,
+        "step_started",
+        serde_json::json!({}),
+        None,
+    ));
+    app.on_line(session_line(
+        session,
+        "tool_call_requested",
+        serde_json::json!({"name": "read", "arguments": {"path": "notes.txt"}}),
+        Some("a_1"),
+    ));
+    let text = (1..=25)
+        .map(|n| format!("L{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_line(session_line(
+        session,
+        "tool_call_completed",
+        serde_json::json!({"status": "completed",
+            "content": [{"type": "text", "text": text}],
+            "details": {"start_line": 1}}),
+        Some("a_1"),
+    ));
+    // Open the ledger, then the call past its twenty lines.
+    let group = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Group(_)).then_some(target))
+        .expect("a group target");
+    app.open(group);
+    let call = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| matches!(target, crate::app::Target::Call(_)).then_some(target))
+        .expect("a call target");
+    app.open(call);
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("… 5 more lines (Enter to view)")),
+        "{:?}",
+        texts(&app)
+    );
+    assert!(
+        app.targets()
+            .into_iter()
+            .any(|(_, target)| matches!(target, crate::app::Target::CallView(_))),
+        "the more row is a focus stop"
+    );
+}
