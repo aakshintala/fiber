@@ -414,6 +414,39 @@ fn a_stub_with_no_paused_call_writes_nothing() {
     assert_eq!(conversations[0][1..], conversations[1][1..]);
 }
 
+/// A stub whose id names no paused call is dropped: the paused list is
+/// non-empty but lacks the id, so no hosted pair is logged. With `||`
+/// the paused call's `server_tool_use` type alone would match and log a
+/// hosted pair under the wrong call.
+#[test]
+fn a_stub_with_a_different_id_than_the_paused_call_is_dropped() {
+    let call = call_block("srvtoolu_01");
+    let mut second = Scripted::text("B");
+    second.end.as_mut().unwrap().actions = vec![
+        stub("srvtoolu_99", result_block("srvtoolu_99")),
+        ReplyAction::Text(TextCompleted {
+            text: "B".into(),
+            provider_item: None,
+        }),
+    ];
+    let mut session = Session::new(
+        vec![
+            paused("one", vec![call.clone()]),
+            second,
+            Scripted::text("Done."),
+        ],
+        None,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert!(
+        lines.iter().all(|line| line.kind != "tool_call_requested"),
+        "no hosted line is written"
+    );
+    assert_eq!(text_count(&lines, "B"), 1);
+}
+
 #[test]
 fn two_pauses_log_the_pair_once_and_resend_both_replies() {
     let call = call_block("srvtoolu_01");
