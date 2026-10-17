@@ -350,6 +350,8 @@ them:
 - at each turn start, `skills.disabled` only, with the check for added and
   removed skills (`docs/system-prompt.md`, "Added and removed skills")
 
+A reload fails as a start does. One a start would refuse, such as invalid configuration or a required extension that fails, is rejected with the start's code and changes nothing: the session keeps its configuration, tools and extensions, and writes no `reloaded`. A failure a start goes on past, such as an extension that is not required failing to load, writes the notice a start writes, and the rest of the reload applies.
+
 Nothing watches the files, so an idle Fiber does no work. A value written with
 `host.config.set` is visible to that extension at once, and to other sessions
 at their next reload.
@@ -362,7 +364,7 @@ when (`docs/tui.md`, "Swapped views"):
 - `hub.port`, `hub.allowed_origins` and `hub.idle_exit_ms` when the hub starts again
 - `hub.default` and `hubs.*` at a client's next connection: the next `fiber` command, or the terminal's next start
 - `diagnostics.level` when each Fiber process starts again
-- `model` and `thinking` for sessions started after the write
+- `model`, `thinking`, `models."<provider/model>".thinking`, `providers."<name>".credential` and `providers."<name>".credentials` for sessions started after the write: a running session changes model, thinking level or credential only through a switch (`docs/model-routing.md`), never on `reload`
 - `skills.disabled` at the next turn start
 - every other key on `/reload`, with the one prompt-cache miss it costs
 
