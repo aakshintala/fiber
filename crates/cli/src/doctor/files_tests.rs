@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
-use super::{age, clean, newest_crash, newest_error, seam};
+use super::{
+    CHUNK, WINDOW, age, clean, cut_display, lines_after, newest_crash, newest_error, seam,
+};
 
 /// One wait for every worker in this file.
 const HANG: Duration = Duration::from_secs(10);
@@ -217,6 +219,76 @@ fn newest_error_stops_at_the_open_time_length() {
 }
 
 #[test]
+fn newest_error_holds_the_open_time_length_past_ten_mib() {
+    let setup = Setup::new();
+    // A window-sized file plus one error: the window starts past byte 0,
+    // so the remaining count and the length-plus-start sum differ.
+    let mut big = error(1_699_000_000_000, "open", "open-time").into_bytes();
+    big.extend(std::iter::repeat_n(b'p', WINDOW as usize));
+    big.extend_from_slice(b"\n");
+    big.extend_from_slice(error(1_699_000_000_005, "late", "in window").as_bytes());
+    setup.write("logs/growbig.log", &big);
+    let start = big.len() as u64 - WINDOW;
+    assert!(start > 0, "the window starts past byte 0");
+    let (arrived, release, _pause) = seam::arm_before_chunk("growbig.log", start);
+    drop(seam::take_chunks_for("growbig.log"));
+    let logs = setup.logs();
+    let (done_tx, done_rx) = mpsc::channel();
+    let deadline = fakes::Deadline::after(HANG);
+    let worker = std::thread::spawn({
+        let worker_logs = logs.clone();
+        move || drop(done_tx.send(newest_error(&worker_logs)))
+    });
+    deadline.recv(&arrived).unwrap();
+    // Grown past its open-time length while the scan waits: the appended
+    // newer error is never read, so the open-time one still wins.
+    let mut longer = big.clone();
+    longer.extend_from_slice(error(1_699_999_999_999, "appended", "grown").as_bytes());
+    fs::write(logs.join("growbig.log"), longer).unwrap();
+    drop(release);
+    let found = deadline.recv(&done_rx).unwrap().unwrap();
+    worker.join().unwrap();
+    assert_eq!((found.2.as_str(), found.3.as_str()), ("late", "in window"));
+    let chunks = seam::take_chunks_for("growbig.log");
+    let read: usize = chunks.iter().map(|(_, len)| len).sum();
+    assert_eq!(read, WINDOW as usize, "never past the open-time length");
+    assert!(
+        chunks.iter().all(|(_, len)| *len == CHUNK),
+        "one 64 KiB read at a time: {chunks:?}"
+    );
+}
+
+#[test]
+fn newest_error_stops_when_the_file_shrinks_under_the_scan() {
+    let setup = Setup::new();
+    setup.write(
+        "logs/shrink.log",
+        error(1_699_000_000_000, "gone", "truncated").as_bytes(),
+    );
+    let (arrived, release, _pause) = seam::arm_before_chunk("shrink.log", 0);
+    drop(seam::take_chunks_for("shrink.log"));
+    let logs = setup.logs();
+    let (done_tx, done_rx) = mpsc::channel();
+    let deadline = fakes::Deadline::after(HANG);
+    let worker = std::thread::spawn({
+        let worker_logs = logs.clone();
+        move || drop(done_tx.send(newest_error(&worker_logs)))
+    });
+    deadline.recv(&arrived).unwrap();
+    // Truncated to nothing while the scan waits: the short read ends the
+    // file, so the scan returns promptly with no error from it.
+    fs::write(logs.join("shrink.log"), b"").unwrap();
+    drop(release);
+    let found = deadline.recv(&done_rx).unwrap();
+    worker.join().unwrap();
+    assert_eq!(found, None);
+    assert!(
+        seam::take_chunks_for("shrink.log").is_empty(),
+        "a short read is never recorded"
+    );
+}
+
+#[test]
 fn newest_error_cuts_an_over_long_line_for_display_only() {
     let setup = Setup::new();
     // Exactly 64 KiB of `code: message` prints whole.
@@ -257,6 +329,60 @@ fn newest_error_cuts_an_over_long_line_for_display_only() {
     fs::remove_file(setup.logs().join("long-new.log")).unwrap();
     let found = newest_error(&setup.logs()).unwrap();
     assert_eq!(found.0, "exact.log");
+}
+
+#[test]
+fn lines_after_drops_the_straddling_line_only_past_byte_zero() {
+    let bytes = b"head\nkept\ntail";
+    let all: Vec<&[u8]> = lines_after(bytes, 0).collect();
+    assert_eq!(all, [&b"head"[..], &b"kept"[..], &b"tail"[..]]);
+    // Past byte 0 the first piece began before the window and is dropped.
+    let windowed: Vec<&[u8]> = lines_after(bytes, 1).collect();
+    assert_eq!(windowed, [&b"kept"[..], &b"tail"[..]]);
+    let windowed: Vec<&[u8]> = lines_after(b"head\nkept\n", 5).collect();
+    assert_eq!(windowed, [&b"kept"[..], &b""[..]]);
+}
+
+#[test]
+fn cut_display_holds_exactly_64_kib_and_cuts_each_side_of_it() {
+    const CAP: usize = 64 * 1024;
+    // Exactly 64 KiB of `code: message` prints whole.
+    let (code, message) = cut_display("e", &"m".repeat(CAP - 3));
+    assert_eq!(code, "e");
+    assert_eq!(message.len(), CAP - 3);
+    // One byte over with an empty code cuts the message to CAP - 2.
+    let (code, message) = cut_display("", &"m".repeat(CAP - 1));
+    assert_eq!(code, "");
+    assert_eq!(message.len(), CAP - 2);
+    // One byte over with a one-byte message cuts the message whole.
+    let (code, message) = cut_display(&"c".repeat(CAP - 2), "x");
+    assert_eq!(code.len(), CAP - 2);
+    assert!(message.is_empty(), "cut to nothing: {message:?}");
+    // One byte under on each side prints whole.
+    let (_, message) = cut_display("", &"m".repeat(CAP - 2));
+    assert_eq!(message.len(), CAP - 2);
+    let (code, message) = cut_display(&"c".repeat(CAP - 3), "x");
+    assert_eq!(code.len(), CAP - 3);
+    assert_eq!(message, "x");
+}
+
+#[test]
+fn cut_display_stops_at_a_char_boundary_within_a_bound() {
+    // The over-long cut splits the last `é`: the boundary walk steps back
+    // one byte at a time and must finish. A worker with a wall guard
+    // proves the bound: a hang fails the test instead of the suite.
+    let long = "é".repeat(40 * 1024);
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        done_tx.send(cut_display("long!", &long)).unwrap_or(());
+    });
+    let (code, message) = fakes::Deadline::after(HANG)
+        .recv(&done_rx)
+        .expect("cut_display returns within its bound");
+    worker.join().unwrap();
+    assert_eq!(code, "long!");
+    assert!(message.ends_with('é'), "cut at a char boundary");
+    assert_eq!(code.len() + 2 + message.len(), 64 * 1024 - 1);
 }
 
 #[test]

@@ -141,12 +141,18 @@ pub(crate) fn newest_error(logs: &Path) -> Option<(String, u64, String, String)>
         let mut bytes = Vec::new();
         let mut left = length - start;
         let mut offset = start;
-        while left > 0 {
+        // `!= 0`, not `> 0`: `left` only shrinks to exactly zero, so both
+        // read the same bytes; `> 0` leaves an equivalent `>= 0` mutant no
+        // test can tell apart.
+        while left != 0 {
             let want = usize::try_from(left.min(CHUNK as u64)).unwrap_or(CHUNK);
             seam::fire_before_chunk(&name, offset);
             let mut chunk = vec![0; want];
             let mut got = 0;
-            while got < want {
+            // `!=`, not `<`: `got` only grows to exactly `want`, so both
+            // read the same bytes; `<` leaves an equivalent `<=` mutant
+            // whose extra empty read breaks at once, which no test can see.
+            while got != want {
                 let Some(slot) = chunk.get_mut(got..) else {
                     break;
                 };
