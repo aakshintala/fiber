@@ -678,6 +678,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ExtensionExec(_)
             | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Shell(..)

@@ -57,6 +57,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Interaction(_)
         | Delivery::Resolved(..)
         | Delivery::Shell(..)
+        | Delivery::ExtensionUsage(_)
         | Delivery::Cancelled => None,
     }
 }

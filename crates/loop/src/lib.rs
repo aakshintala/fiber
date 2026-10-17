@@ -97,13 +97,14 @@ pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::{DisabledReader, PromptInputs};
 pub use resume::{Resumed, resumed};
-pub use retry::Retry;
+pub use retry::{Decision, Retry};
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed};
 pub use rewind::{Rewound, latest_name, rewind_note};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use slash::{FetchPrompt, ServerPrompts};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
+pub use usage::extension_line;
 
 /// The model a session's calls reach, and the prices those calls are logged
 /// at (`docs/model-routing.md`, "Cost").

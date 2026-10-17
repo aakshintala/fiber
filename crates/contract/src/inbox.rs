@@ -155,6 +155,9 @@ pub enum Delivery {
     /// A line an extension wrote with `host.log`: shown live, recorded in
     /// the diagnostic log, starts nothing.
     ExtensionLog(crate::events::ExtensionLog),
+    /// One `usage_recorded` from an extension's `host.model` call: written
+    /// and ledgered with no turn and no action.
+    ExtensionUsage(crate::events::UsageRecorded),
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes

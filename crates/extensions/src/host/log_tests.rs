@@ -61,6 +61,7 @@ fn logged(delivery: Delivery) -> ExtensionLog {
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
         | Delivery::Resolved(..)
+        | Delivery::ExtensionUsage(_)
         | Delivery::Shell(..)
         | Delivery::Cancelled) => panic!("expected extension_log, got {other:?}"),
     }

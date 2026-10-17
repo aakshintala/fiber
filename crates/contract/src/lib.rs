@@ -23,6 +23,7 @@ pub mod inbox;
 pub mod jobs;
 pub mod mcp_remote;
 pub mod mcp_tokens;
+pub mod model;
 pub use mcp_remote::McpRemote;
 mod pre_session;
 pub mod provider;
