@@ -120,6 +120,7 @@ fn passed_with_context(context: Vec<(&str, &str)>) -> BeforeMessageAnswer {
             context: context
                 .into_iter()
                 .map(|(extension, text)| Context {
+                    state: Vec::new(),
                     extension: extension.to_owned(),
                     text: text.to_owned(),
                 })

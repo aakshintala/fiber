@@ -21,6 +21,10 @@ use crate::{Error, LuaProvider};
 /// runs it: its settings checked, its session, secrets, memory cap and hook
 /// timeout. Its entry script has not run yet. Also returns the notices for
 /// the repository's settings keys its manifest does not let it read.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "VM startup receives the session's existing services and shared state"
+)]
 pub(super) fn start_vm(
     name: &str,
     dir: &Path,
@@ -29,10 +33,12 @@ pub(super) fn start_vm(
     manifest: &Manifest,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    state: Arc<crate::host::state::StateRegistry>,
 ) -> Result<(LuaExtension, Vec<Notice>), Error> {
     let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
     let (_, ignored) = config.extensions().merged(name, &repo)?;
     let mut extension = LuaExtension::new(name, dir, home, clock)
+        .with_state(state)
         .with_session(Session {
             config: config.clone(),
             repo_settings: manifest.repo_settings.clone(),
@@ -78,6 +84,7 @@ pub(super) fn provider_handles(
                 &entry.manifest,
                 clock,
                 locks,
+                session.state.clone(),
             )?;
             session.notices.append(&mut notices);
             Arc::new(match &session.host_script {
@@ -144,8 +151,16 @@ impl SessionExtensions {
         let lua = match vms.get(extension).and_then(std::sync::Weak::upgrade) {
             Some(lua) => lua,
             None => {
-                let (lua, _) =
-                    start_vm(extension, dir, &self.home, config, &manifest, clock, locks)?;
+                let (lua, _) = start_vm(
+                    extension,
+                    dir,
+                    &self.home,
+                    config,
+                    &manifest,
+                    clock,
+                    locks,
+                    self.state.clone(),
+                )?;
                 let lua = match &self.host_script {
                     Some(script) => lua.with_host_script(Arc::clone(script)),
                     None => lua,

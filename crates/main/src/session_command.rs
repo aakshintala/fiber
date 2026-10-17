@@ -282,6 +282,11 @@ pub(crate) fn run_new(
                 .thinking
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+            let seed = crate::resume::chain_seed(
+                &log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
+                    .map_err(|error| failed(error.code(), error))?,
+            )
+            .map_err(|error| failed(error.code(), error))?;
             parts_with(
                 Vec::new(),
                 folded.model.as_deref(),
@@ -291,6 +296,7 @@ pub(crate) fn run_new(
                 host,
                 Arc::clone(&reads),
                 process,
+                seed,
             )?
         }
         None => parts_with(
@@ -302,6 +308,7 @@ pub(crate) fn run_new(
             host,
             Arc::clone(&reads),
             process,
+            extensions::StateSeed::new(),
         )?,
     };
     crash::attach(&id);
@@ -519,6 +526,7 @@ pub(crate) fn run_new(
         run_one_turn,
         cancel,
         &diag,
+        &extensions,
         |inbox, cancel| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`

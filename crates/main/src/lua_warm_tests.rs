@@ -170,6 +170,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
             None,
             reads,
             log::diag::Process::Session,
+            extensions::StateSeed::new(),
         )));
     });
     let parts = Deadline::after(DEADLINE)

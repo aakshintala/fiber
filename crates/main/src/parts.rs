@@ -115,6 +115,7 @@ pub(crate) fn parts_with<'a>(
     host: Option<Arc<extensions::HostScript>>,
     reads: Arc<switch::Reads>,
     process: log::diag::Process,
+    seed: extensions::StateSeed,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -131,6 +132,7 @@ pub(crate) fn parts_with<'a>(
         prompt_files::agents_home(std::env::var_os("HOME")),
         reads,
         process,
+        seed,
     )
 }
 
@@ -154,6 +156,7 @@ pub(crate) fn parts_in(
     agents_home: Option<PathBuf>,
     reads: Arc<switch::Reads>,
     process: log::diag::Process,
+    seed: extensions::StateSeed,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     // The one monotonic read the `startup.config` timer starts from,
@@ -209,12 +212,13 @@ pub(crate) fn parts_in(
     startup_notices.extend(notices);
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let mut extensions = extensions::SessionExtensions::load(
+    let mut extensions = extensions::SessionExtensions::load_with_state(
         &home,
         &config,
         Arc::clone(&clock),
         session_locks,
         host,
+        seed,
     );
     drop(extensions_timing);
     // The session's diagnostics, installed after load and before any

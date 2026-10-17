@@ -239,10 +239,12 @@ fn two_session_start_hooks_add_context_in_run_order() {
         added(&answer),
         vec![
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/a".into(),
                 text: "A".into(),
             },
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/b".into(),
                 text: "B".into(),
             },
@@ -282,6 +284,7 @@ fn a_session_start_hook_is_shown_why_the_session_started() {
         assert_eq!(
             added(&answer),
             vec![Context {
+                state: Vec::new(),
                 extension: "fiber.test/a".into(),
                 text: format!("{word}:s_4c1d:/w"),
             }],
@@ -349,6 +352,7 @@ fn a_turn_start_hook_is_shown_the_turns_input_without_unknown_items() {
     assert_eq!(
         added(&answer),
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/a".into(),
             text: "message,jobs,handoff".into(),
         }]
@@ -375,6 +379,7 @@ fn a_non_blocking_failure_keeps_the_chain_and_names_the_extension() {
     assert_eq!(
         added(&answer),
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/b".into(),
             text: "late".into(),
         }]
@@ -733,10 +738,12 @@ fn two_turn_end_hooks_continue_the_turn_in_run_order() {
         added(&answer),
         vec![
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/a".into(),
                 text: "A".into(),
             },
             Context {
+                state: Vec::new(),
                 extension: "fiber.test/b".into(),
                 text: "B".into(),
             },
@@ -760,6 +767,7 @@ fn a_turn_end_hook_is_shown_the_models_final_reply() {
     assert_eq!(
         added(&answer),
         vec![Context {
+            state: Vec::new(),
             extension: "fiber.test/a".into(),
             text: "got:Done.".into(),
         }]

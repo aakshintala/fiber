@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use contract::events::{ContextAdded, Event};
-use contract::hook::{BeforeMessage, BeforeMessageOutcome};
+use contract::events::Event;
+use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
 use contract::{CommandId, ErrorCode, TurnId};
@@ -26,11 +26,12 @@ pub type OnRewrite = Arc<dyn Fn(&CommandId, &[ContentPart]) + Send + Sync>;
 /// replaced its content, and the contexts its hooks added, in run order.
 #[derive(Debug, Default)]
 pub(crate) struct Hooked {
+    pub(crate) state: Vec<StateLine>,
     /// The extensions whose hook returned `content`, in run order, each
     /// once; `Some` exactly when the message's content is a hook's.
     pub(crate) changed_by: Option<Vec<String>>,
     /// The contexts the hooks added, in run order.
-    pub(crate) context: Vec<ContextAdded>,
+    pub(crate) context: Vec<Context>,
 }
 
 impl Loop {
@@ -68,6 +69,8 @@ impl Loop {
         let answer = hooks.before_message(&BeforeMessage {
             content: &message.content,
         });
+        let state = hooks.take_change_state();
+        self.drain_state(&hooks, turn)?;
         for notice in answer.notices {
             self.write(&Event::Notice(notice), turn, None)?;
         }
@@ -78,15 +81,9 @@ impl Loop {
                     None => (message.content, None),
                 };
                 let hooked = Hooked {
+                    state,
                     changed_by,
-                    context: context
-                        .into_iter()
-                        .map(|added| ContextAdded {
-                            text: added.text,
-                            extension: added.extension,
-                            hook: "before_message".to_owned(),
-                        })
-                        .collect(),
+                    context,
                 };
                 Ok(Some((
                     Message {

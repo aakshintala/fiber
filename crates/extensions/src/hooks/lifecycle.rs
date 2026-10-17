@@ -89,8 +89,14 @@ pub(super) fn before_model_call(
         };
         let name = extension.name();
         let returned = extension
-            .hook(BEFORE_MODEL_CALL, entry.index, arg.clone())
-            .and_then(|value| decode_additive(name, BEFORE_MODEL_CALL, "refuse", value));
+            .hook_with(BEFORE_MODEL_CALL, entry.index, arg.clone(), |value| {
+                decode_additive(name, BEFORE_MODEL_CALL, "refuse", value)
+                    .map(|change| (change, false))
+            })
+            .map(|(change, lines, _)| {
+                session.state.queue(lines);
+                change
+            });
         match returned {
             Ok(None) => {}
             Ok(Some(reason)) => {
@@ -152,14 +158,25 @@ fn run_additive(
         };
         let name = extension.name();
         let returned = extension
-            .hook(point, entry.index, arg.clone())
-            .and_then(|value| decode_additive(name, point, key, value));
+            .hook_with(point, entry.index, arg.clone(), |value| {
+                let change = decode_additive(name, point, key, value)?;
+                let changed = change.is_some();
+                Ok((change, changed))
+            })
+            .map(|(change, lines, _)| match change {
+                Some(text) => Some(Context {
+                    extension: name.to_owned(),
+                    text,
+                    state: lines,
+                }),
+                None => {
+                    session.state.queue(lines);
+                    None
+                }
+            });
         match returned {
             Ok(None) => {}
-            Ok(Some(text)) => context.push(Context {
-                extension: name.to_owned(),
-                text,
-            }),
+            Ok(Some(added)) => context.push(added),
             Err(error) if entry.blocking => {
                 return ContextAnswer {
                     outcome: ContextOutcome::Failed(HookFailure {

@@ -388,14 +388,14 @@ impl crate::Loop {
             }),
         });
         self.write(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
-        let decision = if self.turn_cancelled() || (origin.stopped)() {
-            Err(self.cancelled_before_ran())
+        let (decision, state) = if self.turn_cancelled() || (origin.stopped)() {
+            (Err(self.cancelled_before_ran()), Vec::new())
         } else {
             self.prepared(&call, turn)?
         };
         let prepared = match decision {
             Err(mut done) => {
-                self.after_completed(None, &mut done, &id, turn)?;
+                self.after_completed(None, &mut done, &id, turn, Vec::new())?;
                 request.answer(done);
                 return Ok(());
             }
@@ -432,17 +432,18 @@ impl crate::Loop {
                 Some(&id),
             )?;
             let mut done = crate::completion::denied(reason, message);
-            self.after_completed(None, &mut done, &id, turn)?;
+            self.after_completed(None, &mut done, &id, turn, Vec::new())?;
             request.answer(done);
             return Ok(());
         }
         if self.turn_cancelled() || (origin.stopped)() {
             let mut done = self.cancelled_before_ran();
-            self.after_completed(None, &mut done, &id, turn)?;
+            self.after_completed(None, &mut done, &id, turn, Vec::new())?;
             request.answer(done);
             return Ok(());
         }
         let (arguments, changed_by) = prepared.rewrite();
+        self.write_carried(state, turn)?;
         self.write(
             &Event::ToolCallStarted(ToolCallStarted {
                 always_reviewed: prepared.effects.always_reviewed,
@@ -554,7 +555,7 @@ impl crate::Loop {
             if let Some(delta) = flushed {
                 self.write_delta(&delta, turn, &call.id);
             }
-            let mut done = self.finish(
+            let (mut done, state) = self.finish(
                 output,
                 (&call.request.name, &call.arguments),
                 call.rewritten.as_deref(),
@@ -563,7 +564,7 @@ impl crate::Loop {
                 &call.id,
                 turn,
             )?;
-            self.after_completed(Some(&call.declared), &mut done, &call.id, turn)?;
+            self.after_completed(Some(&call.declared), &mut done, &call.id, turn, state)?;
             call.request.answer(Box::new(done));
             wrote = true;
         }

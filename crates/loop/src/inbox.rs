@@ -234,6 +234,9 @@ impl Loop {
                 self.emit_queue(None)?;
             }
             if kept > 0 || held {
+                if let Some(hooks) = self.hooks.clone() {
+                    self.drain_state(&hooks, None)?;
+                }
                 // Kept steers and notices moved into `turn_started`, and
                 // held deliveries are already admitted above: what arrived
                 // since is drained without blocking or re-announcing the
@@ -253,6 +256,9 @@ impl Loop {
                 }
                 match self.recv_until(deadline, true, due) {
                     InboxRecv::Delivery(first) => {
+                        if let Some(hooks) = self.hooks.clone() {
+                            self.drain_state(&hooks, None)?;
+                        }
                         let mut batch = vec![first];
                         batch.extend(self.inbox.try_iter());
                         for delivery in batch {
@@ -369,6 +375,9 @@ impl Loop {
     /// Drains the inbox at a step boundary or the end-of-turn check. A steer
     /// taken here is left in `queued` until [`Self::apply_steering`].
     pub(crate) fn drain(&mut self, turn: &TurnId) -> Result<(), Error> {
+        if let Some(hooks) = self.hooks.clone() {
+            self.drain_state(&hooks, Some(turn))?;
+        }
         let waiting: Vec<Delivery> = self.inbox.try_iter().collect();
         for delivery in waiting {
             self.admit_running(delivery, turn)?;

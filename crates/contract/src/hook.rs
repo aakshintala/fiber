@@ -4,10 +4,15 @@
 //! data on the answer. `contract` holds no behaviour beyond checking that a value fits the
 //! vocabulary, and pure conversions of its own values.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 use crate::SessionId;
-use crate::events::{CallStatus, HandoffTrigger, InputItem, Notice};
+use crate::events::{
+    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, InputItem, Notice,
+    OnFork,
+};
 use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};
 use crate::tool::{Cancel, SpillFile};
@@ -173,6 +178,8 @@ pub struct Replaced {
 /// at `turn_end` the texts are messages that continue the turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Context {
+    /// State writes owned by this context, written immediately before it.
+    pub state: Vec<StateLine>,
     /// The extension whose hook returned it.
     pub extension: String,
     /// The context to add.
@@ -260,8 +267,61 @@ pub struct BeforeHandoffAnswer {
     pub notices: Vec<Notice>,
 }
 
+/// Folded extension state: extension, key, whole value and its last fork rule.
+pub type StateSeed = BTreeMap<String, BTreeMap<String, (Value, OnFork)>>;
+
+/// A state write carried beside the change its hook returned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateLine {
+    /// The extension that owns the key.
+    pub extension: String,
+    /// The key written.
+    pub key: String,
+    /// The set value and fork rule, or none for an unset.
+    pub value: Option<(Value, OnFork)>,
+    /// The write's position in the session's state view.
+    pub landing: u64,
+}
+
+impl StateLine {
+    /// Builds the state event to write before the changed event.
+    pub fn into_event(self) -> Event {
+        match self.value {
+            Some((value, on_fork)) => Event::ExtensionStateSet(ExtensionStateSet {
+                extension: self.extension,
+                key: self.key,
+                value,
+                on_fork,
+            }),
+            None => Event::ExtensionStateUnset(ExtensionStateUnset {
+                extension: self.extension,
+                key: self.key,
+            }),
+        }
+    }
+}
+
 /// The session's hooks. Calls come from the loop thread, one at a time.
 pub trait Hooks: Send + Sync {
+    /// Drains admitted non-hook and unchanged-hook writes in landing order.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
+    fn take_state_lines(&self) -> Vec<Event> {
+        Vec::new()
+    }
+
+    /// Admits carried writes, after draining any queued writes first.
+    fn admit_state_lines(&self, lines: Vec<StateLine>) -> Vec<Event> {
+        lines.into_iter().map(StateLine::into_event).collect()
+    }
+
+    /// Takes the last hook answer's state lines that belong to no context.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
+    fn take_change_state(&self) -> Vec<StateLine> {
+        Vec::new()
+    }
+
     /// Runs every `after_tool` hook on `call`, in order, and returns what
     /// they decided.
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer;

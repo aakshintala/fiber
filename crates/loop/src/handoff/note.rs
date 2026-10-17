@@ -43,6 +43,7 @@ pub(super) enum Noted {
     Hook {
         note_text: String,
         extension: String,
+        state: Vec<contract::hook::StateLine>,
     },
     /// The request or the reply failed.
     Failed(Failure),
@@ -79,7 +80,10 @@ fn finished(
     tokens_before: u64,
     instructions: Option<String>,
     started: Started,
-) -> (HandoffCompleted, Vec<ContextAdded>) {
+) -> (
+    HandoffCompleted,
+    Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
+) {
     match started {
         Started::Contexts(contexts) => (
             HandoffCompleted {
@@ -143,7 +147,8 @@ impl Loop {
         &mut self,
         turn: &TurnId,
         done: HandoffCompleted,
-        contexts: Vec<ContextAdded>,
+        contexts: Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
+        state: Vec<contract::hook::StateLine>,
     ) -> Result<Outcome, Error> {
         let completed = done.outcome == Outcome::Completed;
         if completed {
@@ -168,10 +173,14 @@ impl Loop {
             }
             let cancel = Arc::clone(&self.cancel);
             let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+                if completed {
+                    self.write_carried(state, Some(turn))?;
+                }
                 self.append(&Event::HandoffCompleted(done), turn, None)?;
                 if completed {
                     self.write_opening(Some(turn))?;
-                    for added in &contexts {
+                    for (added, state) in &contexts {
+                        self.write_carried(state.clone(), Some(turn))?;
                         self.append(&Event::ContextAdded(added.clone()), turn, None)?;
                     }
                 }
@@ -338,15 +347,19 @@ impl Loop {
         // way, so a `session_start` failure or cancel after it ends the
         // handoff `failed` or `cancelled` with no note, as after the
         // model's.
-        let note = match noted {
-            Noted::Note(id) => Note::Actions { note: vec![id] },
+        let (note, state) = match noted {
+            Noted::Note(id) => (Note::Actions { note: vec![id] }, Vec::new()),
             Noted::Hook {
                 note_text,
                 extension,
-            } => Note::Hook {
-                note_text,
-                extension,
-            },
+                state,
+            } => (
+                Note::Hook {
+                    note_text,
+                    extension,
+                },
+                state,
+            ),
             Noted::Failed(failure) => {
                 #[cfg(test)]
                 if crate::timing_tests::take_fail_handoff_completed() {
@@ -391,7 +404,7 @@ impl Loop {
             instructions,
             self.handoff_start(turn)?,
         );
-        let outcome = self.restarted(turn, done, contexts)?;
+        let outcome = self.restarted(turn, done, contexts, state)?;
         if outcome == Outcome::Failed {
             self.handoff.blocked = true;
         }
@@ -411,7 +424,7 @@ impl Loop {
     ) -> Result<Outcome, Error> {
         let taken = Some(Note::Actions { note });
         let (done, contexts) = finished(taken, tokens_before, None, self.handoff_start(turn)?);
-        let outcome = self.restarted(turn, done, contexts)?;
+        let outcome = self.restarted(turn, done, contexts, Vec::new())?;
         if outcome != Outcome::Completed {
             self.handoff.step_ran = true;
         }

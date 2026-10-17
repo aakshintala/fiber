@@ -26,7 +26,7 @@ is `docs/events.md`; the rationale and the rejected alternatives are on
   or an extension wants state the contract does not carry, the fix is a new
   event kind, never a side channel — and a new kind is additive, so this is
   cheap on purpose. An extension's own state in a session is such a kind,
-  `extension_state_set` (`docs/extensions.md`, "State"), never a file beside
+  `extension_state_set` (`docs/extensions.md`, "Extension state"), never a file beside
   the log and never Lua globals.
 - Opening a session folds the log. That cost is bounded by indexing line offsets
   and parsing only the window a consumer asks for, not by caching the fold to

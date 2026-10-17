@@ -41,6 +41,8 @@ mod switch;
 mod theme_setting;
 
 #[cfg(test)]
+mod exit_state_tests;
+#[cfg(test)]
 #[path = "live_tests.rs"]
 mod live_tests;
 #[cfg(test)]
@@ -563,6 +565,24 @@ fn finish(
         .map_err(|e| failed(e.code(), e))
 }
 
+/// Closes state before the final drain, without extending a rewound log.
+fn write_state_at_exit(
+    log: &Log,
+    dir: &Path,
+    extensions: &extensions::SessionExtensions,
+) -> Result<(), r#loop::Error> {
+    use contract::hook::Hooks;
+    extensions.close_state();
+    let lines = extensions.take_state_lines();
+    if log::last_line(dir).is_some_and(|line| line.kind == "rewound") {
+        return Ok(());
+    }
+    for event in lines {
+        log.append(&event, None, None)?;
+    }
+    Ok(())
+}
+
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
@@ -585,6 +605,7 @@ fn run_turn(
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
+    extensions: &extensions::SessionExtensions,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
@@ -621,6 +642,8 @@ fn run_turn(
     }
     // `fiber_exited` is the last line: nothing on the door side follows it.
     session.quiesce();
+    let written = write_state_at_exit(log, dir, extensions);
+    let ran = ran.and(written.map_err(|error| failed(error.code(), error)));
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
     match r#loop::fiber_exited(log, dir, ran, one_turn, cancel.shutdown_code()) {

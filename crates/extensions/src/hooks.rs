@@ -6,18 +6,18 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use config::Config;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, HookChain, Op, Timing};
-use contract::events::{LoadedExtension, Notice};
+use contract::events::{Event, LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
     BeforeMessage, BeforeMessageAnswer, BeforeModelCall, BeforeToolAnswer, BeforeToolCall,
-    CheckAnswer, ContextAnswer, Hooks, SessionStart, TurnEnd, TurnStart,
+    CheckAnswer, ContextAnswer, Hooks, SessionStart, StateLine, StateSeed, TurnEnd, TurnStart,
 };
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
@@ -36,6 +36,8 @@ mod handoff;
 mod lifecycle;
 mod settle;
 mod start;
+#[cfg(test)]
+mod state_tests;
 
 use settle::Meta;
 
@@ -49,6 +51,8 @@ const ENTRY: &str = "init.lua";
 /// order they run.
 #[derive(Default)]
 pub struct SessionExtensions {
+    state: Arc<crate::host::state::StateRegistry>,
+    change_state: Mutex<Vec<StateLine>>,
     loaded: Vec<LoadedExtension>,
     /// Each loaded extension's name and package directory.
     dirs: Vec<(String, PathBuf)>,
@@ -133,7 +137,20 @@ impl SessionExtensions {
         locks: Arc<dyn PathLock>,
         host: Option<Arc<crate::host::script::HostScript>>,
     ) -> Self {
+        Self::load_with_state(home, config, clock, locks, host, StateSeed::new())
+    }
+
+    /// Loads extensions with their folded state installed before any Lua runs.
+    pub fn load_with_state(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        seed: StateSeed,
+    ) -> Self {
         let mut session = Self {
+            state: crate::host::state::StateRegistry::new(seed),
             home: home.to_path_buf(),
             host_script: host.clone(),
             ..Self::default()
@@ -259,6 +276,7 @@ impl SessionExtensions {
                     &entry.manifest,
                     Arc::clone(&clock),
                     Arc::clone(&locks),
+                    Arc::clone(&session.state),
                 ) {
                     Ok((extension, mut ignored)) => {
                         session.notices.append(&mut ignored);
@@ -581,6 +599,28 @@ impl SessionExtensions {
         }
     }
 
+    /// Whether the session loaded any extension, even one without hooks.
+    pub fn has_extensions(&self) -> bool {
+        !self.loaded.is_empty()
+    }
+
+    /// Refuses further state writes before the final drain.
+    pub fn close_state(&self) {
+        self.state.close();
+    }
+
+    fn set_change_lines(&self, lines: Vec<StateLine>) {
+        let mut slot = self
+            .change_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(
+            slot.is_empty(),
+            "change lines slot not taken before the next hook call"
+        );
+        *slot = lines;
+    }
+
     /// Whether any extension registered a hook at any point.
     pub fn has_hooks(&self) -> bool {
         self.any
@@ -611,12 +651,32 @@ impl SessionExtensions {
 }
 
 impl Hooks for SessionExtensions {
+    fn take_state_lines(&self) -> Vec<Event> {
+        self.state.take_outbox()
+    }
+
+    fn admit_state_lines(&self, lines: Vec<StateLine>) -> Vec<Event> {
+        let mut events = self.state.take_outbox();
+        events.extend(self.state.admit(lines));
+        events
+    }
+
+    fn take_change_state(&self) -> Vec<StateLine> {
+        std::mem::take(
+            &mut *self
+                .change_state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer {
         let mut content: Option<String> = None;
         let mut details: Option<Value> = None;
         let mut artifact: Option<String> = None;
         let mut changed_by: Vec<String> = Vec::new();
         let mut notices = Vec::new();
+        let mut pending = Vec::new();
         for entry in &self.after_tool {
             let Some(extension) = self.lua.get(entry.extension) else {
                 continue;
@@ -635,8 +695,21 @@ impl Hooks for SessionExtensions {
                 details.as_ref().or(call.details),
             );
             let returned = extension
-                .hook(AFTER_TOOL, entry.index, arg)
-                .and_then(|value| decode(name, value));
+                .hook_with(AFTER_TOOL, entry.index, arg, |value| {
+                    let change = decode(name, value)?;
+                    let changed = change.content.is_some()
+                        || change.details.is_some()
+                        || change.artifact.is_some();
+                    Ok((change, changed))
+                })
+                .map(|(change, lines, changed)| {
+                    if changed {
+                        pending.extend(lines);
+                    } else {
+                        self.state.queue(lines);
+                    }
+                    change
+                });
             match returned {
                 Ok(change) => {
                     let mut changed = false;
@@ -676,6 +749,7 @@ impl Hooks for SessionExtensions {
         let outcome = if changed_by.is_empty() {
             AfterToolOutcome::Unchanged
         } else {
+            self.set_change_lines(pending);
             AfterToolOutcome::Changed {
                 content,
                 details,
