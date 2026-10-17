@@ -2995,6 +2995,7 @@ fn a_rewound_line_settles_no_job() {
         new_session_id: SessionId("s_0000000000000001".into()),
         seq: Seq(3),
         from_session_id: None,
+        summary: None,
     });
     // A `rewound` settles no job: the job a rewind stopped has its own
     // `job_completed` before it, so the open job is still owed its

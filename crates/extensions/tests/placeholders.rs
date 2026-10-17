@@ -465,7 +465,13 @@ fn lua_models_are_filled_and_the_cache_keeps_the_template() {
         &setup,
         &["extensions.\"acme-ext\".settings.workspace=h.example"],
     );
-    providers.add_lua("acme-ext", &lua, &cfg, &fakes::children::grouped_output);
+    providers.add_lua(
+        "acme-ext",
+        &lua,
+        &cfg,
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
     let env = env_of(&[]);
     providers
         .fill_placeholders(&cfg, &|name| env.get(name).cloned())

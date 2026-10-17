@@ -28,7 +28,7 @@ use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Failure, Point};
 use contract::tool::Tool;
-use contract::{ErrorCode, JobId, Seq, SessionId};
+use contract::{CommandId, ErrorCode, JobId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
@@ -350,6 +350,7 @@ fn rewind_checked(dir: &std::path::Path) -> (Delivery, mpsc::Receiver<Answer>) {
     let dir = dir.to_path_buf();
     (
         Delivery::Rewind(
+            CommandId("c_rewind".into()),
             args(None, None, false),
             Ack(Box::new(move |answer| {
                 let last = log::read(&dir).unwrap().pop().unwrap();
@@ -712,13 +713,31 @@ fn refusals_send_no_stop_with_jobs_running() {
         .take()
         .unwrap()
         .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
-    let before = log_bytes(&dir);
+    let before = log::read(&dir).unwrap().len();
     let (rw, answered) = support::rewind(args(None, None, true));
     let inbox = take_inbox(&mut session);
     drop(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
     assert_eq!(rejection.code, ErrorCode::SummaryFailed);
-    assert_eq!(log_bytes(&dir), before);
+    // The summary runs before the stop: its failed turn stays in the log,
+    // with no `rewound` after it, and no stop was sent.
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        lines[before..]
+            .iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(lines.last().unwrap().payload["outcome"], "failed");
+    assert!(lines.iter().all(|line| line.kind != "rewound"));
     assert!(stops.try_recv().is_err(), "no stop was sent");
     // A bad point is refused the same way, with the jobs still running.
     let mut session = run_a_with_id(A_ID);

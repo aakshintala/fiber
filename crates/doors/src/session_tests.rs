@@ -3217,6 +3217,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             new_session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".into()),
             seq: contract::Seq(5),
             from_session_id: None,
+            summary: None,
         }),
     ] {
         log.append(&event, None, None).unwrap();

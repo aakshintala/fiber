@@ -198,7 +198,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
-        Delivery::Rewind(args, ack) => {
+        Delivery::Rewind(_, args, ack) => {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
@@ -1384,7 +1384,8 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 .recv(&inbox)
                 .expect("the rewind is delivered")
             {
-                Delivery::Rewind(args, ack) => {
+                Delivery::Rewind(id, args, ack) => {
+                    assert_eq!(id.0, "c_r1");
                     assert_eq!(args.seq, Some(contract::Seq(5)));
                     assert_eq!(args.from_session_id, None);
                     assert!(!args.summarise);
@@ -1426,7 +1427,8 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 .recv(&inbox)
                 .expect("the second rewind is delivered")
             {
-                Delivery::Rewind(args, ack) => {
+                Delivery::Rewind(id, args, ack) => {
+                    assert_eq!(id.0, "c_r2");
                     assert_eq!(args.seq, None);
                     ack.0(Err(Rejection {
                         code: ErrorCode::Busy,
@@ -3306,12 +3308,14 @@ fn commands_answers_with_the_rows_it_was_given_while_the_inbox_is_unread() {
     let opened = Opened::open(vec![]);
     opened.session.commands(vec![
         CommandInfo {
+            extension: false,
             name: "review".into(),
             description: "Review a diff.".into(),
             argument_hint: Some("[base]".into()),
             tag: "template".into(),
         },
         CommandInfo {
+            extension: false,
             name: "tdd".into(),
             description: "Test first.".into(),
             argument_hint: None,

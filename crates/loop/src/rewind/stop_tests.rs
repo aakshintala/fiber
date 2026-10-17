@@ -124,6 +124,7 @@ fn rewound_line() -> Event {
         new_session_id: SessionId("s_new000000000001".into()),
         seq: Seq(12),
         from_session_id: None,
+        summary: None,
     })
 }
 

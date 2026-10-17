@@ -51,11 +51,14 @@ fn printing(lines: &[String]) -> Child {
 }
 
 #[track_caller]
-fn drained(child: Child) -> Arc<Mutex<State>> {
-    let state = Arc::new(Mutex::new(State {
-        exited: false,
-        failure: None,
-    }));
+fn drained(child: Child) -> Arc<(Mutex<State>, Condvar)> {
+    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+        }),
+        Condvar::new(),
+    ));
     let child = Arc::new(Mutex::new(child));
     // `drain` blocks reading stdout to EOF and reaping the child: a wait,
     // so the test receives it with a wall-clock deadline.
@@ -77,8 +80,8 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
     state
 }
 
-fn failure_of(state: &Arc<Mutex<State>>) -> Option<Failure> {
-    lock(state).failure.clone()
+fn failure_of(state: &Arc<(Mutex<State>, Condvar)>) -> Option<Failure> {
+    lock(&state.0).failure.clone()
 }
 
 #[test]
@@ -246,10 +249,13 @@ fn configure_reads_a_global_debug_level() {
 fn exited_is_none_while_the_session_runs() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
-        state: Arc::new(Mutex::new(State {
-            exited: false,
-            failure: None,
-        })),
+        state: Arc::new((
+            Mutex::new(State {
+                exited: false,
+                failure: None,
+            }),
+            Condvar::new(),
+        )),
     };
     assert!(spawned.exited().is_none());
 }
@@ -258,7 +264,7 @@ fn exited_is_none_while_the_session_runs() {
 fn exited_reports_the_drained_failure() {
     let child = printing(&[exited_line("no_model", "No model is configured.")]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
@@ -289,7 +295,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
         "noise".to_owned(),
     ]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
     assert_eq!(failure.message, "The request was bad.");
@@ -299,7 +305,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
 fn drain_marks_exited_once_stdout_closes() {
     let child = printing(&[]);
     let state = drained(child);
-    assert!(lock(&state).exited);
+    assert!(lock(&state.0).exited);
     assert!(failure_of(&state).is_none());
 }
 
@@ -421,38 +427,93 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
 /// An executable that prints a `fiber_exited` line whose message is
 /// `marker`, so a start through it is told apart from any other binary.
 fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let path = root.path().join("fiber-stub");
     let line = exited_line("io_failed", marker).replace('\'', "'\\''");
-    std::fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    fakes::script(
+        root.path(),
+        "fiber-stub",
+        &format!("printf '%s\\n' '{line}'\n"),
+    )
 }
 
 /// The failure a started session reports once it has exited.
 #[track_caller]
 fn exit_of(started: Box<dyn hub::Started>) -> Failure {
     let (done_tx, done_rx) = mpsc::channel();
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     thread::Builder::new()
         .name("hub-test-exit".to_owned())
-        .spawn({
-            let stop = Arc::clone(&stop);
-            move || {
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Some(failure) = started.exited() {
-                        done_tx.send(failure).unwrap_or(());
-                        return;
-                    }
-                    thread::yield_now();
-                }
-            }
+        .spawn(move || {
+            done_tx.send(started.wait_exited()).unwrap_or(());
         })
         .unwrap();
-    let exit = Deadline::after(DRAIN_DEADLINE).recv(&done_rx);
-    // The poll thread ends with the wait, whichever way the wait ended.
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    exit.expect("the session exits before its deadline")
+    // `wait_exited` blocks: a wait, so the test receives it with a
+    // wall-clock deadline.
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&done_rx)
+        .expect("the session exits before its deadline")
+        .expect("the session exits before its deadline")
+}
+
+#[test]
+fn wait_exited_blocks_until_the_child_exits() {
+    // The stub blocks reading stdin until the test releases it, so a
+    // `wait_exited` that answers without waiting returns `None` and a
+    // `wait_exited` that never wakes misses the deadline: both fail here.
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("read line; printf '%s\\n' \"$line\"")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
+        Mutex::new(State {
+            exited: false,
+            failure: None,
+        }),
+        Condvar::new(),
+    ));
+    let child = Arc::new(Mutex::new(child));
+    thread::Builder::new()
+        .name("hub-test-drain".to_owned())
+        .spawn({
+            let child = Arc::clone(&child);
+            let state = Arc::clone(&state);
+            move || drain(&child, &state)
+        })
+        .unwrap();
+    let spawned = Spawned {
+        id: SessionId("s_wait".to_owned()),
+        state,
+    };
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-exit".to_owned())
+        .spawn(move || {
+            started_tx.send(()).unwrap_or(());
+            done_tx.send(spawned.wait_exited()).unwrap_or(());
+        })
+        .unwrap();
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&started_rx)
+        .expect("the waiter reports before it waits");
+    // The child still holds stdin, so the waiter must still be blocked:
+    // a `wait_exited` that answers without waiting has sent by now.
+    assert!(
+        Deadline::after(Duration::from_millis(500))
+            .recv(&done_rx)
+            .is_err(),
+        "wait_exited answered while stdin was held"
+    );
+    std::io::Write::write_all(&mut stdin, b"go\n").unwrap();
+    drop(stdin);
+    let failure = Deadline::after(DRAIN_DEADLINE)
+        .recv(&done_rx)
+        .expect("the session exits before its deadline")
+        .expect("the session exits before its deadline");
+    assert_eq!(failure.code, ErrorCode::IoFailed);
 }
 
 #[test]

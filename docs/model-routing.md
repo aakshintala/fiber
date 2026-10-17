@@ -341,7 +341,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"), taking each model's `name` from OpenRouter's list. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -387,7 +387,7 @@ workspace, an Azure resource or a Vertex region. A model's `base_url` names
 that part with a placeholder, `{name}`:
 
 ```json
-"base_url": "https://{workspace}/ai-gateway/anthropic"
+"base_url": "https://{workspace}/ai-gateway/anthropic/v1"
 ```
 
 The extension's manifest lists the same pattern under `providers`
@@ -447,7 +447,7 @@ includes `cached_tokens`, for example 15 with 14 cached
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with
-`anthropic-messages` and the `/ai-gateway/anthropic` base URL. Models that
+`anthropic-messages`, the `/ai-gateway/anthropic/v1` base URL and `compat.bearer`. Models that
 support the Responses API get `openai-responses`, and the rest get
 `openai-completions`. It also sends one custom header on every request. All of
 that is data.
@@ -467,7 +467,11 @@ runs in the background and never holds a list back. The generator leaves out ids
   provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
   a provider with no credential never runs.
 - **When no cached copy exists,** `models()` runs when the list is first
-  needed.
+  needed. `models()` receives `{ key, placeholders }`: the provider's key as
+  a session reads it, absent when its token comes from `credential()`, and
+  the host each declared placeholder holds. Fiber does not call `models()`
+  while a declared placeholder has no value or a value that is not a host,
+  so the key goes only to a host the person set.
 - **The model picker** refreshes, in the background, any provider whose list
   is older than `model_lists.refresh_after`, and updates the list when the result
   arrives. Its refresh button refreshes every provider with a credential,
@@ -880,8 +884,8 @@ so the idle limit is long. Either failure is `connection_failed` and is
 retried like a dropped connection. Neither is a configuration key.
 
 A response header `x-should-retry` overrides the status: `true` retries the
-failure, `false` does not. Fiber never retries quota or billing errors, or an
-`unknown_stop_reason`, whatever the header says.
+failure, `false` does not. Fiber never retries quota or billing errors, an
+`unknown_stop_reason` or a `paused_too_long`, whatever the header says.
 
 Among the responses probed, only Anthropic sent `x-should-retry`: `false` on its
 400 and 404 responses, `true` on a 429. Anthropic's 429 also carried

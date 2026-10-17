@@ -18,10 +18,11 @@ use extensions::{Providers, SessionExtensions};
 
 use crate::switch::Reads;
 
-/// How the terminal reads the installed models: [`read`] on a thread off
-/// the loop, with Fiber home, the workspace, the clock, the locks and the
-/// process's shared reads. Every picker read runs through the same
-/// [`Reads`], so the terminal's cancel at exit reaches one in flight.
+/// How the terminal reads the installed models: [`catalogue`] on a
+/// thread off the loop, with Fiber home, the workspace, the clock, the
+/// locks and the process's shared reads. Every picker read runs through
+/// the same [`Reads`], so the terminal's cancel at exit reaches one in
+/// flight.
 pub(crate) fn reader(
     home: PathBuf,
     workspace: PathBuf,
@@ -30,20 +31,44 @@ pub(crate) fn reader(
     reads: Arc<Reads>,
 ) -> tui::ReadModels {
     Arc::new(move |refresh| {
-        let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
-            reads.credential(command, timeout, &*clock)
-        };
-        read(
-            &home,
-            &workspace,
+        catalogue(
+            home.clone(),
+            workspace.clone(),
+            Arc::clone(&clock),
+            Arc::clone(&locks),
+            Arc::clone(&reads),
             refresh,
-            clock.wall(),
-            &|config| {
-                SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
-            },
-            &run,
         )
+        .map_err(|error| error.to_string())
     })
+}
+
+/// The installed models the way the local picker reads them, typed for
+/// the hub's `models` operation to reuse: one read feeds both doors.
+/// The error keeps its code, so the hub answers `config_invalid` for an
+/// invalid configuration and the code the failure names otherwise; only
+/// the local adapter above flattens it to text.
+pub(crate) fn catalogue(
+    home: PathBuf,
+    workspace: PathBuf,
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+    reads: Arc<Reads>,
+    refresh: tui::Refresh,
+) -> Result<tui::Catalogue, cli::ModelListsError> {
+    let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    read(
+        &home,
+        &workspace,
+        refresh,
+        clock.wall(),
+        &|config| {
+            SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
+        },
+        &run,
+    )
 }
 
 /// The installed models at `refresh`: the cached lists at once, refreshed
@@ -57,9 +82,8 @@ pub(crate) fn read(
     now: SystemTime,
     load: &dyn Fn(&Config) -> SessionExtensions,
     run: config::Runner<'_>,
-) -> Result<tui::Catalogue, String> {
-    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load, run)
-        .map_err(|error| error.to_string())?;
+) -> Result<tui::Catalogue, cli::ModelListsError> {
+    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load, run)?;
     Ok(tui::Catalogue {
         models: entries(&providers, &config),
         // The ages read after the refresh above ran, so a refreshed

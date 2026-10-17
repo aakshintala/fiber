@@ -4,7 +4,28 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 
-use super::{Variables, VariablesSource};
+use super::{InputItem, Rewound, Variables, VariablesSource};
+
+#[test]
+fn rewind_input_round_trips() {
+    let value = serde_json::json!({"type": "rewind", "command_id": "c_1"});
+    let item: InputItem = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), value);
+}
+
+#[test]
+fn rewound_summary_round_trips() {
+    let value = serde_json::json!({"new_session_id": "s_new", "seq": 7, "summary": "s"});
+    let item: Rewound = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), value);
+}
+
+#[test]
+fn rewound_without_summary_has_no_summary_key() {
+    let value = serde_json::json!({"new_session_id": "s_new", "seq": 7});
+    let item: Rewound = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), value);
+}
 
 #[test]
 fn path_is_taken_out_and_other_names_sorted() {

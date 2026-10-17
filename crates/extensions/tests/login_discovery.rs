@@ -103,7 +103,13 @@ fn discover(stuck: Stuck, wait_until: Duration) -> (Vec<(ErrorCode, Option<Strin
         )
         .unwrap();
         let mut temp = providers.clone();
-        let notices = temp.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
+        let notices = temp.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &|_| None,
+        );
         let notices = notices
             .into_iter()
             .map(|notice| (notice.code, notice.extension))

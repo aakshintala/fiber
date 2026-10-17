@@ -16,7 +16,7 @@ use contract::hook::Hooks;
 use contract::inbox::Delivery;
 use contract::shapes::Process;
 use extensions::{
-    Error, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, SessionExtensions,
+    Error, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, ModelsArg, SessionExtensions,
 };
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
@@ -231,7 +231,7 @@ fiber.provider("host-script", {{ models = {{
         .expect("loaded the host-script provider");
     let (models_tx, models_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = models_tx.send(provider.models());
+        let _sent = models_tx.send(provider.models(&ModelsArg::default()));
     });
     let models = Deadline::after(WAIT)
         .recv(&models_rx)

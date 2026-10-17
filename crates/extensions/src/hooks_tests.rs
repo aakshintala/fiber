@@ -26,7 +26,7 @@ use serde_json::{Map, json};
 
 use super::SessionExtensions;
 use crate::lua::HookPhase;
-use crate::{Origin, Request, plan};
+use crate::{ModelsArg, Origin, Request, plan};
 use fakes::FakeLock;
 
 struct Home {
@@ -460,9 +460,12 @@ fn an_unrelated_init_error_keeps_the_extensions_provider_data() {
     assert!(session.rejected().is_empty());
     let (mut providers, notices) = crate::Providers::load(&home.home()).unwrap();
     assert!(notices.is_empty());
-    providers.add_session(&session, &home.config(&[]), &|_, _| {
-        unreachable!("no credential command runs")
-    });
+    providers.add_session(
+        &session,
+        &home.config(&[]),
+        &|_, _| unreachable!("no credential command runs"),
+        &|_| None,
+    );
     assert_eq!(providers.names().collect::<Vec<_>>(), ["p"]);
 }
 
@@ -1043,7 +1046,8 @@ fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
     let weak = Arc::downgrade(&other);
     // No cached copy, so the refresh runs; the thread holds the last Arc
     // beside this test's.
-    let refresh = bounded(move || other.refresh(None)).expect("the refresh starts");
+    let refresh =
+        bounded(move || other.refresh(None, ModelsArg::default())).expect("the refresh starts");
     let mut session = Arc::try_unwrap(session)
         .ok()
         .expect("the test holds the only Arc");
@@ -1579,9 +1583,12 @@ fn a_provider_in_init_refuses_the_whole_extension_and_its_data() {
         assert!(notices[0].message.contains("providers/acme.lua"));
         let (mut providers, _) = crate::Providers::load(&home.home()).unwrap();
         assert!(providers.names().any(|name| name == "acme"));
-        providers.add_session(&session, &home.config(&[]), &|_, _| {
-            unreachable!("no credential command runs")
-        });
+        providers.add_session(
+            &session,
+            &home.config(&[]),
+            &|_, _| unreachable!("no credential command runs"),
+            &|_| None,
+        );
         assert!(!providers.names().any(|name| name == "acme"));
     }
 }

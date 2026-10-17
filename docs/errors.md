@@ -142,12 +142,13 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, or OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"). A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
 | `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
+| `paused_too_long` | a reply was still paused (`pause_turn`) after 5 continuations in a row; the message carries `pause_turn` | never |
 
 Every stop or finish reason a protocol documents is mapped in its native
 module. An unknown one fails the call as `unknown_stop_reason`, whatever the
 protocol. `pause_turn` is not unknown: the loop continues it
 (`docs/loop.md`, "A reply paused by a hosted tool"). Only a reply still
-paused after the continuation bound fails the turn with `unknown_stop_reason`. A reason a vendor documents that Fiber has not mapped is a Fiber
+paused after the continuation bound fails the turn, with `paused_too_long`. A reason a vendor documents that Fiber has not mapped is a Fiber
 bug, and a release fixes it.
 
 The status alone cannot classify: OpenRouter sends an upstream's context
@@ -156,8 +157,7 @@ provider crate reads the body, per protocol and per upstream.
 
 The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
-model call fails"). It never overrides `quota_exceeded` or
-`unknown_stop_reason`, which are never retried.
+model call fails"). It never overrides `quota_exceeded`, `unknown_stop_reason` or `paused_too_long`, which are never retried.
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
 `retry_after_ms` set, so a person or a caller can decide.
@@ -249,6 +249,7 @@ result. `turn_completed` is `failed`, with `error` set to the cause, on:
   (`docs/permissions.md`, "Headless")
 - `output_truncated`: a second reply in a row cut off by the output-token limit
   (`docs/loop.md`, "A reply cut off by the output limit")
+- `paused_too_long`: a reply still paused after 5 continuations in a row (`docs/loop.md`, "A reply paused by a hosted tool")
 - `budget_exceeded`: the session reached `budget.usd`, or a `before_model_call`
   hook refused the request (`docs/loop.md`, "Spending budget")
 
@@ -318,6 +319,7 @@ the lines that carry it.
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
+| `paused_too_long` | turn | a reply was still paused (`pause_turn`) after 5 continuations in a row; send the request again or simplify it |
 | `protocol_unsupported` | exit, driver command (`rewind`) | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
@@ -330,7 +332,7 @@ the lines that carry it.
 | `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
-| `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
+| `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | notice | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
 | `stale_request` | driver command, hub command, notice | the command names a request, steering message, job or turn that is no longer pending, queued or running, or a `dismiss` names a session that is not a crashed session in the feed, or a cascading `delete`'s `expect` differs from the sessions it would remove; the message names them (`docs/invocation.md`, "Deleting and pruning"), or the terminal has no request waiting; or a Ctrl+G `write_config` version no longer matches the file on the hub; or a newer `search_files` query superseded this one, a device-login command has no login, or another result command is already waiting |
@@ -368,7 +370,7 @@ Notices, for a failure outside any action:
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `reviewer_selection_failed` | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
-| `skill_shadowed` | two skills share a name, an MCP server's prompt is named like a skill, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
+| `skill_shadowed` | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 | `web_search_unavailable` | `web_search` is not declared: several search backends are installed and `web_search.backend` is unset, or it names a backend that is not installed; the message names which (`docs/tools.md`, "Web fetch and web search") |

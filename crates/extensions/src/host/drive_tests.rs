@@ -165,6 +165,7 @@ fn drive_returns_the_result_table() {
         &clock,
         vec![Ok(Some(CommandResult::Commands {
             commands: vec![CommandInfo {
+                extension: false,
                 name: "sync".into(),
                 description: "Sync now.".into(),
                 argument_hint: None,

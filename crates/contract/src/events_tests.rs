@@ -283,7 +283,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "rewound",
-            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1"}),
+            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "summary": "s"}),
         ),
         (
             "turn_started",
@@ -294,7 +294,8 @@ fn samples() -> Vec<(&'static str, Value)> {
              "command_id": "c"},
             {"type": "shell_command", "seq": 2},
             {"type": "jobs", "job_ids": ["j"]},
-            {"type": "handoff", "command_id": "c"}]}),
+            {"type": "handoff", "command_id": "c"},
+            {"type": "rewind", "command_id": "c"}]}),
         ),
         ("step_started", json!({})),
         (
@@ -1488,12 +1489,14 @@ fn a_commands_result_reads_as_commands_with_and_without_a_hint() {
                     description: "Review a diff.".into(),
                     argument_hint: Some("[base]".into()),
                     tag: "template".into(),
+                    extension: false,
                 },
                 CommandInfo {
                     name: "tdd".into(),
                     description: "Test first.".into(),
                     argument_hint: None,
                     tag: "skill".into(),
+                    extension: false,
                 },
             ]
         }
@@ -1505,6 +1508,33 @@ fn a_commands_result_reads_as_commands_with_and_without_a_hint() {
     assert_eq!(
         serde_json::to_string(&accepted).unwrap(),
         r#"{"command_id":"c_1","result":{"commands":[{"name":"review","description":"Review a diff.","argument_hint":"[base]","tag":"template"},{"name":"tdd","description":"Test first.","tag":"skill"}]}}"#
+    );
+}
+
+#[test]
+fn an_extension_command_result_marks_extension() {
+    let result = result_of(json!({"command_id": "c_1", "result": {"commands": [
+        {"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]}}));
+    assert_eq!(
+        result,
+        CommandResult::Commands {
+            commands: vec![CommandInfo {
+                name: "deploy".into(),
+                description: "Deploys.".into(),
+                argument_hint: None,
+                tag: "acme".into(),
+                extension: true,
+            }]
+        }
+    );
+    let written = serde_json::to_value(&result).unwrap();
+    assert_eq!(written["commands"][0]["extension"], json!(true));
+    let plain = result_of(json!({"command_id": "c_1", "result": {"commands": [
+        {"name": "tdd", "description": "Test first.", "tag": "skill"}]}}));
+    let written = serde_json::to_value(&plain).unwrap();
+    assert!(
+        written["commands"][0].get("extension").is_none(),
+        "{written}"
     );
 }
 

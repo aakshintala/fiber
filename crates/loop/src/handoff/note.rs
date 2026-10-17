@@ -67,7 +67,10 @@ pub(crate) fn reply_note(reply: &Reply) -> String {
         .iter()
         .filter_map(|action| match action {
             ReplyAction::Text(part) => Some(part.text.as_str()),
-            ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+            ReplyAction::Reasoning(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::Hosted(_)
+            | ReplyAction::HostedResult { .. } => None,
         })
         .collect::<Vec<_>>()
         .join("\n")

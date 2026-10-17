@@ -754,3 +754,33 @@ fn slash_range_counts_from_the_entries_actually_drawn() {
         "{drawn:?}"
     );
 }
+
+#[test]
+fn slash_replaced() {
+    let mut app = attached(160, 48);
+    let asked = app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "reloaded",
+        serde_json::json!({"servers": {"kept": [], "restarted": [], "started": [],
+            "stopped": []}, "extensions": []}),
+    ));
+    assert_eq!(asked.len(), 1);
+    let asked: serde_json::Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_accepted",
+        serde_json::json!({"command_id": asked["id"], "result": {"commands": [
+            {"name": "model", "description": "Picks a fast model.", "argument_hint": "[speed]",
+             "tag": "acme", "extension": true},
+            {"name": "model", "description": "The model skill.", "tag": "skill"}]}}),
+    ));
+    type_text(&mut app, "/mo");
+    let shown = screen(&app, 160, 48);
+    assert!(
+        shown.contains("model") && shown.contains("Picks a fast model."),
+        "{shown}"
+    );
+    assert!(shown.contains("acme"), "{shown}");
+    assert!(!shown.contains("The model skill"), "{shown}");
+    insta::assert_snapshot!("slash-replaced", shown);
+}

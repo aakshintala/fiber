@@ -52,7 +52,7 @@ pub(crate) fn session_rewound(
             format!("No session `{}`.", old.0),
         ));
     }
-    let point = match point_of(log::last_line(&old_dir), &new, &old) {
+    let (point, summary) = match point_of(log::last_line(&old_dir), &new, &old) {
         Ok(point) => point,
         Err(failure) => return ask_failed(failure),
     };
@@ -93,6 +93,7 @@ pub(crate) fn session_rewound(
         Some(r#loop::Rewound {
             from: point,
             note,
+            summary,
             worktree,
             name,
         }),
@@ -106,7 +107,11 @@ pub(crate) fn session_rewound(
 /// The point `new` continues from, from the old log's last line: `seq`
 /// counts in the old session's log, or in `from_session_id`'s when an
 /// ancestor point names one. Anything else is `invalid_arguments`.
-fn point_of(last: Option<Envelope>, new: &SessionId, old: &SessionId) -> Result<Point, Failure> {
+fn point_of(
+    last: Option<Envelope>,
+    new: &SessionId,
+    old: &SessionId,
+) -> Result<(Point, Option<String>), Failure> {
     let Some(last) = last else {
         return Err(invalid(old, new));
     };
@@ -119,10 +124,13 @@ fn point_of(last: Option<Envelope>, new: &SessionId, old: &SessionId) -> Result<
     if rewound.new_session_id != *new {
         return Err(invalid(old, new));
     }
-    Ok(Point {
-        session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
-        seq: rewound.seq,
-    })
+    Ok((
+        Point {
+            session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
+            seq: rewound.seq,
+        },
+        rewound.summary,
+    ))
 }
 
 fn invalid(old: &SessionId, new: &SessionId) -> Failure {

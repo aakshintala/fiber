@@ -98,7 +98,9 @@ pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_se
 pub use prompt::{DisabledReader, PromptInputs};
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
-pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed};
+pub use reviewer::{
+    BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed, summary_skips,
+};
 pub use rewind::{Rewound, latest_name, rewind_note, rewind_note_with_jobs};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;

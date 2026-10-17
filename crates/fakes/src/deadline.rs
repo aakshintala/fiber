@@ -10,7 +10,8 @@ use contract::clock::Clock;
 use crate::clock::SystemClock;
 
 /// nextest kills a test at 120 s (`.config/nextest.toml`): a test's
-/// deadlines sum to half of that.
+/// deadlines sum to half of that. The relations between the three bounds
+/// are pinned in `deadline_tests.rs`.
 pub const BUDGET: Duration = Duration::from_secs(60);
 /// From the test's start, when its success-path waits must be over.
 pub const WAITS: Duration = Duration::from_secs(40);

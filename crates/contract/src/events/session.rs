@@ -151,6 +151,9 @@ pub struct Rewound {
     /// "Rewind").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_session_id: Option<SessionId>,
+    /// The old session's summary of the path after the point, when requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// `turn_started`. Its envelope carries the new `turn_id`.
@@ -189,6 +192,11 @@ pub enum InputItem {
     },
     /// A `handoff` command sent between turns.
     Handoff {
+        /// The command.
+        command_id: CommandId,
+    },
+    /// A `rewind` command asking for a summary between turns.
+    Rewind {
         /// The command.
         command_id: CommandId,
     },

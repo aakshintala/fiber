@@ -1695,6 +1695,7 @@ mod window {
                 new_session_id: SessionId("s_2".into()),
                 seq: contract::Seq(0),
                 from_session_id: None,
+                summary: None,
             }),
             None,
             None,
@@ -2191,11 +2192,12 @@ mod from_log {
     )]
 
     use contract::events::{
-        ContextAdded, Event, InputItem, ReasoningCompleted, ToolCallCompleted, TurnStarted,
+        AssistantMessageCompleted, ContextAdded, Event, InputItem, MessageOutcome,
+        ReasoningCompleted, TextCompleted, ToolCallCompleted, ToolCallRequested, TurnStarted,
     };
     use contract::provider::Input;
     use contract::shapes::{ContentPart, Origin, Sender};
-    use contract::{ActionId, CommandId, Envelope, SessionId};
+    use contract::{ActionId, CommandId, Envelope, ProviderCallId, SessionId};
     use log::Log;
 
     use super::events::{
@@ -3162,6 +3164,81 @@ mod from_log {
                 Input::Assistant {
                     model: MODEL.into(),
                     text: "Done.".into(),
+                    provider_item: None
+                }
+            ]
+        );
+        assert!(
+            conversation
+                .iter()
+                .all(|i| !matches!(i, Input::ToolCall { .. } | Input::ToolResult { .. }))
+        );
+    }
+
+    #[test]
+    fn a_hosted_pair_whose_two_halves_follow_two_assistant_messages_rebuilds_in_order() {
+        let text_a = json!({"type": "text", "text": "A"});
+        let call = json!({"type": "server_tool_use", "id": "srvtoolu_01",
+            "name": "web_search", "input": {"query": "fiber"}});
+        let result = json!({"type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01", "content": []});
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(message_started(), Some("a_0"));
+        log.append(
+            Event::TextCompleted(TextCompleted {
+                text: "A".into(),
+                provider_item: Some(text_a.clone()),
+            }),
+            Some("a_0"),
+        );
+        log.append(
+            Event::AssistantMessageCompleted(AssistantMessageCompleted {
+                outcome: MessageOutcome::Completed,
+                error: None,
+            }),
+            Some("a_0"),
+        );
+        log.append(message_started(), Some("a_2"));
+        log.append(
+            Event::ToolCallRequested(ToolCallRequested {
+                name: "web_search".into(),
+                arguments: json!({"query": "fiber"}),
+                provider_id: Some(ProviderCallId("srvtoolu_01".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: Some(call.clone()),
+            }),
+            Some("a_3"),
+        );
+        log.append(started(), Some("a_3"));
+        let Event::ToolCallCompleted(done) = completed_event("") else {
+            panic!("completed builds a tool_call_completed");
+        };
+        log.append(
+            Event::ToolCallCompleted(ToolCallCompleted {
+                provider_item: Some(result.clone()),
+                ..done
+            }),
+            Some("a_3"),
+        );
+        log.append(assistant("B"), Some("a_2"));
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        assert_eq!(
+            conversation[1..],
+            [
+                Input::Assistant {
+                    model: MODEL.into(),
+                    text: "A".into(),
+                    provider_item: Some(text_a)
+                },
+                raw(call),
+                raw(result),
+                Input::Assistant {
+                    model: MODEL.into(),
+                    text: "B".into(),
                     provider_item: None
                 }
             ]
