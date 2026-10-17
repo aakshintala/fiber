@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use contract::events::{DecidedBy, Decision, Event, ModelSettings, Outcome};
+use contract::events::{
+    CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
+};
 use contract::{Envelope, Seq, TurnId};
 use log::{Log, Segment};
 use serde_json::Value;
@@ -36,6 +38,7 @@ const FOLDED: &[&str] = &[
     "job_completed",
     "rewound",
     "opening_message",
+    "skills_resent",
     "handoff_completed",
     "reviewer_kept",
     "repository_code_offered",
@@ -173,6 +176,37 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     {
         return Ok(());
     }
+    // A load is a Fiber-run completion carrying `control.skill`, whichever
+    // tool wrote it (`docs/tools.md`, "What a result carries"): the same
+    // `admitted` rule the live render uses, read from the raw payload. No
+    // early return: the guard and the typed parse below run unchanged.
+    if line.kind == "tool_call_completed" {
+        let status = match line.payload.get("status").and_then(Value::as_str) {
+            Some("completed") => Some(CallStatus::Completed),
+            Some("failed") => Some(CallStatus::Failed),
+            Some("denied") => Some(CallStatus::Denied),
+            Some("cancelled") => Some(CallStatus::Cancelled),
+            _ => None,
+        };
+        if let (Some(status), Some(action)) = (status, line.action_id.as_ref())
+            && !pass.running.is_inner(action)
+        {
+            let provider_run = line
+                .payload
+                .get("provider_item")
+                .is_some_and(|item| !item.is_null());
+            let control: Option<Control> = line
+                .payload
+                .get("control")
+                .and_then(|control| serde_json::from_value(control.clone()).ok());
+            if let Some(load) =
+                crate::conversation::admitted(status, provider_run, control.as_ref())
+                    .and_then(|control| control.skill.clone())
+            {
+                pass.running.loaded(load);
+            }
+        }
+    }
     // Results without host lists or file changes cannot affect known hosts.
     if line.kind == "tool_call_completed"
         && !line.payload.contains_key("hosts_surfaced")
@@ -264,10 +298,20 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             let state = Carry {
                 jobs: pass.running.jobs.clone(),
                 session_log: pass.running.session_log.clone(),
+                skills: pass.running.skills.clone(),
                 ..Carry::default()
             };
             pass.starts
                 .insert(turn.clone(), ((pass.index, seq.0), state));
+        }
+    } else if let Event::ToolCallRequested(_) = &event {
+        crate::conversation::inner_action(&event, line.action_id.as_ref(), &mut pass.running);
+    } else if let Event::SkillsResent(resent) = &event {
+        for sent in &resent.skills {
+            pass.running.loaded(SkillLoad {
+                name: sent.name.clone(),
+                path: sent.path.clone(),
+            });
         }
     } else if let Event::HandoffCompleted(done) = &event
         && done.outcome == Outcome::Completed
@@ -279,6 +323,9 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             .unwrap_or_default();
         resumed.window = window;
         resumed.seed = seed;
+        // Only this context's loads resend: a later handoff rearms the
+        // resend from what its own context loaded.
+        pass.running.skills.clear();
         // Only this turn can complete another handoff before its
         // next `turn_started`.
         pass.starts.retain(|started, _| Some(started) == turn);
