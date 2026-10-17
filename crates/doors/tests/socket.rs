@@ -198,7 +198,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
-        Delivery::Rewind(id, args, ack) => {
+        Delivery::Rewind(_, args, ack) => {
             ack.0(Ok(None));
             format!("rewind {:?}", args.seq)
         }
