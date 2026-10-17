@@ -174,6 +174,13 @@ fn a_secret_named_for_another_server_is_a_named_refusal() {
             let seen = refusal.message();
             assert!(seen.contains(&format!("`{secret}`")), "{seen}");
             assert!(seen.contains("`mcp.fx.<KEY>`"), "{seen}");
+            // The refusal's polarity is the sentence's verb: a required
+            // entry stops startup, an optional one is skipped.
+            if required {
+                assert!(seen.contains("cannot start it"), "{seen}");
+            } else {
+                assert!(seen.contains("does not start it"), "{seen}");
+            }
         }
     }
 }
@@ -303,6 +310,11 @@ fn debug_prints_names_but_no_command_argument_value_or_url() {
     let shown = format!("{:?}", found.servers);
     assert!(shown.contains("fx"), "{shown}");
     assert!(shown.contains("docs"), "{shown}");
+    // The transports render redacted: the debug names the shape without
+    // any value.
+    assert!(shown.contains("Stdio"), "{shown}");
+    assert!(shown.contains("Remote"), "{shown}");
+    assert!(shown.contains("redacted"), "{shown}");
     for secret in [
         "run-sekret-cmd",
         "--sekret-flag",
@@ -311,6 +323,22 @@ fn debug_prints_names_but_no_command_argument_value_or_url() {
     ] {
         assert!(!shown.contains(secret), "{shown}");
     }
+    // The servers' own debug names the set without any value.
+    let shown = format!("{found:?}");
+    assert!(shown.contains("McpServers"), "{shown}");
+    assert!(shown.contains("fx"), "{shown}");
+    assert!(!shown.contains("run-sekret-cmd"), "{shown}");
+}
+
+#[test]
+fn debug_names_a_refusal_and_its_kind() {
+    let refusal = refused(
+        &json!({"mcp": {"servers": {"fx": {"command": "run", "url": "https://fx.example/mcp"}}}}),
+    );
+    let shown = format!("{refusal:?}");
+    assert!(shown.contains("McpRefusal"), "{shown}");
+    assert!(shown.contains("fx"), "{shown}");
+    assert!(shown.contains("Both"), "{shown}");
 }
 
 /// One `read_script` call on a worker thread, so a blocking read would
