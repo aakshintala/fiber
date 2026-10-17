@@ -654,7 +654,6 @@ jobs:
           fi
           perf --version || true
           sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
-          cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null | sed "s/^/probe-mmap: perf_event_paranoid: /" || true
           # PROBE retry 2: round 4 showed the remount alone only opens
           # the tracefs root; the events subtree keeps its owner-only
           # bits. Run BOTH the remount and the chmod, logging each exit
@@ -694,8 +693,7 @@ jobs:
           # perf script summarizer, read from the script output: one TOTAL
           # line, one SITE line per call site, one LEN line per site and
           # request size. A sys_enter_mmap event line starts a sample; the
-          # len comes from its trace fields where printed in a labeled
-          # form (len: N, len=N, len N, hex or decimal), else "?". The
+          # len comes from its trace fields where printed, else "?". The
           # call site is the first user-space frame with a symbol and
           # file:line where present (the jig's own frames or a .rs:line),
           # else the first frame. Run-specific paths are normalized away
@@ -738,9 +736,9 @@ jobs:
             emit()
             total++
             curlen = "?"
-            if (match($0, /len[:= ]+(0[xX][0-9a-fA-F]+|[0-9]+)/)) {
+            if (match($0, /len[: ]+(0[xX][0-9a-fA-F]+|[0-9]+)/)) {
               curlen = substr($0, RSTART, RLENGTH)
-              sub(/^len[:= ]+/, "", curlen)
+              sub(/^len[: ]+/, "", curlen)
             }
             cur = "x"
             next
@@ -901,10 +899,8 @@ jobs:
           # hard timeout 1200 (the exact command is logged). One minute
           # after recording starts it logs the event count and the
           # perf.data size so far without waiting for the run to finish:
-          # the count is default perf script over a snapshot copy (the
-          # same stream the summary parses), the size is stat. The first
-          # 20 lines of -F trace and default output are logged for layout
-          # checking. It projects both
+          # the count is perf script over a snapshot copy with fast fields
+          # only (no DWARF unwind), the size is stat. It projects both
           # linearly to the timeout (x20) and either lets the recording
           # finish or stops it for a -c escalation. Returns 0 with the
           # counts summarized, 1 when the side is unavailable, 2 when the
@@ -944,12 +940,7 @@ jobs:
               size=$(stat -c %s "$data" 2>/dev/null || true)
               if cp "$data" "$tmp/$side-perf.data.snap" 2>/dev/null; then
                 snap_size=$(stat -c %s "$tmp/$side-perf.data.snap" 2>/dev/null || true)
-                echo "probe-mmap: $side sample source: perf script -F trace (first 20 lines, stderr included)"
-                timeout 60 perf script -i "$tmp/$side-perf.data.snap" -F trace 2>&1 | sed -n '1,20p' | sed "s/^/probe-mmap: sample head: [$side] /" || true
-                echo "probe-mmap: $side sample source: default perf script (first 20 lines, stderr included)"
-                timeout 60 perf script -i "$tmp/$side-perf.data.snap" 2>&1 | sed -n '1,20p' | sed "s/^/probe-mmap: sample default: [$side] /" || true
-                events=$(timeout 55 perf script -i "$tmp/$side-perf.data.snap" 2>"$tmp/$side-script-count.err" | grep -c sys_enter_mmap || true)
-                sed -n '1,5p' "$tmp/$side-script-count.err" 2>/dev/null | sed "s/^/probe-mmap: $side count err: /" || true
+                events=$(timeout 50 perf script -i "$tmp/$side-perf.data.snap" -F comm,pid,time,event 2>/dev/null | grep -c sys_enter_mmap || true)
                 echo "probe-mmap: $side one-minute mark: state=$state c=$c perf.data bytes=${size:-unknown} snap bytes=${snap_size:-unknown} free bytes=${free:-unknown} mmap samples=${events:-unknown}"
               else
                 echo "probe-mmap: $side one-minute mark: state=$state c=$c perf.data bytes=${size:-unknown} (snapshot copy failed; count skipped)"
@@ -1026,8 +1017,8 @@ jobs:
             df -h "$tmp" || true
             return 0
           }
-          # Summarizes a finished recording: streams default perf script
-          # straight into the counts (no giant intermediate),
+          # Summarizes a finished recording: streams perf script with
+          # source lines straight into the counts (no giant intermediate),
           # then prints the required side lines. Counts are raw samples;
           # est multiplies by the side's -c. At a shared -c the sample
           # order is the est order.
@@ -1038,9 +1029,8 @@ jobs:
             data="$tmp/$side-perf.data"
             echo "$c" > "$tmp/$side-c.txt" || true
             jigbase=$(basename "$jig")
-            perf script -i "$data" 2>"$tmp/$side-script.err" | \
+            perf script -i "$data" -F +srcline 2>/dev/null | \
               awk -v JIG="$jigbase" -v JIGPATH="$jig" -v SAMPLE="$tmp/$side-script-sample.txt" "$perfawk" > "$tmp/$side-counts.txt" 2>/dev/null || true
-            sed -n '1,5p' "$tmp/$side-script.err" 2>/dev/null | sed "s/^/probe-mmap: $side script err: /" || true
             echo "probe-mmap: $side script sample, first lines for format checking"
             sed -n '1,30p' "$tmp/$side-script-sample.txt" 2>/dev/null | sed "s/^/probe-mmap: $side raw: /" || true
             total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$side-counts.txt" 2>/dev/null | sed -n '1p' || true)
