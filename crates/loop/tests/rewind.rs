@@ -1365,6 +1365,44 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
 }
 
 #[test]
+fn an_ancestor_summary_starts_its_excerpt_after_the_inherited_last_line() {
+    let session = run_a_with_id(A_ID);
+    let lines = log::read(&session.dir).unwrap();
+    // The inherited segment ends on the person's input, immediately before
+    // step_started. Moving the cut back even one line quotes that input.
+    let at = turn_start(&lines, 2);
+    let (b, tx, _, _) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId(A_ID.into()),
+            seq: Seq(at),
+        },
+        "B's note".into(),
+        None,
+        vec![Scripted::text("B replied")],
+    );
+    drop(run_turn(b, &tx, "B prompt"));
+    let (b, tx, provider) = resume_existing(&session, B_ID, vec![Scripted::text("The path.")]);
+    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true, vec![]));
+    drop(drive(b, &tx, rw));
+    accepted(answer_of(answer));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert!(request.conversation.contains(&Input::User {
+        text: "two".into(),
+        images: vec![],
+    }));
+    assert!(
+        matches!(request.conversation.last().unwrap(), Input::User { text, .. }
+            if text.contains("B prompt") && !text.contains("two")),
+        "the summary quotes B's first message, not the inherited input: {:?}",
+        request.conversation.last()
+    );
+}
+
+#[test]
 fn a_summary_reads_through_a_handoff_without_its_note_request() {
     let session = run_a_handed();
     let lines = log::read(&session.dir).unwrap();
