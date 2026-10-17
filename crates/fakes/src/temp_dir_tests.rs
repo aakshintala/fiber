@@ -186,6 +186,10 @@ fn a_symlink_is_not_followed_when_modes_are_restored() {
 /// Run on its own it does nothing.
 #[test]
 #[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+#[allow(
+    clippy::print_stderr,
+    reason = "the parent test quotes this line in its failure message"
+)]
 fn child_leaves_a_read_only_directory() {
     let Ok(prefix) = std::env::var(CHILD_PREFIX) else {
         return;
@@ -197,7 +201,8 @@ fn child_leaves_a_read_only_directory() {
     println!("{}", dir.path().display());
     std::io::Write::flush(&mut std::io::stdout()).unwrap();
     let mut rest = String::new();
-    std::io::stdin().read_line(&mut rest).unwrap();
+    let read = std::io::stdin().read_line(&mut rest);
+    eprintln!("read_line: {read:?}");
 }
 
 #[test]
