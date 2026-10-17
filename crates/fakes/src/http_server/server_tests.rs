@@ -463,3 +463,99 @@ fn shutdown_reports_an_accept_thread_held_past_its_bound() {
         assert!(server.shutdown(), "shutdown reaps the released accept");
     });
 }
+
+/// Releases a held park-gap waiter when the test unwinds past it: a
+/// waiter held between its park becoming visible and its condvar wait
+/// would otherwise outlive the failed test and hang the scope's join,
+/// turning a red assertion into a hung suite.
+struct ReleaseGapOnDrop {
+    release: mpsc::Sender<()>,
+}
+
+impl Drop for ReleaseGapOnDrop {
+    fn drop(&mut self) {
+        match self.release.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// Shutdown ends a condvar wait held between its park becoming visible
+/// and its condvar wait: the waiter signals from the hold with the wake
+/// mutex held, shutdown takes that mutex before its notify, and the
+/// release lets the notify land after the waiter parks. A shutdown that
+/// notified without the mutex would miss the held waiter, which would
+/// then sleep its guard instead of ending within the operation bound.
+#[test]
+fn a_shutdown_in_the_park_gap_ends_the_wait() {
+    let clock = fake_clock();
+    let server = HttpServer::bind(
+        clock.clone() as Arc<dyn Clock>,
+        Limits {
+            request: Duration::from_secs(10),
+            // A long poll: only shutdown may end the park, so a missed
+            // notify sleeps the guard instead of passing on a
+            // millisecond poll.
+            poll: Duration::from_secs(60),
+            ..Limits::default()
+        },
+    )
+    .expect("the core binds");
+    let budget = budget(&clock);
+    let (reached_rx, release_tx) = server.test_park_gap();
+    // Dropped when an assertion below fails, before the scope joins the
+    // held waiter: the release lets the join end, so a red assertion
+    // fails the test instead of hanging it.
+    let _release_gap = ReleaseGapOnDrop {
+        release: release_tx.clone(),
+    };
+    let (wait_tx, wait_rx) = mpsc::channel();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut seq = 0;
+            let mut acked = None;
+            let end = server.shared.wait(
+                &budget,
+                "the test request",
+                "to wait out the test",
+                &mut seq,
+                &mut acked,
+            );
+            match wait_tx.send(end) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        Deadline::after(OP).recv_or_fail(&reached_rx, "the waiter in the park gap");
+        scope.spawn(|| {
+            let joined = server.shutdown();
+            match stop_tx.send(joined) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        match Deadline::after(OP).recv(&stop_rx) {
+            // Shutdown returned while the waiter was held: it notified
+            // without the wake mutex, so the notify missed the waiter.
+            Ok(joined) => assert!(joined, "shutdown stops the server"),
+            // Shutdown blocks on the wake mutex the held waiter owns:
+            // its notify lands after the waiter parks.
+            Err(_) => {}
+        }
+        release_tx
+            .send(())
+            .expect("the waiter is held in the park gap");
+        assert!(
+            matches!(
+                Deadline::after(OP).recv_or_fail(&wait_rx, "the stopped wait"),
+                WaitEnd::Waited
+            ),
+            "shutdown ends the wait at once"
+        );
+    });
+    assert_eq!(server.test_wait_entries(), 1, "the wait parks once");
+    assert_eq!(
+        server.test_slept_waits(),
+        0,
+        "a stopped wait sleeps nothing"
+    );
+}

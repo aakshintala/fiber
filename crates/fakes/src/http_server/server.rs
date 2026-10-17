@@ -154,6 +154,12 @@ pub(crate) struct Shared {
     /// reaches that window.
     #[cfg(test)]
     pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// The next condvar park waits here while the test holds it,
+    /// test-only: the hold sits between the park becoming visible to
+    /// the clock and the condvar wait, holding the wake mutex, so no
+    /// outside seam reaches that window.
+    #[cfg(test)]
+    gap: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     /// The next shutdown signals immediately before it takes the accept
     /// lock, test-only: the spawn-race test waits for the actual contest.
     #[cfg(test)]
@@ -348,6 +354,9 @@ impl Shared {
     /// One condvar park for `seen`, bounded by the shorter of the poll and
     /// `guard_left`: true when no wake landed while parked, so the whole
     /// bound slept.
+    /// One condvar park for `seen`, bounded by the shorter of the poll and
+    /// `guard_left`: true when no wake landed while parked, so the whole
+    /// bound slept.
     fn condvar_park(&self, budget: &RequestBudget, seen: u64, guard_left: Duration) -> bool {
         // One park, bounded by the shorter of the poll and the guard. The
         // predicate holds the generation read above: a wake past that read
@@ -359,7 +368,23 @@ impl Shared {
             Some(self.limits.poll.min(guard_left)),
             &self.wake_changed,
             guard,
-            |wake| woken(seen, *wake),
+            |wake| {
+                // Test-only hold between the park becoming visible and
+                // the condvar wait, under the wake mutex: the test keeps
+                // the waiter here across shutdown, so a notify sent
+                // without the mutex is missed and the wait sleeps its
+                // bound. Consumed once.
+                #[cfg(test)]
+                if let Some((reached, release)) = lock(&self.gap).take() {
+                    match reached.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    match release.recv() {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                woken(seen, *wake)
+            },
         );
         drop(parked);
         // No generation moved past the read above and shutdown never
@@ -493,6 +518,8 @@ impl HttpServer {
             }),
             #[cfg(test)]
             pause: Mutex::new(None),
+            #[cfg(test)]
+            gap: Mutex::new(None),
             #[cfg(test)]
             shutdown_accept_lock: Mutex::new(None),
         });
@@ -740,6 +767,19 @@ impl HttpServer {
         let (reached_tx, reached_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         *lock(&self.shared.pause) = Some((reached_tx, release_rx));
+        (reached_rx, release_tx)
+    }
+
+    /// Holds the next condvar park between its park becoming visible and
+    /// its condvar wait until the test releases it, test-only: no outside
+    /// seam reaches that window, so forcing the shutdown race needs this
+    /// committed hold point. Returns the reached signal and the release
+    /// channel; dropping the release ends the wait too.
+    #[cfg(test)]
+    pub(crate) fn test_park_gap(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *lock(&self.shared.gap) = Some((reached_tx, release_rx));
         (reached_rx, release_tx)
     }
 
