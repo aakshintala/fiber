@@ -713,3 +713,7 @@ impl ExecMeta {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "host_calls_tests.rs"]
+mod tests;

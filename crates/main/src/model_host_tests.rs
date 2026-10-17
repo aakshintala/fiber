@@ -24,8 +24,8 @@ use contract::model::{
     Bound, HostMessage, HostModel as _, HostModelReply, HostModelRequest, HostRole,
 };
 use contract::provider::{
-    CallError, CallUsage, Cost, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction,
+    CallError, CallUsage, Cost, Finish, ImageRef, Input, InputSize, ModelCall, ModelRequest,
+    Provider, Reply, ReplyAction,
 };
 use contract::shapes::{ContentPart, Failure, Tokens};
 use contract::{ErrorCode, GenerationId, SessionId};
@@ -359,11 +359,19 @@ fn second_call_sees_the_first_lines_cost() {
     // the log still holds only its seeded line.
     assert_eq!(log::read(&dir).unwrap().len(), 1);
     let second_lines = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host.call(
-        "tag",
-        request("scripted/s.json"),
-        bound(clock, None, Arc::clone(&second_lines)),
-    ));
+    // On a thread with a wall-clock deadline: a mutant that never releases
+    // the gate fails here in seconds instead of hanging the suite until
+    // the mutant timeout.
+    let (done_tx, done_rx) = mpsc::channel();
+    let done_lines = Arc::clone(&second_lines);
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(clock, None, done_lines),
+        ));
+    });
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the second call to fail"));
     assert_eq!(failure.code, ErrorCode::BudgetExceeded);
     assert_eq!(provider.requests().len(), 1);
     assert!(second_lines.lock().unwrap().is_empty());
@@ -561,11 +569,20 @@ fn retry_wait_past_the_deadline_fails_timeout() {
     )]));
     let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
     let held = Arc::new(Mutex::new(Vec::new()));
-    let failure = err(host.call(
-        "tag",
-        request("scripted/s.json"),
-        bound(clock, Some(deadline), Arc::clone(&held)),
-    ));
+    // On a thread with a wall-clock deadline: a mutant that never returns
+    // from the retry wait fails here in seconds instead of hanging the
+    // suite until the mutant timeout.
+    let (done_tx, done_rx) = mpsc::channel();
+    let done_lines = Arc::clone(&held);
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(clock, Some(deadline), done_lines),
+        ));
+    });
+    let failure =
+        err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the over-deadline retry to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
     assert_eq!(held.lock().unwrap().len(), 1);
@@ -707,7 +724,15 @@ fn in_flight_call_keeps_its_reached_provider() {
     assert_eq!(reply.text, "one");
     assert_eq!(first_sent.requests().len(), 2);
     assert_eq!(second_sent.requests().len(), 0);
-    let reply = ok(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    // On a thread with a wall-clock deadline: a mutant that never releases
+    // the gate fails here in seconds instead of hanging the suite until
+    // the mutant timeout.
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent =
+            done_tx.send(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    });
+    let reply = ok(Deadline::after(WAIT).recv_or_fail(&done_rx, "the next call to answer"));
     assert_eq!(reply.text, "two");
     assert_eq!(second_sent.requests().len(), 1);
 }
@@ -977,4 +1002,325 @@ fn gate_holds_one_call_and_times_out_the_next() {
     let reply = ok(Deadline::after(WAIT).recv_or_fail(&a_rx, "call A to answer"));
     assert_eq!(reply.text, "slow");
     assert_eq!(first_lines.lock().unwrap().len(), 1);
+}
+
+/// A provider that blocks every call until `cancel` releases it, then ends
+/// `Cancelled`: the attempt's watcher is the only way out.
+struct BlockingProvider {
+    entered: mpsc::Sender<()>,
+    shared: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl BlockingProvider {
+    fn new(entered: mpsc::Sender<()>) -> Self {
+        Self {
+            entered,
+            shared: Arc::new((Mutex::new(false), std::sync::Condvar::new())),
+        }
+    }
+}
+
+impl Provider for BlockingProvider {
+    fn wire_tools(&self, _tools: &[contract::provider::ToolDefinition]) -> Vec<Map<String, Value>> {
+        Vec::new()
+    }
+
+    fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
+        Box::new(BlockingCall {
+            entered: self.entered.clone(),
+            shared: Arc::clone(&self.shared),
+        })
+    }
+}
+
+struct BlockingCall {
+    entered: mpsc::Sender<()>,
+    shared: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl ModelCall for BlockingCall {
+    fn run(&self, _sink: &mut dyn FnMut(contract::provider::Delta)) -> Result<Reply, CallError> {
+        let _sent = self.entered.send(());
+        let (lock, changed) = &*self.shared;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = changed.wait(released).unwrap();
+        }
+        Err(CallError::Cancelled {
+            usage: Box::new(CallUsage::unnamed(InputSize {
+                bytes: 1000,
+                media: false,
+            })),
+        })
+    }
+
+    fn cancel(&self) {
+        let (lock, changed) = &*self.shared;
+        *lock.lock().unwrap() = true;
+        changed.notify_all();
+    }
+}
+
+/// Cancelling the callback mid-attempt ends `timeout` with one line: the
+/// watcher cancels the run. On a thread with a wall-clock deadline, so a
+/// mutant that never watches fails in seconds instead of hanging the suite
+/// until the mutant timeout.
+#[test]
+fn cancel_during_attempt_ends_timeout() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let provider = Arc::new(BlockingProvider::new(entered_tx));
+    let host = test_host(provider, dir, "s_1", None, immediate_retry());
+    let cancel = Arc::new(CancelToken::new());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn({
+        let thread_clock = Arc::clone(&clock);
+        let thread_cancel = Arc::clone(&cancel);
+        let thread_held = Arc::clone(&held);
+        move || {
+            let bound = Bound {
+                deadline: None,
+                clock: thread_clock,
+                cancel: thread_cancel,
+                lines: Arc::new(move |line| thread_held.lock().unwrap().push(line)),
+            };
+            let _sent = done_tx.send(host.call("tag", request("scripted/s.json"), bound));
+        }
+    });
+    Deadline::after(WAIT).recv_or_fail(&entered_rx, "the attempt to start");
+    cancel.cancel();
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the cancelled attempt to end"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+    assert_eq!(held.lock().unwrap().len(), 1);
+}
+
+/// A deadline already past when the attempt runs ends `timeout` with one
+/// line: the watcher cancels the run before it parks. On a thread with a
+/// wall-clock deadline, so a mutant that never watches fails in seconds
+/// instead of hanging the suite until the mutant timeout.
+#[test]
+fn expired_deadline_during_attempt_ends_timeout() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let deadline = clock.now();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let provider = Arc::new(BlockingProvider::new(entered_tx));
+    let host = test_host(provider, dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(clock, Some(deadline), held),
+        ));
+    });
+    Deadline::after(WAIT).recv_or_fail(&entered_rx, "the attempt to start");
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the expired attempt to end"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+}
+
+/// A retry wait ending exactly at the deadline parks before failing
+/// `timeout` with no second send: only a wait past the deadline fails at
+/// once. The park itself is the assertion: a mutant failing at once never
+/// parks, and `advance_when_parked` fails on its wall-clock deadline.
+#[test]
+fn retry_wait_at_exactly_the_deadline_parks_then_fails() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let origin = clock.now();
+    let deadline = origin + Duration::from_secs(60);
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, Some(60_000)), seen("g_1")),
+        Scripted::text("ok"),
+    ]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let thread_clock = Arc::clone(&clock);
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(thread_clock, Some(deadline), held),
+        ));
+    });
+    let _mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(WAIT),
+    );
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the exact retry wait to fail"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+    assert_eq!(provider.requests().len(), 1);
+}
+
+/// Cancelling mid-retry-wait ends `timeout` with no second send, although
+/// the deadline never expires: either disjunct ends the wait. On a thread
+/// with a wall-clock deadline, so a mutant needing both fails in seconds
+/// instead of hanging the suite until the mutant timeout.
+#[test]
+fn cancelled_retry_wait_fails_without_clock_move() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let origin = clock.now();
+    let target = origin + Duration::from_secs(60);
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, Some(60_000)), seen("g_1")),
+        Scripted::text("ok"),
+    ]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let cancel = Arc::new(CancelToken::new());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn({
+        let thread_clock = Arc::clone(&clock);
+        let thread_cancel = Arc::clone(&cancel);
+        let thread_held = Arc::clone(&held);
+        move || {
+            let bound = Bound {
+                deadline: None,
+                clock: thread_clock,
+                cancel: thread_cancel,
+                lines: Arc::new(move |line| thread_held.lock().unwrap().push(line)),
+            };
+            let _sent = done_tx.send(host.call("tag", request("scripted/s.json"), bound));
+        }
+    });
+    assert!(
+        clock.await_parked(target, WAIT),
+        "the retry wait to park at its target"
+    );
+    cancel.cancel();
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the cancelled retry to fail"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+    assert_eq!(provider.requests().len(), 1);
+}
+
+/// A clock jump past the deadline mid-retry-wait ends `timeout` with no
+/// second send, although nothing is cancelled: either disjunct ends the
+/// wait.
+#[test]
+fn clock_jump_past_deadline_during_retry_wait_fails() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let origin = clock.now();
+    let target = origin + Duration::from_secs(30);
+    let deadline = origin + Duration::from_secs(60);
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, Some(30_000)), seen("g_1")),
+        Scripted::text("ok"),
+    ]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let thread_clock = Arc::clone(&clock);
+    std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(thread_clock, Some(deadline), held),
+        ));
+    });
+    assert!(
+        clock.await_parked(target, WAIT),
+        "the retry wait to park at its target"
+    );
+    clock.advance(Duration::from_secs(100));
+    let failure =
+        err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the jumped retry wait to fail"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+    assert_eq!(provider.requests().len(), 1);
+}
+
+/// Each call releases the gate: a second call sends at once. On a thread
+/// with a wall-clock deadline, so a mutant that never releases fails in
+/// seconds instead of hanging the suite until the mutant timeout.
+#[test]
+fn gate_releases_after_each_call() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::text("one"),
+        Scripted::text("two"),
+    ]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let reply = ok(host.call(
+        "tag",
+        request("scripted/s.json"),
+        bound(Arc::clone(&clock), None, Arc::clone(&held)),
+    ));
+    assert_eq!(reply.text, "one");
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent =
+            done_tx.send(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
+    });
+    let reply = ok(Deadline::after(WAIT).recv_or_fail(&done_rx, "the second call to answer"));
+    assert_eq!(reply.text, "two");
+    assert_eq!(provider.requests().len(), 2);
+}
+
+/// An image part rides the request as a reference: text joined, images in
+/// order.
+#[test]
+fn image_parts_ride_the_request_as_references() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let imaged = HostModelRequest {
+        model: "scripted/s.json".to_owned(),
+        system: None,
+        messages: vec![HostMessage {
+            role: HostRole::User,
+            content: vec![
+                ContentPart::Text {
+                    text: "look".to_owned(),
+                },
+                ContentPart::Image {
+                    path: "artifacts/shot.png".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                    width: 800,
+                    height: 600,
+                },
+            ],
+        }],
+        max_tokens: 16,
+    };
+    let reply = ok(host.call("tag", imaged, bound(clock, None, held)));
+    assert_eq!(reply.text, "hi");
+    let sent = provider.requests();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].conversation,
+        vec![Input::User {
+            text: "look".to_owned(),
+            images: vec![ImageRef {
+                path: "artifacts/shot.png".to_owned(),
+                mime_type: "image/png".to_owned(),
+                width: 800,
+                height: 600,
+            }],
+        }]
+    );
 }

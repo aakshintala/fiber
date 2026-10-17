@@ -613,3 +613,42 @@ fn an_evicted_delivery_drops_after_the_hub_lock_is_released() {
         "the evicted delivery drops with the hub lock released"
     );
 }
+
+/// A stub session model `host.model` calls through.
+struct StubModel;
+
+impl contract::model::HostModel for StubModel {
+    fn call(
+        &self,
+        _extension: &str,
+        _request: contract::model::HostModelRequest,
+        _bound: contract::model::Bound,
+    ) -> Result<contract::model::HostModelReply, contract::shapes::Failure> {
+        unreachable!("no call runs in these tests");
+    }
+}
+
+fn with_model() -> Arc<Hub> {
+    let hub = Hub::new(FakeClock::new());
+    hub.set_model(Arc::new(StubModel));
+    hub
+}
+
+/// The model answers while the extension is live, and is gone once it is
+/// dropped or sealed: neither alone leaves a call.
+#[test]
+fn model_answers_only_while_live() {
+    assert!(with_model().model().is_some(), "live answers");
+    let hub = with_model();
+    hub.dispose("ext");
+    assert!(hub.model().is_none(), "nothing calls after the drop");
+    let hub = with_model();
+    hub.seal();
+    assert!(hub.model().is_none(), "nothing calls after the seal");
+    let hub = with_model();
+    hub.dispose("ext");
+    hub.seal();
+    assert!(hub.model().is_none(), "nothing calls after drop and seal");
+    let hub = Hub::new(FakeClock::new());
+    assert!(hub.model().is_none(), "nothing calls before model_to");
+}
