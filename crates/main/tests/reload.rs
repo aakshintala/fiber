@@ -58,7 +58,7 @@ impl Session {
                 .take(u64::MAX)
                 .read_to_string(&mut text)
                 .unwrap();
-            let _ = tx.send(text);
+            tx.send(text).unwrap();
         });
         first_line(setup.deadline, &lines);
         let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
@@ -139,7 +139,7 @@ impl Session {
         let group = self.child.id();
         let (tx, done) = mpsc::channel();
         thread::spawn(move || {
-            let _ = tx.send(self.child.wait());
+            tx.send(self.child.wait()).unwrap();
         });
         let status = self.setup.deadline.recv(&done).unwrap().unwrap();
         let stderr = self.setup.deadline.recv(&self.stderr).unwrap();
@@ -551,7 +551,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     let group = session.child.id();
     let (tx, done) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(session.child.wait());
+        tx.send(session.child.wait()).unwrap();
     });
     let status = session.setup.deadline.recv(&done).unwrap().unwrap();
     let stderr = session.setup.deadline.recv(&session.stderr).unwrap();
