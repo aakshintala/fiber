@@ -119,7 +119,7 @@ fn config(setup: &Setup, reduced_motion: bool) {
         &setup.home().join("config.json"),
         &serde_json::json!({
             "model": "scripted/s.json",
-            "hub": {"idle_exit_ms": 1000},
+            "hub": {"idle_exit_ms": 200},
             "tui": {"reduced_motion": reduced_motion, "rail": {"shown": false}},
         }),
     );

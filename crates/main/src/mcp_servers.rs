@@ -321,7 +321,7 @@ pub(crate) fn session_tools(
     }
     let mut specs = specs;
     specs.extend(prepared.ready);
-    let cache = home.join("cache").join("mcp");
+    let cache = config::mcp_cache_dir(home);
     let started = mcp::start_observed(
         specs,
         workspace,
@@ -415,13 +415,11 @@ fn add_extension_tools(
 /// are the person's and the repository's merged key by key; a
 /// repository's share is partitioned out by `specs`, never skipped here.
 fn spec(config: &Config, name: &str) -> Entry {
-    let command = server_field(config, name, "command")
-        .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    let url =
-        server_field(config, name, "url").and_then(|(value, _)| value.as_str().map(str::to_owned));
-    let required = server_field(config, name, "required")
-        .and_then(|(value, _)| value.as_bool())
-        .unwrap_or(false);
+    let command = config.text(&server_key(name, "command"), None);
+    let url = config.text(&server_key(name, "url"), None);
+    let required = config
+        .flag(&server_key(name, "required"), None)
+        .unwrap_or_default();
     if url.as_deref().is_some_and(mcp::url_has_userinfo) {
         return Entry::Userinfo {
             name: name.to_owned(),
@@ -436,8 +434,7 @@ fn spec(config: &Config, name: &str) -> Entry {
             };
         }
         (Some(command), None) => {
-            let args =
-                server_field(config, name, "args").map_or(Vec::new(), |(value, _)| strings(&value));
+            let args = config.list(&server_key(name, "args"), None);
             let (env, secrets) = server_env(config, name);
             for secret in secrets.values() {
                 if !config::mcp_secret_name_ok(name, secret) {
@@ -475,16 +472,10 @@ fn spec(config: &Config, name: &str) -> Entry {
     let spec = mcp::ServerSpec {
         name: name.to_owned(),
         transport,
-        startup_timeout: millis(
-            config,
-            name,
-            "startup_timeout_ms",
-            mcp::DEFAULT_STARTUP_TIMEOUT,
-        ),
+        startup_timeout: millis(config, name, "startup_timeout_ms", Duration::ZERO),
         call_timeout: millis(config, name, "timeout_ms", mcp::DEFAULT_CALL_TIMEOUT),
         enabled: server_field(config, name, "tools.enabled").map(|(value, _)| strings(&value)),
-        disabled: server_field(config, name, "tools.disabled")
-            .map_or(Vec::new(), |(value, _)| strings(&value)),
+        disabled: config.list(&server_key(name, "tools.disabled"), None),
         hints: hints(config, name),
         required,
     };
@@ -519,7 +510,7 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
 
 /// The merged value of `mcp.servers."<name>".<field>` and its layer.
 fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
-    config.get(&format!("mcp.servers.{}.{field}", quoted(server)), None)
+    config.get(&server_key(server, field), None)
 }
 
 /// Whether the merged value of one field effectively comes from the
@@ -556,9 +547,17 @@ fn quoted(segment: &str) -> String {
     }
 }
 
+/// The `mcp.servers."<name>".<field>` key, quoting the name as
+/// [`server_field`] does.
+fn server_key(name: &str, field: &str) -> String {
+    format!("mcp.servers.{}.{field}", quoted(name))
+}
+
+/// The `field` timeout in milliseconds: the schema default when the key
+/// has one, else `default`.
 fn millis(config: &Config, server: &str, field: &str, default: Duration) -> Duration {
-    server_field(config, server, field)
-        .and_then(|(value, _)| value.as_u64())
+    config
+        .count(&server_key(server, field), None)
         .map(Duration::from_millis)
         .unwrap_or(default)
 }

@@ -155,7 +155,7 @@ impl Loop {
             || Err(self.cancelled_before_ran()),
             |call| self.started_again(call, started),
         );
-        let cancelled = self.run_batch(calls, &turn, Some((action, request)))?;
+        let cancelled = self.run_batch(calls, &turn, Some((action, request)), None)?;
         self.finish_batch(&turn, cancelled)
     }
 

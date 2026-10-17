@@ -34,6 +34,7 @@ pub(super) fn before_handoff(
         };
     }
     let mut note: Option<(String, String)> = None;
+    let mut pending = Vec::new();
     let mut notices = Vec::new();
     let messages = render(handoff.conversation);
     for (at, entry) in chain.iter().enumerate() {
@@ -53,8 +54,19 @@ pub(super) fn before_handoff(
             note.as_ref().map(|(_, text)| text.as_str()),
         );
         let returned = extension
-            .hook(BEFORE_HANDOFF, entry.index, arg)
-            .and_then(|value| decode(name, value));
+            .hook_with(BEFORE_HANDOFF, entry.index, arg, |value| {
+                let change = decode(name, value)?;
+                let changed = change.is_some();
+                Ok((change, changed))
+            })
+            .map(|(change, lines, changed)| {
+                if changed {
+                    pending.extend(lines);
+                } else {
+                    session.state.queue(lines);
+                }
+                change
+            });
         match returned {
             Ok(None) => {}
             Ok(Some(text)) => note = Some((name.to_owned(), text)),
@@ -69,6 +81,9 @@ pub(super) fn before_handoff(
             }
             Err(error) => notices.push(failed_notice(name, &error)),
         }
+    }
+    if note.is_some() {
+        session.set_change_lines(pending);
     }
     BeforeHandoffAnswer {
         outcome: match note {

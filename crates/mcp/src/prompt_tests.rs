@@ -4,6 +4,8 @@
 
 use serde_json::{Value, json};
 
+use crate::error::McpError;
+use crate::slot::Death;
 use crate::test_support::Setup;
 
 #[test]
@@ -253,14 +255,19 @@ fn each_outcome_maps_to_its_sentence() {
         json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Body."}}]});
     let no_text: Value = json!({"messages": []});
     let refused = Fault::Refused("Unknown prompt.".to_owned());
-    let died = Fault::Died(contract::events::McpServerFailed {
-        server: "fx".to_owned(),
-        reason: contract::events::ServerFailure::Died,
-        will_restart: true,
-        error: crate::fail::failure(
-            ErrorCode::McpServerUnavailable,
-            "The MCP server `fx` exited; Fiber restarts it on the next call.".to_owned(),
-        ),
+    let died = Fault::Died({
+        let error = McpError::ServerExited {
+            server: "fx".to_owned(),
+        };
+        Death {
+            record: contract::events::McpServerFailed {
+                server: "fx".to_owned(),
+                reason: contract::events::ServerFailure::Died,
+                will_restart: true,
+                error: contract::shapes::Failure::from(&error),
+            },
+            error,
+        }
     });
     let rows: Vec<(
         &str,

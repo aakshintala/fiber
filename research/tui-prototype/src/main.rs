@@ -16,6 +16,7 @@ mod offers;
 mod overlays;
 mod paged;
 mod panel;
+mod quota;
 mod rail;
 mod reviewer_setup;
 mod theme;
@@ -5436,6 +5437,7 @@ const SURFACES: &[cases::Surface] = &[
     images::SURFACE,
     theme::SURFACE,
     failures::SURFACE,
+    quota::SURFACE,
 ];
 
 // ============================================================ main
@@ -5469,6 +5471,8 @@ struct Args {
     rail_case: Option<String>,
     /// the swapped-view case (`--view-case`), drawn instead of the conversation
     view_case: Option<String>,
+    /// the quota-view case (`--quota-case`), drawn instead of the conversation
+    quota_case: Option<String>,
     /// the offer and one-question-form case (`--offer-case`), drawn instead of the conversation
     offer_case: Option<String>,
     /// the image and link case (`--image-case`), drawn instead of the conversation
@@ -5547,6 +5551,7 @@ fn args() -> Args {
         overlay: None,
         rail_case: None,
         view_case: None,
+        quota_case: None,
         offer_case: None,
         image_case: None,
         screen_reader: false,
@@ -5611,6 +5616,7 @@ fn args() -> Args {
             "--overlay" => a.overlay = it.next(),
             "--rail-case" => a.rail_case = it.next(),
             "--view-case" => a.view_case = it.next(),
+            "--quota-case" => a.quota_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
             "--image-case" => a.image_case = it.next(),
             "--screen-reader" => a.screen_reader = true,
@@ -5651,7 +5657,7 @@ fn args() -> Args {
             "--reviewer-setup" => a.reviewer_setup = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--reviewer-setup CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--quota-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--login CASE] [--reviewer-setup CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5853,6 +5859,8 @@ fn main() -> io::Result<()> {
         rail::run_rail(&a, &mut term)
     } else if a.view_case.is_some() {
         views::run_view(&a, &mut term)
+    } else if a.quota_case.is_some() {
+        quota::run_quota(&a, &mut term)
     } else if a.offer_case.is_some() {
         offers::run_offer(&a, &mut term)
     } else if a.image_case.is_some() {
@@ -5887,6 +5895,7 @@ fn main() -> io::Result<()> {
         && a.reviewer_setup.is_none()
         && a.rail_case.is_none()
         && a.view_case.is_none()
+        && a.quota_case.is_none()
         && a.offer_case.is_none()
         && a.image_case.is_none()
         && a.failure_case.is_none()
@@ -8081,7 +8090,7 @@ mod tests {
         assert_eq!(
             all,
             [
-                "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, rail-focused, live",
+                "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, full-remote-empty, full-remote-picker, rail-focused, live",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, history-one, history-none, notice, notices, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty, prices, prices-empty, prices-free, prices-noprice, prices-tiered",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
@@ -8093,6 +8102,7 @@ mod tests {
                 "--image-case tool_image, fallback, pasted, links, screen_reader, title_approval, title_question, title_waiting, title_finished",
                 "--theme light, dark-256, light-256, dark-no-color",
                 "--failure-case retry, failed, auth_failed, nudge, connection_lost, crashed, rewind, rewound",
+                "--quota-case quota, quota-empty",
             ]
         );
         let h = cases::help(SURFACES);
@@ -9516,6 +9526,7 @@ mod tests {
             overlay: None,
             rail_case: None,
             view_case: None,
+            quota_case: None,
             offer_case: None,
             image_case: None,
             theme: None,

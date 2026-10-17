@@ -99,6 +99,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
                 _ => Err(format!("Unknown delegate model {model:?}.")),
             }),
             catalogue: Arc::from("Roles: none\nReferences:\nfiber:fake/m"),
+            credential: Arc::new(|_| Ok(None)),
         },
         launch,
         watch,

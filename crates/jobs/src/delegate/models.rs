@@ -36,13 +36,31 @@ pub struct Resolve {
     /// The full text `delegate_models` returns and every model refusal
     /// lists.
     pub catalogue: Arc<str>,
+    /// Resolves the `credential` label a role names for the same `model`
+    /// argument `lookup` took, after `lookup` was `Ok`: `Ok(Some(label))`
+    /// when the role names a label the provider has, `Ok(None)` for a
+    /// full reference or a role without one, and `Err` with the full
+    /// `credential_missing` message when the label names no credential.
+    /// The label set is read at call time, so a `fiber login` before the
+    /// spawn changes the answer.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the resolver seam: one closure type shared by the session resolver and every test stub"
+    )]
+    pub credential: Arc<dyn Fn(&str) -> Result<Option<String>, String> + Send + Sync>,
 }
 
-/// Returns the catalogue: the configured roles, what each maps to now,
-/// and the full references available, for `delegate_spawn`'s `model`.
+/// Returns the catalogue with the quota appended on top: the configured
+/// roles, what each maps to now, the full references available, and one
+/// quota entry per provider credential label (`docs/delegates.md`,
+/// "The tools"). A refusal carries the catalogue alone; only
+/// `delegate_models` appends the quota. The quota is read on every call,
+/// so a `delegate_models` call never answers a stale figure.
 pub struct DelegateModels {
     /// The catalogue text, built with the session's resolver.
     pub catalogue: Arc<str>,
+    /// Renders the quota section, read on every call.
+    pub quota: Arc<dyn Fn() -> String + Send + Sync>,
 }
 
 impl Tool for DelegateModels {
@@ -87,7 +105,7 @@ impl Tool for DelegateModels {
     ) -> Output {
         Output {
             content: vec![ContentPart::Text {
-                text: self.catalogue.to_string(),
+                text: format!("{}\n{}", self.catalogue, (self.quota)()),
             }],
             ..Output::default()
         }

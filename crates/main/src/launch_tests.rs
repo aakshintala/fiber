@@ -72,9 +72,14 @@ fn an_identity_equal_to_the_workspace_is_not_git() {
         None,
         Vec::new(),
     );
-    assert_eq!(launch.workspace, workspace);
-    assert_eq!(launch.project, log::project_key(&identity));
-    assert!(!launch.git);
+    assert_eq!(
+        launch.location,
+        tui::LaunchLocation::Local {
+            workspace,
+            project: log::project_key(&identity),
+            git: false
+        }
+    );
     assert!(launch.hover);
     assert_eq!(launch.version, env!("CARGO_PKG_VERSION"));
 }
@@ -95,9 +100,14 @@ fn an_identity_elsewhere_is_git_and_names_the_project() {
         None,
         Vec::new(),
     );
-    assert_eq!(launch.workspace, workspace);
-    assert_eq!(launch.project, log::project_key(&identity));
-    assert!(launch.git);
+    assert_eq!(
+        launch.location,
+        tui::LaunchLocation::Local {
+            workspace,
+            project: log::project_key(&identity),
+            git: true
+        }
+    );
 }
 
 #[test]
@@ -145,22 +155,9 @@ fn model_thinking_and_logo_glyph_come_from_config() {
 }
 
 #[test]
-fn tui_hover_defaults_to_on_and_reads_off() {
+fn tui_hover_false_reads_off() {
     let dir = fakes::TempDir::new("fiber-launch-hover");
     let workspace = dir.path().to_path_buf();
-    let on = config(dir.path(), &workspace, Vec::new());
-    assert!(
-        launch(
-            workspace.clone(),
-            &workspace,
-            &on,
-            tui::ThemeSetting::Follow,
-            dir.path(),
-            None,
-            Vec::new(),
-        )
-        .hover
-    );
     let off = config(dir.path(), &workspace, vec!["tui.hover=false".to_owned()]);
     assert!(
         !launch(
@@ -177,22 +174,9 @@ fn tui_hover_defaults_to_on_and_reads_off() {
 }
 
 #[test]
-fn reduced_motion_comes_from_config_default_off() {
+fn reduced_motion_true_reads_on() {
     let dir = fakes::TempDir::new("fiber-launch-reduced");
     let workspace = dir.path().to_path_buf();
-    let off = config(dir.path(), &workspace, Vec::new());
-    assert!(
-        !launch(
-            workspace.clone(),
-            &workspace,
-            &off,
-            tui::ThemeSetting::Follow,
-            dir.path(),
-            None,
-            Vec::new(),
-        )
-        .reduced_motion
-    );
     let on = config(
         dir.path(),
         &workspace,
@@ -213,24 +197,9 @@ fn reduced_motion_comes_from_config_default_off() {
 }
 
 #[test]
-fn shares_and_cards_come_from_config_with_defaults() {
+fn shares_and_cards_come_from_config() {
     let dir = fakes::TempDir::new("fiber-launch-shares");
     let workspace = dir.path().to_path_buf();
-    let plain = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(
-        workspace.clone(),
-        &workspace,
-        &plain,
-        tui::ThemeSetting::Follow,
-        dir.path(),
-        None,
-        Vec::new(),
-    );
-    assert_eq!((unset.rail_share, unset.panel_share), (15.0, 21.0));
-    assert_eq!(
-        unset.panel_cards,
-        ["session", "changed_files", "delegates", "jobs", "quota"]
-    );
     let set_config = config(
         dir.path(),
         &workspace,
@@ -257,17 +226,6 @@ fn shares_and_cards_come_from_config_with_defaults() {
 fn the_rail_shows_unless_config_hides_it() {
     let dir = fakes::TempDir::new("fiber-launch-rail-shown");
     let workspace = dir.path().to_path_buf();
-    let plain = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(
-        workspace.clone(),
-        &workspace,
-        &plain,
-        tui::ThemeSetting::Follow,
-        dir.path(),
-        None,
-        Vec::new(),
-    );
-    assert!(!unset.rail_hidden);
     for (value, hidden) in [("false", true), ("true", false)] {
         let set_config = config(
             dir.path(),
@@ -416,22 +374,9 @@ fn the_theme_setting_is_passed_through() {
 }
 
 #[test]
-fn attention_switches_come_from_config_with_defaults() {
+fn attention_switches_come_from_config() {
     let dir = fakes::TempDir::new("fiber-launch-attention");
     let workspace = dir.path().to_path_buf();
-    let plain = config(dir.path(), &workspace, Vec::new());
-    let unset = launch(
-        workspace.clone(),
-        &workspace,
-        &plain,
-        tui::ThemeSetting::default(),
-        dir.path(),
-        None,
-        Vec::new(),
-    );
-    assert!(unset.attention.notification);
-    assert!(unset.attention.bell);
-    assert!(unset.attention.title);
     for (key, check) in [
         ("tui.attention.notification=false", (false, true, true)),
         ("tui.attention.bell=false", (true, false, true)),

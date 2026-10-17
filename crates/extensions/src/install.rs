@@ -155,7 +155,7 @@ pub(crate) fn stage(
 ) -> Result<(Manifest, Vec<ProviderData>, Paths), Error> {
     let (manifest, _) = check(source, fiber_version)?;
     let slug = slug(&manifest.name)?;
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     fs::create_dir_all(&root).map_err(io(&root))?;
     overlap(source, &root)?;
     let pid = std::process::id();

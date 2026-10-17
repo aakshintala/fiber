@@ -137,6 +137,7 @@ impl DelegateMessage {
                 prompt: message.clone(),
                 workspace: PathBuf::from(&resumable.delegate.workspace),
                 resume: true,
+                credential: None,
             };
             let log = resumable.output_path.clone();
             // The stamp covers building the runner and spawning the

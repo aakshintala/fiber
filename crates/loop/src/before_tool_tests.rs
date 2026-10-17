@@ -975,7 +975,7 @@ fn prepared_under_a_shutdown_cancels_and_calls_no_hook() {
     };
     let turn = contract::TurnId("t_test".into());
     let decided = looped.prepared(&call, Some(&turn)).unwrap();
-    let Err(completed) = decided else {
+    let (Err(completed), _) = decided else {
         panic!("a shutdown cancels the call");
     };
     assert_eq!(completed.status, contract::events::CallStatus::Cancelled);

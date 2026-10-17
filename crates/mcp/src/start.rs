@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
 use contract::images::Images;
@@ -23,10 +22,11 @@ use contract::tool::Tool;
 
 use crate::cache;
 use crate::effects::Hints;
+use crate::error::McpError;
 use crate::prompt::{PromptSource, Prompts};
 use crate::server::Server;
 use crate::server_json::{ListedPrompt, ListedTool};
-use crate::slot::Slot;
+use crate::slot::{Death, Slot};
 use crate::tool::McpTool;
 
 /// How Fiber reaches a server (`docs/mcp.md`, "What Fiber does with MCP").
@@ -676,12 +676,12 @@ pub(crate) fn open_observed(
         Err(error) => {
             return if required {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, true, remote),
+                    failure: not_started(&name, &error, timeout, true, remote).record,
                     required: true,
                 }
             } else {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, false, remote),
+                    failure: not_started(&name, &error, timeout, false, remote).record,
                     required: false,
                 }
             };
@@ -794,9 +794,9 @@ pub(crate) fn declare(
     declared
 }
 
-/// The failure of a server that did not start: `required` servers name
+/// The death of a server that did not start: `required` servers name
 /// themselves, because the session stops before the log, so a required
-/// failure is never written as `mcp_server_failed` but returned for the
+/// death is never written as `mcp_server_failed` but returned for the
 /// exit-before-session path instead.
 pub(crate) fn not_started(
     server: &str,
@@ -804,13 +804,16 @@ pub(crate) fn not_started(
     startup: Duration,
     required: bool,
     remote: bool,
-) -> McpServerFailed {
-    let (reason, code, message) = fail_parts(server, error, startup, required, remote);
-    McpServerFailed {
-        server: server.to_owned(),
-        reason,
-        will_restart: false,
-        error: crate::fail::failure(code, message),
+) -> Death {
+    let (reason, error) = fail_parts(server, error, startup, required, remote);
+    Death {
+        record: McpServerFailed {
+            server: server.to_owned(),
+            reason,
+            will_restart: false,
+            error: contract::shapes::Failure::from(&error),
+        },
+        error,
     }
 }
 
@@ -820,55 +823,49 @@ fn fail_parts(
     startup: Duration,
     required: bool,
     remote: bool,
-) -> (ServerFailure, ErrorCode, String) {
-    let subject = if required {
-        format!("The required MCP server `{server}`")
-    } else {
-        format!("The MCP server `{server}`")
-    };
-    // A remote server has no `command` to check: its advice names its `url`.
-    let advice = if remote {
-        "Check its `url` under `mcp.servers` in your configuration."
-    } else {
-        "Check its `command` and `args` under `mcp.servers` in your configuration."
-    };
+) -> (ServerFailure, McpError) {
     match error {
         crate::server::StartError::StartFailed(detail) => (
             ServerFailure::StartFailed,
-            ErrorCode::McpServerUnavailable,
-            format!("{subject} failed to start: {detail} {advice}",),
+            McpError::StartFailed {
+                server: server.to_owned(),
+                required,
+                remote,
+                detail: detail.clone(),
+            },
         ),
         crate::server::StartError::Login(detail) => (
             ServerFailure::NotLoggedIn,
-            ErrorCode::McpServerUnavailable,
-            format!(
-                "{subject} failed to start: {}",
-                crate::slot::login_sentence(server, detail)
-            ),
+            McpError::NotLoggedIn {
+                server: server.to_owned(),
+                required,
+                detail: detail.clone(),
+            },
         ),
         crate::server::StartError::Deadline => (
             ServerFailure::Deadline,
-            ErrorCode::McpServerUnavailable,
-            format!(
-                "{subject} did not answer before its startup deadline of {} ms. Raise `startup_timeout_ms` under `mcp.servers.{server}` if it needs longer.",
-                startup.as_millis(),
-            ),
+            McpError::StartDeadline {
+                server: server.to_owned(),
+                required,
+                startup_ms: startup.as_millis(),
+            },
         ),
         crate::server::StartError::SecretMissing { name } => (
             ServerFailure::StartFailed,
-            ErrorCode::CredentialMissing,
-            format!(
-                "{subject} names the secret `credentials/{name}`, which is not stored. Run `fiber mcp remove {server}`, then `fiber mcp add {server}` with `--secret {key}` to store it.",
-                key = name.rsplit('.').next().unwrap_or(name),
-            ),
+            McpError::SecretMissing {
+                server: server.to_owned(),
+                required,
+                name: name.clone(),
+            },
         ),
         crate::server::StartError::SecretUnreadable { name, why } => (
             ServerFailure::StartFailed,
-            ErrorCode::CredentialFailed,
-            format!(
-                "{subject} names the secret `credentials/{name}`, which cannot be read: {why}. Run `fiber mcp remove {server}`, then `fiber mcp add {server}` with `--secret {key}` to store it again.",
-                key = name.rsplit('.').next().unwrap_or(name),
-            ),
+            McpError::SecretUnreadable {
+                server: server.to_owned(),
+                required,
+                name: name.clone(),
+                why: why.clone(),
+            },
         ),
     }
 }

@@ -20,8 +20,11 @@ fn list(names: &[&str]) -> Vec<String> {
 fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -792,14 +795,17 @@ fn an_unlisted_widget_shows_after_the_listed_cards_in_arrival_order() {
 }
 
 #[test]
-fn quota_and_unknown_names_place_nothing() {
+fn quota_places_one_card_and_unknown_names_place_nothing() {
     let none: [(&str, &str); 0] = [];
-    assert!(cards(&list(&["quota"]), &none).is_empty());
+    assert_eq!(
+        cards(&list(&["quota", "quota"]), &none),
+        vec![super::Card::Quota]
+    );
     assert!(cards(&list(&["nope"]), &none).is_empty());
     let widgets = [("plan", "tasks")];
     assert_eq!(
         cards(&list(&["quota", "nope", "plan/tasks"]), &widgets),
-        vec![super::Card::Widget(0)]
+        vec![super::Card::Quota, super::Card::Widget(0)]
     );
 }
 

@@ -12,7 +12,7 @@ use serde_json::Value;
 /// toggle heading the list, the workspace chip opening the workspace
 /// picker, the new worktree switch, the model chip opening the model
 /// picker, the thinking chip opening it at the model's thinking chips,
-/// one picker row by its index in the list fixed at open, one
+/// one picker row by its index in the current picker list, one
 /// quit choice while the quit question is open, the delete question's
 /// ✕, and the delete frame itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,9 +23,10 @@ pub(crate) enum Spot {
     /// A row's ✕ in its last column: stopping a live session, or the
     /// delete question for an exited one. Unreadable rows have none.
     Stop(u64),
-    /// The scope toggle heading the list: clicking it, or Enter on it,
-    /// shows every project or only the launch one.
-    Toggle,
+    /// Start a session in the section's workspace.
+    Start(u64),
+    /// Reveal the remaining exited sessions in this project.
+    More(u64),
     /// The workspace chip: clicking it opens the workspace picker.
     Workspace,
     /// The new worktree switch: clicking it, or Enter on it while
@@ -37,7 +38,7 @@ pub(crate) enum Spot {
     /// The thinking chip: clicking it, or Enter on it while focused,
     /// opens the model picker at the model's thinking chips.
     Thinking,
-    /// A picker row, by its index in the list fixed at open.
+    /// A picker row, by its index in the current picker list.
     Pick(usize),
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
@@ -51,6 +52,24 @@ pub(crate) enum Spot {
 }
 
 impl Spot {
+    /// Whether the spot is a list stop: an entry and its cross normalize
+    /// to the entry, and `More` stays its own stop.
+    pub(crate) fn list_stop(self) -> Option<Spot> {
+        match self {
+            Spot::Entry(key) | Spot::Stop(key) => Some(Spot::Entry(key)),
+            Spot::More(key) => Some(Spot::More(key)),
+            Spot::Start(_)
+            | Spot::Workspace
+            | Spot::Worktree
+            | Spot::Model
+            | Spot::Thinking
+            | Spot::Pick(_)
+            | Spot::Quit(_)
+            | Spot::Keep
+            | Spot::Question => None,
+        }
+    }
+
     /// Whether the spot is a chip of the chip row: the workspace chip,
     /// the new worktree switch, the model chip or the thinking chip.
     pub(crate) fn is_chip(self) -> bool {
@@ -58,7 +77,8 @@ impl Spot {
             Spot::Workspace | Spot::Worktree | Spot::Model | Spot::Thinking => true,
             Spot::Entry(_)
             | Spot::Stop(_)
-            | Spot::Toggle
+            | Spot::Start(_)
+            | Spot::More(_)
             | Spot::Pick(_)
             | Spot::Keep
             | Spot::Question
@@ -79,15 +99,66 @@ pub(crate) enum QuitChoice {
     Stay,
 }
 
-/// What the terminal knows about where it was launched.
+/// The terminal's local launch directory or its listed hub.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LaunchLocation {
+    /// A local terminal has a launch workspace and project.
+    Local {
+        /// The launch directory; `start`'s default workspace.
+        workspace: PathBuf,
+        /// Its project key (`docs/state.md`, "Projects").
+        project: String,
+        /// The launch directory is inside a git repository.
+        git: bool,
+    },
+    /// A listed hub has no client launch workspace or project.
+    Remote {
+        /// The listed hub's name.
+        hub: String,
+    },
+}
+
+impl Default for LaunchLocation {
+    fn default() -> Self {
+        Self::Local {
+            workspace: PathBuf::new(),
+            project: String::new(),
+            git: false,
+        }
+    }
+}
+
+impl LaunchLocation {
+    /// The launch directory: a listed hub has none.
+    pub(crate) fn workspace(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Local { workspace, .. } => Some(workspace),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    /// The launch directory's project key: a listed hub has none.
+    pub(crate) fn project(&self) -> Option<&str> {
+        match self {
+            Self::Local { project, .. } => Some(project),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    pub(crate) fn hub(&self) -> Option<&str> {
+        match self {
+            Self::Local { .. } => None,
+            Self::Remote { hub } => Some(hub),
+        }
+    }
+}
+
+/// What the terminal knows about where it was launched, with settings
+/// shared by local and remote terminals.
 #[derive(Default)]
 pub struct Launch {
-    /// The launch directory; `start`'s default workspace.
-    pub workspace: PathBuf,
-    /// Its project key (`docs/state.md`, "Projects").
-    pub project: String,
-    /// The launch directory is inside a git repository.
-    pub git: bool,
+    /// The launch workspace or listed hub.
+    pub location: LaunchLocation,
     /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
     pub open_at: crate::OpenAt,
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
@@ -147,24 +218,35 @@ pub struct Launch {
     pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
+/// One chip on home's chip row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Chip {
+    /// What a click on it opens, if anything.
+    pub(crate) spot: Option<Spot>,
+    /// It draws dim: the workspace chip while no workspace is chosen.
+    pub(crate) dim: bool,
+    /// Its text.
+    pub(crate) text: String,
+}
+
 /// What home draws, built by [`crate::app::App::home_screen`].
 pub(crate) struct HomeScreen {
     /// Fiber's version, for the logo.
     pub(crate) version: String,
     /// The glyph before the name in the one-row logo.
     pub(crate) glyph: String,
-    /// The chip row, left to right: each chip's text, and its click
-    /// target when it has one.
-    pub(crate) chips: Vec<(Option<Spot>, String)>,
-    /// The toggle line heading the scope toggle: how many wait in other
-    /// projects, or how to scope back down.
-    pub(crate) toggle: Option<String>,
-    /// The rows: their keys, their lines, and whether they end in a ✕.
-    pub(crate) rows: Vec<(u64, String, bool)>,
+    /// The chip row, left to right.
+    pub(crate) chips: Vec<Chip>,
+    /// Counts across all live sessions and the summed spend.
+    pub(crate) header: Header,
+    /// Project sections in display order.
+    pub(crate) list: Vec<ListLine>,
+    /// No live, crashed or exited session exists.
+    pub(crate) empty: bool,
     /// The rejected `start`'s message, above the box until the next
     /// `start` goes out.
     pub(crate) blockers: Vec<String>,
-    /// The workspace picker above the box: its recents fixed at open,
+    /// The workspace picker above the box: its current recents,
     /// the focused row, and the typed path once a key opens its row.
     pub(crate) picker: Option<PickerScreen>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
@@ -180,10 +262,61 @@ pub(crate) struct HomeScreen {
     pub(crate) placeholder: bool,
 }
 
+/// The header's nonzero state counts in display order.
+pub(crate) struct Header {
+    pub(crate) counts: Vec<(crate::theme::Role, String)>,
+    pub(crate) spend: Option<String>,
+}
+
+/// A logical row in a project section.
+pub(crate) enum ListLine {
+    Head {
+        start: Option<u64>,
+        name: String,
+        live: usize,
+        spend: String,
+        waiting: usize,
+    },
+    Live {
+        key: u64,
+        number: Option<usize>,
+        glyph: String,
+        name: String,
+        word: &'static str,
+        tone: crate::theme::Role,
+        since: String,
+        stop: bool,
+        id: String,
+        turns: Option<u64>,
+        branch: Option<String>,
+        spend: String,
+        context: Option<u64>,
+        wait: Option<String>,
+    },
+    ExitedHead {
+        count: usize,
+    },
+    Exited {
+        key: u64,
+        glyph: &'static str,
+        name: String,
+        id: String,
+        turns: Option<u64>,
+        spend: String,
+        age: Option<String>,
+    },
+    More {
+        key: u64,
+        count: usize,
+    },
+}
+
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PickerScreen {
-    /// The recent workspaces, fixed at open.
+    /// Esc may close the picker because a workspace is already in use.
+    pub(crate) escapes: bool,
+    /// The recent workspaces, refreshed until a key touches the picker.
     pub(crate) recents: Vec<String>,
     /// The focused row's index over the completions then the recents
     /// while typing, over the recents alone otherwise; `None` with
@@ -343,7 +476,7 @@ pub(crate) struct Row {
     pub(crate) clients: u32,
     /// What a refusal says about the row, in place of its detail.
     pub(crate) note: Option<String>,
-    /// Its latest status; none for an unreadable row or a `recent` row.
+    /// Its latest status; none for an unreadable row.
     pub(crate) status: Option<SessionStatus>,
 }
 
@@ -354,13 +487,110 @@ pub(crate) struct Sessions {
     feed: Vec<Row>,
     recent: Vec<Row>,
     next_key: u64,
-    /// The scope toggle showed every project: unscoped.
-    show_all: bool,
+    /// Projects whose loaded exited rows are expanded.
+    expanded: std::collections::BTreeSet<String>,
     /// The last `recent` answer carried rows: an older page may exist.
     more: bool,
 }
 
+/// One project's live sessions and loaded exited sessions, in display order.
+pub(crate) struct Section<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) name: String,
+    pub(crate) start: Option<u64>,
+    pub(crate) live: Vec<&'a Row>,
+    pub(crate) exited: Vec<&'a Row>,
+    pub(crate) shown_exited: usize,
+}
+
+impl Section<'_> {
+    /// Loaded exited rows that the collapsed section hides.
+    pub(crate) fn hidden(&self) -> usize {
+        self.exited.len() - self.shown_exited
+    }
+}
+
 impl Sessions {
+    /// All rows, feed first and then recent, without a project filter.
+    pub(crate) fn all(&self) -> Vec<&Row> {
+        self.feed.iter().chain(self.recent.iter()).collect()
+    }
+
+    /// Reveal every loaded exited row of this project for this terminal run.
+    pub(crate) fn expand(&mut self, project: &str) {
+        self.expanded.insert(project.to_owned());
+    }
+
+    /// Project sections: launch first, live projects in feed order, exited-only
+    /// projects by their earliest loaded start, with loaded order breaking ties.
+    pub(crate) fn sections(&self, launch_project: Option<&str>) -> Vec<Section<'_>> {
+        let mut sections: Vec<Section<'_>> = Vec::new();
+        for row in self.all() {
+            if sections
+                .iter()
+                .any(|section| section.project == row.project)
+            {
+                continue;
+            }
+            let live = self
+                .feed
+                .iter()
+                .filter(|r| r.project == row.project && r.left != Some(Left::Exited))
+                .collect();
+            let exited: Vec<&Row> = self
+                .feed
+                .iter()
+                .rev()
+                .filter(|r| r.project == row.project && r.left == Some(Left::Exited))
+                .chain(self.recent.iter().filter(|r| r.project == row.project))
+                .collect();
+            let shown_exited = if self.expanded.contains(&row.project) {
+                exited.len()
+            } else {
+                exited.len().min(3)
+            };
+            let start = self
+                .all()
+                .into_iter()
+                .find(|r| r.project == row.project && !r.workspace.is_empty())
+                .map(|r| r.key);
+            let name = std::path::Path::new(&row.workspace)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&row.project)
+                .to_owned();
+            sections.push(Section {
+                project: &row.project,
+                name,
+                start,
+                live,
+                exited,
+                shown_exited,
+            });
+        }
+        sections.sort_by_key(|section| {
+            let category = if Some(section.project) == launch_project {
+                0
+            } else if !section.live.is_empty() {
+                1
+            } else {
+                2
+            };
+            let started = if category == 2 {
+                section
+                    .exited
+                    .iter()
+                    .filter_map(|r| r.status.as_ref().map(|s| s.started))
+                    .min()
+            } else {
+                None
+            };
+            (category, started.is_none(), started)
+        });
+        sections
+    }
+
     /// Folds a `session_status` into the rows: an id already listed keeps
     /// its position and its key, a recent row moves into the feed, and a
     /// new id goes after the rows already there. A status means the
@@ -447,16 +677,6 @@ impl Sessions {
         }
     }
 
-    /// The rows home draws: the feed rows in feed order, then the recent
-    /// rows. Scoped, only the launch project's rows.
-    pub(crate) fn shown(&self, project: &str, scoped: bool) -> Vec<&Row> {
-        self.feed
-            .iter()
-            .chain(self.recent.iter())
-            .filter(|row| !scoped || row.project == project)
-            .collect()
-    }
-
     /// The live feed rows, in feed order.
     pub(crate) fn live(&self) -> Vec<&Row> {
         self.feed.iter().filter(|row| row.left.is_none()).collect()
@@ -471,29 +691,6 @@ impl Sessions {
             .collect()
     }
 
-    /// Flips the scope toggle: showing every project, or only the launch
-    /// one.
-    pub(crate) fn toggle(&mut self) {
-        self.show_all = !self.show_all;
-    }
-
-    /// Whether the scope toggle showed every project.
-    pub(crate) fn show_all(&self) -> bool {
-        self.show_all
-    }
-
-    /// The feed rows outside `project` scope hides, and of them how many
-    /// wait on the person.
-    pub(crate) fn hidden(&self, project: &str) -> (usize, usize) {
-        let mut hidden = 0;
-        let mut waiting = 0;
-        for row in self.feed.iter().filter(|row| row.project != project) {
-            hidden += 1;
-            waiting += usize::from(row.waiting.is_some());
-        }
-        (hidden, waiting)
-    }
-
     /// Whether an older `recent` page may exist: the last answer carried
     /// rows.
     pub(crate) fn more(&self) -> bool {
@@ -503,6 +700,16 @@ impl Sessions {
     /// The last recent row, whose id pages the older `recent` rows.
     pub(crate) fn last_recent(&self) -> Option<&Row> {
         self.recent.last()
+    }
+
+    /// The project of the newest row in this workspace, first row on ties.
+    pub(crate) fn project_of(&self, workspace: &str) -> Option<&str> {
+        self.all()
+            .into_iter()
+            .filter(|row| row.workspace == workspace)
+            // min_by_key keeps the first row on equal timestamps.
+            .min_by_key(|row| std::cmp::Reverse(row.status.as_ref().map(|status| status.since)))
+            .map(|row| row.project.as_str())
     }
 
     /// Whether any row, live or exited, is in `workspace` inside git.
@@ -686,22 +893,12 @@ pub(crate) fn recent_rows(result: &Value) -> Vec<Row> {
                         delegates,
                         clients,
                         note: None,
-                        status: None,
+                        status,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The scope toggle's line: how many wait in other projects while
-/// scoped, or how to scope back down while showing everything.
-pub(crate) fn toggle_line(waiting: usize, show_all: bool) -> String {
-    if show_all {
-        "show this project only".to_owned()
-    } else {
-        format!("{waiting} waiting in other projects · show all")
-    }
 }
 
 /// The quit question's count line: how many sessions work, and of them
@@ -726,8 +923,9 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
 /// A resume line on exit: the session's id and the command resuming
 /// it. The terminal is restored first, and one line prints per live
 /// session.
-pub(crate) fn exit_line(id: &SessionId) -> String {
-    format!("{}  fiber resume {}", id.0, id.0)
+pub(crate) fn exit_line(id: &SessionId, hub: Option<&str>) -> String {
+    let suffix = hub.map(|hub| format!(" --hub {hub}")).unwrap_or_default();
+    format!("{}  fiber resume {}{suffix}", id.0, id.0)
 }
 
 /// The delete question on the foot: the session and that deleting is
@@ -828,13 +1026,13 @@ pub(crate) fn glyph(row: &Row) -> &'static str {
 /// A row's line: the glyph, the name or the id, the detail, and the
 /// workspace's last path segment outside the launch project, joined by
 /// two spaces with empty parts left out.
-pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+pub(crate) fn line(row: &Row, launch_project: Option<&str>) -> String {
     line_with(row, launch_project, glyph(row))
 }
 
 /// A row's line with `glyph` drawn first: the frame's spinner while the
 /// row works, else the still glyph.
-pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String {
+pub(crate) fn line_with(row: &Row, launch_project: Option<&str>, glyph: &str) -> String {
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {
@@ -852,7 +1050,7 @@ pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String 
         }
     }
     let mut segment = String::new();
-    if row.project != launch_project {
+    if Some(row.project.as_str()) != launch_project {
         segment = row
             .workspace
             .split('/')
@@ -870,3 +1068,5 @@ pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String 
 #[cfg(test)]
 #[path = "home_tests.rs"]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::home_test_rows;

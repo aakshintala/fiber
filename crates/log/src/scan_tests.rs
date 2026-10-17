@@ -98,6 +98,35 @@ fn a_symlinked_session_directory_is_left_out() {
 }
 
 #[test]
+fn started_sessions_in_lists_only_that_project() {
+    let home = fakes::TempDir::new("log-scan-in-project");
+    let home = home.path();
+    session(home, "-a", "s_0000000000000001", &started(Some("/w"), None));
+    session(home, "-a", "s_0000000000000003", &started(Some("/w"), None));
+    session(home, "-b", "s_0000000000000002", &started(Some("/w"), None));
+    let found = started_sessions_in(&home.join("projects/-a/sessions"));
+    assert_eq!(ids(&found), ["s_0000000000000001", "s_0000000000000003"]);
+}
+
+#[test]
+fn started_sessions_in_with_a_missing_dir_or_a_link_gives_nothing() {
+    let home = fakes::TempDir::new("log-scan-in-missing");
+    let home = home.path();
+    assert!(started_sessions_in(&home.join("projects/-a/sessions")).is_empty());
+    let outside = home.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(
+        outside.join("events.jsonl"),
+        format!("{}\n", started(Some("/w"), None)),
+    )
+    .unwrap();
+    let sessions = home.join("projects/-a/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    std::os::unix::fs::symlink(&outside, sessions.join("s_0000000000000001")).unwrap();
+    assert!(started_sessions_in(&sessions).is_empty());
+}
+
+#[test]
 fn forked_from_is_read() {
     let home = fakes::TempDir::new("log-scan-fork");
     let home = home.path();

@@ -330,7 +330,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m", "thinking": "high",
-            "state": "idle", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "idle", "started": 0, "calls": 0, "turns": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
@@ -933,6 +933,23 @@ fn a_session_status_round_trips_with_and_without_step() {
         }
         assert_eq!(written, payload);
     }
+}
+
+#[test]
+fn a_session_status_reads_turns_and_reads_none_without_it() {
+    let mut payload = samples()
+        .into_iter()
+        .find(|(kind, _)| *kind == "session_status")
+        .unwrap()
+        .1;
+    payload["turns"] = json!(3);
+    let status: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(status.turns, Some(3));
+    assert_eq!(serde_json::to_value(&status).unwrap(), payload);
+    payload.as_object_mut().unwrap().remove("turns");
+    let old: SessionStatus = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(old.turns, None);
+    assert_eq!(serde_json::to_value(&old).unwrap(), payload);
 }
 
 #[test]

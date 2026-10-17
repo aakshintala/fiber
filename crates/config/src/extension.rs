@@ -325,6 +325,13 @@ pub fn read_package_text(dir: &Path, relative: &str, key: &str) -> Result<String
     })
 }
 
+/// Whether `dir` holds an extension's manifest: `extension.json` at
+/// its top is a regular file. A probe only, never a read and never an
+/// error (`docs/configuration.md`, "Files and format").
+pub fn has_manifest(dir: &Path) -> bool {
+    dir.join("extension.json").is_file()
+}
+
 /// Reads `extension.json` at the top of an extension's directory.
 pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
     let file = dir.join("extension.json");

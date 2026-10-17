@@ -154,6 +154,16 @@ pub(crate) struct Shared {
     /// reaches that window.
     #[cfg(test)]
     pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// The next condvar park waits here while the test holds it,
+    /// test-only: the hold sits between the park becoming visible to
+    /// the clock and the condvar wait, holding the wake mutex, so no
+    /// outside seam reaches that window.
+    #[cfg(test)]
+    gap: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    /// The next shutdown signals immediately before it takes the wake
+    /// mutex, test-only: the park-gap test waits for the actual contest.
+    #[cfg(test)]
+    shutdown_wake_lock: Mutex<Option<mpsc::Sender<()>>>,
     /// The next shutdown signals immediately before it takes the accept
     /// lock, test-only: the spawn-race test waits for the actual contest.
     #[cfg(test)]
@@ -359,7 +369,23 @@ impl Shared {
             Some(self.limits.poll.min(guard_left)),
             &self.wake_changed,
             guard,
-            |wake| woken(seen, *wake),
+            |wake| {
+                // Test-only hold between the park becoming visible and
+                // the condvar wait, under the wake mutex: the test keeps
+                // the waiter here across shutdown, so a notify sent
+                // without the mutex is missed and the wait sleeps its
+                // bound. Consumed once.
+                #[cfg(test)]
+                if let Some((reached, release)) = lock(&self.gap).take() {
+                    match reached.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    match release.recv() {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                woken(seen, *wake)
+            },
         );
         drop(parked);
         // No generation moved past the read above and shutdown never
@@ -493,6 +519,10 @@ impl HttpServer {
             }),
             #[cfg(test)]
             pause: Mutex::new(None),
+            #[cfg(test)]
+            gap: Mutex::new(None),
+            #[cfg(test)]
+            shutdown_wake_lock: Mutex::new(None),
             #[cfg(test)]
             shutdown_accept_lock: Mutex::new(None),
         });
@@ -743,6 +773,28 @@ impl HttpServer {
         (reached_rx, release_tx)
     }
 
+    /// Holds the next condvar park between its park becoming visible and
+    /// its condvar wait until the test releases it, test-only: no outside
+    /// seam reaches that window, so forcing the shutdown race needs this
+    /// committed hold point. Returns the reached signal and the release
+    /// channel; dropping the release ends the wait too.
+    #[cfg(test)]
+    pub(crate) fn test_park_gap(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *lock(&self.shared.gap) = Some((reached_tx, release_rx));
+        (reached_rx, release_tx)
+    }
+
+    /// Signals immediately before the next shutdown takes the wake
+    /// mutex, test-only: no outside seam reaches the contested acquisition.
+    #[cfg(test)]
+    pub(crate) fn test_shutdown_before_wake_lock(&self) -> mpsc::Receiver<()> {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        *lock(&self.shared.shutdown_wake_lock) = Some(reached_tx);
+        reached_rx
+    }
+
     /// Signals immediately before the next shutdown takes the accept
     /// lock, test-only: no outside seam reaches the contested acquisition.
     #[cfg(test)]
@@ -762,9 +814,19 @@ impl HttpServer {
         match rustix::io::write(self.shared.wake_send.as_fd(), &[1]) {
             Ok(_) | Err(_) => {}
         }
-        // No wake-generation bump beside the notify: every parked wait
-        // ends on the notify, and every other waiter re-checks stopping
-        // past its millisecond poll, so no waiter sleeps past shutdown.
+        // Only the park-gap test installs this signal; with no hook,
+        // shutdown follows the same path directly to the wake mutex.
+        #[cfg(test)]
+        if let Some(reached) = lock(&self.shared.shutdown_wake_lock).take() {
+            match reached.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        // Holding the wake mutex until the waiter parks puts the notify
+        // below after its wait, so no generation bump is needed: the
+        // notify ends every parked wait and the rest re-check stopping
+        // past their poll, so no waiter sleeps past shutdown.
+        drop(lock(&self.shared.wake));
         self.shared.wake_changed.notify_all();
         self.shared.idle_changed.notify_all();
         // Take and close the listener: the port refuses connections

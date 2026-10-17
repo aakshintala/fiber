@@ -282,6 +282,11 @@ pub(crate) fn run_new(
                 .thinking
                 .as_deref()
                 .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
+            let seed = crate::resume::chain_seed(
+                &log::history_to(&sessions.join(&start.from.session_id.0), start.from.seq)
+                    .map_err(|error| failed(error.code(), error))?,
+            )
+            .map_err(|error| failed(error.code(), error))?;
             parts_with(
                 Vec::new(),
                 folded.model.as_deref(),
@@ -291,6 +296,7 @@ pub(crate) fn run_new(
                 host,
                 Arc::clone(&reads),
                 process,
+                seed,
             )?
         }
         None => parts_with(
@@ -302,6 +308,7 @@ pub(crate) fn run_new(
             host,
             Arc::clone(&reads),
             process,
+            extensions::StateSeed::new(),
         )?,
     };
     crash::attach(&id);
@@ -345,6 +352,7 @@ pub(crate) fn run_new(
     let fiber_path = fiber
         .clone()
         .map_err(|message| failed(ErrorCode::IoFailed, message))?;
+    let (quota, model_quota) = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -354,7 +362,8 @@ pub(crate) fn run_new(
         jobs.clone(),
         Arc::clone(&clock),
         resolve,
-    );
+    )
+    .with_quota(model_quota);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     // The `skill` tool answers from the loop's set: the reader shares it,
@@ -475,7 +484,7 @@ pub(crate) fn run_new(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
-    session.quota(switching.quota_reader());
+    session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
@@ -517,6 +526,7 @@ pub(crate) fn run_new(
         run_one_turn,
         cancel,
         &diag,
+        &extensions,
         |inbox, cancel| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`

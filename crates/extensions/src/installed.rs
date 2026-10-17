@@ -51,7 +51,7 @@ pub(crate) struct Lock {
 /// then fails with [`Error::Busy`]. A commit that stopped halfway is
 /// finished before the lock is returned.
 pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     fs::create_dir_all(&root).map_err(io(&root))?;
     let path = root.join(".lock");
     let file = File::options()
@@ -126,7 +126,7 @@ pub struct Listing {
 /// error naming the file. A commit that stopped halfway is finished
 /// first, under the same lock every other operation takes.
 pub fn list(home: &Path, clock: &dyn Clock) -> Result<Listing, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Listing::default());
     }
@@ -168,7 +168,7 @@ pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
 /// halfway. `found` is in directory file-name order, as `Providers::load`
 /// iterates, so collision notices keep their order.
 pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Entries::default()),
@@ -224,7 +224,7 @@ pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
 /// The installed extensions with their manifests, under the same lock every
 /// other operation takes. A commit that stopped halfway is finished first.
 pub(crate) fn locked_entries(home: &Path, clock: &dyn Clock) -> Result<Entries, Error> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Entries::default());
     }
@@ -255,7 +255,7 @@ pub fn is_enabled(config: &config::Config, name: &str) -> bool {
 /// manifest, Lua or repository code is loaded. The name is the record's,
 /// as installed.
 pub fn package_names(home: &Path) -> Vec<(String, PathBuf)> {
-    let root = home.join("extensions");
+    let root = config::extensions_dir(home);
     let Ok(entries) = fs::read_dir(&root) else {
         return Vec::new();
     };
@@ -280,22 +280,28 @@ pub struct Removal {
     /// The extensions that go: the one asked for, then each dependency
     /// nothing left needs.
     pub names: Vec<String>,
-    /// Their data directories and settings files that exist.
+    /// Their data directories and settings files that exist, for the
+    /// prompt: every path it deletes is named before anything goes.
     pub data: Vec<PathBuf>,
+    home: PathBuf,
+    data_dirs: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
     _lock: Lock,
 }
 
 impl Removal {
     /// Deletes the extensions, their data directories and their settings.
+    /// The settings go through `config`, which owns their deletion; a
+    /// settings path that is a directory fails naming it, instead of
+    /// being removed as one.
     pub fn commit(self) -> Result<(), Error> {
-        for path in &self.data {
+        for path in &self.data_dirs {
             present(path)?;
         }
         for dir in &self.dirs {
             remove(dir)?;
         }
-        for path in &self.data {
+        for path in &self.data_dirs {
             // `present` already ran. A path that vanished since then is
             // already gone; any other failure names the path.
             let gone = if path.is_dir() {
@@ -308,6 +314,9 @@ impl Removal {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(io(path)(e)),
             }
+        }
+        for name in &self.names {
+            config::remove_extension_settings(&self.home, name)?;
         }
         Ok(())
     }
@@ -349,7 +358,7 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             // Removal deletes `extensions/<slug>/`. A record that names
             // the extension from a directory left under another layout
             // does not make that directory exist.
-            let path = home.join("extensions").join(slug(&name)?);
+            let path = config::extensions_dir(home).join(slug(&name)?);
             match left.iter().position(|i| i.name == name) {
                 Some(i) if present(&path)? => Some(i),
                 _ => {
@@ -370,23 +379,33 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     }
     let layers = layers(home)?;
     let mut dirs = Vec::new();
+    let mut data_dirs = Vec::new();
     let mut data = Vec::new();
     // The damaged directory is named by its directory, without reading
-    // its record; every orphan cascades from its healthy name.
+    // its record; every orphan cascades from its healthy name. The
+    // prompt and the deletion read the same results, so they agree.
     let mut orphan_names = names.iter();
     if let Some(dir) = damaged_dir {
         orphan_names.next();
-        dirs.push(home.join("extensions").join(&dir));
-        data.extend(existing_data(&layers, &dir)?);
+        dirs.push(config::extensions_dir(home).join(&dir));
+        let (gone, found) = existing_data(&layers, &dir)?;
+        data.extend(gone.iter().cloned());
+        data.extend(found.iter().cloned());
+        data_dirs.extend(gone);
     }
     for name in orphan_names {
         let dir = slug(name)?;
-        dirs.push(home.join("extensions").join(&dir));
-        data.extend(existing_data(&layers, &dir)?);
+        dirs.push(config::extensions_dir(home).join(&dir));
+        let (gone, found) = existing_data(&layers, &dir)?;
+        data.extend(gone.iter().cloned());
+        data.extend(found.iter().cloned());
+        data_dirs.extend(gone);
     }
     Ok(Removal {
         names,
         data,
+        home: home.to_path_buf(),
+        data_dirs,
         dirs,
         _lock: lock,
     })
@@ -417,21 +436,26 @@ fn layers(home: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(layers)
 }
 
-/// The data directories and settings files that exist for the extension
-/// directory `dir`.
-fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
-    let mut data = Vec::new();
+/// What exists for the extension directory `dir`, in layer order: the
+/// data directories `commit` deletes itself, and the settings files the
+/// prompt lists. The settings paths are listed for the prompt only:
+/// `commit` deletes them through `config`.
+fn existing_data(layers: &[PathBuf], dir: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
+    let mut gone = Vec::new();
+    let mut found = Vec::new();
     for layer in layers {
-        for path in [
-            layer.join("data").join(dir),
-            layer.join("config").join(format!("{dir}.json")),
-        ] {
-            if present(&path)? {
-                data.push(path);
-            }
+        let data_dir = config::extension_data_dir(layer, dir);
+        if present(&data_dir)? {
+            gone.push(data_dir);
+        }
+        // `dir` is already slugged, and slugging twice changes nothing:
+        // this is the file `remove_extension_settings` deletes.
+        let settings = config::settings_file(layer, dir);
+        if present(&settings)? {
+            found.push(settings);
         }
     }
-    Ok(data)
+    Ok((gone, found))
 }
 
 #[cfg(test)]

@@ -1,0 +1,98 @@
+# Running tests
+
+How the suite is run, and how a flaky test is worked. It is part of `docs/testing.md`.
+
+## Running tests
+
+
+Tests run under cargo-nextest. Each test runs in its own process and is killed
+past its timeout. `cargo test` is not a substitute: it runs a crate's tests as
+threads of one process, and a child process one test spawns holds the file
+locks another test holds until the child execs, so lock-release and
+extension-load tests fail there and pass under nextest. A process per test
+does not contain what the test starts: every test that starts a process, at
+any level, runs it in its own process group, and reaps the group on every
+path, including failure and timeout, with SIGKILL through the guarded helper
+in `fakes` (`fakes::process_group::kill_group`, `Watchdog`), because the
+fixtures ignore SIGTERM on purpose (`docs/testing/fakes.md`, "Fakes"). A binary-level test's
+watchdog, started beside Fiber, kills Fiber's process group when the test
+process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
+A filter that matches no
+tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
+"0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
+
+`scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
+fails the run when a process still carries it after the tests, listing each
+leak's PID and command. The scan only reports: reaping stays the test's job,
+above.
+A test that clears a child's environment puts `FIBER_CHECK_RUN`
+back (`fakes::check_run`), so `fiber` and the processes it starts carry
+the nonce. The exception is the case processes of `fiber extension test`,
+which Fiber starts with a cleared environment. A shell-tool command gets
+the nonce through the session's environment: `fiber ask` passes its
+caller's, and a hub a test starts gets no `SHELL`, so it uses its
+inherited environment (`docs/invocation.md`, "A session's environment").
+When the selection includes `main`, `scripts/test-leak-probe` leaks a
+process through the shell tool under `fiber ask`, with its own nonce, and
+requires the scan to name its PID.
+On macOS `ps` withholds the environment of some processes, such as
+`sh` and `sleep`, so the nonce scan cannot name them. After it the scan
+reads the user's processes reparented to init that started after
+`scripts/check` began: one whose executable is under this worktree's
+`target/` fails the check and is named, and one whose command is `sh`,
+`bash` or `sleep` is listed in a warning that says it may belong to another
+run, without changing the exit status. Neither case sends a signal. An
+orphan that is neither is still invisible on macOS: it is caught by the
+test's own reap above, not the scan.
+
+The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
+
+A test that runs a command, directly or through a scripted tool call, uses
+only the shells above and the standard Unix tools every runner has, such as
+`grep`, `sed` and `awk`. `rg`, `jq` and other tools a developer installs are
+absent on the Linux runners, and a scripted call to one fails there.
+
+A test never depends on the length of a temporary path: macOS's are long and
+Linux's short. A test that needs a line cut makes the line long enough to cut
+on any temporary path.
+
+The tests need a user other than root: root bypasses file modes, so the tests
+that deny a file or socket by mode fail with a message saying so.
+
+Every portable test runs on all three release targets. A test that applies to
+one platform is compiled only for that platform, never skipped at runtime. CI
+reports the number of tests run on each target, so an empty suite cannot pass.
+
+Each test uses its own temporary directory and checks only its own processes
+and files, never a machine-wide count.
+
+Every process-group signal in a test goes through the guarded helper in
+`fakes`, which refuses a group id of 1 or less: `kill(-1)` signals every
+process the user owns. Code that signals a process or group refuses an id of
+1 or less the same way, and `scripts/check` fails on a signal sent anywhere
+else. A test of that refusal passes the probe signal `0`, or
+tests the refusal as a function that signals nothing, so a mutant that removes
+the check sends nothing. Mutation testing runs in CI only, never on a
+developer machine.
+
+## Flaky tests
+
+
+A failed binary-level test retries once. The binary-level tests are the test
+binaries in `crates/main/tests/`; no other test retries, including the unit
+tests in `crates/main/src/`. A pass on retry does not block the
+merge. CI opens a flake issue naming the test and its first failure, or
+comments on the open one. The issue's title is `Flaky test: ` followed by
+the test as nextest prints it. Within one report job a test title files or
+comments once; a repeat is skipped. On a pull request run the report reads
+the failing file from the panic path: when main changed that file since
+the run's tested base it files nothing and notes the stale base in the
+summary, and when the pull request itself changed that file it comments on
+the pull request instead of filing. A failure with no panic path, or any
+failure on a push run, files as usual. A flake issue closes when the test
+is rewritten to be deterministic, never by rerunning. A failure on a
+commit that does not contain the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
+reopens the closed issue nor counts against the fix.
+
+Crate-level and cross-crate tests never retry: they are deterministic, so a
+failure there is signal.

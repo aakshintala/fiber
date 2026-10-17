@@ -22,6 +22,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--home [CASE]` | draws the full-screen fleet case instead of the conversation, or the live fleet with no case; see "Home (#2424)" |
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail-case CASE` | draws one rail-cards case instead of the conversation; see "The rail (#692)" |
+| `--quota-case CASE` | draws one quota-view case instead of the conversation; see "Quota view (#2526)" |
 | `--theme CASE` | draws the screen in another theme or colour depth; combines with any other flag; see "Themes (#1634)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
@@ -80,6 +81,8 @@ cargo run --release -- fixtures/session.jsonl --static --home full-empty
 cargo run --release -- fixtures/session.jsonl --static --home full-focus-exited
 cargo run --release -- fixtures/session.jsonl --static --home full-closing
 cargo run --release -- fixtures/session.jsonl --static --home full-picker
+cargo run --release -- fixtures/session.jsonl --static --home full-remote-empty
+cargo run --release -- fixtures/session.jsonl --static --home full-remote-picker
 cargo run --release -- fixtures/session.jsonl --static --home rail-focused
 ```
 
@@ -92,7 +95,12 @@ cargo run --release -- fixtures/session.jsonl --static --home rail-focused
   centred middle lines, a still frame.
 - `full-focus-exited`: the first exited row focused, a still frame.
 - `full-closing`: one live row `CLOSING` after `/clear`, a still frame.
-- `full-picker`: the workspace picker open over the fleet, a still frame.
+- `full-picker`: the workspace picker open over the fleet, browsing the
+  launch directory with the recents below, a still frame.
+- `full-remote-empty`: remote home with no workspace chosen: the same picker
+  browsing `~/` with no recents, a still frame.
+- `full-remote-picker`: remote home with no workspace chosen: the same picker
+  browsing `~/` with the hub's recent workspaces below, a still frame.
 - `rail-focused`: the conversation view with the rail focused on a
   NEEDS INPUT card (the lifted card, the dimmed input box, the rail foot
   hint), a still frame.
@@ -151,6 +159,30 @@ cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
 
 `./capture-overlays.sh` captures every case in tmux, plain text and SGR, for
 the ticket's PR body: `keymap-narrow` at 100 by 40, the rest at 160 by 48.
+
+## Quota view (#2526)
+
+`--quota-case CASE` draws the `/quota` swapped view instead of the
+conversation: one row per entry of the `quota` answer with each window's
+reset time, the fetching mark while the fetch is in flight, and the empty
+line when no provider reports quota. Each case draws one static frame from
+the fixtures in `src/quota.rs` and waits for a key; Esc, q or Ctrl+C quits.
+Combine with `--static`; the fixture still loads but the view ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --quota-case quota
+cargo run --release -- fixtures/session.jsonl --static --quota-case quota-empty
+```
+
+- `quota`: the cached rows with the fetch in flight: `codex · default` with
+  two windows, each a dim name, its percent and its bar, then its reset
+  time dim, and `claude · default` with its last value and `unreachable`
+  in the error colour; the top row carries `fetching` dim.
+- `quota-empty`: the same view with no entries: one dim line
+  `No provider reports quota`.
+
+`./capture-quota.sh` captures every case in tmux at 160 by 48, plain text
+and SGR, for the ticket's PR body.
 
 ## Login (#1736)
 

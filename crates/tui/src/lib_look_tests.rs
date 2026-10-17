@@ -211,9 +211,11 @@ fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
     use crate::home::Launch;
     let mut app = App::new(std::path::PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: std::path::PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

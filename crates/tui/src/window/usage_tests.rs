@@ -49,7 +49,7 @@ impl Log {
     /// One turn as the attach benchmark's log holds it: a prompt, one
     /// long single-paragraph reply and its usage line, under
     /// `generation`.
-    fn turn(&mut self, turn: usize, generation: &str) {
+    fn turn(&mut self, turn: usize, generation: &str, repeats: usize) {
         self.line(
             "turn_started",
             None,
@@ -59,7 +59,7 @@ impl Log {
         let message = format!("a_m{turn}");
         self.line("step_started", None, json!({}));
         self.line("assistant_message_started", Some(&message), json!({}));
-        let text = "the session log holds every durable line ".repeat(100);
+        let text = "the session log holds every durable line ".repeat(repeats);
         self.line("text_completed", Some(&message), json!({"text": text}));
         self.usage(generation, 100, Value::Null);
         self.line(
@@ -81,7 +81,7 @@ fn session(turns: usize, shared: bool) -> Vec<Envelope> {
         } else {
             format!("resp_{turn}")
         };
-        log.turn(turn, &generation);
+        log.turn(turn, &generation, 100);
     }
     log.lines
 }
@@ -150,8 +150,8 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
     // closed first page still holds its cards: no window trims the pages
     // here.
     let mut log = Log::default();
-    for turn in 0..12 {
-        log.turn(turn, &format!("g{turn}"));
+    for turn in 0..10 {
+        log.turn(turn, &format!("g{turn}"), 3);
     }
     let mut pages = folded(&log.lines, 30);
     assert!(!pages.closed.is_empty(), "the first page closed");

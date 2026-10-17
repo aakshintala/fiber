@@ -76,6 +76,7 @@ fn replaced(text: &str, by: &str, context: Vec<(&str, &str)>) -> BeforeMessageAn
             context: context
                 .into_iter()
                 .map(|(extension, text)| Context {
+                    state: Vec::new(),
                     extension: extension.to_owned(),
                     text: text.to_owned(),
                 })

@@ -309,34 +309,9 @@ const SEED: Fixture = Fixture {
     handoffs: 0,
 };
 
-/// The label the home draws for session `id`'s row: the last `recent`
-/// line naming `id`, its `name` with control characters as spaces, or the
-/// id when the name is empty (`crates/tui/src/home.rs`, `title`). Errs
-/// when `run_entries` holds a session socket, which the hub's feed would
-/// report after the terminal's startup, or when no line names `id`.
-pub(crate) fn row_needle(recent: &str, run_entries: &[String], id: &str) -> Result<String, String> {
-    if let Some(session) = run_entries.iter().find(|entry| entry.starts_with("s_")) {
-        return Err(format!("run/ still holds session {session}"));
-    }
-    let row = recent
-        .lines()
-        .rev()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|row| row.get("session_id") == Some(&json!(id)))
-        .ok_or_else(|| format!("the seeded session {id} left no recent.jsonl row"))?;
-    let name = row.get("name").and_then(Value::as_str).unwrap_or_default();
-    if name.is_empty() {
-        return Ok(id.to_owned());
-    }
-    Ok(name
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect())
-}
-
-/// Runs and closes one prompted session in `home`, then returns the label
-/// the home draws for its row ([`row_needle`]).
-fn seed(ctx: &Ctx<'_>, home: &Home, notes: &mut Vec<String>) -> Result<String, String> {
+/// Runs and closes one prompted session in `home`, checking that its
+/// `recent.jsonl` row was written and its session socket was removed.
+fn seed(ctx: &Ctx<'_>, home: &Home, notes: &mut Vec<String>) -> Result<(), String> {
     let id = doors::mint("s_");
     resume::generate(ctx, home, &SEED, &id, notes)?;
     // The script ends with the reply to a resumed run's prompt, which the
@@ -362,13 +337,22 @@ fn seed(ctx: &Ctx<'_>, home: &Home, notes: &mut Vec<String>) -> Result<String, S
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(err) => return Err(format!("reading {}: {err}", run.display())),
     };
-    row_needle(&recent, &entries, &id)
+    if let Some(session) = entries.iter().find(|entry| entry.starts_with("s_")) {
+        return Err(format!("run/ still holds session {session}"));
+    }
+    let has_recent_row = recent
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|row| row.get("session_id") == Some(&json!(id)));
+    if !has_recent_row {
+        return Err(format!("the seeded session {id} left no recent.jsonl row"));
+    }
+    Ok(())
 }
 
-/// The window starts once the terminal has drawn the home row of a
-/// prompted session this run closed just before it, which only the answer
-/// to its last startup command draws, and two readings in a row find every
-/// thread asleep with no counter moved.
+/// The window starts once home draws the seeded session's project header,
+/// which only the answer to its last startup command draws, and two
+/// readings in a row find every thread asleep with no counter moved.
 fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let home = Home::scripted(ctx.home.fiber(), SEED.script())?;
     busy::in_home(home, |home| {
@@ -380,11 +364,11 @@ fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
             runs: ctx.runs,
             paging: ctx.paging,
         };
-        let needle = seed(&ctx, home, notes)?;
+        seed(&ctx, home, notes)?;
         let terminal = Terminal::spawn(home, &[], ctx.path.as_deref(), ctx.clock)?;
         let pid = terminal.proc.pid();
         let measured = terminal
-            .wait_for(ctx.clock, ctx.clock.now() + READY, &needle)
+            .wait_for(ctx.clock, ctx.clock.now() + READY, "0 live")
             .and_then(|()| idle_window(&ctx, pid, notes));
         let quit = quit(&ctx, terminal, notes, HubExit::Wait);
         let (switches, rss, split, _) = measured?;

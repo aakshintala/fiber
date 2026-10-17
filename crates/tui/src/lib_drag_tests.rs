@@ -34,8 +34,11 @@ fn wide(seam: Option<Arc<Fake>>) -> super::Loop<TestBackend> {
         .resize(200, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -97,8 +100,11 @@ fn pty(markers: Vec<&'static [u8]>) -> (Pair, mpsc::Receiver<Vec<u8>>, super::Lo
         .resize(200, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -316,7 +322,7 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
     let tail = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     // After the resume bytes the arrow is written again.
     let resumed: &[u8] =
-        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h";
+        b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h";
     let at = tail
         .windows(resumed.len())
         .position(|window| window == resumed)

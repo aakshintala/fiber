@@ -2,15 +2,13 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use std::path::PathBuf;
-
 use serde_json::{Value, json};
 
 use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Sessions, Spot, State, cascade_line, delete_line, from_status, line,
-    line_with, recent_rows, toggle_line,
+    Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
+    delete_line, from_status, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -28,6 +26,12 @@ mod workspace;
 use open::Subscriptions;
 use prompt::{Prompt, Questions};
 use workspace::Chooser;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListFocus {
+    FirstStop,
+    FirstExited,
+}
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -52,8 +56,8 @@ pub(super) struct Home {
     /// This connection's subscriptions, the session opening and the
     /// lowering lines queued.
     subs: Subscriptions,
-    /// `/resume` asks the next frame to focus the list.
-    focus_list: bool,
+    /// The target the next home frame focuses, if a list open asked for it.
+    focus_list: Option<ListFocus>,
     /// A rejected `start`'s message, above the box until the next `start`
     /// goes out.
     blockers: Vec<String>,
@@ -72,13 +76,34 @@ pub(super) struct Home {
     pub(super) left_after_attach: Option<SessionId>,
 }
 
+impl Home {
+    /// The launch project that sections and row text compare against;
+    /// a listed hub has none.
+    pub(super) fn launch_project(&self) -> Option<&str> {
+        self.launch.location.project()
+    }
+
+    /// The project `prompt_history` names: the launch project, else
+    /// the project of the chosen workspace's newest row.
+    pub(super) fn history_project(&self) -> Option<String> {
+        self.launch
+            .location
+            .project()
+            .or_else(|| {
+                self.chooser
+                    .chosen()
+                    .and_then(|workspace| self.sessions.project_of(workspace))
+            })
+            .map(str::to_owned)
+    }
+}
+
 impl App {
     /// Stores the launch description as home, keying prompt history by its
     /// project as the run argument did. The app keeps today's screen, so
     /// the jigs and every existing app test stay byte-identical.
     pub(crate) fn set_home(&mut self, launch: Launch) {
         self.set_reduced_motion(launch.reduced_motion);
-        self.set_project(launch.project.clone());
         // A launch that saved the rail hidden starts with it hidden;
         // this is the launch's state, not a person-caused hide, so it
         // queues nothing.
@@ -94,13 +119,17 @@ impl App {
             feed_id: None,
             recent_ask: None,
             subs: Subscriptions::default(),
-            focus_list: false,
+            focus_list: None,
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
             chooser: Chooser::default(),
             questions: Questions::default(),
             left_after_attach: None,
         });
+        self.sync_project();
+        if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
+            self.open_picker();
+        }
         if rail_hidden {
             self.chrome.hide_rail();
         }
@@ -144,16 +173,9 @@ impl App {
     /// What home draws, or `None` unless [`App::on_home`] holds.
     pub(crate) fn home_screen(&self) -> Option<HomeScreen> {
         let home = self.home.as_ref().filter(|_| self.on_home())?;
-        // Scoped is inside git with the toggle off: only the launch
-        // project's rows show.
-        let scoped = home.launch.git && !home.sessions.show_all();
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker.
-        let workspace = home
-            .chooser
-            .chosen()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.launch.workspace.clone());
+        let workspace = self.home_workspace();
         let segment = workspace
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -183,27 +205,151 @@ impl App {
         // The foot names the key map's bound key, leaving it out
         // when the action is unbound; Ctrl+C cannot be rebound, so its
         // hint stays fixed.
+        let sections = home.sessions.sections(home.launch_project());
+        let (mut waiting_count, mut working, mut retrying, mut crashed, mut ready) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut spend = 0.0;
+        let mut live_count = 0usize;
+        let mut list = Vec::new();
+        let wall = self.rail_state().wall();
+        for section in sections {
+            let hidden_exited = section.hidden();
+            let section_spend = section
+                .live
+                .iter()
+                .fold(0.0, |spend, row| spend + row.spend);
+            let waiting = section
+                .live
+                .iter()
+                .filter(|row| row.left.is_none() && row.state == State::Waiting)
+                .count();
+            list.push(ListLine::Head {
+                start: section.start,
+                name: section.name,
+                live: section.live.len(),
+                spend: crate::format::money(section_spend),
+                waiting,
+            });
+            for row in section.live {
+                live_count += 1;
+                spend += row.spend;
+                if row.left == Some(Left::Crashed) {
+                    crashed += 1;
+                } else {
+                    match row.state {
+                        State::Waiting => waiting_count += 1,
+                        State::Working | State::Jobs => working += 1,
+                        State::Retrying => retrying += 1,
+                        State::Idle => ready += 1,
+                        State::Unreadable => {}
+                    }
+                }
+                let status = row.status.as_ref();
+                let stop = row.left.is_none() && row.state != State::Unreadable;
+                list.push(ListLine::Live {
+                    key: row.key,
+                    number: self.rail_state().number(row.key),
+                    glyph: self.motion.glyph(row).to_owned(),
+                    name: crate::home::title(row),
+                    word: crate::view::rail::word(row),
+                    tone: crate::view::rail::tone(row),
+                    since: status
+                        .map(|status| crate::view::rail::elapsed(status.since, wall))
+                        .unwrap_or_default(),
+                    stop,
+                    id: row.id.0.clone(),
+                    turns: status.and_then(|status| status.turns),
+                    branch: status
+                        .and_then(|status| status.git.as_ref().and_then(|git| git.branch.clone())),
+                    spend: crate::format::money(row.spend),
+                    context: status.and_then(|status| {
+                        status.context.as_ref().map(|context| {
+                            context
+                                .tokens
+                                .saturating_mul(100)
+                                .checked_div(context.window)
+                                .unwrap_or(0)
+                        })
+                    }),
+                    wait: row.note.clone().or_else(|| row.waiting.clone()),
+                });
+            }
+            if !section.exited.is_empty() {
+                list.push(ListLine::ExitedHead {
+                    count: section.exited.len(),
+                });
+            }
+            for row in section.exited.iter().take(section.shown_exited) {
+                list.push(ListLine::Exited {
+                    key: row.key,
+                    glyph: "○",
+                    name: crate::home::title(row),
+                    id: row.id.0.clone(),
+                    turns: row.status.as_ref().and_then(|status| status.turns),
+                    spend: crate::format::money(row.spend),
+                    age: row.status.as_ref().map(|status| {
+                        format!("{} ago", crate::view::rail::elapsed(status.since, wall))
+                    }),
+                });
+            }
+            if let Some(row) = section.exited.get(section.shown_exited) {
+                list.push(ListLine::More {
+                    key: row.key,
+                    count: hidden_exited,
+                });
+            }
+        }
+        let header = Header {
+            counts: [waiting_count, working, retrying, crashed, ready]
+                .into_iter()
+                .zip([
+                    (crate::theme::Role::Attention, "waiting on you"),
+                    (crate::theme::Role::Accent, "working"),
+                    (crate::theme::Role::Warning, "retrying"),
+                    (crate::theme::Role::Error, "crashed"),
+                    (crate::theme::Role::Muted, "ready"),
+                ])
+                .filter(|(count, _)| *count > 0)
+                .map(|(count, (role, label))| (role, format!("{count} {label}")))
+                .collect(),
+            spend: (live_count > 0).then(|| format!("{} live", crate::format::money(spend))),
+        };
         let foot = if self.hint() {
             self.hint_text()
         } else {
             match self.keys().first_label("key_map") {
                 Some(label) => {
-                    format!("↓ chips and sessions · {label} the key map · Ctrl+C twice to quit")
+                    format!("↑ sessions · ↓ chips · {label} the key map · Ctrl+C twice to quit")
                 }
-                None => "↓ chips and sessions · Ctrl+C twice to quit".to_owned(),
+                None => "↑ sessions · ↓ chips · Ctrl+C twice to quit".to_owned(),
             }
         };
         Some(HomeScreen {
+            header,
+            list,
+            empty: home.sessions.all().is_empty(),
             version: home.launch.version.clone(),
-            // A remote client has no launch directory; the picker it would
-            // always show is a later ticket's.
             glyph: home.launch.logo_glyph.clone(),
             chips: {
-                let mut chips = vec![(Some(Spot::Workspace), format!("[{segment}]"))];
+                let chip = |spot: Option<Spot>, text: String| Chip {
+                    spot,
+                    dim: false,
+                    text,
+                };
+                let dim = home.no_workspace();
+                let workspace = if dim {
+                    "no workspace"
+                } else {
+                    segment.as_str()
+                };
+                let mut chips = vec![Chip {
+                    dim,
+                    ..chip(Some(Spot::Workspace), format!("[{workspace}]"))
+                }];
                 // The new worktree switch sits beside the workspace
                 // chip, shown while the workspace in use is in git.
                 if home.in_git() {
-                    chips.push((
+                    chips.push(chip(
                         Some(Spot::Worktree),
                         if home.chooser.worktree() {
                             "[x] new worktree".to_owned()
@@ -213,49 +359,23 @@ impl App {
                     ));
                 }
                 chips.extend([
-                    (
+                    chip(
                         Some(Spot::Model),
                         format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
-                    (
+                    chip(
                         Some(Spot::Thinking),
                         format!(
                             "[thinking: {}]",
                             home.launch.thinking.as_deref().unwrap_or("default")
                         ),
                     ),
-                    (None, "Enter starts a session".to_owned()),
+                    chip(None, "Enter starts a session".to_owned()),
                 ]);
                 chips
             },
-            rows: home
-                .sessions
-                .shown(&home.launch.project, scoped)
-                .iter()
-                .map(|row| {
-                    // Every readable row ends in a ✕: stopping a live
-                    // session, deleting an exited one. An unreadable row
-                    // has none.
-                    (
-                        row.key,
-                        line_with(row, &home.launch.project, self.motion.glyph(row)),
-                        row.state != State::Unreadable,
-                    )
-                })
-                .collect(),
             picker: home.picker_screen(),
             blockers: home.blockers.clone(),
-            // The toggle shows inside git whenever a row hides, or
-            // while everything shows.
-            toggle: {
-                let (hidden, waiting) = if scoped {
-                    home.sessions.hidden(&home.launch.project)
-                } else {
-                    (0, 0)
-                };
-                (home.launch.git && (hidden > 0 || home.sessions.show_all()))
-                    .then(|| toggle_line(waiting, home.sessions.show_all()))
-            },
             foot,
             question,
             question_scroll,
@@ -267,8 +387,8 @@ impl App {
     }
 
     /// The hub lines home asks for, once the link is up: `feed`, then the
-    /// first `recent` page, naming the launch project while scoped. The
-    /// session list fills in when the hub's feed arrives.
+    /// first unscoped `recent` page. The session list fills in when the
+    /// hub's feed arrives.
     pub(super) fn home_outgoing(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
@@ -287,9 +407,7 @@ impl App {
         let recent = mint();
         home.feed_id = Some(feed.clone());
         home.recent_ask = Some((recent.clone(), true));
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
-        let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
+        let recent = recent_line(&recent, None);
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
         out.extend(self.launch_lines());
         out.append(&mut asks);
@@ -390,6 +508,7 @@ impl App {
                                 .unwrap_or_default();
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
+                                home.refill_picker();
                             }
                             self.list_answered(first, true);
                         } else {
@@ -428,6 +547,7 @@ impl App {
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
+                        home.refill_picker();
                         // A live status for the session supersedes an exit
                         // that arrived after attach: it is live again.
                         if home
@@ -487,35 +607,46 @@ impl App {
     pub(super) fn resume_list(&mut self) -> Effect {
         let effect = self.leave();
         if let Some(home) = self.home.as_mut() {
-            home.focus_list = true;
+            home.focus_list = Some(ListFocus::FirstExited);
         }
         effect
     }
 
-    /// Focuses the list after `/resume`: the first list stop among the
-    /// new targets, leaving focus in the box when the list is empty.
+    /// Focuses the requested list stop after the next home frame. `/resume`
+    /// asks for the first exited row; `OpenAt::List` asks for the first row.
     /// True when it ran, so the frame draws again with the focus shown.
     pub(super) fn home_drawn(&mut self, targets: &[Target]) -> bool {
         let Some(home) = self.home.as_mut() else {
             return false;
         };
-        if !home.focus_list {
+        let Some(focus_list) = home.focus_list.take() else {
             return false;
-        }
-        home.focus_list = false;
+        };
         self.focus = order(targets, &self.regions, Area::Conversation)
             .into_iter()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Toggle)));
+            .find_map(|id| {
+                let TargetId::Home(spot) = id else {
+                    return None;
+                };
+                let Some(Spot::Entry(key)) = spot.list_stop() else {
+                    return None;
+                };
+                let row = home.sessions.by_key(key)?;
+                let should_focus = match focus_list {
+                    ListFocus::FirstStop => true,
+                    ListFocus::FirstExited => row.left.is_some(),
+                };
+                should_focus.then_some(TargetId::Home(Spot::Entry(key)))
+            });
         true
     }
 
     /// A key for home, ahead of the key map and focus: the picker's keys
-    /// while it is open, then the chip row's and the list's arrows, and
-    /// j on the last drawn row paging below the fold. `None` for
-    /// anything else, so the focused stops keep moving as they do on the
-    /// conversation. Only ↓ enters the list from the entry bar, landing
-    /// on the chip row first: j moves only while the list has focus, and
-    /// the draft keeps every printable key typed into it.
+    /// while open, then the chip row's and the list's arrows, and j at
+    /// the last drawn list stop paging below the fold. `None` for anything
+    /// else, so focused stops keep moving as they do on the conversation.
+    /// ↓ from the entry bar focuses the last chip; ↑ from an empty bar
+    /// focuses the last drawn list stop. Typing on a row returns to the box.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
         // The quit question takes every key first, on home or not.
         if let Some(effect) = self.quit_key(key) {
@@ -549,70 +680,72 @@ impl App {
         if self.focused_chip().is_some() {
             return self.chip_key(key);
         }
-        // Only ↓ enters the list: with the box focused the draft keeps
-        // j, and focus moves it once the list has focus.
+        // With the box focused, j is still draft text. On a row, j/k
+        // remain focus movement keys rather than draft text.
         if matches!(key, Key::Char('j')) && self.focus.is_none() {
             return None;
         }
         if matches!(key, Key::Up | Key::Down) {
-            // ↑ ↓ on a row or the toggle walk the rows, row to row.
             if self.focus.is_some() {
                 if let Some(effect) = self.list_key(key) {
                     return Some(effect);
                 }
                 return None;
             }
-            // ↑ in the box stays with recall; ↓ leaves for the chip
-            // row, while the completion panel and a recalled prompt
-            // keep it and a multi-line draft moves its cursor first.
-            if matches!(key, Key::Up) {
-                return None;
-            }
-            return self.entry_down();
+            return if matches!(key, Key::Up) {
+                self.entry_up()
+            } else {
+                self.entry_down()
+            };
         }
         if !matches!(key, Key::Char('j')) {
-            // Backspace on a focused row asks to delete it when it
-            // exited; anything else on a focused row is swallowed.
             if matches!(key, Key::Backspace) {
                 return self.delete_key();
             }
+            if matches!(key, Key::Char(ch) if !matches!(ch, 'k' | 'y'))
+                && matches!(
+                    self.focus,
+                    Some(TargetId::Home(
+                        Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)
+                    ))
+                )
+            {
+                self.focus = None;
+            }
             return None;
         }
-        // j on the last drawn row pages below the fold; shorter of it
-        // steps through the stops as on the conversation.
-        let Some(TargetId::Home(Spot::Entry(focused) | Spot::Stop(focused))) = self.focus else {
+        // j follows the drawn list order; when it reaches the last drawn
+        // stop it advances into the next logical row, or pages recents.
+        let Some(TargetId::Home(spot @ (Spot::Entry(_) | Spot::Stop(_) | Spot::More(_)))) =
+            self.focus
+        else {
             return None;
         };
-        let ordered = order(&self.stops, &self.regions, Area::Conversation);
-        // The last drawn list stop, rows or their crosses: further steps
-        // stay while focus is short of it.
-        let last = ordered
-            .iter()
-            .rev()
-            .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Stop(_))));
-        if last != self.focus.as_ref() {
+        let current = spot.list_stop()?;
+        if matches!(spot, Spot::Entry(key) if self.stops.iter().any(|target| target.id == TargetId::Home(Spot::Stop(key))))
+            || self.list_stops().last().copied() != Some(current)
+        {
             return None;
         }
-        let next = self.home.as_ref().and_then(|home| {
-            let scoped = home.launch.git && !home.sessions.show_all();
-            let shown = home.sessions.shown(&home.launch.project, scoped);
-            let at = shown.iter().position(|row| row.key == focused)?;
-            shown.get(at + 1).map(|row| row.key)
-        });
-        if let Some(key) = next {
-            self.focus = Some(TargetId::Home(Spot::Entry(key)));
+        let stops = self.all_list_stops();
+        let at = stops.iter().position(|stop| *stop == current)?;
+        if let Some(next) = stops.get(at.saturating_add(1)) {
+            self.focus = Some(TargetId::Home(*next));
             return Some(Effect::None);
         }
-        // At the end of the list, ↓ asks the next `recent` page when
-        // the focused row is the last recent row, the last answer was
-        // not empty, and no `recent` is in flight. Focus stays.
-        self.page_recent(focused)
+        if let Spot::Entry(key) = current
+            && let Some(effect) = self.page_recent(key)
+        {
+            return Some(effect);
+        }
+        self.focus = None;
+        Some(Effect::None)
     }
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
-    /// live session or asks to delete an exited one, the toggle flips
-    /// the scope, the workspace chip opens the picker, the worktree
-    /// switch toggles it, the model chip opens the model picker, the
+    /// live session or asks to delete an exited one, a `More` row reveals
+    /// its project's loaded exited rows, the workspace chip opens the
+    /// picker, the worktree switch toggles it, the model chip opens the model picker, the
     /// thinking chip opens it at the model's thinking chips, a picker
     /// row chooses its workspace, and a quit choice does what its key
     /// does while the quit question is open, on home or over a session.
@@ -623,24 +756,50 @@ impl App {
         match spot {
             Spot::Entry(key) => self.open_row(key),
             Spot::Stop(key) => self.stop_or_ask(key),
-            Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
             Spot::Worktree => self.toggle_worktree(),
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::More(key) => {
+                let project = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.sessions.by_key(key))
+                    .map(|row| row.project.clone());
+                if let Some(project) = project
+                    && let Some(home) = self.home.as_mut()
+                {
+                    home.sessions.expand(&project);
+                    self.focus = Some(TargetId::Home(Spot::Entry(key)));
+                }
+                Effect::None
+            }
             Spot::Keep => {
                 self.close_delete_prompt();
                 Effect::None
             }
             Spot::Question => Effect::None,
+            Spot::Start(key) => {
+                let workspace = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.sessions.by_key(key))
+                    .map(|row| row.workspace.clone())
+                    .filter(|workspace| !workspace.is_empty());
+                if let Some(workspace) = workspace {
+                    self.choose_workspace(workspace);
+                    self.focus = None;
+                }
+                Effect::None
+            }
             Spot::Quit(_) => Effect::None,
         }
     }
 
-    /// Asks the first `recent` page again, naming the launch project
-    /// `on_edit`: the delete question when it exited, swallowed
-    /// otherwise. The workspace picker owns every edit while open, so
+    /// An edit on home: Delete asks about an exited row; otherwise the
+    /// picker and chip row get first refusal, and unhandled edits reach the
+    /// draft. The workspace picker owns every edit while open, so
     /// nothing reaches the chip row or the draft behind it. A focused
     /// chip takes its edits first: ← → move
     /// between chips, every other edit returns to the entry bar. With
@@ -686,8 +845,8 @@ impl App {
         }
     }
 
-    /// Asks the first `recent` page again, naming the launch project
-    /// while scoped: an accepted delete fills the gap it left.
+    /// Asks the first unscoped `recent` page again: an accepted delete
+    /// fills the gap it left.
     fn ask_recent_first(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
@@ -695,42 +854,17 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
         let id = mint();
         home.recent_ask = Some((id.clone(), true));
-        vec![recent_line(&id, None, scoped.then_some(project.as_str()))]
+        vec![recent_line(&id, None)]
     }
 
-    /// Flips the scope toggle and asks the first `recent` page again,
-    /// naming the launch project while scoped.
-    fn toggle_scope(&mut self) -> Effect {
-        let Some(home) = self.home.as_mut() else {
-            return Effect::None;
-        };
-        home.sessions.toggle();
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
-        let id = mint();
-        home.recent_ask = Some((id.clone(), true));
-        Effect::Send(vec![recent_line(
-            &id,
-            None,
-            scoped.then_some(project.as_str()),
-        )])
-    }
-
-    /// Asks the next `recent` page past the focused last row: `before`
-    /// its id, naming the launch project while scoped. `None` unless the
-    /// focused row ends the list and is its last recent row, the last
+    /// Asks the next unscoped `recent` page past the focused last row,
+    /// using its id as `before`. `None` unless the focused row ends the
+    /// list and is its last recent row, the last
     /// answer was not empty, and no `recent` is in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let home = self.home.as_mut()?;
-        let project = home.launch.project.clone();
-        let scoped = home.launch.git && !home.sessions.show_all();
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
         }
@@ -743,11 +877,7 @@ impl App {
             .clone();
         let id = mint();
         home.recent_ask = Some((id.clone(), false));
-        Some(Effect::Send(vec![recent_line(
-            &id,
-            Some(before.as_str()),
-            scoped.then_some(project.as_str()),
-        )]))
+        Some(Effect::Send(vec![recent_line(&id, Some(before.as_str()))]))
     }
 
     /// The text y copies and Ctrl+G opens for `spot`: the row's line;
@@ -757,10 +887,21 @@ impl App {
             Spot::Entry(key) => {
                 let home = self.home.as_ref()?;
                 let row = home.sessions.by_key(key)?;
-                Some(line(row, &home.launch.project))
+                Some(line(row, home.launch_project()))
+            }
+            Spot::More(key) => {
+                let home = self.home.as_ref()?;
+                let row = home.sessions.by_key(key)?;
+                let section = home
+                    .sessions
+                    .sections(home.launch_project())
+                    .into_iter()
+                    .find(|section| section.project == row.project)?;
+                let hidden = section.hidden();
+                (hidden > 0).then(|| format!("… {hidden} more"))
             }
             Spot::Stop(_)
-            | Spot::Toggle
+            | Spot::Start(_)
             | Spot::Workspace
             | Spot::Worktree
             | Spot::Model
@@ -784,12 +925,16 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
-                let workspace = home
-                    .chooser
-                    .chosen()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| home.launch.workspace.display().to_string());
-                let mut args = json!({"workspace": workspace});
+                let workspace = home.chooser.chosen().map(str::to_owned).or_else(|| {
+                    home.launch
+                        .location
+                        .workspace()
+                        .map(|workspace| workspace.display().to_string())
+                });
+                let mut args = json!({});
+                if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
+                    object.insert("workspace".to_owned(), Value::String(workspace));
+                }
                 if let Some(object) = args.as_object_mut() {
                     if !self.launch_overrides.is_empty() {
                         object.insert(
@@ -813,20 +958,13 @@ impl App {
     }
 }
 
-/// A `recent` line: the first page, or past `before`, naming `project`
-/// while scoped.
-fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String {
-    let mut args = serde_json::Map::new();
-    if let Some(before) = before {
-        args.insert("before".to_owned(), Value::String(before.to_owned()));
-    }
-    if let Some(project) = project {
-        args.insert("project".to_owned(), Value::String(project.to_owned()));
-    }
-    if args.is_empty() {
-        json!({"id": id, "command": "recent"}).to_string()
-    } else {
-        json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
+/// A `recent` line: the first page, or past `before`.
+fn recent_line(id: &str, before: Option<&str>) -> String {
+    match before {
+        Some(before) => {
+            json!({"id": id, "command": "recent", "args": {"before": before}}).to_string()
+        }
+        None => json!({"id": id, "command": "recent"}).to_string(),
     }
 }
 

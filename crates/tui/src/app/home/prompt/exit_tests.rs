@@ -14,9 +14,11 @@ use std::path::PathBuf;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -398,7 +400,7 @@ fn esc_stays_and_shows_no_hint() {
     assert!(!app.hint());
     assert_eq!(
         foot(&app),
-        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
+        "↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -577,6 +579,28 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
         })
         .unwrap_or_default();
     assert_eq!(closing, ["s_bbbbbbbbbbbbbbbb"]);
+}
+
+#[test]
+fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
+    let mut app = home();
+    app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
+        hub: "box".to_owned(),
+    };
+    linked(&mut app);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", json!("idle"), 0, 0, 0));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa --hub box"]
+    );
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        [
+            "s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa --hub box",
+            "s_bbbbbbbbbbbbbbbb  fiber resume s_bbbbbbbbbbbbbbbb --hub box"
+        ]
+    );
 }
 
 #[test]

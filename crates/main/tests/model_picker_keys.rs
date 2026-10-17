@@ -68,7 +68,7 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     .unwrap();
     support::write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "fake/alpha", "hub": {"idle_exit_ms": 200}}),
     );
 }
 
@@ -198,16 +198,24 @@ fn chip_cell(screen: &Grid, needle: &str) -> (u16, u16) {
         .iter()
         .position(|row| row.contains(needle))
         .unwrap_or_else(|| panic!("no chip {needle} in {:?}", screen.rows));
-    let row = &screen.rows[y];
-    let at = row.find(needle).unwrap();
-    assert!(
-        row[..at].is_ascii(),
-        "the chip's columns are countable: {row:?}"
-    );
-    (
-        u16::try_from(at + 1).expect("the chip fits its row"),
-        u16::try_from(y).expect("the chip fits the screen"),
-    )
+    let y = u16::try_from(y).expect("the chip fits the screen");
+    let symbols: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
+    let len = u16::try_from(symbols.len()).expect("the chip fits its row");
+    let (cols, _) = screen.size();
+    let x = (0..=cols.saturating_sub(len))
+        .find(|x| {
+            symbols.iter().enumerate().all(|(dx, symbol)| {
+                screen
+                    .cell(
+                        x.saturating_add(u16::try_from(dx).expect("the chip fits its row")),
+                        y,
+                    )
+                    .symbol
+                    == *symbol
+            })
+        })
+        .expect("the chip's cells on its row");
+    (x + 1, y)
 }
 
 /// Clicks the cell at `(x, y)`: an SGR press then its release on the

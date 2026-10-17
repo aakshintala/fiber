@@ -13,8 +13,33 @@ fn progress_subject(w: &mut World, call: &Value, subject: Option<&str>) -> bool 
         0,
         None,
         None,
+        None,
         &json!({"call": call, "subject": subject}),
     ))
+}
+
+#[test]
+fn turns_count_each_turn_started_that_carries_a_turn_id() {
+    let mut w = world();
+    assert_eq!(w.status().turns, Some(0));
+    w.prompt("first");
+    assert_eq!(w.status().turns, Some(1));
+    w.prompt("second");
+    assert_eq!(w.status().turns, Some(2));
+    w.call("a1", "read");
+    assert_eq!(w.status().turns, Some(2));
+    w.feed("turn_started", None, &prompt("without an id"));
+    assert_eq!(w.status().turns, Some(2));
+    let line = envelope(
+        "turn_started",
+        w.ts + 1,
+        Some("t_third"),
+        None,
+        Some(w.ts + 1),
+        &prompt("third"),
+    );
+    assert!(w.fold.observe(&line));
+    assert_eq!(w.status().turns, Some(3));
 }
 
 #[test]
@@ -113,7 +138,7 @@ fn progress_a_malformed_subject_is_skipped() {
     w.call("a1", "shell");
     assert!(
         !w.fold
-            .subject(&envelope("status_subject", 0, None, None, &json!({})))
+            .subject(&envelope("status_subject", 0, None, None, None, &json!({})))
     );
     assert_eq!(w.status().step.as_deref(), Some("shell"));
 }
@@ -177,7 +202,7 @@ impl World {
     /// changed.
     fn feed(&mut self, kind: &str, action: Option<&str>, payload: &Value) -> bool {
         self.ts += 1;
-        let line = envelope(kind, self.ts, action, Some(self.ts), payload);
+        let line = envelope(kind, self.ts, None, action, Some(self.ts), payload);
         self.fold.observe(&line)
     }
 
@@ -194,7 +219,16 @@ impl World {
     }
 
     fn prompt(&mut self, text: &str) {
-        self.feed("turn_started", None, &prompt(text));
+        self.ts += 1;
+        let line = envelope(
+            "turn_started",
+            self.ts,
+            Some(&format!("t_{}", self.ts)),
+            None,
+            Some(self.ts),
+            &prompt(text),
+        );
+        self.fold.observe(&line);
     }
 
     fn call(&mut self, action: &str, tool: &str) {
@@ -242,6 +276,7 @@ impl World {
 fn envelope(
     kind: &str,
     ts: u64,
+    turn: Option<&str>,
     action: Option<&str>,
     seq: Option<u64>,
     payload: &Value,
@@ -253,6 +288,9 @@ fn envelope(
         "schema_version": 1,
         "payload": payload,
     });
+    if let Some(turn) = turn {
+        line["turn_id"] = json!(turn);
+    }
     if let Some(action) = action {
         line["action_id"] = json!(action);
     }
@@ -899,16 +937,25 @@ fn an_ephemeral_delta_and_an_unknown_or_unreadable_line_change_nothing() {
     let delta = envelope(
         "assistant_message_delta",
         5000,
+        None,
         Some("a1"),
         None,
         &json!({"text": "hi"}),
     );
     assert!(!w.fold.observe(&delta));
-    let unknown = envelope("from_the_future", 5001, None, Some(90), &json!({"x": 1}));
+    let unknown = envelope(
+        "from_the_future",
+        5001,
+        None,
+        None,
+        Some(90),
+        &json!({"x": 1}),
+    );
     assert!(!w.fold.observe(&unknown));
     let unreadable = envelope(
         "turn_started",
         5002,
+        None,
         None,
         Some(91),
         &json!({"input": "no"}),
@@ -1078,14 +1125,14 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
     let since = w.status().since;
     *w.count.lock().unwrap() = 2;
     w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    let line = envelope("clients", w.ts, None, None, None, &json!({"count": 2}));
     assert!(w.fold.observe(&line));
     let s = w.status();
     assert_eq!(s.clients, 2);
     assert_eq!(s.since, since);
     // The same count again changes nothing.
     w.ts += 1;
-    let line = envelope("clients", w.ts, None, None, &json!({"count": 2}));
+    let line = envelope("clients", w.ts, None, None, None, &json!({"count": 2}));
     assert!(!w.fold.observe(&line));
 }
 
@@ -1225,6 +1272,7 @@ fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
     let delta = envelope(
         "assistant_message_delta",
         5000,
+        None,
         Some("a1"),
         None,
         &json!({"text": "hi"}),
@@ -1514,7 +1562,7 @@ fn an_ephemeral_retry_notice_is_read_and_another_ephemeral_line_is_not() {
     let mut w = world();
     w.start();
     w.prompt("go");
-    let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, payload);
+    let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, None, payload);
     let delta = ephemeral("assistant_message_delta", &json!({"text": "hi"}));
     assert!(!w.fold.observe(&delta));
     assert_eq!(w.status().state, SessionState::Streaming);

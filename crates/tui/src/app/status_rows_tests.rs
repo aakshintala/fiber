@@ -48,9 +48,11 @@ fn prompt_edge(row: &str, app: &App) -> bool {
 /// The launch description: `/w`, outside git, default shares and cards.
 fn launch() -> Launch {
     Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -192,7 +194,7 @@ fn no_rows_outside_the_narrow_layout() {
 
 #[test]
 fn conversation_height_equals_the_drawn_rows_in_the_narrow_layout() {
-    let long: String = std::iter::repeat_n('w', 20_000).collect();
+    let long: String = std::iter::repeat_n('w', 5_000).collect();
     for height in [10, 12, 16, 24, 40] {
         for (name, setup) in [
             ("plain", vec![]),

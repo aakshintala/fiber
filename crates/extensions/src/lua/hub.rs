@@ -273,6 +273,7 @@ impl Hub {
 
 #[derive(Default)]
 pub(crate) struct Shared {
+    pub(super) state: Arc<crate::host::state::ExtensionState>,
     pub(super) phase: Phase,
     pub(super) loads: HashMap<String, ProviderLoad>,
     pub(super) pending_loads: VecDeque<String>,
@@ -461,6 +462,9 @@ impl Shared {
     fn push_at(&mut self, target: Target, arg: Value, asked: Instant, held: bool) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
+        if matches!(&target, Target::Hook { .. }) {
+            self.state.begin(id);
+        }
         self.queue.push_back(Job {
             id,
             target,

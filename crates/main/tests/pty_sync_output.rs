@@ -117,18 +117,18 @@ fn every_frame_is_wrapped_in_synchronized_output() {
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
     let pre_resize = run.output().len();
     run.resize(40, 10);
-    // The redrawn home at 40 by 10: the input line sits on row 4
-    // with the cursor parked on it, and the footer hint closes row 9.
-    // Only a redraw at the new size lays the frame out this way.
-    run.wait_screen("the redrawn grid at the new size", |grid| {
+    // The redrawn home at 40 by 10: the box moves to the bottom, with
+    // the input line on row 5 and the footer hint on row 9. Only a redraw
+    // at the new size lays the frame out this way.
+    let grid = run.wait_screen("the redrawn grid at the new size", |grid| {
         grid.rows.len() == 10
             && grid
                 .rows
-                .get(4)
-                .is_some_and(|row| row.trim_end() == "› █? for shortcuts")
+                .get(5)
+                .is_some_and(|row| row.trim() == "› █? for shortcuts")
             && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
-            && grid.cursor == (4, 2)
     });
+    assert_eq!(grid.cursor, (5, 4));
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
     until_socket(

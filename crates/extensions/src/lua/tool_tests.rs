@@ -388,15 +388,19 @@ fn on_thread<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> mp
     rx
 }
 
-/// `require("go_<name>")` in `dir` signals that the callback has started.
+/// `require("go_<name>")` in `dir` signals that the callback has started:
+/// the loader runs the registered observer before it opens the empty file.
 fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
     let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
-    on_thread(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        drop(held);
-    })
+    std::fs::File::create(&path).unwrap();
+    let (tx, rx) = mpsc::channel();
+    crate::lua::observe_load(
+        path.canonicalize().unwrap(),
+        Box::new(move || match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }),
+    );
+    rx
 }
 
 /// A tool spec as Lua source with `timeout` and `run`.

@@ -25,10 +25,10 @@ pub(crate) fn fetch(clock: &Arc<dyn contract::clock::Clock>) -> extensions::Fetc
     )
 }
 
-/// `looped` asking the session's hooks, when any extension registered one;
-/// otherwise `looped` as it was.
+/// Attaches loaded extensions, including empty hook chains whose state
+/// still needs to reach the loop's drains.
 pub(crate) fn hooked(looped: Loop, extensions: &Arc<SessionExtensions>) -> Loop {
-    if !extensions.has_hooks() {
+    if !extensions.has_extensions() {
         return looped;
     }
     let hooks: Arc<dyn Hooks> = Arc::clone(extensions) as Arc<dyn Hooks>;

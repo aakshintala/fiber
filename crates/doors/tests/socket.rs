@@ -90,6 +90,7 @@ fn status(name: &str) -> Event {
         since: 0,
         started: 0,
         calls: 0,
+        turns: Some(0),
         step: None,
         git: None,
         context: None,
@@ -333,6 +334,16 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 ("unknown_command", "`frob` is not built in this Fiber yet.")
             );
 
+            send(
+                &client,
+                r#"{"id":"c_nope_args","command":"frob","args":{"x":1}}"#,
+            );
+            let unknown_args = response(&client, "c_nope_args");
+            assert_eq!(
+                rejection(&unknown_args),
+                ("unknown_command", "`frob` is not built in this Fiber yet.")
+            );
+
             send(&client, r#"{"id":"c_reload","command":"reload"}"#);
             let line = response(&client, "c_reload");
             assert_eq!(
@@ -341,6 +352,15 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                     "unknown_command",
                     "`reload` is not built in this Fiber yet.",
                 ),
+            );
+
+            send(
+                &client,
+                r#"{"id":"c_reload_args","command":"reload","args":{"x":1}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_reload_args")),
+                ("invalid_arguments", UNFIT)
             );
 
             // `artifact_page` answers a 200-line file in four pages: the

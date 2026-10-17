@@ -40,6 +40,8 @@ codes! {
     Busy,
     /// The terminal rebuilt its completion cache after a model switch.
     CacheRebuild,
+    /// A `cancel` stopped a `shell` before its command started.
+    Cancelled,
     /// The session was sent `close`.
     Closing,
     /// Two extensions registered the same command name.

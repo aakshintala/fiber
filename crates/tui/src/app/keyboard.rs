@@ -111,7 +111,8 @@ impl App {
             match default_event(&stroke) {
                 Some(Event::Key(key)) => return self.on_key(key, now),
                 Some(Event::Edit(edit)) => return self.on_edit(edit),
-                Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_)) | None => {
+                Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_) | Event::Focus(_))
+                | None => {
                     return Effect::None;
                 }
             }

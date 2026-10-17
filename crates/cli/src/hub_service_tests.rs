@@ -1,4 +1,4 @@
-//! Install, uninstall and restart against a recording fake service
+//! Install, uninstall and restart against a recording stub service
 //! manager: the exact calls per row of the install table, the unit file's
 //! bytes, the restore after a failed call, and the convergence of a rerun.
 
@@ -15,6 +15,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,8 +26,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    RERUN, Ran, Runner, SystemRunner, current_exe, hub_answers, hub_install, hub_restart,
-    hub_uninstall, install, must, read_unit, restart, uninstall,
+    InstallRow, RERUN, Ran, current_exe, hub_answers, hub_install, hub_restart, hub_uninstall,
+    install, must, read_unit, restart, system_run, uninstall,
 };
 use crate::hub_unit::{Manager, Service, name};
 
@@ -37,19 +38,36 @@ const UID: u32 = 501;
 
 type Script = Box<dyn FnMut(&str) -> io::Result<Ran>>;
 
-/// A service manager that records each command line and answers it from a
-/// script.
-struct Fake {
-    calls: RefCell<Vec<String>>,
-    script: RefCell<Script>,
+/// The command lines one recording manager ran.
+type Calls = Rc<RefCell<Vec<String>>>;
+
+/// Runs a service manager's command to completion.
+type RunCommand = Box<super::ManagerRun>;
+
+/// A manager that records each command line in `calls` and answers it from
+/// `script`.
+fn recording(script: impl FnMut(&str) -> io::Result<Ran> + 'static, calls: &Calls) -> RunCommand {
+    let calls = Rc::clone(calls);
+    let script: RefCell<Script> = RefCell::new(Box::new(script));
+    Box::new(move |program, args| {
+        let line = format!("{program} {}", args.join(" "));
+        calls.borrow_mut().push(line.clone());
+        (script.borrow_mut())(&line)
+    })
 }
 
-impl Fake {
+/// A service manager that records each command line and answers it from a
+/// script: the closure in `run` runs the manager, `calls` replays what ran.
+struct Stub {
+    calls: Calls,
+    run: RunCommand,
+}
+
+impl Stub {
     fn new(script: impl FnMut(&str) -> io::Result<Ran> + 'static) -> Self {
-        Self {
-            calls: RefCell::new(Vec::new()),
-            script: RefCell::new(Box::new(script)),
-        }
+        let calls: Calls = Default::default();
+        let run = recording(script, &calls);
+        Self { calls, run }
     }
 
     /// Every command succeeds.
@@ -64,14 +82,6 @@ impl Fake {
 
     fn calls(&self) -> Vec<String> {
         self.calls.borrow().clone()
-    }
-}
-
-impl Runner for Fake {
-    fn run(&self, program: &str, args: &[String]) -> io::Result<Ran> {
-        let line = format!("{program} {}", args.join(" "));
-        self.calls.borrow_mut().push(line.clone());
-        (self.script.borrow_mut())(&line)
     }
 }
 
@@ -139,19 +149,21 @@ impl Setup {
         &self,
         service: &Service,
         port: Option<u16>,
-        fake: &Fake,
+        stub: &Stub,
         answers: bool,
     ) -> (Result<(), Failure>, String) {
         let mut out = Vec::new();
         let result = install(
             service,
-            &self.home(),
-            port,
-            fake,
-            &*self.clock,
-            answers,
-            &mut out,
-            &super::write_unit,
+            &stub.run,
+            InstallRow {
+                home: &self.home(),
+                port,
+                clock: &*self.clock,
+                hub_answers: answers,
+                out: &mut out,
+                write: &super::write_unit,
+            },
         );
         (result, String::from_utf8(out).unwrap())
     }
@@ -204,10 +216,10 @@ const TAKEOVER: &str = "A hub a client started is running; the installed hub tak
 fn launchd_not_loaded_writes_the_plist_and_bootstraps() {
     let setup = Setup::new();
     let service = setup.service(launchd());
-    let fake = Fake::unloaded();
-    let (result, out) = setup.install(&service, Some(4040), &fake, false);
+    let stub = Stub::unloaded();
+    let (result, out) = setup.install(&service, Some(4040), &stub, false);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service), bootstrap(&service)]);
+    assert_eq!(stub.calls(), [print(&service), bootstrap(&service)]);
     assert_eq!(
         fs::read_to_string(&service.unit).unwrap(),
         service.render(Some(4040)).unwrap()
@@ -221,9 +233,9 @@ fn launchd_not_loaded_bootstraps_even_when_the_plist_is_unchanged() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, service.render(None).unwrap()).unwrap();
-    let fake = Fake::unloaded();
-    setup.install(&service, None, &fake, false).0.unwrap();
-    assert_eq!(fake.calls(), [print(&service), bootstrap(&service)]);
+    let stub = Stub::unloaded();
+    setup.install(&service, None, &stub, false).0.unwrap();
+    assert_eq!(stub.calls(), [print(&service), bootstrap(&service)]);
 }
 
 #[test]
@@ -231,14 +243,14 @@ fn a_second_identical_launchd_install_only_asks() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     setup
-        .install(&service, None, &Fake::unloaded(), false)
+        .install(&service, None, &Stub::unloaded(), false)
         .0
         .unwrap();
     let before = fs::read(&service.unit).unwrap();
-    let fake = Fake::ok();
-    let (result, out) = setup.install(&service, None, &fake, false);
+    let stub = Stub::ok();
+    let (result, out) = setup.install(&service, None, &stub, false);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service)]);
+    assert_eq!(stub.calls(), [print(&service)]);
     assert_eq!(fs::read(&service.unit).unwrap(), before);
     assert_eq!(out, installed_line(&service));
 }
@@ -250,16 +262,16 @@ fn launchd_loaded_and_changed_boots_out_waits_until_gone_then_bootstraps() {
     fs::write(&service.unit, service.render(None).unwrap()).unwrap();
     // Loaded before; after bootout launchd still knows it for two asks.
     let mut prints = 0;
-    let fake = Fake::new(move |line| {
+    let stub = Stub::new(move |line| {
         if line.contains(" print ") {
             prints += 1;
             return Ok(if prints <= 3 { ok() } else { no() });
         }
         Ok(ok())
     });
-    setup.install(&service, Some(4040), &fake, false).0.unwrap();
+    setup.install(&service, Some(4040), &stub, false).0.unwrap();
     assert_eq!(
-        fake.calls(),
+        stub.calls(),
         [
             print(&service),
             bootout(&service),
@@ -286,13 +298,13 @@ fn launchd_still_loaded_10_s_after_bootout_fails_and_restores_the_plist() {
     let service = setup.service(launchd());
     let previous = service.render(None).unwrap();
     fs::write(&service.unit, &previous).unwrap();
-    let fake = Fake::ok();
-    let (result, out) = setup.install(&service, Some(4040), &fake, false);
+    let stub = Stub::ok();
+    let (result, out) = setup.install(&service, Some(4040), &stub, false);
     let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(error.message.ends_with(RERUN), "{}", error.message);
     // Asked at 0, 100 ms, ..., 10 s after the bootout.
-    let calls = fake.calls();
+    let calls = stub.calls();
     assert_eq!(calls.get(1), Some(&bootout(&service)));
     assert_eq!(calls.len(), 2 + 101);
     assert!(calls.iter().skip(2).all(|line| *line == print(&service)));
@@ -307,7 +319,7 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
     let previous = service.render(None).unwrap();
     fs::write(&service.unit, &previous).unwrap();
     let mut prints = 0;
-    let fake = Fake::new(move |line| {
+    let stub = Stub::new(move |line| {
         if line.contains(" print ") {
             prints += 1;
             return Ok(if prints == 1 { ok() } else { no() });
@@ -319,7 +331,7 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
         })
     });
     let error = setup
-        .install(&service, Some(4040), &fake, false)
+        .install(&service, Some(4040), &stub, false)
         .0
         .unwrap_err();
     assert_eq!(
@@ -331,7 +343,7 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
     );
     assert_eq!(fs::read_to_string(&service.unit).unwrap(), previous);
 
-    let rerun = Fake::unloaded();
+    let rerun = Stub::unloaded();
     setup
         .install(&service, Some(4040), &rerun, false)
         .0
@@ -347,7 +359,7 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
 fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_row() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
     let previous = fs::read(&service.unit).unwrap();
     let rendered = service.render(Some(4040)).unwrap();
     assert_ne!(previous, rendered.as_bytes());
@@ -365,13 +377,15 @@ fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_
     let mut out = Vec::new();
     let error = install(
         &service,
-        &setup.home(),
-        Some(4040),
-        &Fake::ok(),
-        &*setup.clock,
-        false,
-        &mut out,
-        &failing,
+        &Stub::ok().run,
+        InstallRow {
+            home: &setup.home(),
+            port: Some(4040),
+            clock: &*setup.clock,
+            hub_answers: false,
+            out: &mut out,
+            write: &failing,
+        },
     )
     .unwrap_err();
     assert!(error.message.ends_with(RERUN), "{}", error.message);
@@ -383,7 +397,7 @@ fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_
     assert_eq!(fs::read(&service.unit).unwrap(), previous);
     assert!(out.is_empty(), "{out:?}");
 
-    let rerun = Fake::ok();
+    let rerun = Stub::ok();
     setup
         .install(&service, Some(4040), &rerun, false)
         .0
@@ -396,10 +410,10 @@ fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_
 fn systemd_fresh_install_reloads_enables_and_restarts() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    let fake = Fake::ok();
-    let (result, out) = setup.install(&service, None, &fake, false);
+    let stub = Stub::ok();
+    let (result, out) = setup.install(&service, None, &stub, false);
     result.unwrap();
-    assert_eq!(fake.calls(), changed_row(&service));
+    assert_eq!(stub.calls(), changed_row(&service));
     assert_eq!(
         fs::read_to_string(&service.unit).unwrap(),
         service.render(None).unwrap()
@@ -412,13 +426,13 @@ fn a_second_identical_systemd_install_enables_now_and_restarts_nothing() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     setup
-        .install(&service, Some(4040), &Fake::ok(), false)
+        .install(&service, Some(4040), &Stub::ok(), false)
         .0
         .unwrap();
-    let fake = Fake::ok();
-    setup.install(&service, Some(4040), &fake, false).0.unwrap();
+    let stub = Stub::ok();
+    setup.install(&service, Some(4040), &stub, false).0.unwrap();
     assert_eq!(
-        fake.calls(),
+        stub.calls(),
         [systemctl(&format!("enable --now {}.service", service.name))]
     );
 }
@@ -427,10 +441,10 @@ fn a_second_identical_systemd_install_enables_now_and_restarts_nothing() {
 fn a_port_only_change_whose_restart_fails_is_restarted_by_the_rerun() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
     let previous = fs::read(&service.unit).unwrap();
 
-    let fake = Fake::new(|line| {
+    let stub = Stub::new(|line| {
         Ok(if line.contains(" restart ") {
             boom()
         } else {
@@ -438,7 +452,7 @@ fn a_port_only_change_whose_restart_fails_is_restarted_by_the_rerun() {
         })
     });
     let error = setup
-        .install(&service, Some(4040), &fake, false)
+        .install(&service, Some(4040), &stub, false)
         .0
         .unwrap_err();
     assert_eq!(
@@ -455,7 +469,7 @@ fn a_port_only_change_whose_restart_fails_is_restarted_by_the_rerun() {
         "hub.port is not rolled back"
     );
 
-    let rerun = Fake::ok();
+    let rerun = Stub::ok();
     setup
         .install(&service, Some(4040), &rerun, false)
         .0
@@ -467,19 +481,19 @@ fn a_port_only_change_whose_restart_fails_is_restarted_by_the_rerun() {
 fn a_failed_daemon_reload_on_a_fresh_install_removes_the_unit_and_the_rerun_reloads() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    let fake = Fake::new(|line| {
+    let stub = Stub::new(|line| {
         Ok(if line.contains("daemon-reload") {
             boom()
         } else {
             ok()
         })
     });
-    let error = setup.install(&service, None, &fake, false).0.unwrap_err();
+    let error = setup.install(&service, None, &stub, false).0.unwrap_err();
     assert!(error.message.contains("daemon-reload"), "{}", error.message);
     assert!(!service.unit.exists());
-    assert_eq!(fake.calls(), [systemctl("daemon-reload")]);
+    assert_eq!(stub.calls(), [systemctl("daemon-reload")]);
 
-    let rerun = Fake::ok();
+    let rerun = Stub::ok();
     setup.install(&service, None, &rerun, false).0.unwrap();
     assert_eq!(rerun.calls(), changed_row(&service));
 }
@@ -488,10 +502,10 @@ fn a_failed_daemon_reload_on_a_fresh_install_removes_the_unit_and_the_rerun_relo
 fn an_unchanged_unit_is_left_as_it_is_when_its_call_fails() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
     let before = fs::read(&service.unit).unwrap();
-    let fake = Fake::new(|_| Ok(boom()));
-    let error = setup.install(&service, None, &fake, false).0.unwrap_err();
+    let stub = Stub::new(|_| Ok(boom()));
+    let error = setup.install(&service, None, &stub, false).0.unwrap_err();
     assert!(error.message.contains("enable --now"), "{}", error.message);
     assert_eq!(fs::read(&service.unit).unwrap(), before);
 }
@@ -501,13 +515,13 @@ fn a_restore_that_fails_names_the_unit_file_and_says_to_uninstall() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     let units = setup.dir.path().join("units");
-    let fake = Fake::new(move |_| {
+    let stub = Stub::new(move |_| {
         // The unit is written; the directory then refuses the restore's
         // removal.
         fs::set_permissions(&units, fs::Permissions::from_mode(0o555)).unwrap();
         Ok(boom())
     });
-    let error = setup.install(&service, None, &fake, false).0.unwrap_err();
+    let error = setup.install(&service, None, &stub, false).0.unwrap_err();
     fs::set_permissions(
         setup.dir.path().join("units"),
         fs::Permissions::from_mode(0o755),
@@ -543,8 +557,8 @@ fn a_missing_service_manager_says_what_the_installed_hub_needs() {
     ] {
         let setup = Setup::new();
         let service = setup.service(manager);
-        let fake = Fake::new(|_| Err(io::Error::new(io::ErrorKind::NotFound, "no such file")));
-        let error = setup.install(&service, None, &fake, false).0.unwrap_err();
+        let stub = Stub::new(|_| Err(io::Error::new(io::ErrorKind::NotFound, "no such file")));
+        let error = setup.install(&service, None, &stub, false).0.unwrap_err();
         assert_eq!(error.code, ErrorCode::IoFailed);
         assert!(error.message.starts_with(sentence), "{}", error.message);
         assert!(!service.unit.exists());
@@ -555,8 +569,8 @@ fn a_missing_service_manager_says_what_the_installed_hub_needs() {
 fn another_spawn_failure_names_the_program() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    let fake = Fake::new(|_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")));
-    let error = setup.install(&service, None, &fake, false).0.unwrap_err();
+    let stub = Stub::new(|_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")));
+    let error = setup.install(&service, None, &stub, false).0.unwrap_err();
     assert!(
         error.message.starts_with("running `systemctl`: denied"),
         "{}",
@@ -569,7 +583,7 @@ fn a_blank_first_stderr_line_adds_no_quote_to_the_error() {
     // An empty stderr takes the `None` arm, a whitespace-only first line
     // trims to empty: neither names stderr in the error.
     for stderr in [String::new(), "   \nsecond line\n".to_owned()] {
-        let fake = Fake::new({
+        let stub = Stub::new({
             let stderr = stderr.clone();
             move |_| {
                 Ok(Ran {
@@ -580,7 +594,7 @@ fn a_blank_first_stderr_line_adds_no_quote_to_the_error() {
             }
         });
         let error = must(
-            &fake,
+            &stub.run,
             "launchctl",
             &["bootstrap".to_owned(), "gui/501/x".to_owned()],
         )
@@ -606,13 +620,13 @@ fn current_exe_is_the_running_binary() {
 fn a_hub_answering_while_the_service_is_not_loaded_prints_the_takeover_line() {
     let setup = Setup::new();
     let service = setup.service(launchd());
-    let (result, out) = setup.install(&service, None, &Fake::unloaded(), true);
+    let (result, out) = setup.install(&service, None, &Stub::unloaded(), true);
     result.unwrap();
     assert_eq!(out, format!("{}{TAKEOVER}", installed_line(&service)));
 
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    let (result, out) = setup.install(&service, None, &Fake::ok(), true);
+    let (result, out) = setup.install(&service, None, &Stub::ok(), true);
     result.unwrap();
     assert_eq!(out, format!("{}{TAKEOVER}", installed_line(&service)));
 }
@@ -622,14 +636,14 @@ fn a_hub_answering_while_the_service_is_loaded_prints_no_takeover_line() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, service.render(None).unwrap()).unwrap();
-    let (result, out) = setup.install(&service, None, &Fake::ok(), true);
+    let (result, out) = setup.install(&service, None, &Stub::ok(), true);
     result.unwrap();
     assert_eq!(out, installed_line(&service));
 
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
-    let (result, out) = setup.install(&service, None, &Fake::ok(), true);
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
+    let (result, out) = setup.install(&service, None, &Stub::ok(), true);
     result.unwrap();
     assert_eq!(out, installed_line(&service));
 }
@@ -639,10 +653,10 @@ fn install_without_a_port_removes_hub_port() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     setup
-        .install(&service, Some(4040), &Fake::ok(), false)
+        .install(&service, Some(4040), &Stub::ok(), false)
         .0
         .unwrap();
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
     assert_eq!(setup.port(), None);
     assert!(
         fs::read_to_string(&service.unit)
@@ -655,7 +669,7 @@ fn install_without_a_port_removes_hub_port() {
 fn the_unit_file_is_mode_0644_and_no_temporary_file_remains() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    setup.install(&service, None, &Fake::ok(), false).0.unwrap();
+    setup.install(&service, None, &Stub::ok(), false).0.unwrap();
     let mode = fs::metadata(&service.unit).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o644);
     let names: Vec<_> = fs::read_dir(setup.dir.path().join("units"))
@@ -665,9 +679,9 @@ fn the_unit_file_is_mode_0644_and_no_temporary_file_remains() {
     assert_eq!(names, [service.unit.file_name().unwrap().to_owned()]);
 }
 
-fn uninstalled(service: &Service, fake: &Fake) -> (Result<(), Failure>, String) {
+fn uninstalled(service: &Service, stub: &Stub) -> (Result<(), Failure>, String) {
     let mut out = Vec::new();
-    let result = uninstall(service, fake, &mut out);
+    let result = uninstall(service, &stub.run, &mut out);
     (result, String::from_utf8(out).unwrap())
 }
 
@@ -679,10 +693,10 @@ fn launchd_uninstall_boots_out_a_loaded_service_then_deletes_the_plist() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::ok();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::ok();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service), bootout(&service)]);
+    assert_eq!(stub.calls(), [print(&service), bootout(&service)]);
     assert!(!service.unit.exists());
     assert_eq!(out, REMOVED);
 }
@@ -692,10 +706,10 @@ fn launchd_uninstall_of_an_unloaded_service_deletes_the_plist() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::unloaded();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::unloaded();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service)]);
+    assert_eq!(stub.calls(), [print(&service)]);
     assert!(!service.unit.exists());
     assert_eq!(out, REMOVED);
 }
@@ -704,10 +718,10 @@ fn launchd_uninstall_of_an_unloaded_service_deletes_the_plist() {
 fn launchd_uninstall_of_a_loaded_service_with_no_plist_boots_it_out() {
     let setup = Setup::new();
     let service = setup.service(launchd());
-    let fake = Fake::ok();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::ok();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service), bootout(&service)]);
+    assert_eq!(stub.calls(), [print(&service), bootout(&service)]);
     assert_eq!(out, REMOVED);
 }
 
@@ -715,10 +729,10 @@ fn launchd_uninstall_of_a_loaded_service_with_no_plist_boots_it_out() {
 fn launchd_uninstall_with_nothing_installed_says_so() {
     let setup = Setup::new();
     let service = setup.service(launchd());
-    let fake = Fake::unloaded();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::unloaded();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
-    assert_eq!(fake.calls(), [print(&service)]);
+    assert_eq!(stub.calls(), [print(&service)]);
     assert_eq!(out, NOT_INSTALLED);
 }
 
@@ -727,14 +741,14 @@ fn a_failed_bootout_leaves_the_plist_for_a_retry() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::new(|line| {
+    let stub = Stub::new(|line| {
         Ok(if line.contains(" bootout ") {
             boom()
         } else {
             ok()
         })
     });
-    let (result, out) = uninstalled(&service, &fake);
+    let (result, out) = uninstalled(&service, &stub);
     assert!(result.unwrap_err().message.contains("bootout"));
     assert!(service.unit.exists());
     assert_eq!(out, "");
@@ -745,11 +759,11 @@ fn systemd_uninstall_disables_deletes_then_reloads() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::ok();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::ok();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
     assert_eq!(
-        fake.calls(),
+        stub.calls(),
         [
             systemctl(&format!("disable --now {}.service", service.name)),
             systemctl("daemon-reload"),
@@ -763,10 +777,10 @@ fn systemd_uninstall_disables_deletes_then_reloads() {
 fn systemd_uninstall_with_no_unit_runs_nothing() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
-    let fake = Fake::ok();
-    let (result, out) = uninstalled(&service, &fake);
+    let stub = Stub::ok();
+    let (result, out) = uninstalled(&service, &stub);
     result.unwrap();
-    assert!(fake.calls().is_empty());
+    assert!(stub.calls().is_empty());
     assert_eq!(out, NOT_INSTALLED);
 }
 
@@ -775,8 +789,8 @@ fn a_failed_disable_leaves_the_unit_for_a_retry() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::new(|_| Ok(boom()));
-    assert!(uninstalled(&service, &fake).0.is_err());
+    let stub = Stub::new(|_| Ok(boom()));
+    assert!(uninstalled(&service, &stub).0.is_err());
     assert!(service.unit.exists());
 }
 
@@ -785,19 +799,19 @@ fn restart_kicks_an_installed_service_through_its_manager() {
     let setup = Setup::new();
     let service = setup.service(launchd());
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::ok();
-    assert!(restart(&service, &fake).unwrap());
+    let stub = Stub::ok();
+    assert!(restart(&service, &stub.run).unwrap());
     assert_eq!(
-        fake.calls(),
+        stub.calls(),
         [format!("launchctl kickstart -k gui/{UID}/{}", service.name)]
     );
 
     let service = setup.service(Manager::Systemd);
     fs::write(&service.unit, "x").unwrap();
-    let fake = Fake::ok();
-    assert!(restart(&service, &fake).unwrap());
+    let stub = Stub::ok();
+    assert!(restart(&service, &stub.run).unwrap());
     assert_eq!(
-        fake.calls(),
+        stub.calls(),
         [systemctl(&format!("restart {}.service", service.name))]
     );
 }
@@ -807,9 +821,9 @@ fn restart_with_no_unit_file_runs_nothing() {
     for manager in [launchd(), Manager::Systemd] {
         let setup = Setup::new();
         let service = setup.service(manager);
-        let fake = Fake::ok();
-        assert!(!restart(&service, &fake).unwrap());
-        assert!(fake.calls().is_empty());
+        let stub = Stub::ok();
+        assert!(!restart(&service, &stub.run).unwrap());
+        assert!(stub.calls().is_empty());
     }
 }
 
@@ -818,7 +832,7 @@ fn a_failed_restart_is_an_error() {
     let setup = Setup::new();
     let service = setup.service(Manager::Systemd);
     fs::write(&service.unit, "x").unwrap();
-    assert!(restart(&service, &Fake::new(|_| Ok(boom()))).is_err());
+    assert!(restart(&service, &Stub::new(|_| Ok(boom())).run).is_err());
 }
 
 /// A hub on `home`'s `run/hub` that speaks `hub_hello` to one client.
@@ -862,13 +876,13 @@ fn no_hub_answers_on_an_absent_socket_and_none_is_started() {
 }
 
 #[test]
-fn the_system_runner_reports_the_exit_code_and_stderr() {
+fn system_run_reports_the_exit_code_and_stderr() {
     let dir = fakes::TempDir::new("cli-hub-runner");
     let marker = dir.path().join("runner").display().to_string();
     let watchdog = fakes::Watchdog::matching(&marker);
     let failing = marker.clone();
     let ran = fakes::within("sh", DEADLINE, move || {
-        SystemRunner.run(
+        system_run(
             "sh",
             &["-c".to_owned(), "echo oops >&2; exit 3".to_owned(), failing],
         )
@@ -883,7 +897,7 @@ fn the_system_runner_reports_the_exit_code_and_stderr() {
         }
     );
     let ran = fakes::within("true", DEADLINE, move || {
-        SystemRunner.run("sh", &["-c".to_owned(), "true".to_owned(), marker])
+        system_run("sh", &["-c".to_owned(), "true".to_owned(), marker])
     })
     .unwrap();
     assert!(ran.success);
@@ -892,10 +906,8 @@ fn the_system_runner_reports_the_exit_code_and_stderr() {
 }
 
 #[test]
-fn the_system_runner_reports_a_missing_program_as_not_found() {
-    let error = SystemRunner
-        .run("/nonexistent/fiber-launchctl", &[])
-        .unwrap_err();
+fn system_run_reports_a_missing_program_as_not_found() {
+    let error = system_run("/nonexistent/fiber-launchctl", &[]).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }
 

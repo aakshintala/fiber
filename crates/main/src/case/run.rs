@@ -443,12 +443,18 @@ fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
     if let Some(config) = &case.config {
         let home = config::fiber_home_from_env().map_err(|error| error.to_string())?;
         let config_path = home.join("config.json");
-        let config_bytes = serde_json::to_vec(config)
-            .map_err(|error| format!("config: cannot encode: {error}"))?;
-        fs::write(&config_path, config_bytes)
-            .map_err(|error| format!("{}: {error}", config_path.display()))?;
+        write_config(&config_path, config)?;
     }
     Ok(())
+}
+
+/// Writes the scripted `config.json` whole into `path`, creating a
+/// missing parent directory. The bytes are the case's raw JSON, with no
+/// type check and no lock: only the rename is atomic.
+fn write_config(path: &Path, config: &Value) -> Result<(), String> {
+    let bytes =
+        serde_json::to_vec(config).map_err(|error| format!("config: cannot encode: {error}"))?;
+    config::write_atomic(path, &bytes, 0o666).map_err(|error| error.to_string())
 }
 
 fn has_fiber_exited(events: &[Value]) -> bool {

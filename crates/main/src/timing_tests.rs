@@ -106,6 +106,7 @@ fn parts(
                 None,
                 reads,
                 log::diag::Process::Session,
+                extensions::StateSeed::new(),
             )
         })
     };
@@ -171,6 +172,7 @@ fn a_malformed_config_keeps_the_load_error_and_writes_nothing() {
                 None,
                 reads,
                 log::diag::Process::Session,
+                extensions::StateSeed::new(),
             )
         })
     }

@@ -21,6 +21,7 @@ mod read;
 mod resolve;
 mod scan;
 mod search;
+mod state_fold;
 mod usage;
 mod weak_emit;
 mod write;
@@ -40,9 +41,10 @@ pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::{most_recent, resolve};
 pub use scan::{
     Hold, SessionLock, Started, last_line_where, last_ts, remaining, session_bytes,
-    started_sessions, try_hold,
+    started_sessions, started_sessions_in, try_hold,
 };
 pub use search::{Identity, SessionScan};
+pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
 pub use write::{Log, cut_joined, cut_notice};

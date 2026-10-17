@@ -15,8 +15,11 @@ use crate::link::Line;
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
@@ -111,10 +114,9 @@ fn opened(app: &mut App) {
     let key = app
         .home_screen()
         .map(|screen| {
-            screen
-                .rows
+            crate::home::home_test_rows(&screen)
                 .into_iter()
-                .map(|(key, _, _)| key)
+                .map(|(key, _)| key)
                 .collect::<Vec<_>>()
         })
         .and_then(|keys| keys.into_iter().next())

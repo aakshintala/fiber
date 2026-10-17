@@ -232,17 +232,23 @@ impl Loop {
     pub(crate) fn turn_input(
         &mut self,
         pieces: Vec<Queued>,
-    ) -> (Vec<InputItem>, Vec<ContextAdded>) {
+    ) -> (
+        Vec<InputItem>,
+        Vec<contract::hook::Context>,
+        Vec<contract::hook::StateLine>,
+    ) {
         let mut input: Vec<InputItem> = Vec::new();
         // Every held `shell_command` line joins this turn first, in `seq`
         // order: the `turn_started` naming them releases them.
         for seq in self.handoff.carry.pending() {
             input.push(InputItem::ShellCommand { seq: Seq(seq) });
         }
-        let mut contexts: Vec<ContextAdded> = Vec::new();
+        let mut contexts = Vec::new();
+        let mut state = Vec::new();
         for piece in pieces {
             match piece {
                 Queued::Steer(message, hooked) => {
+                    state.extend(hooked.state);
                     contexts.extend(hooked.context);
                     input.push(InputItem::Message {
                         content: message.content,
@@ -276,7 +282,7 @@ impl Loop {
                 Queued::Pending(ids, reason) => self.queued.push_back(Queued::Pending(ids, reason)),
             }
         }
-        (input, contexts)
+        (input, contexts, state)
     }
 
     /// Writes each `jobs_pending_notified` at the front of the queue: the
@@ -304,6 +310,7 @@ impl Loop {
             let event = match piece {
                 Queued::Steer(message, hooked) => {
                     steered = true;
+                    self.write_carried(hooked.state, Some(turn))?;
                     self.append(
                         &Event::SteeringApplied(contract::events::SteeringApplied {
                             content: message.content,
@@ -314,7 +321,16 @@ impl Loop {
                         None,
                     )?;
                     for added in hooked.context {
-                        self.append(&Event::ContextAdded(added), turn, None)?;
+                        self.write_carried(added.state, Some(turn))?;
+                        self.append(
+                            &Event::ContextAdded(ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "before_message".into(),
+                            }),
+                            turn,
+                            None,
+                        )?;
                     }
                     continue;
                 }

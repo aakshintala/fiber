@@ -1,29 +1,28 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 989
 expression: drawn
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no sessions yet
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
+w +  0 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  exite
+   ○ fi  Delete session                                               ✕   0s ago
 
-
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-       ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-
-         Delete session                                               ✕
-▄▄▄▄▄▄▄                                                                  ▄▄▄▄▄▄▄
-› █? fo  Delete fix the parser (s_0123456789abcdef) and 8 sessions that
+         Delete fix the parser (s_0123456789abcdef) and 8 sessions that
          continue it: s_0000000000000001, s_0000000000000002,
          s_0000000000000003, s_0000000000000004, s_0000000000000005,
-[w]  [n  s_0000000000000006, s_0000000000000007, s_0000000000000008?
-▀▀▀▀▀▀▀                                                                  ▀▀▀▀▀▀▀
-○  fix   It cannot be undone.                                                  ✕
+         s_0000000000000006, s_0000000000000007, s_0000000000000008?
+
+         It cannot be undone.
 
          Enter delete all · Esc keep
 
-       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+▄▄▄▄▄▄▄▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

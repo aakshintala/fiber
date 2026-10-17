@@ -133,16 +133,16 @@ pub(crate) fn listed(home: &Path, project: Option<&str>) -> Vec<RecentRow> {
         .collect()
 }
 
-/// One page of exited sessions, newest first, newest row per session
-/// only: delegates' rows, rows whose directory is gone and sessions in
-/// `running` are skipped; with `project`, only that key. The page starts
-/// after `before`'s row.
-pub(crate) fn page(
+/// One page of exited sessions and the query's total, from one read of
+/// `recent.jsonl`: a row written mid-answer cannot make them disagree.
+/// The page starts after `before`'s row; the total counts every row the
+/// pages walk, whatever `before` and the page hold.
+pub(crate) fn page_with_total(
     home: &Path,
     before: Option<&str>,
     project: Option<&str>,
     running: &BTreeSet<String>,
-) -> Result<Vec<RecentRow>, PageError> {
+) -> Result<(Vec<RecentRow>, usize), PageError> {
     let listed = listed(home, project);
     let start = match before {
         None => 0,
@@ -154,12 +154,17 @@ pub(crate) fn page(
                 + 1
         }
     };
-    Ok(listed
+    let total = listed
+        .iter()
+        .filter(|row| !running.contains(&row.session_id.0))
+        .count();
+    let rows = listed
         .into_iter()
         .skip(start)
         .filter(|row| !running.contains(&row.session_id.0))
         .take(RECENT_PAGE)
-        .collect())
+        .collect();
+    Ok((rows, total))
 }
 
 /// The rows the hub seeds its feed from at start: of the newest

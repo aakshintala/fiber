@@ -15,14 +15,22 @@ mod extension;
 mod extension_settings;
 mod home;
 mod keys;
+mod layout;
 mod mcp_tokens;
 mod names;
 pub mod path;
+mod prompt_files;
 mod rules;
 mod secret;
 mod settings;
+mod themes;
 mod write;
 
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
+
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -42,15 +50,20 @@ pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
     Binary, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
-    provider_files, read_manifest, read_package_text, read_providers,
+    has_manifest, provider_files, read_manifest, read_package_text, read_providers,
 };
 pub use extension_settings::ExtensionSettings;
 pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
 };
+pub use layout::{
+    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
+    project_data_dir,
+};
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
+pub use prompt_files::{append_prompt, system_prompt};
 pub use rules::{RuleLine, RulesFiles, RulesListing, RulesScope, list_rules, remove_rule};
 pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held, delete_secret,
@@ -58,10 +71,11 @@ pub use secret::{
     valid_env_key,
 };
 pub use settings::{SettingInfo, SettingValue};
+pub use themes::{theme_names, theme_text};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,
     insert_entry, remove_entry, remove_extension_settings, replace_global, set,
-    set_global_if_unset, update_global_entries, write_atomic,
+    set_global_if_unset, settings_file, update_global_entries, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
@@ -145,6 +159,14 @@ impl fmt::Debug for Config {
             .field("notices", &self.notices)
             .finish_non_exhaustive()
     }
+}
+
+/// What the fast path reads without merging every layer.
+enum Fast {
+    /// The answer: `get_segments` returns it directly.
+    Answer(Option<(Value, Source)>),
+    /// The key needs the whole merge: `get_segments` reads `merged`.
+    Merge,
 }
 
 impl Config {
@@ -291,6 +313,9 @@ impl Config {
         {
             *name = full_name(name);
         }
+        if let Fast::Answer(found) = self.fast_get(&key, model) {
+            return found;
+        }
         let from = self
             .layers
             .iter()
@@ -306,6 +331,113 @@ impl Config {
                 Some((default, Source::Default))
             }
         }
+    }
+
+    /// The value and source of `key` without merging every layer. A
+    /// scalar reads whole from the highest layer holding it; an object
+    /// merges only its subtree, top-down over the layers holding it.
+    /// `Fast::Merge` reads through `merged`: a union or entry-replaced
+    /// row at `key`, above it or below its fill, a key a higher layer
+    /// hides, or a layer whose per-model view is not an object.
+    fn fast_get(&self, key: &[String], model: Option<&str>) -> Fast {
+        // Only a plain replace row merges holder-wins: a union row
+        // holds every layer's names, and an entry-replaced row goes
+        // whole to one layer, neither what the highest layer holds.
+        if (0..=key.len()).any(|len| {
+            key.get(..len).is_some_and(|prefix| {
+                keys::leaf(prefix).is_some_and(|row| row.merge != keys::Merge::Replace)
+            })
+        }) {
+            return Fast::Merge;
+        }
+        // Below a union row's fill the merge re-creates the object, so
+        // a proper prefix of one reads what no single layer holds. The
+        // row itself needs no length check: it already returned above.
+        if keys::union_rows().any(|row| row.starts_with(key)) {
+            return Fast::Merge;
+        }
+        // A layer whose per-model view is not an object wipes the merge,
+        // so it reads through `merged`.
+        let views: Vec<Cow<'_, Value>> = self
+            .layers
+            .iter()
+            .map(|(_, layer)| view(layer, model))
+            .collect();
+        if !views.iter().all(|seen| seen.is_object()) {
+            return Fast::Merge;
+        }
+        // Top-down: the first layer holding the key is the highest,
+        // unless a higher layer holds a scalar over its path, hiding it
+        // as the merge does.
+        let mut hiding = false;
+        for ((source, _), seen) in self.layers.iter().zip(&views).rev() {
+            if let Some(value) = path::get(seen, key) {
+                if hiding {
+                    return Fast::Answer(None);
+                }
+                if value.is_object() {
+                    // Objects merge key by key across the layers holding
+                    // them: merge only this subtree, top-down, as `lay`
+                    // merges it, union and entry-replaced rows included.
+                    let mut sub = Value::Object(Map::new());
+                    for (_, seen) in self.layers.iter().zip(&views) {
+                        if let Some(upper) = path::get(seen, key) {
+                            lay(&mut sub, upper, &mut key.to_vec());
+                        }
+                    }
+                    return Fast::Answer(
+                        path::get(&sub, key)
+                            .cloned()
+                            .map(|found| (found, source.clone())),
+                    );
+                }
+                return Fast::Answer(Some((value.clone(), source.clone())));
+            }
+            if (1..key.len()).any(|len| {
+                key.get(..len)
+                    .is_some_and(|prefix| path::get(seen, prefix).is_some_and(|at| !at.is_object()))
+            }) {
+                hiding = true;
+            }
+        }
+        // No layer holds the key: the schema default.
+        Fast::Answer(
+            keys::leaf(key)
+                .and_then(|row| row.default)
+                .and_then(|text| serde_json::from_str(text).ok())
+                .map(|default| (default, Source::Default)),
+        )
+    }
+
+    /// The effective value of `key` as a whole number of zero or more:
+    /// `None` for a missing key without a default, or a value of another
+    /// JSON type (a negative or fractional number is `None`).
+    pub fn count(&self, key: &str, model: Option<&str>) -> Option<u64> {
+        self.get(key, model).and_then(|(value, _)| value.as_u64())
+    }
+
+    /// The effective value of `key` as a flag: `None` for a missing key
+    /// without a default, or a value of another JSON type.
+    pub fn flag(&self, key: &str, model: Option<&str>) -> Option<bool> {
+        self.get(key, model).and_then(|(value, _)| value.as_bool())
+    }
+
+    /// The effective value of `key` as text: `None` for a missing key
+    /// without a default, or a value of another JSON type.
+    pub fn text(&self, key: &str, model: Option<&str>) -> Option<String> {
+        self.get(key, model)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned))
+    }
+
+    /// The effective value of `key` as a list of strings, in order,
+    /// skipping non-strings: empty for a missing key or a non-array.
+    pub fn list(&self, key: &str, model: Option<&str>) -> Vec<String> {
+        self.get(key, model)
+            .and_then(|(value, _)| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect()
     }
 
     /// Every name in the list at `key`, from every layer that sets it,
@@ -585,15 +717,19 @@ fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
     }
 }
 
-/// A layer with its `models."<model>"` laid over its top level.
-fn view(layer: &Value, model: Option<&str>) -> Value {
-    let mut view = layer.clone();
-    if let Some(model) = model
-        && let Some(own) = layer.get("models").and_then(|m| m.get(model))
-    {
-        path::merge(&mut view, own);
+/// A layer with its `models."<model>"` laid over its top level. Borrows
+/// the layer when there is nothing to lay over it: no model, or no entry
+/// for the model. Any entry at `models.<model>`, an object or not, is
+/// merged over a clone.
+fn view<'a>(layer: &'a Value, model: Option<&str>) -> Cow<'a, Value> {
+    match model.and_then(|model| layer.get("models").and_then(|models| models.get(model))) {
+        None => Cow::Borrowed(layer),
+        Some(own) => {
+            let mut view = layer.clone();
+            path::merge(&mut view, own);
+            Cow::Owned(view)
+        }
     }
-    view
 }
 
 pub(crate) fn top_level(source_name: &str) -> ConfigError {

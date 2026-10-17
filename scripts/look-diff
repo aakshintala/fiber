@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Compares one look test's final screen to a prototype capture
+# (docs/testing/screens.md, "Screens"): runs the named look test with a
+# test-support switch that dumps the output through the last grid wait
+# the test completes, replays the dump
+# through the same `vt100` parser into a grid, and compares the grid to
+# the capture: text row by row with trailing spaces trimmed, and, when
+# the .ansi capture is given, each cell's foreground, background and
+# attributes. Writes a readable diff under target/look-diff/.
+#
+# Usage: scripts/look-diff <test filter> <capture.txt> [<capture.ansi>]
+#
+# Prints exactly one line on stdout: `look: match <test>` (exit 0),
+# `look: differs <test> rows=<n> cells=<m> diff=<path>` (exit 1), or
+# `look: error <test> <reason>` (exit 2) for a missing capture, a
+# failing test or a size mismatch. Build and test output goes to a log
+# beside the diff, not to the console.
+#
+# Env in: LOOK_DIFF_DUMP=<file> (self-test only) skips the look-test run
+# and compares this dump instead of running the binary.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: scripts/look-diff <test filter> <capture.txt> [<capture.ansi>]" >&2
+  exit 2
+fi
+filter=$1
+capture=$2
+ansi=${3-}
+
+abspath() {
+  case $1 in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$PWD" "$1" ;;
+  esac
+}
+
+name=$(printf '%s' "$filter" | tr -c 'A-Za-z0-9_.-' '_')
+dir=target/look-diff
+mkdir -p "$dir"
+grid=$dir/$name.grid
+log=$dir/$name.log
+diff=$dir/$name.diff
+verdict_file=$dir/$name.verdict
+capture_abs=$(abspath "$capture")
+if [ ! -f "$capture" ]; then
+  printf 'look: error %s capture missing: %s\n' "$filter" "$capture_abs"
+  exit 2
+fi
+if [ -n "$ansi" ]; then
+  ansi_abs=$(abspath "$ansi")
+  if [ ! -f "$ansi" ]; then
+    printf 'look: error %s ansi missing: %s\n' "$filter" "$ansi_abs"
+    exit 2
+  fi
+else
+  ansi_abs=
+fi
+: >"$log"
+rm -f "$verdict_file"
+if [ -z "${LOOK_DIFF_DUMP-}" ]; then
+  rm -f "$grid"
+fi
+if [ -n "${LOOK_DIFF_DUMP-}" ]; then
+  dump_abs=$(abspath "$LOOK_DIFF_DUMP")
+else
+  dump_abs=$PWD/$grid
+  if ! LOOK_DIFF_GRID="$dump_abs" CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo nextest run -p main --bins --tests "$filter" >>"$log" 2>&1; then
+    printf 'look: error %s test failed: %s\n' "$filter" "$PWD/$log"
+    exit 2
+  fi
+fi
+if [ -n "$ansi_abs" ]; then
+  export LOOK_DIFF_ANSI="$ansi_abs"
+else
+  unset LOOK_DIFF_ANSI
+fi
+export LOOK_DIFF_GRID="$dump_abs"
+export LOOK_DIFF_CAPTURE="$capture_abs"
+export LOOK_DIFF_TEST="$filter"
+export LOOK_DIFF_OUT="$PWD/$diff"
+export LOOK_DIFF_VERDICT="$PWD/$verdict_file"
+if ! CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 cargo nextest run -p main --test look_diff --run-ignored only >>"$log" 2>&1; then
+  printf 'look: error %s comparator failed: %s\n' "$filter" "$PWD/$log"
+  exit 2
+fi
+line=$(cat "$verdict_file")
+printf '%s\n' "$line"
+case $line in
+  'look: match '*) exit 0 ;;
+  'look: differs '*) exit 1 ;;
+  *) exit 2 ;;
+esac

@@ -1,28 +1,28 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 383
+assertion_line: 548
 expression: "screen(&app, 160, 48)"
 ---
  Models  /model                                                                                                                                      Esc returns
-                                                      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                                                     ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                                        Type to search █
-                                                         0 of 4 marked
-                                                        acme
-                                                        › [ ] m1 [deep] [review]
-                                                              thinking low high
-                                                          [ ] m2
-                                                              fixed thinking
+                                                       Type to search █
+                                                        0 of 4 marked
+                                                       acme
+                                                       › [ ] m1 [deep] [review] $3.00 in · $15.00 out /M
+                                                             thinking low high
+                                                         [ ] m2
+                                                             fixed thinking
 
-                                                        zeta
-                                                          [ ] z1
-                                                              thinking low
-                                                          [ ] z2 [chat]
-                                                              thinking low high
+                                                       zeta
+                                                         [ ] z1
+                                                             thinking low
+                                                         [ ] z2 [chat] $2.00 in · $8.00 out /M
+                                                             thinking low high
 
-                                                        ↑↓ move · Enter toggle · Ctrl+S save · Esc close
+                                                       ↑↓ move · Enter toggle · Ctrl+S save · Esc close
 
-                                                      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 

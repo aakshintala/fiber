@@ -637,7 +637,7 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
     for _ in 0..1_200 {
         log.append(&notice(), None, None).unwrap();
     }
-    crate::client::stop_writer(&injector, &id);
+    injector.push_kept(crate::client::control_line(&id, crate::client::STOP, 0));
     let (mut peer, stream) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(DEADLINE)).unwrap();
     thread::spawn(move || {
@@ -969,6 +969,7 @@ fn status(name: &str) -> Event {
         since: 0,
         started: 0,
         calls: 0,
+        turns: Some(0),
         step: None,
         git: None,
         context: None,
@@ -1423,6 +1424,205 @@ fn a_shell_registered_after_close_is_cancelled() {
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("close returned without the tool's timeout");
+}
+
+/// A driver shell that answers at once: when the cancel token already
+/// fired it reports the stop before start exactly as the shell tool does
+/// (its text, no error, no process), and otherwise a finished command.
+/// The shell thread waits for the test's release before `finish`, so the
+/// test's stop lands before `Tool::run`: the pause point before the run.
+struct StopFirstShell;
+
+impl Tool for StopFirstShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        if cancel.is_cancelled() {
+            return Output {
+                content: vec![ContentPart::Text {
+                    text: "Cancelled before it started.\n".to_owned(),
+                }],
+                ..Output::default()
+            };
+        }
+        Output {
+            content: vec![ContentPart::Text {
+                text: "done\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+/// A driver shell whose command really cannot start: the tool's own
+/// failure, with its error and no process.
+struct UnstartableShell;
+
+impl Tool for UnstartableShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        _cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: "nope\n".to_owned(),
+            }],
+            error: Some(contract::shapes::Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "nope.".to_owned(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+/// Runs one driver shell through `finish` on a thread of its own, as the
+/// reader does, and answers what the stop before its start says: the
+/// thread pauses before `finish`, the test stops the shell, then releases
+/// it, so `stop` lands before `Tool::run`.
+fn stopped_before_start_answer(
+    stop: impl FnOnce(&Gate),
+    tool: Arc<dyn Tool>,
+) -> contract::inbox::Answer {
+    let opened = Opened::open(Vec::new());
+    opened.session.shell(tool);
+    let gate = Arc::clone(&opened.session.gate);
+    let thread_gate = Arc::clone(&gate);
+    let args = contract::commands::Shell {
+        command: "true".to_owned(),
+        send: false,
+    };
+    let running = crate::shell::start(&gate, &args).expect("the driver shell is wired");
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let (answer_tx, answer_rx) = mpsc::channel();
+    thread::spawn(move || {
+        ready_tx
+            .send(())
+            .expect("the test waits for the pause point");
+        go_rx.recv().expect("the test releases the shell");
+        running.finish(
+            &thread_gate,
+            contract::inbox::Ack(Box::new(move |answer| {
+                answer_tx
+                    .send(answer)
+                    .expect("the test waits for the answer");
+            })),
+        );
+    });
+    Deadline::after(DEADLINE)
+        .recv(&ready_rx)
+        .expect("the shell thread reached the pause point");
+    stop(&gate);
+    go_tx.send(()).expect("the shell thread waits for release");
+    let answer = Deadline::after(DEADLINE)
+        .recv(&answer_rx)
+        .expect("the shell answered");
+    close_within(opened.session, opened.log);
+    answer
+}
+
+#[test]
+fn a_shell_stopped_by_cancel_before_it_starts_is_rejected_cancelled() {
+    let answer = stopped_before_start_answer(
+        |gate| {
+            gate.stop_running();
+        },
+        Arc::new(StopFirstShell),
+    );
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell stopped before it starts is rejected"),
+    };
+    assert_eq!(
+        rejection.code,
+        ErrorCode::Cancelled,
+        "a cancel stop is cancelled"
+    );
+    assert_eq!(
+        rejection.message, "Cancelled before it started.",
+        "a cancel stop keeps the tool's words"
+    );
+}
+
+#[test]
+fn a_shell_stopped_by_close_before_it_starts_is_rejected_closing() {
+    let answer = stopped_before_start_answer(
+        |gate| {
+            gate.mark_closed();
+            gate.cancel_shells();
+        },
+        Arc::new(StopFirstShell),
+    );
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell stopped before it starts is rejected"),
+    };
+    assert_eq!(
+        rejection.code,
+        ErrorCode::Closing,
+        "a close stop is closing"
+    );
+    assert_eq!(
+        rejection.message,
+        crate::client::ENDED,
+        "a close stop answers as a running shell does"
+    );
+}
+
+#[test]
+fn a_shell_whose_command_cannot_start_keeps_invalid_arguments() {
+    let answer = stopped_before_start_answer(|_| {}, Arc::new(UnstartableShell));
+    let rejection = match answer {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a shell that cannot start is rejected"),
+    };
+    assert_eq!(
+        rejection.code,
+        ErrorCode::InvalidArguments,
+        "a real no-process failure keeps its code"
+    );
+    assert_eq!(rejection.message, "nope.", "a real failure keeps its words");
 }
 
 #[test]
@@ -4067,5 +4267,185 @@ fn a_level_change_with_a_failing_label_notices_before_new_history() {
             Ok(())
         })
         .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_second_send_on_a_driven_connection_writes_nothing() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let mut conn = crate::client::Conn::driven(
+        gate,
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // The at-once answer takes the driven answer; the acknowledgement held
+    // for the loop finds the sink answered and writes nothing more.
+    crate::client::accept(&mut conn, CommandId("c_2".into()), None);
+    let ack = crate::client::inbox_ack(&mut conn, CommandId("c_1".into()));
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the first send writes its answer");
+    assert!(
+        matches!(answered, Ok(None)),
+        "the first send answers acceptance: {answered:?}"
+    );
+    // The held acknowledgement finds the answer taken and writes nothing
+    // more: the answer is answered once, so the sender is consumed and the
+    // channel disconnects. If the answer were still held, the sender would
+    // be alive and this would see `Empty`, not `Disconnected`.
+    drop(ack);
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+        "the taken answer is answered once"
+    );
+    close_within(opened.session, opened.log);
+}
+
+fn subscribe_line_for(id: &str) -> contract::commands::CommandLine {
+    subscribe_line_for_level(id, contract::commands::SubscribeLevel::Full)
+}
+
+fn subscribe_line_for_level(
+    id: &str,
+    level: contract::commands::SubscribeLevel,
+) -> contract::commands::CommandLine {
+    contract::commands::CommandLine {
+        id: CommandId(id.into()),
+        command: contract::commands::Command::Subscribe(contract::commands::SubscribeArgs {
+            level,
+            credential: None,
+        }),
+    }
+}
+
+#[test]
+fn dispatch_subscribe_on_driven_is_rejected_and_frees_id() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn::driven(
+        Arc::clone(&gate),
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // A driven connection is already subscribed: a same-level subscribe is
+    // rejected through `level::change`, and a rejection frees the id.
+    let line = subscribe_line_for("c_9");
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the driven subscribe is answered");
+    let rejection = match answered {
+        Err(rejection) => rejection,
+        Ok(_) => panic!("a driven subscribe is rejected: {answered:?}"),
+    };
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.message, crate::client::ALREADY);
+    assert!(gate.accepted.reserve(&id), "a rejection frees the id");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn dispatch_subscribe_on_answered_writes_nothing_and_frees_id() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn {
+        id: 0,
+        gate: Arc::clone(&gate),
+        sink: crate::client::Sink::Answered {
+            origin: contract::shapes::Origin::Driver,
+        },
+        full: true,
+        gone: false,
+    };
+    // An answered connection has no stream and no writer: the subscribe
+    // frees the id and leaves the connection alone.
+    let line = subscribe_line_for("c_9");
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(!conn.gone, "an answered subscribe marks nothing gone");
+    assert!(gate.accepted.reserve(&id), "a rejection frees the id");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn dispatch_subscribe_on_driven_at_summary_marks_gone() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    let mut conn = crate::client::Conn::driven(
+        Arc::clone(&gate),
+        contract::inbox::Ack(Box::new(move |answer| {
+            tx.send(answer).unwrap();
+        })),
+        "fiber.test/a",
+    );
+    // A summary subscribe on a driven connection runs `level::change`, as a
+    // socket's second subscribe does: with no writer to switch it marks the
+    // connection gone and answers nothing at this call site.
+    let line = subscribe_line_for_level("c_9", contract::commands::SubscribeLevel::Summary);
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(
+        conn.gone,
+        "a driven summary subscribe marks the connection gone"
+    );
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a driven summary subscribe answers nothing at this call site"
+    );
+    drop(conn);
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+        "the held driven answer is dropped unanswered"
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_failed_summary_write_leaves_the_socket_connection_direct() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let id = CommandId("c_9".into());
+    assert!(gate.accepted.reserve(&id));
+    // Dropping the peer makes every write to `direct` fail, so the
+    // acknowledgement never reaches the client.
+    let (direct, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let mut conn = crate::client::Conn {
+        id: 0,
+        gate: Arc::clone(&gate),
+        sink: crate::client::Sink::Direct {
+            direct,
+            writer: Box::new(Vec::<u8>::new()),
+        },
+        full: false,
+        gone: false,
+    };
+    let line = subscribe_line_for_level("c_9", contract::commands::SubscribeLevel::Summary);
+    crate::client::dispatch(&mut conn, line, "subscribe");
+    assert!(
+        conn.gone,
+        "a failed acknowledgement marks the connection gone"
+    );
+    assert!(
+        !conn.subscribed(),
+        "a failed summary write leaves the socket connection direct"
+    );
     close_within(opened.session, opened.log);
 }

@@ -18,12 +18,53 @@ use contract::clock::Clock;
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
+#[test]
+fn quota_segments_use_short_names_colours_and_no_click_targets() {
+    use crate::app::items::testkit::{commands, hello};
+    use serde_json::json;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch(&["quota"]));
+    app.on_line(hello());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    let out = commands(app.on_line(session_line(SESSION, "clients", json!({"clients": []}))));
+    let id = out.iter().find(|v| v["command"] == "quota").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    app.on_line(session_line(SESSION, "command_accepted", json!({"command_id": id,
+        "result": {"quota": [
+            {"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 80.0}]},
+            {"provider": "openrouter", "credential": "work", "credit": {"remaining": 4.2}}
+        ], "notice_at": 80.0}})));
+    let shown = super::status(&app, 100);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].line.to_string(), "Q codex 20% · openrouter 4.20");
+    assert_eq!(
+        shown[0].line.spans[0].style,
+        crate::markdown::style(crate::markdown::Role::Muted)
+    );
+    let codex = shown[0]
+        .line
+        .spans
+        .iter()
+        .find(|s| s.content.contains("codex"))
+        .unwrap();
+    assert_eq!(
+        codex.style,
+        crate::markdown::style(crate::markdown::Role::Error)
+    );
+    assert!(shown[0].spots.is_empty());
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(super::status(&app, 100).is_empty());
+}
+
 /// The launch description with `cards`, `/w`, outside git.
 fn launch(cards: &[&str]) -> Launch {
     Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,

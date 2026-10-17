@@ -113,7 +113,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   when an `after_tool` hook returned text for the artifact.
 - `kept`: on a cut result, the byte ranges of the full output that `content`
   holds ("Bounded results"), so a client marks the edges of the model's view
-  without reading the cut notice.
+  without reading the cut notice. The ranges index the text or raw stream the
+  cut saw, after any `after_tool` hook replaced `content`. When a hook returns
+  separate artifact text, the ranges do not index it, and a client must not
+  slice that artifact with them.
 - `control`: instructions to the loop, absent on most results. Four fields
   are defined. `handoff`, a handoff note: the loop restarts the model's
   context from it at the step boundary (`docs/handoff.md`). `questions`, a
@@ -1334,6 +1337,12 @@ Each entry is one of:
 - `no quota reported`, for a provider or harness without `quota()`
 - `unreachable`, when the fetch failed or timed out, with the last value and
   its age if there is one
+- `no value yet`, for a label whose first fetch is still in flight, with no
+  last value
+
+Until the loader has checked every provider for `quota()`, the quota
+section is the one line `Quota: loading`. Once it has, a session with no
+credentialed label reads `Quota: none`.
 
 A window whose reset time has passed shows as reset. Quota never appears in a
 tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
@@ -1352,7 +1361,8 @@ Each provider credential label has one cache holding its last value, when it was
 any fetch in flight. Concurrent readers share one fetch. What the person is
 shown reads the same cache, and shows no age.
 
-The first `quota` driver command starts a loader on its own thread. It starts
+The first `quota` driver command or `delegate_models` call starts a loader on
+its own thread. It starts
 providers that have a credential label and checks whether they register
 `quota()` before reading any key. Each label's key is read once per process,
 as a model switch to that label reads it. A provider whose `quota()` is asked
@@ -1361,7 +1371,7 @@ without `quota()`, or whose every label's key read failed, is unloaded at once.
 A failed read reports `unreachable`, while the other labels still answer.
 Shutdown ends the reads; a read already in flight finishes and its result is
 dropped. The loader starts a quota fetch for each label whose read succeeded.
-The command answers from the caches at once, without waiting for loading,
+Without `fetch`, the command answers from the caches at once, without waiting for loading,
 credential reads or fetches.
 
 A fetch runs off the request path when the cache is older than 5 minutes and

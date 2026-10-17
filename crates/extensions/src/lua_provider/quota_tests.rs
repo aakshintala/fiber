@@ -1437,3 +1437,45 @@ fn with_quota_observed_failure_matches_with_quota() {
         "the broken provider fails with_quota_observed the same way"
     );
 }
+
+#[test]
+fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
+    let root = fakes::TempDir::new("fiber-quota-pending");
+    let (provider, clock) = quota_provider(&root, "nil");
+    // A fresh label never fetched: pending.
+    assert!(within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // After a fetch succeeds: no longer pending.
+    let now = clock.now();
+    seed(
+        &provider,
+        Some((Some(percent("primary", 10.0, None)), now)),
+        None,
+    );
+    assert!(!within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // After a first fetch fails with no last value: not pending either.
+    seed(&provider, None, None);
+    lock(&provider.quotas.state)
+        .get_mut(&pair())
+        .unwrap()
+        .failed = true;
+    assert!(!within({
+        let provider = provider.clone();
+        move || provider.quota_pending(&pair())
+    }));
+    // While the VM is busy the call still returns at once: no wait, no Lua.
+    let root = fakes::TempDir::new("fiber-quota-pending-busy");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let busy = http_quota_provider(&root, &server.url(), FakeClock::new());
+    assert!(within({
+        let busy = busy.clone();
+        move || busy.quota_pending(&pair())
+    }));
+    server.release();
+}

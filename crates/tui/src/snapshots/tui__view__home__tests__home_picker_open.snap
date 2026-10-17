@@ -1,29 +1,29 @@
 ---
 source: crates/tui/src/home_view_tests.rs
-assertion_line: 551
+assertion_line: 1153
 expression: "screen(&app, 80, 24)"
 ---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▀▄ █     ▄▄█▄▄ █▀▀█
+                      Workspaces
+w +  1 live · $0.00
+⌥1 ● fix the parser   › /w/█                                       WORKING  0s ✕
+    s_aaaaaaaaaaaaaa  › crates
+                        docs
+                        research
+                        scripts
 
+                      ── recents ──
+                        /w
 
+                      ↑↓ move · Enter open · Esc closes
 
-                     ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
-                     ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀
-                     ▀▄ █       █   ████  █▀▀▀▀ █ ▀▄
-                     ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
-                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts    Workspaces
-
-                      › /w
-[w]  [no model]  [th
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ↑↓ move · Enter open · Esc closes     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-●  fix the parser                                                              ✕
                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-
-
-
-          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+          ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

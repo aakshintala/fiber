@@ -76,20 +76,17 @@ pub const LOGOUT_SHAPE: &str =
     "`fiber logout` takes the provider to log out of. Run `fiber --help` for usage.";
 
 /// A workspace's project: its `sessions` directory and its key
-/// (`docs/state.md`, "Projects"). The one place the key is derived.
+/// (`docs/state.md`, "Projects"). The key comes from `log::project_key`,
+/// the one place it is derived.
 pub fn project_of(
     home: &Path,
     workspace: &Path,
 ) -> Result<(PathBuf, ::config::ProjectKey), Failure> {
-    let sessions = log::sessions_dir(home, &doors::project(workspace));
-    // `projects/<key>/sessions`: the project's key names its parent.
-    let key = sessions
-        .parent()
-        .and_then(Path::file_name)
-        .map(|key| key.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let project = ::config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
-    Ok((sessions, project))
+    let project = doors::project(workspace);
+    let sessions = log::sessions_dir(home, &project);
+    let key =
+        ::config::ProjectKey::new(log::project_key(&project)).map_err(|e| failed(e.code(), e))?;
+    Ok((sessions, key))
 }
 
 fn usage(message: impl Into<String>) -> Failure {

@@ -610,8 +610,11 @@ fn clicking_jobs_expands_and_collapses() {
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),
@@ -683,7 +686,12 @@ fn live(session: &str, state: Value) -> Line {
 /// The home rows' keys.
 fn keys(app: &App) -> Vec<u64> {
     app.home_screen()
-        .map(|screen| screen.rows.into_iter().map(|(key, _, _)| key).collect())
+        .map(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -818,8 +826,13 @@ fn ack(app: &mut App, out: &[Value]) -> Vec<String> {
 
 /// Asserts `lines` hold one branch query, returning its id.
 fn branch_query(lines: &[String]) -> String {
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    let line: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    let branches: Vec<Value> = lines
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap_or_else(|err| panic!("{err}")))
+        .filter(|line| line["command"] == "shell")
+        .collect();
+    assert_eq!(branches.len(), 1, "{lines:?}");
+    let line = &branches[0];
     assert_eq!(line["command"], "shell");
     assert_eq!(line["session_id"], SESSION);
     assert_eq!(line["args"]["command"], "git rev-parse --abbrev-ref HEAD");
@@ -1274,8 +1287,11 @@ fn clicking_the_branch_with_the_link_down_sends_nothing() {
 fn panel_app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: CARDS.map(str::to_owned).to_vec(),

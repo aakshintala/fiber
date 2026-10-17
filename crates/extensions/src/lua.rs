@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 
 use crate::oauth::{Browser, LoginSlot, SystemBrowser};
 use crate::{CredentialPair, Error, host, lua_provider::LoginMethod};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use setup::observe_load;
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
 /// and cost when nothing is loaded"). Past it, an allocation is a Lua error in
@@ -287,6 +289,11 @@ impl LuaExtension {
     /// `host.data_dir` and `host.config` raise.
     pub fn with_session(mut self, session: host::Session) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    pub(crate) fn with_state(self, state: Arc<host::state::StateRegistry>) -> Self {
+        self.hub.lock().state = state.store(&self.name);
         self
     }
 
@@ -586,14 +593,34 @@ impl LuaExtension {
 
     /// Runs the hook `index` registered at `point`, in registration order
     /// from 0, passing `arg`, and returns what its `run` returned as JSON.
+    #[cfg(test)]
     pub(crate) fn hook(&self, point: &str, index: usize, arg: Value) -> Result<Value, Error> {
-        self.call(
+        self.hook_with(point, index, arg, |value| Ok((value, false)))
+            .map(|(value, _, _)| value)
+    }
+
+    pub(crate) fn hook_with<T>(
+        &self,
+        point: &str,
+        index: usize,
+        arg: Value,
+        accept: impl FnOnce(Value) -> Result<(T, bool), Error>,
+    ) -> Result<(T, Vec<contract::hook::StateLine>, bool), Error> {
+        let (id, returned) = self.call_with_id(
             Target::Hook {
                 point: point.to_owned(),
                 index,
             },
             arg,
-        )
+        );
+        let state = self.hub.lock().state.clone();
+        match returned.and_then(accept) {
+            Ok((value, changed)) => Ok((value, state.take_call(id), changed)),
+            Err(error) => {
+                state.discard_call(id);
+                Err(error)
+            }
+        }
     }
 
     /// Every hook this extension registers runs under `timeout` instead of
@@ -715,10 +742,16 @@ impl LuaExtension {
     /// Queues the call and waits on the hub until it is answered, or until
     /// its own limit passes ("Extension lifecycle" in `hub.rs`).
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
+        self.call_with_id(target, arg).1
+    }
+
+    fn call_with_id(&self, target: Target, arg: Value) -> (u64, Result<Value, Error>) {
         // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
         let asked = self.hub.clock().now();
         let mut shared = self.hub.lock();
-        self.start(&mut shared)?;
+        if let Err(error) = self.start(&mut shared) {
+            return (0, Err(error));
+        }
         let id = shared.push(target.clone(), arg, asked);
         // Only a change wakes the others: a waiter that notified on every
         // wake would keep every other waiter spinning.
@@ -733,7 +766,7 @@ impl LuaExtension {
                     self.hub.notify();
                     drop(shared);
                     drop(unsent);
-                    return result;
+                    return (id, result);
                 }
                 (Next::Sleep(until), unsent) => {
                     drop(unsent);

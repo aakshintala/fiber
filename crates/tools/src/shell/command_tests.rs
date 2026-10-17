@@ -1,5 +1,5 @@
 use std::io::{self, ErrorKind, Read};
-use std::os::unix::process::ExitStatusExt as _;
+use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::Command;
 use std::sync::{Arc, TryLockError, Weak, mpsc};
 use std::thread;
@@ -12,42 +12,14 @@ use fakes::Recorder;
 use fakes::clock::FakeClock;
 
 use super::super::background::{Step, running_step, wait_deadline};
-use super::super::drive::{
-    Phase, Run, already_woken, exit_code_of, finish, park, poll_while_occupied,
-};
+use super::super::drive::{Phase, Run, exit_code_of, finish, park, pump};
 use super::super::moved::Moved;
 use super::super::output::{
     Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
 };
-use super::super::process_group::suppress_term;
 use super::{MovePolicy, MoveReason, StopKind};
 use fakes::children::{Ready, ignores_sigterm};
 use support::group::alive;
-
-#[test]
-fn a_moved_sequence_wakes_without_a_cancel() {
-    assert!(already_woken(1, 0, false, false));
-}
-
-#[test]
-fn a_cancel_wakes_only_while_the_run_is_going() {
-    assert!(already_woken(0, 0, true, true));
-    assert!(!already_woken(0, 0, false, true));
-    assert!(!already_woken(0, 0, true, false));
-}
-
-#[test]
-fn the_drain_polls_only_while_the_group_may_be_occupied() {
-    assert!(poll_while_occupied(false));
-    assert!(!poll_while_occupied(true));
-}
-
-#[test]
-fn a_second_signal_and_an_empty_group_are_not_signalled() {
-    assert!(suppress_term(true, false));
-    assert!(suppress_term(false, true));
-    assert!(!suppress_term(false, false));
-}
 
 #[test]
 fn bump_advances_the_sequence() {
@@ -290,6 +262,65 @@ fn a_wake_inside_wait_until_is_not_lost() {
     );
 }
 
+/// Truth table for `park`'s `guard.seq != seen || (wake_on_cancel &&
+/// cancel.is_cancelled())`: each row flips one operand, so flipping either
+/// operator changes a row. The moved-sequence row kills the `||`-to-`&&`
+/// mutant; the two mixed cancel rows kill the `&&`-to-`||` mutant.
+#[test]
+fn park_wakes_on_sequence_or_on_cancel_while_running() {
+    const RETURN: Duration = Duration::from_secs(5);
+    const STILL_PARKED: Duration = Duration::from_millis(200);
+    // (sequence moved, wake_on_cancel, cancelled, park returns).
+    for (moved, wake_on_cancel, cancelled, returns) in [
+        (true, false, false, true),
+        (false, false, false, false),
+        (false, true, true, true),
+        (false, true, false, false),
+        (false, false, true, false),
+    ] {
+        let shared = Arc::new(Shared::default());
+        if moved {
+            shared.wake();
+        }
+        let cancel = CancelToken::new();
+        if cancelled {
+            cancel.cancel();
+        }
+        let origin = FakeClock::new().origin();
+        let until = origin.checked_add(Duration::from_secs(2));
+        let (done, parked) = mpsc::channel();
+        let thread_shared = Arc::clone(&shared);
+        thread::spawn(move || {
+            park(
+                &BoundlessClock { origin, wake: None },
+                &thread_shared,
+                &cancel,
+                until,
+                false,
+                wake_on_cancel,
+                0,
+            );
+            done.send(()).unwrap();
+        });
+        if returns {
+            assert!(
+                Deadline::after(RETURN).recv(&parked).is_ok(),
+                "park returned (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+        } else {
+            assert!(
+                Deadline::after(STILL_PARKED).recv(&parked).is_err(),
+                "park stayed (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+            shared.wake();
+            assert!(
+                Deadline::after(RETURN).recv(&parked).is_ok(),
+                "the stayed park was released (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
+            );
+        }
+    }
+}
+
 /// How long a listing test waits on a command before it fails.
 const LIST_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -377,6 +408,140 @@ fn a_finished_command_is_not_listed() {
         .expect("the run ended");
     assert_eq!(finished.status.and_then(|status| status.code()), Some(0));
     assert!(!support::group::live().contains(pgid));
+}
+
+/// The drain polls the group while it may still be occupied: with the
+/// shell reaped and the pipe closed but the group alive, the drive notices
+/// the group emptying with no further wake, long before the drain bound.
+/// Without the poll (removed, or inverted to poll only once empty) the
+/// drive sleeps until the bound instead.
+#[test]
+fn the_drain_polls_while_the_group_may_be_occupied() {
+    let mut cmd = Command::new("sleep");
+    cmd.arg("60").process_group(0);
+    let mut child = cmd.spawn().expect("sleep spawned");
+    let pgid = child.id();
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(alive(pgid), "the running group probes live");
+
+    // The shell is reaped and the pipe closed, but the group still holds
+    // the sleeper: the drain below starts occupied.
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    lock(&shared.inner).reaped = true;
+
+    let clock = FakeClock::new();
+    let until = clock
+        .origin()
+        .checked_add(support::group::DRAIN)
+        .expect("the drain bound fits");
+    let (done, finished) = mpsc::channel();
+    let drive_shared = Arc::clone(&shared);
+    let drive_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        let mut progress = Run {
+            phase: Phase::Draining { until },
+            stop: None,
+            sent_signal: false,
+            seen_empty: false,
+            stream_carry: Vec::new(),
+            timeout_at: None,
+            move_at: None,
+            pgid,
+            listing: None,
+            shared: drive_shared,
+            ask: None,
+            job: None,
+            feed: None,
+        };
+        let cancel = CancelToken::new();
+        let end = pump(
+            &mut progress,
+            MovePolicy::Stay,
+            drive_clock.as_ref(),
+            &cancel,
+            &Recorder::default(),
+        );
+        let _sent = done.send((progress.seen_empty, end));
+    });
+
+    // The sleeper dies with no output and no wake: only the drain's poll
+    // can notice it is gone.
+    fakes::kill_group(pgid, "KILL").expect("the kill sent");
+    let (reaped, waited) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = reaped.send(child.wait());
+    });
+    let status = Deadline::after(LIST_DEADLINE)
+        .recv(&waited)
+        .expect("the killed child was reaped")
+        .unwrap();
+    assert_eq!(status.signal(), Some(9));
+    let (saw_empty, end) = Deadline::after(LIST_DEADLINE)
+        .recv(&finished)
+        .expect("the drain noticed the emptied group within the deadline");
+    assert!(saw_empty, "the drain saw the emptied group");
+    let super::super::drive::LoopEnd::Finished(_) = end else {
+        panic!("an occupied drain that empties finishes");
+    };
+    watchdog.stand_down(LIST_DEADLINE);
+}
+
+/// `send_term` signals a group only when it was neither signalled nor seen
+/// empty: each of the four pairs against a live group. A suppressed send
+/// leaves the group running; the one real send ends it with SIGTERM. The
+/// two mixed pairs kill the `||`-to-`&&` mutant, which would signal them.
+#[test]
+fn send_term_signals_only_a_group_neither_signalled_nor_empty() {
+    use super::super::process_group::send_term;
+
+    fn reap(mut child: std::process::Child) -> std::process::ExitStatus {
+        let (done, waited) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = done.send(child.wait());
+        });
+        Deadline::after(LIST_DEADLINE)
+            .recv(&waited)
+            .expect("the child answered")
+            .unwrap()
+    }
+
+    // (already sent, seen empty, the send signals, what it returns).
+    for (sent, seen_empty, signalled, want) in [
+        (false, false, true, true),
+        (true, false, false, true),
+        (false, true, false, false),
+        (true, true, false, true),
+    ] {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("60").process_group(0);
+        let child = cmd.spawn().expect("sleep spawned");
+        let pgid = child.id();
+        let watchdog = fakes::Watchdog::group(pgid);
+        assert!(alive(pgid), "the running group probes live");
+
+        assert_eq!(
+            send_term(pgid, sent, seen_empty),
+            want,
+            "sent={sent} seen_empty={seen_empty}"
+        );
+        if signalled {
+            assert_eq!(
+                reap(child).signal(),
+                Some(15),
+                "SIGTERM ended the signalled group"
+            );
+        } else {
+            assert!(
+                alive(pgid),
+                "a suppressed send leaves the group running \
+                 (sent={sent} seen_empty={seen_empty})"
+            );
+            fakes::kill_group(pgid, "KILL").expect("the cleanup kill sent");
+            assert_eq!(reap(child).signal(), Some(9));
+        }
+        watchdog.stand_down(LIST_DEADLINE);
+    }
 }
 
 #[test]
@@ -805,7 +970,7 @@ fn the_park_deadline_is_the_earlier_of_the_timeout_and_thirty_seconds() {
 fn a_missing_exit_code_is_reported_as_zero() {
     assert_eq!(exit_code_of(None), 0);
     let killed = Command::new("sh")
-        .args(["-c", "kill -ABRT $$"])
+        .args(["-c", "kill -USR1 $$"])
         .status()
         .unwrap();
     assert!(killed.code().is_none());
@@ -901,23 +1066,6 @@ fn finish_reports_a_fired_cap() {
     assert!(!open(&shared).capped);
     lock(&shared.inner).cap_fired = true;
     assert!(open(&shared).capped);
-}
-
-#[test]
-fn the_sooner_of_two_instants() {
-    let early = at(1);
-    let late = at(2);
-    assert_eq!(
-        super::super::drive::sooner(Some(late), Some(early)),
-        Some(early)
-    );
-    assert_eq!(
-        super::super::drive::sooner(Some(early), Some(late)),
-        Some(early)
-    );
-    assert_eq!(super::super::drive::sooner(Some(late), None), Some(late));
-    assert_eq!(super::super::drive::sooner(None, Some(early)), Some(early));
-    assert_eq!(super::super::drive::sooner(None, None), None);
 }
 
 const JOB_DEADLINE: Duration = Duration::from_secs(10);

@@ -380,7 +380,7 @@ fn only_the_stripped_library_and_the_host_globals_exist() {
         names,
         "_G,_VERSION,assert,collectgarbage,coroutine,error,fiber,getmetatable,host,ipairs,\
          json,load,math,next,pairs,pcall,rawequal,rawget,rawlen,rawset,require,select,\
-         setmetatable,string,table,tonumber,tostring,type,utf8,xpcall"
+         setmetatable,state,string,table,tonumber,tostring,type,utf8,xpcall"
     );
 }
 

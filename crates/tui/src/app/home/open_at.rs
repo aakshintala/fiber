@@ -69,10 +69,9 @@ impl App {
     }
 
     /// Folds the launch's list request into the first `recent` answer:
-    /// an accepted one asks the next frame to focus the list as
-    /// `/resume` does, leaving the box focused when the displayed list
-    /// is empty, and a rejected one leaves the box focused. Either way
-    /// the request is spent.
+    /// an accepted one asks the next frame to focus the first list stop,
+    /// leaving the box focused when the displayed list is empty, and a
+    /// rejected one leaves the box focused. Either way the request is spent.
     pub(super) fn list_answered(&mut self, first: bool, accepted: bool) {
         let Some(home) = self.home.as_mut() else {
             return;
@@ -82,7 +81,7 @@ impl App {
         }
         home.launch.open_at = OpenAt::Home;
         if accepted {
-            home.focus_list = true;
+            home.focus_list = Some(super::ListFocus::FirstStop);
         }
     }
 }

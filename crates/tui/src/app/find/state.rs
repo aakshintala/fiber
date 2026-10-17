@@ -451,11 +451,10 @@ impl Find {
         }
         let mut matches = Vec::new();
         let mut kept = Vec::new();
+        let mut nth_by_scopes = HashMap::new();
         for (anchor, row, hidden, snippet) in found.into_iter().take(left) {
-            let nth = matches
-                .iter()
-                .filter(|kept: &&Match| kept.anchor.scopes == anchor.scopes)
-                .count();
+            let nth = nth_by_scopes.get(&anchor.scopes).copied().unwrap_or(0);
+            nth_by_scopes.insert(anchor.scopes.clone(), nth + 1);
             let kept_match = Match {
                 anchor,
                 nth,

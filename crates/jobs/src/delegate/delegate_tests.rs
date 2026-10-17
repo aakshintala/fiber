@@ -70,6 +70,7 @@ fn rig() -> Rig {
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
             resume: false,
+            credential: launched.credential.clone(),
         });
         let mut command = Command::new("sh");
         command.args([
@@ -100,6 +101,7 @@ fn resolve() -> Resolve {
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
         catalogue: Arc::from("Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m"),
+        credential: Arc::new(|_| Ok(None)),
     }
 }
 
@@ -743,4 +745,120 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
         }
     }
     panic!("the stopped runner did not report");
+}
+
+#[test]
+fn a_role_credential_reaches_the_launcher() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.resolve.credential = Arc::new(|_| Ok(Some("work".to_owned())));
+    let output = spawned.run(
+        &arguments("deep"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert_eq!(launched.model, "fake/m:high");
+    assert_eq!(launched.credential, Some("work".to_owned()));
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    rig.clock.advance(Duration::from_secs(6));
+}
+
+#[test]
+fn a_full_reference_launches_with_no_credential() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert_eq!(launched.model, "fake/m");
+    assert_eq!(launched.credential, None);
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    rig.clock.advance(Duration::from_secs(6));
+}
+
+#[test]
+fn a_missing_label_fails_credential_missing_and_spawns_nothing() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.resolve.credential = Arc::new(|_| {
+        Err(
+            "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+                .to_owned(),
+        )
+    });
+    let output = spawned.run(
+        &arguments("deep"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("a missing label fails");
+    assert_eq!(error.code, contract::ErrorCode::CredentialMissing);
+    // The refusal names the labels, and lists no catalogue: a label is
+    // never added to it.
+    assert_eq!(
+        error.message,
+        "`fake` has no credential label `gone`. The labels for `fake` are: default, work"
+    );
+    let text = output.content.iter().map(text_of).collect::<String>();
+    assert_eq!(text, error.message);
+    assert!(output.jobs.is_empty());
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        0,
+        "no process starts"
+    );
+    assert!(
+        rig.launched.try_recv().is_err(),
+        "the launcher never receives"
+    );
+    assert_eq!(rig.registry.list_text(), "No jobs.\n");
+    assert!(
+        rig.inbox.try_recv().is_err(),
+        "nothing was recorded, so nothing is sent"
+    );
+}
+
+#[test]
+fn a_refused_model_never_asks_for_the_credential() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    spawned.resolve.credential = Arc::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    });
+    let output = spawned.run(
+        &arguments("unknown"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("an unknown model fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        asked.load(Ordering::SeqCst),
+        0,
+        "the credential check runs only after the lookup was Ok"
+    );
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        0,
+        "no process starts"
+    );
 }

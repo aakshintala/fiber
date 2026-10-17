@@ -21,9 +21,11 @@ use std::time::Duration;
 /// The launch description `run` tests start from: `/w`, outside git.
 pub(super) fn launch() -> super::Launch {
     super::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("p/m".to_owned()),
@@ -51,6 +53,12 @@ pub(super) struct Pair {
 /// Opens a pty pair with a 60x12 window.
 #[track_caller]
 pub(super) fn open() -> Pair {
+    open_at(60, 12)
+}
+
+/// Opens a pty pair at `width` by `height`.
+#[track_caller]
+fn open_at(width: u16, height: u16) -> Pair {
     let main =
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
             .unwrap_or_else(|err| panic!("openpt: {err}"));
@@ -67,8 +75,8 @@ pub(super) fn open() -> Pair {
     rustix::termios::tcsetwinsize(
         &slave,
         rustix::termios::Winsize {
-            ws_col: 60,
-            ws_row: 12,
+            ws_col: width,
+            ws_row: height,
             ws_xpixel: 0,
             ws_ypixel: 0,
         },
@@ -125,11 +133,21 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
     backend: B,
     tty: Option<File>,
 ) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
+    new_loop_at(backend, tty, 60, 12)
+}
+
+/// A loop at `width` by `height` on `backend`, with no tty.
+fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
+    backend: B,
+    tty: Option<File>,
+    width: u16,
+    height: u16,
+) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
     let attached = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attached);
     let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(60, 12);
-    let screen = Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    app.set_size(width, height);
+    let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
     let lp = Loop {
         app,
         parser: crate::keys::Parser::default(),
@@ -468,8 +486,8 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let frames = watch(&pair.main, vec![start.as_bytes(), end.as_bytes()]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
     assert_eq!(
@@ -671,7 +689,10 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // first frame to end of file.
     let frames = watch(
         &pair.main,
-        vec![b"refused" as &[u8], b"\x1b[10;1H" as &[u8], "↓".as_bytes()],
+        vec![
+            b"refused" as &[u8],
+            b"\x1b[10;1H\x1b[39;49m\xE2\x86\x91" as &[u8],
+        ],
     );
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
@@ -709,21 +730,13 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // test's `run`.
     signal_hook::low_level::raise(signal_hook::consts::SIGWINCH)
         .unwrap_or_else(|err| panic!("raise: {err}"));
-    // The foot hint sits on the new last row, wider than the screen and
-    // cut: the cursor goes to column 1, and the next character printed,
-    // after any colour change, is its `↓`.
+    // The resized foot hint starts at column 1 of the new last row; wait
+    // for its cursor move, colour reset and first character together.
     let wait = Deadline::after(DEADLINE);
-    watched(&frames, "the move to row 10", &wait);
-    let next = watched(&frames, "the foot hint on row 10", &wait);
-    let between = next
-        .get(..next.len().saturating_sub("↓".len()))
-        .unwrap_or_default();
+    let foot = watched(&frames, "the foot hint on row 10", &wait);
     assert!(
-        between
-            .iter()
-            .all(|byte| *byte == 0x1b || b"[;m0123456789".contains(byte)),
-        "{:?}",
-        String::from_utf8_lossy(&next)
+        foot.ends_with(b"\x1b[10;1H\x1b[39;49m\xE2\x86\x91"),
+        "the foot starts with its cursor move and first character: {foot:?}"
     );
     pair.main
         .write_all(&[0x03, 0x03])
@@ -1181,8 +1194,8 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str, wait: &Deadline) -> Vec<u8
 #[test]
 fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let mut pair = open();
-    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
-    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    let restore = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let frames = watch(&pair.main, vec![restore.as_bytes(), b"ENDMARK" as &[u8]]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
     let tty = pair
@@ -1243,7 +1256,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         "the restore chunk starts with the start bytes: {suspended:?}"
     );
     // In between, the cooked terminal echoed the program's line.
-    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n";
+    let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b[>1u\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n";
     let title = crate::osc::title("fiber");
     assert_eq!(
         watched(&frames, "the mark", &wait),
@@ -1678,7 +1691,7 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
 
 #[test]
 fn opening_a_row_by_key_calls_on_attach() {
-    let (mut lp, attached) = new_loop(TestBackend::new(60, 12), None);
+    let (mut lp, attached) = new_loop_at(TestBackend::new(60, 14), None, 60, 14);
     lp.app.set_home(launch());
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let reader = BufReader::new(theirs);
@@ -1710,13 +1723,13 @@ fn opening_a_row_by_key_calls_on_attach() {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
-    // The first row draws at the second column of the tenth row: a press
-    // then a release on it opens the session.
+    // The first session row follows the project heading on row 7: a
+    // press then a release on it opens the session.
     feed(
         &mut lp,
         vec![
-            Input::Bytes(b"\x1b[<0;1;10M".to_vec()),
-            Input::Bytes(b"\x1b[<0;1;10m".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;7M".to_vec()),
+            Input::Bytes(b"\x1b[<0;1;7m".to_vec()),
         ],
     );
     let (reader, subscribe) = command(reader, "the subscribe command");
@@ -1821,23 +1834,11 @@ fn hub_status(session: &str, state: &str) -> String {
 
 /// The terminal's start bytes, before its first frame.
 const START: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
 
 /// The terminal's restore bytes, after its last frame.
 const RESTORE: &[u8] =
-    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
-
-/// Runs the terminal on a pty with `hub` as its hub stream: the pty pair,
-/// the exit code once it quits, and the watched pty chunks. The watcher
-/// starts before `run`, and is the only reader from the first frame to
-/// end of file.
-#[track_caller]
-fn spawn_run(
-    hub: UnixStream,
-    markers: Vec<&'static [u8]>,
-) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    spawn_run_with_launch(hub, markers, launch())
-}
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
 
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
@@ -1848,7 +1849,18 @@ fn spawn_run_with_launch(
     markers: Vec<&'static [u8]>,
     started: super::Launch,
 ) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
-    let pair = open();
+    spawn_run_with_launch_at_height(hub, markers, started, 12)
+}
+
+/// Runs the terminal at a height that leaves its home rows visible.
+#[track_caller]
+fn spawn_run_with_launch_at_height(
+    hub: UnixStream,
+    markers: Vec<&'static [u8]>,
+    started: super::Launch,
+    height: u16,
+) -> (Pair, mpsc::Receiver<i32>, Receiver<Vec<u8>>) {
+    let pair = open_at(60, height);
     let frames = watch(&pair.main, markers);
     let slave = pair
         .slave
@@ -1918,7 +1930,8 @@ fn run_home_names_the_key_maps_bound_key() {
 fn run_prints_a_resume_line_per_live_session_after_restoring() {
     let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let (mut pair, finished, frames) = spawn_run(hub, vec![b"parser" as &[u8], line as &[u8]]);
+    let (mut pair, finished, frames) =
+        spawn_run_with_launch_at_height(hub, vec![b"parser" as &[u8], line as &[u8]], launch(), 14);
     crate::link::write_line(&held, &hub_status("s_aaaaaaaaaaaaaaaa", "idle"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The test waits for the session's name on screen before quitting.
@@ -1965,8 +1978,12 @@ fn run_prints_a_resume_line_per_live_session_after_restoring() {
 fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (mut pair, finished, frames) =
-        spawn_run(hub, vec![b"parser" as &[u8], b"ENDMARK" as &[u8]]);
+    let (mut pair, finished, frames) = spawn_run_with_launch_at_height(
+        hub,
+        vec![b"parser" as &[u8], b"ENDMARK" as &[u8]],
+        launch(),
+        14,
+    );
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The start bytes are checked inside the first marker's chunk.
@@ -2044,9 +2061,11 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
     let line = b"s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa";
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let write = held.try_clone().unwrap_or_else(|err| panic!("dup: {err}"));
-    let (mut pair, finished, frames) = spawn_run(
+    let (mut pair, finished, frames) = spawn_run_with_launch_at_height(
         hub,
         vec![b"parser" as &[u8], b"lost" as &[u8], line as &[u8]],
+        launch(),
+        14,
     );
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -2516,7 +2535,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
 
 #[test]
 fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
-    let mut pair = open();
+    let mut pair = open_at(60, 14);
     // Each chunk is the bytes after the previous marker, up to and
     // including this one.
     let frames = watch(

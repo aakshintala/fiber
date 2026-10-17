@@ -458,12 +458,18 @@ state.unset(key)
 state.keys()
 ```
 
+Keys are strings. `state.get` returns `nil` for an absent key.
+`state.keys` returns a Lua array of keys sorted by byte order.
+Unsetting an absent key does nothing and logs no line. Invalid arguments,
+including a `nil` value, raise `invalid_arguments`; use `state.unset` to remove a key.
+
 - **A key holds one whole value.** Each `state.set` writes the key's whole new
   value as JSON, logged as `extension_state_set` (`docs/events.md`,
   "Extensions"). `state.unset` removes a key. `state.set` with `nil` is an
   error, so a missing value is never mistaken for a deletion.
 - **A value is at most 64 KiB.** A larger write fails with code
-  `state_too_large`. Bigger things go in a data directory.
+  `state_too_large`. The limit counts serialized JSON bytes. Bigger things go
+  in a data directory. A value nests at most 125 tables deep.
 - **History takes one key per record.** A value that grows with the session,
   such as one record per turn or per delegate, is written under one key per
   record, so no write repeats the ones before it (`docs/events.md`,
@@ -746,7 +752,7 @@ inbox of messages from other agents does it this way, at `session_start` or
 `turn_start`. `session_start` runs again on every resume, and each time its
 context is appended again. The hook sees why the session started, so an
 extension that must not repeat itself keeps what it delivered in its
-extension state ("State") and adds only what is new.
+extension state ("Extension state") and adds only what is new.
 
 `session_start` also runs at every handoff, with reason `handoff`, so what an
 extension adds at start is not lost when the conversation restarts. Extension
@@ -782,7 +788,7 @@ as one a central service keeps. A refusal fails the turn with
 `budget_exceeded`, naming the extension, exactly as `budget.usd` does. It runs
 before every step's model request, so it must answer fast: an extension that
 reports spend to a service does that from a watcher on `usage_recorded`
-("Watchers"), keeps the service's verdict in its state ("State"), and the
+("Watchers"), keeps the service's verdict in its state ("Extension state"), and the
 hook only reads it. A reviewer's call, a handoff note request, a
 `host.model` call and a cache-warming refresh (`docs/prompt-cache.md`,
 "Warming while idle") are counted in `usage` but never reach this hook.
@@ -1209,7 +1215,7 @@ manifest"). The install summary shows a raised cap ("What an install shows").
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
 Lua extension with `init.lua` runs it again in a new VM before the new tool set is
-declared, and each process extension is restarted. Both are handed their folded state again.
+declared, and each process extension is restarted. Both are handed their current state again, as it stands in the session.
 
 ## When an extension misbehaves
 
@@ -1238,6 +1244,9 @@ declared, and each process extension is restarted. Both are handed their folded 
   approving an extension is a deliberate act.
 
 ## When a session ends
+
+Fiber closes extension state, writes the lines it holds, then writes `fiber_exited`.
+From that close, `state.set` and `state.unset` fail with code `closing`.
 
 On a normal exit, when a session is idle with no client or has been sent
 `close`, Fiber delivers every remaining event to each watcher and waits for

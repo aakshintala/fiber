@@ -7,6 +7,7 @@
 mod cache;
 mod effects;
 mod elicit;
+mod error;
 mod fail;
 mod http;
 mod login;

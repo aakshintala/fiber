@@ -1,0 +1,52 @@
+---
+source: crates/tui/src/home_view_tests.rs
+expression: frame
+---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    2 waiting on you · 2 working · 1 retrying · 1 crashed · 2 ready · $5.78 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+fiber +  5 live · $3.92  2 waiting on you
+⌥1 ● fix flaky lock test                                                                                                                          WORKING  16s ✕
+    s_9f31ac · 4 turns · ⎇ main · $1.35 · 12%
+⌥2 ! review #688                                                                                                                              NEEDS INPUT  22m ✕
+    s_3ab702 · 3 turns · ⎇ review-688 · $1.10 · 41% · approval: shell cargo publish --dry-run
+⌥4 ✗ lsp probe                                                                                                                                       CRASHED  3h
+    s_5e91b4 · 3 turns · ⎇ spike/lsp · $0.05 · 91%
+⌥5 ✓ docs: rail spec                                                                                                                                 READY  9m ✕
+    s_44d2e1 · 6 turns · ⎇ docs/rail-692 · $0.42 · 27%
+⌥7 ! bump ratatui                                                                                                                              NEEDS INPUT  4m ✕
+    s_08f3b9 · 1 turn · ⎇ deps/ratatui-0.30 · $1.00 · 64% · question: 2 of 3 answered
+  exited · 4
+   ○ cut the 0.0.1 release                                                                                                   s_7f20aa · 5 turns · $1.10 · 3h ago
+   ○ speed up the render loop                                                                                                s_61c9d0 · 2 turns · $0.58 · 5h ago
+   ○ port the router to hyper                                                                                                s_88f310 · 8 turns · $2.02 · 1d ago
+     … 1 more
+lens +  2 live · $1.51
+⌥3 ● backfill embeddings                                                                                                                         RETRYING  12m ✕
+    s_50c9d2 · 9 turns · ⎇ backfill/embed · $0.87 · 33%
+⌥6 ● migrate every provider adapter to the new streaming contract                                                                                  WORKING  2m ✕
+    s_77aa01 · 12 turns · ⎇ migrate/streaming · $0.64 · 58%
+  exited · 1
+   ○ how do I backfill embeddings for old sessions?                                                                          s_50c9a1 · 9 turns · $0.87 · 2d ago
+beacon +  1 live · $0.35
+⌥8 ✓ rewrite onboarding tour                                                                                                                         READY  1h ✕
+    s_6d1e44 · 7 turns · ⎇ tour/rewrite · $0.35 · 19%
+
+
+
+
+
+
+
+
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █? for shortcuts
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                  ↑ sessions · ↓ chips · F1 the key map · Ctrl+C twice to quit

@@ -17,6 +17,108 @@ use super::*;
 use crate::host::{Request, exec};
 use fakes::Deadline;
 
+const STATE_INIT: &str = "fiber.hook('before_message',{timeout=5000,on_failure='blocking',run=function() state.set('k',1) end})";
+
+#[test]
+fn state_hook_trial_opens_at_push_and_never_reopens_at_a_late_start() {
+    use crate::host::state::{Scope, StateRegistry, VmState};
+    use contract::events::OnFork;
+    let registry = StateRegistry::standalone();
+    let store = registry.store("goal");
+    let clock = fakes::clock::FakeClock::new();
+    let hub = Hub::new(clock.clone());
+    hub.lock().state = store.clone();
+    let vm = VmState {
+        store: store.clone(),
+        scope: std::cell::Cell::new(Scope::Other),
+    };
+    let target = || Target::Hook {
+        point: "before_message".into(),
+        index: 0,
+    };
+    let id = hub
+        .lock()
+        .push(target(), serde_json::Value::Null, hub.clock().now());
+    vm.enter(Scope::Hook(id));
+    vm.set("k", serde_json::json!(1), OnFork::AtPoint).unwrap();
+    assert_eq!(
+        store.take_call(id).len(),
+        1,
+        "push opened the trial without a worker"
+    );
+    assert!(registry.take_outbox().is_empty());
+    let command = hub.lock().push(
+        Target::Command("test".into()),
+        serde_json::Value::Null,
+        hub.clock().now(),
+    );
+    vm.enter(Scope::Hook(command));
+    vm.set("command", serde_json::json!(true), OnFork::AtPoint)
+        .unwrap();
+    assert_eq!(store.get("command"), None);
+    assert!(store.take_call(command).is_empty());
+    let discarded = hub
+        .lock()
+        .push(target(), serde_json::Value::Null, hub.clock().now());
+    store.discard_call(discarded);
+    vm.enter(Scope::Hook(discarded));
+    vm.set("discarded", serde_json::json!(true), OnFork::AtPoint)
+        .unwrap();
+    assert_eq!(store.get("discarded"), None);
+    assert!(registry.take_outbox().is_empty());
+    drop(hub);
+
+    let registry = StateRegistry::standalone();
+    let store = registry.store("goal");
+    let hub = Hub::new(clock);
+    let dir = fakes::TempDir::new("fiber-state-late-start");
+    std::fs::write(dir.path().join("init.lua"), STATE_INIT).unwrap();
+    hub.lock().state = store.clone();
+    hub.lock().phase = Phase::Registering { abandon_at: None };
+    let id = hub
+        .lock()
+        .push(target(), serde_json::Value::Null, hub.clock().now());
+    store.discard_call(id);
+    let (done, ended) = std::sync::mpsc::channel();
+    let (thread_hub, start) = (hub.clone(), start_in(dir.path()));
+    std::thread::spawn(move || {
+        serve(thread_hub, start);
+        let _sent = done.send(());
+    });
+    wait_returned(&hub, id);
+    assert!(
+        matches!(
+            hub.lock().calls.get(&id),
+            Some(super::super::hub::Progress::Done(Ok(_)))
+        ),
+        "the discarded call still ran successfully"
+    );
+    assert_eq!(store.get("k"), None);
+    assert!(store.take_call(id).is_empty());
+    assert!(registry.take_outbox().is_empty());
+    let next = hub
+        .lock()
+        .push(target(), serde_json::Value::Null, hub.clock().now());
+    hub.notify();
+    wait_returned(&hub, next);
+    assert!(matches!(
+        hub.lock().calls.get(&next),
+        Some(super::super::hub::Progress::Done(Ok(_)))
+    ));
+    let lines = store.take_call(next);
+    assert_eq!(
+        lines.len(),
+        1,
+        "discarding one call does not close the next"
+    );
+    assert_eq!(store.get("k"), Some(serde_json::json!(1)));
+    assert!(registry.take_outbox().is_empty());
+    assert_eq!(registry.admit(lines).len(), 1);
+    hub.dispose("goal");
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&ended, "state test VM stopped");
+}
+
 /// One parked callback with `id`: the thread is a real Lua coroutine, so
 /// the lookup sees the same entries `settle` holds.
 fn entry(lua: &mlua::Lua, id: u64) -> Parked {

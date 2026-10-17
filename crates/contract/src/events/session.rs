@@ -373,6 +373,10 @@ pub struct SessionStatus {
     pub started: u64,
     /// Tool calls the session has made so far.
     pub calls: u64,
+    /// Turns the session has run so far, counted as the usage view counts them.
+    /// The writer always sets this; clients draw no turn count when it is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
     /// The latest call's tool name and subject, after the first call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step: Option<String>,

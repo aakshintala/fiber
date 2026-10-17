@@ -1240,9 +1240,11 @@ fn resume_open_replays_the_log_to_the_tail() {
     let lines = handoff_log(150, "the last reply holds quokkas");
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -1447,8 +1449,11 @@ fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
         .resize(160, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
@@ -1592,7 +1597,9 @@ fn a_hub_batch_holds_while_folding() {
 
 /// Eighty page-shaped groups of identical turns, serialized for the
 /// jig: enough dropped pages that a search spans many fetches, each
-/// answered from the log.
+/// answered from the log. Nine single-sentence turns are the floor for
+/// one page per group at 80x10: eight turns report 72 pages, and longer
+/// replies add time without adding pages.
 fn many_groups() -> String {
     let mut seq = 0u64;
     let mut events = String::new();
@@ -1615,7 +1622,7 @@ fn many_groups() -> String {
             push(
                 "text_completed",
                 Some(&message),
-                json!({"text": "the session holds every line in order ".repeat(4)}),
+                json!({"text": "the session holds every line in order ".to_owned()}),
             );
             push(
                 "assistant_message_completed",

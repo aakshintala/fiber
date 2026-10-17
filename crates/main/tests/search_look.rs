@@ -1034,13 +1034,17 @@ fn the_changed_files_rows_match_the_doc() {
     assert!(changed_file_row_ready(&grid));
 }
 
-/// The Session card once its `cost` row is drawn: while spend is
-/// still settling the row is absent and the cards below it sit one row
-/// higher, so a wait that supplies coordinates for a later click or
-/// hover holds until the row lands (`crates/tui/src/view/panel.rs`,
-/// `session_rows`). The `cost` label draws only with the row.
+/// The Session card once its `cost` row is drawn: the row is absent only
+/// when spend is `Some(0.0)` with no budget, and the cards below it sit
+/// one row higher without it, so a wait that supplies coordinates for a
+/// later click or hover holds until the row lands
+/// (`crates/tui/src/view/panel.rs`, `session_rows`). The `cost` label
+/// draws only with the row: `cost on subscription` draws without it, so
+/// its `cost` prefix does not count.
 fn session_settled(grid: &Grid) -> bool {
-    panel_item_at(grid, "cost").is_some()
+    // The panel starts at column 100, as in `panel_item_at`: a `cost`
+    // elsewhere (a conversation echo, another card) does not settle us.
+    support::session_cost_drawn(grid, 100)
 }
 
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {

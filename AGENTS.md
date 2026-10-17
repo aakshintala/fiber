@@ -11,8 +11,13 @@ matches the work before starting it.
   rather than restating them, and is written only once its area is built.
 - What each area does: `docs/<area>.md`. The crates and their boundaries:
   `docs/architecture.md`. Decisions: `docs/adr/`.
-- Tests: `docs/testing.md`. Code rules: `docs/code-quality.md`. Crates and
-  toolchain: `docs/dependencies.md`. CI: `docs/ci.md`. Budgets:
+- Writing or changing any test: `docs/testing.md`, plus
+  `docs/testing/screens.md` for TUI screens, `docs/testing/fakes.md` for
+  fakes, model calls, extensions and jigs, `docs/testing/running.md` to run the
+  suite or work a flake, `docs/testing/mutants.md` to prove a test bites.
+- Code rules: `docs/code-quality.md`, plus `docs/code-quality/lints.md` for
+  lints and allowances.
+- Crates and toolchain: `docs/dependencies.md`. CI: `docs/ci.md`. Budgets:
   `docs/performance.md`.
 
 Docs state what is true now. When code and a doc disagree, the doc wins and

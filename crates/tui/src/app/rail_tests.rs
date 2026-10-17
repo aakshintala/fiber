@@ -21,8 +21,11 @@ const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quot
 fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         model: Some("test/model".to_owned()),
         rail_share: 15.0,
         panel_share: 21.0,
@@ -51,9 +54,13 @@ fn commands(lines: Vec<String>) -> Vec<Value> {
         .collect()
 }
 
-/// Links the app: the feed and recent ids.
+/// Links the app: the feed and recent ids. An open picker's listing
+/// goes out beside them.
 fn linked(app: &mut App) -> (String, String) {
-    let lines = commands(app.on_line(hello()));
+    let lines: Vec<Value> = commands(app.on_line(hello()))
+        .into_iter()
+        .filter(|line| line["command"] != "directories")
+        .collect();
     assert_eq!(lines.len(), 2);
     (
         lines[0]["id"]
@@ -137,6 +144,29 @@ fn with(sessions: &[&str]) -> App {
         app.on_line(live(session, json!({})));
     }
     app
+}
+
+#[test]
+fn remote_rail_has_no_launch_project() {
+    let mut app = home();
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        ..Default::default()
+    });
+    linked(&mut app);
+    app.on_line(live(A, json!({"project":"other"})));
+    app.on_line(live(B, json!({"project":"sentinel-project"})));
+    let (cards, project) = app.rail_cards().unwrap();
+    assert_eq!(project, None);
+    assert_eq!(
+        cards
+            .iter()
+            .map(|row| row.id.0.as_str())
+            .collect::<Vec<_>>(),
+        [A, B]
+    );
 }
 
 #[test]
@@ -230,7 +260,7 @@ fn a_recent_row_gets_no_number() {
     }));
     assert!(
         app.home_screen()
-            .is_some_and(|screen| screen.rows.len() == 1)
+            .is_some_and(|screen| crate::home::home_test_rows(&screen).len() == 1)
     );
     assert_eq!(app.rail_cards().map(|(cards, _)| cards.len()), Some(0));
     app.on_line(live(B, json!({})));
@@ -1012,7 +1042,7 @@ fn plus_goes_home_with_that_projects_workspace() {
     assert_eq!(on_screen(&app), None);
     let chip = app
         .home_screen()
-        .and_then(|screen| screen.chips.first().map(|(_, chip)| chip.clone()));
+        .and_then(|screen| screen.chips.first().map(|chip| chip.text.clone()));
     assert_eq!(chip.as_deref(), Some("[hub]"));
     assert_eq!(app.focused(), None);
 }

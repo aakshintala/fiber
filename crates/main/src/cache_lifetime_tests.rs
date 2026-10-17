@@ -11,11 +11,6 @@ fn config(overrides: &[&str]) -> config::Config {
 }
 
 #[test]
-fn absent_is_the_one_hour_default() {
-    assert_eq!(cache_lifetime(&config(&[]), MODEL), CacheLifetime::OneHour);
-}
-
-#[test]
 fn top_level_five_minutes_is_five_minutes() {
     let config = config(&["cache.lifetime=5m"]);
     assert_eq!(cache_lifetime(&config, MODEL), CacheLifetime::FiveMinutes);

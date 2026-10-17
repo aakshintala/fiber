@@ -9,7 +9,7 @@ use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
     ToolDefinition,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 pub(crate) use fakes::write_record;
 
@@ -69,6 +69,14 @@ impl Home {
     /// fake clock never ends a wait the runtime does not end itself.
     #[track_caller]
     pub(crate) fn load(&self, overrides: &[&str]) -> std::sync::Arc<crate::SessionExtensions> {
+        self.load_seeded(overrides, contract::hook::StateSeed::new())
+    }
+
+    pub(crate) fn load_seeded(
+        &self,
+        overrides: &[&str],
+        seed: contract::hook::StateSeed,
+    ) -> std::sync::Arc<crate::SessionExtensions> {
         use config::{Config, ProjectKey, Sources};
         let config = Config::load(Sources {
             home: self.home(),
@@ -81,12 +89,13 @@ impl Home {
         let locks: std::sync::Arc<dyn contract::files::PathLock> =
             std::sync::Arc::new(fakes::FakeLock::new());
         std::sync::Arc::new(bounded(move || {
-            crate::SessionExtensions::load(
+            crate::SessionExtensions::load_with_state(
                 &home,
                 &config,
                 fakes::clock::FakeClock::new(),
                 locks,
                 None,
+                seed,
             )
         }))
     }
@@ -138,14 +147,7 @@ impl Provider for Inner {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        tools
-            .iter()
-            .map(|tool| {
-                let mut map = Map::new();
-                map.insert("own".into(), json!(tool.name));
-                map
-            })
-            .collect()
+        fakes::wire_tools(tools)
     }
 }
 

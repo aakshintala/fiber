@@ -128,8 +128,15 @@ fn clock() -> std::sync::Arc<fakes::clock::FakeClock> {
     fakes::clock::FakeClock::new()
 }
 
-fn select(setup: &Setup, force: bool) -> Planned {
-    super::select(&setup.home(), &setup.workspace(), force, false, wall())
+fn select(setup: &Setup, force: bool, dry_run: bool) -> Planned {
+    super::select(
+        &setup.home(),
+        &log::started_sessions(&setup.home()),
+        &setup.workspace(),
+        force,
+        dry_run,
+        wall(),
+    )
 }
 
 fn removable(row: &WorktreeRow) -> (&str, Option<&str>) {
@@ -151,7 +158,7 @@ fn line(row: &WorktreeRow) -> String {
 fn a_clean_worktree_lists_one_removable_row() {
     let setup = Setup::new("cli-prune-wt-clean");
     let dir = setup.worktree("s_00000000000000e1");
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert_eq!(planned.rows.len(), 1);
     assert_eq!(planned.removals.len(), 1);
     let (name, forced) = removable(&planned.rows[0]);
@@ -189,7 +196,7 @@ fn every_skip_reason_has_its_exact_text() {
     let broken = setup.worktrees().join("broken");
     fs::create_dir_all(&broken).unwrap();
     fs::write(broken.join(".git"), "gitdir: /nonexistent-admin-dir/x\n").unwrap();
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert!(planned.removals.is_empty());
     let lines: Vec<String> = planned.rows.iter().map(line).collect();
     let size = |dir: &Path| super::super::format_size(log::session_bytes(dir));
@@ -231,7 +238,7 @@ fn force_lists_losing_worktrees_as_forced() {
     let setup = Setup::new("cli-prune-wt-force-rows");
     let dirty = setup.worktree("s_00000000000000e2");
     fs::write(dirty.join("notes.txt"), "scratch").unwrap();
-    let planned = select(&setup, true);
+    let planned = select(&setup, true, false);
     assert_eq!(planned.removals.len(), 1);
     let (name, forced) = removable(&planned.rows[0]);
     assert_eq!(name, "s_00000000000000e2");
@@ -258,7 +265,7 @@ fn revalidation_covers_each_cleanliness_and_force_case_with_exact_totals() {
         }
         let bytes = log::session_bytes(&dir);
         assert!(bytes > 0);
-        let mut planned = select(&setup, force);
+        let mut planned = select(&setup, force, false);
         assert_eq!(listed_bytes(&planned), bytes, "{case}: listed bytes");
         let mut before_remove = |path: &Path| {
             if make_dirty {
@@ -308,7 +315,7 @@ fn force_removes_the_dirty_and_unique_cases() {
     fs::write(unique.join("more.txt"), "y").unwrap();
     git(&unique, &["add", "."]);
     git(&unique, &["commit", "--quiet", "-m", "second"]);
-    let mut planned = select(&setup, true);
+    let mut planned = select(&setup, true, false);
     assert_eq!(planned.removals.len(), 2);
     let removed = remove_planned(&setup.home(), &mut planned, true, &mut |_| {});
     assert!(removed.failures.is_empty(), "{:?}", removed.failures);
@@ -329,7 +336,7 @@ fn force_never_removes_a_running_or_an_uncertain_worktree() {
     };
     let plain = setup.worktrees().join("plain");
     fs::create_dir_all(&plain).unwrap();
-    let planned = select(&setup, true);
+    let planned = select(&setup, true, false);
     assert!(planned.removals.is_empty());
     let lines: Vec<String> = planned.rows.iter().map(line).collect();
     assert!(
@@ -357,7 +364,7 @@ fn a_user_in_a_subdirectory_counts() {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
     };
-    let planned = select(&setup, true);
+    let planned = select(&setup, true, false);
     assert!(planned.removals.is_empty());
     assert!(
         planned
@@ -379,7 +386,7 @@ fn an_unwritable_session_lock_counts_as_running() {
     // The log still reads with the directory read-only, but taking the
     // lock fails: an error counts as running, `--force` included.
     fs::set_permissions(&user, fs::Permissions::from_mode(0o555)).unwrap();
-    let planned = select(&setup, true);
+    let planned = select(&setup, true, false);
     fs::set_permissions(&user, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(planned.removals.is_empty());
     assert!(
@@ -397,7 +404,7 @@ fn an_unwritable_session_lock_counts_as_running() {
 fn a_user_that_appears_after_the_scan_is_caught() {
     let setup = Setup::new("cli-prune-wt-new-user");
     let dir = setup.worktree("s_00000000000000e1");
-    let mut planned = select(&setup, false);
+    let mut planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     // The hook starts a session in the worktree and holds its lock, so the
     // revalidation finds it running.
@@ -442,7 +449,7 @@ fn a_user_that_appears_after_the_scan_is_caught() {
 fn a_commit_after_listing_is_not_removed_without_force() {
     let setup = Setup::new("cli-prune-wt-changed");
     let dir = setup.worktree("s_00000000000000e1");
-    let mut planned = select(&setup, false);
+    let mut planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     let mut before_remove = |path: &Path| {
         fs::write(path.join("more.txt"), "y").unwrap();
@@ -471,7 +478,7 @@ fn dropping_the_plan_releases_every_lock() {
     let setup = Setup::new("cli-prune-wt-locks");
     let dir = setup.worktree("s_00000000000000e1");
     let user = setup.user("s_00000000000000a1", &dir);
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     assert_eq!(planned.locks.len(), 1, "the plan owns the user's lock");
     assert!(
@@ -492,7 +499,7 @@ fn dry_run_drops_each_lock_before_output() {
     let setup = Setup::new("cli-prune-wt-dry-run-locks");
     let dir = setup.worktree("s_00000000000000e1");
     let user = setup.user("s_00000000000000a1", &dir);
-    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    let planned = select(&setup, false, true);
     assert_eq!(planned.removals.len(), 1);
     assert!(
         planned.locks.is_empty(),
@@ -515,7 +522,7 @@ fn dry_run_still_skips_a_running_worktree() {
         Ok(log::Hold::Held(held)) => held,
         Ok(log::Hold::Busy) | Err(_) => panic!("the user's lock is held"),
     };
-    let planned = super::select(&setup.home(), &setup.workspace(), false, true, wall());
+    let planned = select(&setup, false, true);
     assert!(planned.removals.is_empty());
     assert!(
         planned
@@ -535,7 +542,7 @@ fn a_partial_removal_is_reported_and_still_counts_as_freed() {
     let dir = setup.worktree("s_00000000000000e1");
     let listed = log::session_bytes(&dir);
     assert!(listed > 0);
-    let mut planned = select(&setup, false);
+    let mut planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     // The hook takes write permission off the branch's directory, so
     // `branch -D` has nothing it can unlink: the worktree goes and only
@@ -579,7 +586,7 @@ fn age_comes_from_the_directory_mtime() {
         .unwrap()
         .set_modified(ahead)
         .unwrap();
-    let planned = super::select(&setup.home(), &setup.workspace(), false, false, wall());
+    let planned = select(&setup, false, false);
     assert_eq!(planned.rows.len(), 2);
     assert!(
         line(&planned.rows[0]).contains("  12d  "),
@@ -598,7 +605,7 @@ fn a_session_working_elsewhere_does_not_block() {
     let setup = Setup::new("cli-prune-wt-elsewhere");
     setup.worktree("s_00000000000000e1");
     setup.user("s_00000000000000a1", Path::new("/elsewhere"));
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     assert_eq!(removable(&planned.rows[0]).0, "s_00000000000000e1");
 }
@@ -608,7 +615,7 @@ fn an_exited_user_is_held_once_and_the_worktree_still_goes() {
     let setup = Setup::new("cli-prune-wt-exited-user");
     let dir = setup.worktree("s_00000000000000e1");
     setup.user("s_00000000000000a1", &dir);
-    let mut planned = select(&setup, false);
+    let mut planned = select(&setup, false, false);
     assert_eq!(planned.removals.len(), 1);
     assert_eq!(planned.locks.len(), 1);
     // The revalidation must not take the user's lock twice: a second
@@ -629,7 +636,7 @@ fn a_symlinked_entry_is_skipped() {
     let dir = setup.worktree("s_00000000000000e1");
     fs::create_dir_all(setup.worktrees()).unwrap();
     std::os::unix::fs::symlink(&dir, setup.worktrees().join("alias")).unwrap();
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert_eq!(planned.rows.len(), 1);
     assert_eq!(removable(&planned.rows[0]).0, "s_00000000000000e1");
 }
@@ -706,7 +713,7 @@ fn an_ignored_only_worktree_is_removable_and_names_its_ignored_files() {
     fs::create_dir_all(dir.join("target")).unwrap();
     fs::write(dir.join("target/out.bin"), "1234567890").unwrap();
     fs::write(dir.join(".env"), "123456").unwrap();
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert_eq!(planned.rows.len(), 1);
     assert_eq!(planned.removals.len(), 1);
     let (name, forced) = removable(&planned.rows[0]);
@@ -718,7 +725,7 @@ fn an_ignored_only_worktree_is_removable_and_names_its_ignored_files() {
             super::super::format_size(log::session_bytes(&dir)),
         )
     );
-    let mut planned = select(&setup, false);
+    let mut planned = select(&setup, false, false);
     let removed = remove_planned(&setup.home(), &mut planned, false, &mut |_| {});
     assert!(removed.failures.is_empty(), "{:?}", removed.failures);
     assert_eq!(removed.total, 1);
@@ -736,7 +743,7 @@ fn an_untracked_file_alongside_ignored_files_is_skipped_without_an_ignored_segme
     let dir = setup.worktree("s_00000000000000e2");
     fs::write(dir.join("notes.txt"), "scratch").unwrap();
     fs::write(dir.join(".env"), "123456").unwrap();
-    let planned = select(&setup, false);
+    let planned = select(&setup, false, false);
     assert!(planned.removals.is_empty());
     let lines: Vec<String> = planned.rows.iter().map(line).collect();
     assert_eq!(lines.len(), 1);
@@ -756,7 +763,7 @@ fn force_names_ignored_files_before_the_forced_losses() {
     let dir = setup.worktree("s_00000000000000e2");
     fs::write(dir.join("notes.txt"), "scratch").unwrap();
     fs::write(dir.join(".env"), "123456").unwrap();
-    let planned = select(&setup, true);
+    let planned = select(&setup, true, false);
     assert_eq!(planned.removals.len(), 1);
     assert!(
         line(&planned.rows[0]).ends_with("  ignored 6 B: .env  forced: loses uncommitted files"),

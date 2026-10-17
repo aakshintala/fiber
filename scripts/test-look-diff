@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# The self-test for scripts/look-diff: feeds canned dumps through
+# LOOK_DIFF_DUMP, so no look test runs and the binary is never spawned,
+# and checks each verdict line with its exit code: a match, a one-cell
+# colour difference (rows=1 cells=1), a missing capture, an over-tall
+# capture, and the 48-row and 160-column edges passing.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-look-diff: $1" >&2
+  exit 1
+}
+
+# Runs look-diff with the canned dump at $1 for test $2 and the capture
+# args after it. Leaves the verdict line in $out with the exit code in
+# $rc. Fails when anything but the verdict reaches the console: build
+# and test output belongs in the log beside the diff.
+out=
+rc=0
+run() {
+  local dump=$1 name=$2
+  shift 2
+  local err=$tmp/$name.stderr
+  set +e
+  out=$(LOOK_DIFF_DUMP="$dump" scripts/look-diff "$name" "$@" 2>"$err")
+  rc=$?
+  set -e
+  if [ -s "$err" ]; then
+    fail "$name: printed on stderr: $(cat "$err")"
+  fi
+  case $out in
+    *$'\n'*) fail "$name: more than one line on stdout: $out" ;;
+  esac
+}
+
+printf 'hi' >"$tmp/dump"
+printf 'hi\n' >"$tmp/capture.txt"
+run "$tmp/dump" look-match "$tmp/capture.txt"
+[ "$rc" -eq 0 ] || fail "match exited $rc, want 0: $out"
+[ "$out" = "look: match look-match" ] || fail "match verdict: $out"
+
+printf '\x1b[31mh\x1b[0mi' >"$tmp/capture.ansi"
+run "$tmp/dump" look-colour "$tmp/capture.txt" "$tmp/capture.ansi"
+[ "$rc" -eq 1 ] || fail "differs exited $rc, want 1: $out"
+[ "$out" = "look: differs look-colour rows=1 cells=1 diff=$PWD/target/look-diff/look-colour.diff" ] || fail "differs verdict: $out"
+grep -Fq "cell 0,0 fg" "$PWD/target/look-diff/look-colour.diff" || fail "diff names no fg cell: $(cat "$PWD/target/look-diff/look-colour.diff")"
+
+printf 'ab\r\ncd' >"$tmp/dump2"
+printf 'ab\ncd\n' >"$tmp/capture2.txt"
+printf 'ab\ncd' >"$tmp/capture2.ansi"
+run "$tmp/dump2" look-ansi-lf "$tmp/capture2.txt" "$tmp/capture2.ansi"
+[ "$rc" -eq 0 ] || fail "ansi lf exited $rc, want 0: $out"
+[ "$out" = "look: match look-ansi-lf" ] || fail "ansi lf verdict: $out"
+
+printf 'ab\r\ncd' >"$tmp/capture3.ansi"
+run "$tmp/dump2" look-ansi-crlf "$tmp/capture2.txt" "$tmp/capture3.ansi"
+[ "$rc" -eq 0 ] || fail "ansi crlf exited $rc, want 0: $out"
+[ "$out" = "look: match look-ansi-crlf" ] || fail "ansi crlf verdict: $out"
+
+run "$tmp/dump" look-missing "$tmp/no-such-capture.txt"
+[ "$rc" -eq 2 ] || fail "missing exited $rc, want 2: $out"
+[ "$out" = "look: error look-missing capture missing: $tmp/no-such-capture.txt" ] || fail "missing verdict: $out"
+
+i=0
+: >"$tmp/tall.txt"
+while [ "$i" -lt 49 ]; do printf 'x\n' >>"$tmp/tall.txt"; i=$((i + 1)); done
+run "$tmp/dump" look-tall "$tmp/tall.txt"
+[ "$rc" -eq 2 ] || fail "tall exited $rc, want 2: $out"
+[ "$out" = "look: error look-tall size mismatch: capture 49x1, look 160x48" ] || fail "tall verdict: $out"
+
+i=0
+: >"$tmp/dump48"
+: >"$tmp/edge48.txt"
+while [ "$i" -lt 47 ]; do printf 'x\r\n' >>"$tmp/dump48"; printf 'x\n' >>"$tmp/edge48.txt"; i=$((i + 1)); done
+printf 'x' >>"$tmp/dump48"
+printf 'x\n' >>"$tmp/edge48.txt"
+run "$tmp/dump48" look-edge-rows "$tmp/edge48.txt"
+[ "$rc" -eq 0 ] || fail "48 rows exited $rc, want 0: $out"
+[ "$out" = "look: match look-edge-rows" ] || fail "48 rows verdict: $out"
+
+python3 -c "print('a' * 161)" >"$tmp/wide161.txt"
+run "$tmp/dump" look-wide "$tmp/wide161.txt"
+[ "$rc" -eq 2 ] || fail "wide exited $rc, want 2: $out"
+[ "$out" = "look: error look-wide size mismatch: capture 1x161, look 160x48" ] || fail "wide verdict: $out"
+
+python3 -c "print('a' * 160, end='')" >"$tmp/dump160"
+python3 -c "print('a' * 160)" >"$tmp/edge160.txt"
+run "$tmp/dump160" look-edge-cols "$tmp/edge160.txt"
+[ "$rc" -eq 0 ] || fail "160 cols exited $rc, want 0: $out"
+[ "$out" = "look: match look-edge-cols" ] || fail "160 cols verdict: $out"
+
+# A replay whose dump lives at the script's own grid path must survive
+# the run: the script removes only files it creates in replay mode.
+mkdir -p "$PWD/target/look-diff"
+printf 'hi' >"$PWD/target/look-diff/look-replay.grid"
+printf 'hi\n' >"$tmp/replay.txt"
+printf '\x1b[31mh\x1b[0mi' >"$tmp/replay.ansi"
+run "$PWD/target/look-diff/look-replay.grid" look-replay "$tmp/replay.txt" "$tmp/replay.ansi"
+[ "$rc" -eq 1 ] || fail "replay exited $rc, want 1: $out"
+[ "$out" = "look: differs look-replay rows=1 cells=1 diff=$PWD/target/look-diff/look-replay.diff" ] || fail "replay verdict: $out"
+[ -f "$PWD/target/look-diff/look-replay.grid" ] || fail "replay deleted its dump"
+[ "$(cat "$PWD/target/look-diff/look-replay.grid")" = "hi" ] || fail "replay changed its dump"

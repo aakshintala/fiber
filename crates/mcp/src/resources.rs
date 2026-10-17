@@ -11,7 +11,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::images::Images;
 use contract::provider::ToolDefinition;
@@ -21,6 +20,7 @@ use serde_json::{Map, Value};
 
 use crate::effects::Hints;
 use crate::elicit::Asker;
+use crate::error::McpError;
 use crate::fail;
 use crate::rpc::{RESOURCES_LIST, RESOURCES_READ};
 use crate::server_json::{CallResult, Content, ListedResource, Resource, entries, from_object};
@@ -116,7 +116,7 @@ impl Resources {
         let server = slot.spec().name.clone();
         match slot.serve() {
             Served::Failed(failed) => Output {
-                error: Some(failed.error),
+                error: Some(contract::shapes::Failure::from(&failed.error)),
                 servers: failed.records,
                 ..Output::default()
             },
@@ -152,13 +152,10 @@ impl Resources {
                                     answered
                                 }
                                 None => {
-                                    let mut out = fail::failed(
-                                        ErrorCode::ToolError,
-                                        format!(
-                                            "The MCP server `{server}` answered `resources/read` \
-                                             without its contents."
-                                        ),
-                                    );
+                                    let mut out =
+                                        fail::failed(&McpError::ResourceContentsMissing {
+                                            server: server.clone(),
+                                        });
                                     out.servers = records;
                                     out
                                 }
@@ -170,8 +167,8 @@ impl Resources {
                                     servers: records,
                                     ..Output::default()
                                 },
-                                Err(message) => {
-                                    let mut out = fail::failed(ErrorCode::ToolError, message);
+                                Err(error) => {
+                                    let mut out = fail::failed(&error);
                                     out.servers = records;
                                     out
                                 }
@@ -243,7 +240,7 @@ impl Resources {
     ) -> Output {
         let request = match request(arguments) {
             Ok(request) => request,
-            Err(message) => return fail::failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return fail::failed(&error),
         };
         let slots = self.snapshot();
         match &request {
@@ -255,7 +252,9 @@ impl Resources {
             },
             Request::List { server, cursor } => {
                 let Some(slot) = Self::lookup(&slots, server) else {
-                    return fail::failed(ErrorCode::InvalidArguments, no_resources(server));
+                    return fail::failed(&McpError::NoResources {
+                        server: server.clone(),
+                    });
                 };
                 let params = match cursor {
                     Some(cursor) => serde_json::json!({"cursor": cursor}),
@@ -265,7 +264,9 @@ impl Resources {
             }
             Request::Read { server, uri } => {
                 let Some(slot) = Self::lookup(&slots, server) else {
-                    return fail::failed(ErrorCode::InvalidArguments, no_resources(server));
+                    return fail::failed(&McpError::NoResources {
+                        server: server.clone(),
+                    });
                 };
                 let params = serde_json::json!({"uri": uri});
                 self.call(&slot, RESOURCES_READ, &params, true, cancel, asker)
@@ -298,8 +299,8 @@ enum Request {
 /// Reads the arguments: `action` is required; `read` needs `server` and
 /// `uri`; `cursor` is used only by `list` with a `server`, and anywhere
 /// else `cursor` and `uri` are ignored. A missing or non-string required
-/// field is the message the call fails with.
-fn request(arguments: &Map<String, Value>) -> Result<Request, String> {
+/// field is its own invalid-arguments case.
+fn request(arguments: &Map<String, Value>) -> Result<Request, McpError> {
     let action = arguments.get("action").and_then(Value::as_str);
     match action {
         Some("list") => {
@@ -307,7 +308,7 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, String> {
                 None => return Ok(Request::Servers),
                 Some(value) => value
                     .as_str()
-                    .ok_or("`server` must be a string.".to_owned())?
+                    .ok_or(McpError::ResourceFieldNotString { field: "server" })?
                     .to_owned(),
             };
             let cursor = match arguments.get("cursor") {
@@ -315,7 +316,7 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, String> {
                 Some(value) => Some(
                     value
                         .as_str()
-                        .ok_or("`cursor` must be a string.".to_owned())?
+                        .ok_or(McpError::ResourceFieldNotString { field: "cursor" })?
                         .to_owned(),
                 ),
             };
@@ -323,22 +324,22 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, String> {
         }
         Some("read") => {
             let server = match arguments.get("server") {
-                None => return Err("`read` needs `server` and `uri`.".to_owned()),
+                None => return Err(McpError::ResourceReadNeedsServerAndUri),
                 Some(value) => value
                     .as_str()
-                    .ok_or("`server` must be a string.".to_owned())?
+                    .ok_or(McpError::ResourceFieldNotString { field: "server" })?
                     .to_owned(),
             };
             let uri = match arguments.get("uri") {
-                None => return Err("`read` needs `server` and `uri`.".to_owned()),
+                None => return Err(McpError::ResourceReadNeedsServerAndUri),
                 Some(value) => value
                     .as_str()
-                    .ok_or("`uri` must be a string.".to_owned())?
+                    .ok_or(McpError::ResourceFieldNotString { field: "uri" })?
                     .to_owned(),
             };
             Ok(Request::Read { server, uri })
         }
-        _ => Err("`action` must be `list` or `read`.".to_owned()),
+        _ => Err(McpError::ResourceActionUnknown),
     }
 }
 
@@ -346,9 +347,10 @@ fn request(arguments: &Map<String, Value>) -> Result<Request, String> {
 /// kept a string `uri`, with the answer's string `nextCursor` passed on.
 /// Anything but an object with a `resources` array is the message the
 /// call fails with.
-fn page(server: &str, value: Value) -> Result<String, String> {
-    let missing =
-        || format!("The MCP server `{server}` answered `resources/list` without a resource list.");
+fn page(server: &str, value: Value) -> Result<String, McpError> {
+    let missing = || McpError::ResourceListMissing {
+        server: server.to_owned(),
+    };
     let object = value.as_object().ok_or_else(missing)?;
     let listed = object
         .get("resources")
@@ -396,14 +398,6 @@ fn servers_text(slots: &[Arc<Slot>]) -> String {
     names.sort();
     let servers = serde_json::to_string(&names).unwrap_or_default();
     format!("{{\"servers\":{servers}}}")
-}
-
-/// The message of a call naming no server that offers resources.
-fn no_resources(server: &str) -> String {
-    format!(
-        "No MCP server named `{server}` offers resources; \
-         `list` with no `server` names those that do."
-    )
 }
 
 #[cfg(test)]

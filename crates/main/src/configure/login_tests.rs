@@ -329,6 +329,8 @@ fn the_browser_shows_the_url_and_code_through_the_login_show() {
     let (tx, rx) = std::sync::mpsc::channel();
     let browser = super::ShownBrowser {
         shown: std::sync::Arc::new(ShowCode { shown: tx }),
+        method: extensions::LoginMethod::Browser,
+        cancel: std::sync::Arc::new(cli::LoginCancel::default()),
     };
     extensions::Browser::show(&browser, "https://auth.example/device", "ABCD-1234");
     assert_eq!(
@@ -560,7 +562,8 @@ mod browser {
             name: "codex".to_owned(),
             browser: Arc::clone(&browser) as Arc<dyn Browser>,
             clock: Arc::clone(&clock),
-            cancel: cli::LoginCancel::default(),
+            cancel: Arc::new(cli::LoginCancel::default()),
+            method: extensions::LoginMethod::Browser,
         });
         let (done, finished) = mpsc::channel();
         thread::spawn(move || match done.send(login.run()) {
@@ -627,7 +630,8 @@ mod browser {
             name: "codex".to_owned(),
             browser: Arc::clone(&browser) as Arc<dyn Browser>,
             clock: Arc::clone(&clock),
-            cancel: cli::LoginCancel::default(),
+            cancel: Arc::new(cli::LoginCancel::default()),
+            method: extensions::LoginMethod::Browser,
         });
         let (done, finished) = mpsc::channel();
         let running = Arc::clone(&login);

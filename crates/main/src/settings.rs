@@ -13,50 +13,41 @@ use serde_json::Value;
 
 /// How long an idle session waits before it exits, from
 /// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
-/// empty wait. A missing value is 30 minutes.
-pub(crate) fn idle_exit(config: &Config) -> Option<Duration> {
+/// empty wait.
+pub(crate) fn idle_exit(config: &Config) -> Duration {
     let ms = config
-        .get("session.idle_exit_ms", None)
-        .and_then(|(value, _)| value.as_u64())
-        .unwrap_or(1_800_000);
-    Some(Duration::from_millis(ms))
+        .count("session.idle_exit_ms", None)
+        .unwrap_or_default();
+    Duration::from_millis(ms)
 }
 
 /// How long a hub a client started stays running with no client
 /// connected, from `hub.idle_exit_ms` (`docs/configuration.md`). `0`
-/// exits at the first empty wait. A missing value is 30 minutes.
+/// exits at the first empty wait.
 pub(crate) fn hub_idle_exit(config: &Config) -> Duration {
-    let ms = config
-        .get("hub.idle_exit_ms", None)
-        .and_then(|(value, _)| value.as_u64())
-        .unwrap_or(1_800_000);
+    let ms = config.count("hub.idle_exit_ms", None).unwrap_or_default();
     Duration::from_millis(ms)
 }
 
 /// When a reviewer block hands the call to a person, from configuration
 /// with the documented defaults (`docs/configuration.md`).
 pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
-    let limit = |key: &str, default: u64| {
-        config
-            .get(key, None)
-            .and_then(|(value, _)| value.as_u64())
-            .unwrap_or(default)
-    };
+    let limit = |key: &str| config.count(key, None).unwrap_or_default();
     r#loop::BlockLimits {
-        consecutive: limit("reviewer.block_limits.consecutive", 3),
-        session: limit("reviewer.block_limits.session", 20),
+        consecutive: limit("reviewer.block_limits.consecutive"),
+        session: limit("reviewer.block_limits.session"),
     }
 }
 
 /// The prompt-cache lifetime for `model`, from `cache.lifetime`
 /// (`docs/prompt-cache.md`, "Cache lifetime" and
 /// `docs/configuration.md`). A per-model key wins over the same key at
-/// the top level. `"5m"` is five minutes; anything else or absent is the
-/// 1-hour default (the config crate's `OneOf` refuses other values).
+/// the top level. `"5m"` is five minutes; anything else is one hour (the
+/// config crate's `OneOf` refuses other values).
 pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
     if config
-        .get("cache.lifetime", Some(model))
-        .is_some_and(|(value, _)| value == "5m")
+        .text("cache.lifetime", Some(model))
+        .is_some_and(|value| value == "5m")
     {
         CacheLifetime::FiveMinutes
     } else {
@@ -67,19 +58,13 @@ pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
 /// How many cache lifetimes after the last turn an idle session keeps its
 /// prompt cache warm: `cache.warm_cap` when `cache.warm_idle` is set, else
 /// `None`, which never warms (`docs/prompt-cache.md`, "Warming while idle").
-/// A missing cap is the default, 2 lifetimes; the config crate refuses 12
-/// or more.
+/// The config crate refuses 12 or more.
 pub(crate) fn warm(config: &Config) -> Option<u32> {
-    let on = config
-        .get("cache.warm_idle", None)
-        .is_some_and(|(value, _)| value == true);
+    let on = config.flag("cache.warm_idle", None).unwrap_or_default();
     if !on {
         return None;
     }
-    let cap = config
-        .get("cache.warm_cap", None)
-        .and_then(|(value, _)| value.as_u64())
-        .unwrap_or(2);
+    let cap = config.count("cache.warm_cap", None).unwrap_or_default();
     Some(u32::try_from(cap).unwrap_or(u32::MAX))
 }
 
@@ -87,16 +72,11 @@ pub(crate) fn warm(config: &Config) -> Option<u32> {
 /// documented defaults (`docs/configuration.md`). `attempts` is clamped
 /// to `u32`, so a huge configured count never overflows the loop.
 pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {
-    let count = |key: &str, default: u64| {
-        config
-            .get(key, None)
-            .and_then(|(value, _)| value.as_u64())
-            .unwrap_or(default)
-    };
+    let count = |key: &str| config.count(key, None).unwrap_or_default();
     r#loop::Retry {
-        attempts: u32::try_from(count("retry.attempts", 3)).unwrap_or(u32::MAX),
-        initial: Duration::from_millis(count("retry.initial_delay_ms", 2000)),
-        max: Duration::from_millis(count("retry.max_delay_ms", 60000)),
+        attempts: u32::try_from(count("retry.attempts")).unwrap_or(u32::MAX),
+        initial: Duration::from_millis(count("retry.initial_delay_ms")),
+        max: Duration::from_millis(count("retry.max_delay_ms")),
     }
 }
 

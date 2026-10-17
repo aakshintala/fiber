@@ -18,6 +18,9 @@ mod install;
 mod installed;
 mod login;
 mod lua;
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use lua::observe_load;
 mod lua_cost;
 mod lua_provider;
 mod manage;
@@ -41,6 +44,7 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
+pub use contract::hook::StateSeed;
 pub use extension_tools::LuaTool;
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;

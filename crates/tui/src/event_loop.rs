@@ -105,7 +105,13 @@ pub(crate) fn run_with(
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return Ok(1);
     };
-    let mut app = App::new(launch.workspace.clone());
+    let mut app = App::new(
+        launch
+            .location
+            .workspace()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+    );
     app.set_zone(jiff::tz::TimeZone::system());
     let mut launch = launch;
     let (look, notice) = Look::new(std::mem::take(&mut launch.theme), &|name| {
@@ -441,6 +447,16 @@ impl<B: Backend> Loop<B> {
         );
         let before = self.app.session().cloned();
         for event in events {
+            let quota = if let Event::Focus(true) = event {
+                self.app.quota_focus()
+            } else if matches!(event, Event::Stroke(_) | Event::Key(_) | Event::Edit(_)) {
+                self.app.quota_keypress()
+            } else {
+                None
+            };
+            if let Some(line) = quota {
+                self.hub.send(&[line], &mut self.app);
+            }
             let effect = match event {
                 Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
                 Event::Key(key) => self.app.on_key(key, self.clock.now()),
@@ -476,7 +492,7 @@ impl<B: Backend> Loop<B> {
                     self.screen.appearance(appearance);
                     Effect::None
                 }
-                Event::Reply(Reply::DeviceAttributes) => Effect::None,
+                Event::Reply(Reply::DeviceAttributes) | Event::Focus(_) => Effect::None,
             };
             match effect {
                 Effect::None => {}

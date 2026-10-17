@@ -21,6 +21,26 @@ use r#loop::Loop;
 use crate::session_command::close;
 use crate::{ask_failed, failed, run_turn};
 
+pub(crate) fn chain_seed(segments: &[log::Segment]) -> Result<extensions::StateSeed, log::Error> {
+    let mut carry = log::Ruled::new();
+    for segment in segments {
+        let lines = segment.lines(0)?;
+        carry = match segment.to {
+            Some(point) => {
+                let full = log::Segment {
+                    session_id: segment.session_id.clone(),
+                    dir: segment.dir.clone(),
+                    to: None,
+                }
+                .lines(0)?;
+                log::fold_boundary(carry, &lines, &full, point.0)
+            }
+            None => log::fold_from(carry, &lines, log::Fold::Resume),
+        };
+    }
+    Ok(log::seed(carry))
+}
+
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
 /// session's log, folds what the resume needs, and runs one turn on it. A
 /// held lock attaches instead of opening a second writer; every failure
@@ -345,6 +365,8 @@ fn resumed_session(
     } else {
         log::diag::Process::Session
     };
+    let seed = chain_seed(&log::history(dir).map_err(|error| failed(error.code(), error))?)
+        .map_err(|error| failed(error.code(), error))?;
     let mut parts = crate::parts_with(
         overrides,
         folded.model.as_deref(),
@@ -354,6 +376,7 @@ fn resumed_session(
         None,
         Arc::clone(&reads),
         process,
+        seed,
     )?;
     // The session directory's log: the opening message's
     // environment names it.
@@ -430,6 +453,7 @@ fn resumed_session(
             "the session directory has no parent",
         ));
     };
+    let (quota, model_quota) = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -439,7 +463,8 @@ fn resumed_session(
         Arc::clone(&jobs),
         Arc::clone(&clock),
         resolve,
-    );
+    )
+    .with_quota(model_quota);
     crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
@@ -523,7 +548,7 @@ fn resumed_session(
     let mut all_commands = listed.rows;
     all_commands.extend(extensions.commands());
     session.commands(all_commands);
-    session.quota(switching.quota_reader());
+    session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
@@ -576,6 +601,7 @@ fn resumed_session(
         one_turn,
         cancel,
         &diag,
+        &extensions,
         |inbox, cancel| {
             crate::finish(
                 Loop::resume(

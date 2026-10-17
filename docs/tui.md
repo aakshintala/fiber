@@ -79,34 +79,46 @@ and leaving creates nothing. The first turn waits for any MCP server that
 starts with the session (`docs/mcp.md`, "Starting servers"), and the working
 line says so: "Connecting 2 MCP servers…".
 
-**The workspace chip** defaults to the directory the terminal was launched in.
-Clicking it opens a picker of recent workspaces, from `recent.jsonl`
-(`docs/state.md`). A remote client has no launch directory, so it always
-shows the picker. The picker is an overlay centred over home ("Look",
-"Overlays"): the title "Workspaces", one row per recent workspace with the
-first focused, and the footer "↑↓ move · Enter open · Esc closes".
+**The workspace chip** names the workspace in use: the one last picked, else
+the directory the terminal was launched in. Clicking it opens the workspace
+picker, the same on every client. It is an overlay centred over home, unless
+that would cover the input box's top row: then its bottom edge sits on the
+row above the box ("Look", "Overlays", "Placement").
 
-The picker also takes a typed path, so a workspace never used before can be
-picked:
-
-- Typing in the picker opens a row above the recents: "› " in `info`, the
-  text and the cursor. The completions sit under it, the focused one on the
-  selection bar, then a blank row, "── recents ──" dim and the recents, dim.
-  Backspace past the first character returns to the recents alone.
+- It opens browsing, under the title "Workspaces". The first row is the typed
+  path, "› " in `info`, the text and the cursor, filled with the chip's
+  workspace and a trailing `/`, or `~/` while no workspace is chosen. The
+  completions sit under it, the focused one on the selection bar, then a
+  blank row, "── recents ──" dim and the recent rows, dim. With no recent rows
+  the divider is left out too. The footer is "↑↓ move · Enter open · Esc
+  closes".
+- The recent rows are one list: the launch directory, when there is one, then
+  the recent workspaces from `recent.jsonl` (`docs/state.md`), the live
+  sessions' workspaces then the exited ones', distinct and absolute, ten rows
+  at most. The list refills as sessions arrive until a key is pressed in the
+  picker, and again on every row that arrives once Backspace leaves the
+  recents alone.
 - The completions are the subdirectories of the directory up to the typed
   path's last `/` whose names start with the text after it: one listing of
   that directory, filtered at each keystroke, never a walk of the tree. A
   hidden directory is listed only when the typed name starts with `.`. `~`
   is the hub's home, and a path that is neither absolute nor starts with `~`
   has no completions. The listing is the hub's `directories` command
-  (`docs/invocation.md`, "What the hub speaks"), so a remote client's completions list
-  the hub's machine.
+  (`docs/invocation.md`, "What the hub speaks"), so a remote client's
+  completions list the hub's machine.
 - The first completion is focused. ↑ and ↓ move through the completions,
-  then the recents. Tab puts the focused completion into the path with a
-  trailing `/` and lists that directory. Enter opens the focused row as the
-  workspace. With no completion matching, Enter takes the typed path when it
-  names a directory; otherwise nothing opens and the list holds one dim row,
-  "no such directory". The footer stays as it is.
+  then the recents. Typing edits the path. Tab puts the focused completion
+  into the path with a trailing `/` and lists that directory. Enter opens the
+  focused row as the workspace. With no completion matching, Enter takes the
+  typed path when it names a directory; otherwise nothing opens and the list
+  holds one dim row, "no such directory". Backspace past the last character
+  leaves the recents alone, the first focused.
+
+While no workspace is chosen, the chip reads "no workspace", dim, the
+picker's footer is "↑↓ move · Enter open", and Esc does not close it. Enter
+on a prompt in that state reopens the picker, sends nothing and keeps the
+prompt. A remote client has no launch directory, so its home starts in that
+state, with the picker open on `~/`.
 
 Until the typed path's directory has answered, the picker shows the typed
 row and the recents with no completions, and Enter does nothing. While the
@@ -205,7 +217,8 @@ puts it aside", both dim.
 
 Home lists every project, in the rail's order: the launch project first, then
 the others in the order their first session started. Each project is a
-section, and the sections scroll when they outgrow the screen:
+section, and the sections scroll when they outgrow the screen. When the
+list is one row tall, it shows the focused row's first line.
 
 - **The section's header** is the project's name, bold in the accent colour,
   and a "+" that starts a session in that project, as on the rail; then, dim,
@@ -447,7 +460,23 @@ cut with "…". The cards draw:
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
 - **Quota.** "extension" dim in the title. Each limit is its name dim with
   the share left right-aligned, and a bar of ▆ under it in `accent`, or in
-  `error` with the share when little is left.
+  `error` with the share when little is left. A window shows `100 -
+  percent_used`, floored at zero, as a rounded whole percent. A credit with
+  a positive limit shows remaining divided by limit, clamped to 0–100%.
+  The figure and bar use `error` at or past `quota.notice_at` percent used
+  (default 80). A reset window says "reset" with a full `accent` bar.
+  A credit without a positive limit shows remaining to two decimals, with
+  no bar or `error` colour. The bar fills to the share left, rounded to
+  the nearest cell, with at least one cell for any positive share.
+  Each name is the provider and window name, or "credit". The credential
+  label follows the provider only when it has more than one label.
+  An unreachable label shows its last value without age, or nothing when
+  it has none. With no rows, the card draws nothing.
+  The terminal asks for cached quota on attach, on focus-in (DEC mode
+  1004), and at each attached session's busy-to-settled turn end. A
+  keypress asks only once the last answer is at least 5 minutes old
+  (`docs/tools.md`, "Fetching"). At most one query is in flight; a turn
+  end during it is not held. A rejection stops queries until reattach.
 
 With the rail hidden and sessions waiting, the Session card ends with "! N
 waiting · hidden · show" in `attention`, the "!" bold; a click on it
@@ -460,7 +489,7 @@ never from `details`, which has no fixed shape a client may rely on
 
 ⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
-file's diff. The same views back `/model`, `/context`, `/usage` and `/tools`.
+file's diff, or the quota view. The same views back `/model`, `/context`, `/usage`, `/tools` and `/quota`.
 
 There is no built-in task list
 ([Task list](https://github.com/aakshintala/fiber/issues/56)).
@@ -535,9 +564,9 @@ a click on it returns too. The views are:
   <command> · <elapsed> · <id>". The last row is "a row opens that item's
   view", dim.
 - **The model picker:** models by provider with roles marked, a chip for each
-  thinking level the model supports, and the size of the prompt-cache rebuild
-  a switch costs. Choosing a model saves the global `model`, and choosing a
-  level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
+  thinking level the model supports, each model's input and output prices,
+  and what a switch to it costs to rebuild the prompt cache. Choosing a model
+  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
@@ -561,8 +590,19 @@ a click on it returns too. The views are:
   `attention` while its list refreshes. Each model takes two rows. The first
   is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
   "● current" bold in `accent` on the session's model, "· scoped" dim on a
-  scoped model while every model shows, and the rebuild cost dim at the
-  right end ("~84k tokens · $0.31", "—" for the current model). The second,
+  scoped model while every model shows, then its input and output prices per
+  million tokens dim ("$3.00 in · $15.00 out /M"): "free" when both are zero,
+  and nothing for a model whose provider data names no cost. A model priced
+  by request size shows the prices of the tier the session's last call falls
+  in, with the tier's threshold ("$6.00 in · $30.00 out /M · tier 200k+";
+  `docs/model-routing.md`, "Cost"), and its base prices before the session's
+  first call. On a screen too narrow for 60 columns inside the picker, the
+  prices are left out. Once the session has made a call, the switch cost is
+  dim at the right end: the prompt-cache rebuild a switch to that model costs
+  at its rebuild price ("switch ~84k tokens · $0.31", "switch ~250k · $1.88"
+  at a tier's price, "switch ~58k tokens" for a model with no price, "—" for
+  the current model). On home and before the session's first call, no row
+  shows a switch cost. The second,
   indented four columns, is "thinking" dim and the model's levels, or "fixed
   thinking" dim for a model with none. On the focused model the levels are in
   `attention`, its saved level bold, and the chosen chip bold in brackets
@@ -579,6 +619,17 @@ a click on it returns too. The views are:
   "By turn", "By model" and "By delegate" are bold headings, then one row
   each: "turn 3 · 120k in · 15k out · $1.35 billed · $0.00 subscription".
   The last row is "budget left $17.90 of $20.00", dim.
+- **The quota view,** `/quota`: one row per entry of the `quota` answer
+  (`docs/events.md`), in its order, with the same name, figure and bar as
+  the panel card. The top row reads "Quota" bold, "  /quota" dim and
+  "Esc returns" dim, right-aligned. Each window's reset time follows its
+  bar, dim ("resets in 3h12m"). An unreachable entry shows its last value
+  and "unreachable" in `error`, or "unreachable" alone when it has no
+  last value. With no entries, one dim line reads "No provider reports
+  quota". While the fetch is in flight, the top row shows "fetching" dim.
+  Opening the view sends `quota` with `fetch: true`.
+  The view draws the cached answer at once and redraws on the fetch's
+  answer, which also updates the panel card.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -717,7 +768,7 @@ Each card contributes its segments to the status line in the configured order,
 and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
-area. Clicking any other segment opens its card's view.
+area. Clicking any other segment opens its card's view, the Quota segment the quota view.
 
 The status line sits on the `panel` tint, one column in, with segments joined
 by a dim "  │  ". Each card's segments are short forms of its rows: the working
@@ -728,6 +779,10 @@ context breakdown; the cost and "cache" dim with its share; "tools N" dim and
 any down server in `error`; "±" dim, "N files" and the `added` and `removed`
 totals; "◆" in `secondary` before the delegates; "⚙" in `attention` before
 the jobs; and "Q" dim before the quota, with a limit nearly spent in `error`.
+The Quota segment joins each short name and figure with a dim " · ". A
+short name is the provider, with its credential label when it has more than
+one. The window name follows only when that label has more than one
+window. With no quota rows, there is no Quota segment.
 With the rail hidden and sessions waiting, the first row opens with "N
 waiting" in `attention`.
 
@@ -1308,8 +1363,9 @@ what it started keeps running.
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
-- **Esc closes whatever is on top,** returns focus to the input box from the
-  conversation, and interrupts the turn only when nothing is open and the
+- **Esc closes whatever is on top,** except the workspace picker while no
+  workspace is chosen ("Home"). It returns focus to the input box from
+  the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
@@ -1342,6 +1398,9 @@ what it started keeps running.
   one enters it and keeps the panel open on the new base, choosing a file inserts
   its path and closes the panel, and a base that cannot be read says why.
   Each keystroke cancels the last search, in either mode.
+  A remote terminal searches the hub's machine in both modes: `~/` is the
+  hub's home and `../` starts at the workspace there. The path listing stays
+  on the hub; only the ranked rows reach the terminal.
 
 ### Moving through the conversation
 
@@ -1630,6 +1689,10 @@ opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers 
 "Providers", each tagged `browser` for OAuth or `key` for an API key, then
 the extension credentials under "Secrets", the first row focused.
 
+On a remote terminal, login runs on the hub and stores its credential in the
+hub's Fiber home. OAuth always uses the device-code step below; Esc cancels
+the hub's login. The reviewer step lists the hub's models.
+
 Once a provider is picked, each step replaces the whole overlay; nothing is
 added under the list. The title is the provider's name and the list is not
 drawn. The steps keep the provider list's height and share one width, so the
@@ -1705,7 +1768,9 @@ Each can be turned off: `tui.attention.notification`, `tui.attention.bell` and
 
 ## Mouse and hover
 
-Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Hover
+Mouse reporting is modes 1000, 1002, 1006 and 1003, every motion. Mode
+1004, focus reporting, is also on for Quota queries ("The panel"); restore
+turns it off. Hover
 highlights the click target under the pointer. The highlight is instant, with
 no transition. A frame redraws only the rows that changed.
 
@@ -1817,7 +1882,9 @@ the model picker inside its view.
   less four columns on a narrower screen.
 - **Placement.** An overlay is centred across the area it covers. A question,
   a notice, the Ctrl+R panel and the workspace picker are also centred down
-  it. The key map docks at the bottom, full width. The completion panels
+  it, unless that would cover the input box's top row: then the workspace
+  picker, when it fits there, sits with its bottom edge on the row above the
+  box. The key map docks at the bottom, full width. The completion panels
   sit above the input box, and the model picker under its view's top row.
   The overlay's side margins are blank, with no tint, so the screen behind
   reads around it.

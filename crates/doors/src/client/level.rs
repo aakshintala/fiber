@@ -84,8 +84,7 @@ impl Outbox {
         lock(&self.settles).clear();
     }
 
-    /// Pushes the writer's STOP line into the current queue
-    /// (`super::stop_writer`).
+    /// Pushes the writer's STOP line into the current queue.
     pub(crate) fn stop(&self, session: &SessionId) {
         self.push_kept(control_line(session, super::STOP, 0));
     }
@@ -198,7 +197,7 @@ pub(super) fn change(
     let response = match credential {
         None => None,
         Some(label) => {
-            let Some(outbox) = conn.outbox.clone() else {
+            let Some(outbox) = conn.outbox() else {
                 conn.gone = true;
                 return;
             };
@@ -222,11 +221,15 @@ pub(super) fn change(
         prelude,
         response,
     };
-    if conn
-        .switches
-        .as_ref()
-        .is_none_or(|switches| switches.send(switch).is_err())
-    {
+    let Some((outbox, switches)) = conn.subscription() else {
+        // No writer to switch: a `Direct` sink never started one, and a
+        // driven connection has none. The connection is marked gone and the
+        // reader runs its normal disconnect cleanup, which detaches when
+        // `conn.full` already matches the count.
+        conn.gone = true;
+        return;
+    };
+    if switches.send(switch).is_err() {
         // The writer is dead: a dead writer does not always mean the
         // client has gone, so the connection is marked gone and the
         // reader runs its normal disconnect cleanup, which detaches when
@@ -234,10 +237,6 @@ pub(super) fn change(
         conn.gone = true;
         return;
     }
-    let Some(outbox) = conn.outbox.clone() else {
-        conn.gone = true;
-        return;
-    };
     outbox.swap(control_line(&conn.gate.session_id, LEVEL, 0), injector);
 }
 

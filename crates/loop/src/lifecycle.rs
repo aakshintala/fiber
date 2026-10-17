@@ -7,7 +7,7 @@ use contract::events::{
 };
 use contract::hook::{
     BeforeModelCall, CheckAnswer, CheckOutcome, ContextAnswer, ContextOutcome, SessionStart,
-    StartReason, TurnEnd, TurnStart,
+    StartReason, StateLine, TurnEnd, TurnStart,
 };
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{ErrorCode, SessionId, TurnId};
@@ -94,7 +94,7 @@ pub(crate) struct State {
     ran: bool,
     /// A resumed turn's `session_start` contexts, waiting for the next
     /// step to write them after its results.
-    start_contexts: Vec<ContextAdded>,
+    start_contexts: Vec<(ContextAdded, Vec<StateLine>)>,
 }
 
 impl Default for State {
@@ -132,7 +132,7 @@ impl State {
 /// notices already written, or nothing applied under a cancel.
 pub(crate) enum Started {
     /// The contexts the hooks added, in run order, unwritten.
-    Contexts(Vec<ContextAdded>),
+    Contexts(Vec<(ContextAdded, Vec<StateLine>)>),
     /// A `blocking` hook failed with this `hook_failed` failure.
     Failed(Failure),
     /// A cancel or a shutdown landed: nothing is applied.
@@ -175,6 +175,8 @@ impl Loop {
             workspace: &self.workspace_label,
             cancel: &*self.cancel,
         });
+        let _state = hooks.take_change_state();
+        self.drain_state(&hooks, turn)?;
         let ContextAnswer { outcome, notices } = answer;
         for notice in notices {
             self.write(&Event::Notice(notice), turn, None)?;
@@ -190,10 +192,15 @@ impl Loop {
             ContextOutcome::Added(contexts) => Ok(Started::Contexts(
                 contexts
                     .into_iter()
-                    .map(|added| ContextAdded {
-                        text: added.text,
-                        extension: added.extension,
-                        hook: "session_start".to_owned(),
+                    .map(|added| {
+                        (
+                            ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "session_start".to_owned(),
+                            },
+                            added.state,
+                        )
                     })
                     .collect(),
             )),
@@ -214,7 +221,9 @@ impl Loop {
     /// hook points"). Empty when already run, with no hooks, or when
     /// cancelled. A `blocking` failure is `Error::HookFailed`, so the
     /// session does not start.
-    pub(crate) fn session_start_once(&mut self) -> Result<Vec<ContextAdded>, Error> {
+    pub(crate) fn session_start_once(
+        &mut self,
+    ) -> Result<Vec<(ContextAdded, Vec<StateLine>)>, Error> {
         if self.lifecycle.ran {
             return Ok(Vec::new());
         }
@@ -296,6 +305,8 @@ impl Loop {
             input: &shown,
             cancel: &*self.cancel,
         });
+        let _state = hooks.take_change_state();
+        self.drain_state(&hooks, Some(turn))?;
         let contract::hook::ContextAnswer { outcome, notices } = answer;
         for notice in notices {
             self.append(&Event::Notice(notice), turn, None)?;
@@ -307,6 +318,19 @@ impl Loop {
         }
         match outcome {
             ContextOutcome::Added(contexts) => {
+                let contexts: Vec<_> = contexts
+                    .into_iter()
+                    .map(|added| {
+                        (
+                            ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "turn_start".into(),
+                            },
+                            added.state,
+                        )
+                    })
+                    .collect();
                 // Guarded with `Commit::Step` so a shutdown lands before
                 // the writes or after them: no context is applied on a
                 // shutdown (`docs/extensions.md`, "Hooks").
@@ -314,16 +338,9 @@ impl Loop {
                 pause_after_turn_start_check();
                 let cancel = Arc::clone(&self.cancel);
                 let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
-                    for added in &contexts {
-                        self.append(
-                            &Event::ContextAdded(ContextAdded {
-                                text: added.text.clone(),
-                                extension: added.extension.clone(),
-                                hook: "turn_start".to_owned(),
-                            }),
-                            turn,
-                            None,
-                        )?;
+                    for (added, state) in &contexts {
+                        self.write_carried(state.clone(), Some(turn))?;
+                        self.append(&Event::ContextAdded(added.clone()), turn, None)?;
                     }
                     Ok(())
                 });
@@ -371,6 +388,7 @@ impl Loop {
             usage: &self.ledger.usage(),
             cancel: &*self.cancel,
         });
+        self.drain_state(&hooks, Some(turn))?;
         let CheckAnswer { outcome, notices } = answer;
         for notice in notices {
             self.append(&Event::Notice(notice), turn, None)?;
@@ -440,6 +458,8 @@ impl Loop {
             reply,
             cancel: &*self.cancel,
         });
+        let _state = hooks.take_change_state();
+        self.drain_state(&hooks, Some(turn))?;
         let ContextAnswer { outcome, notices } = answer;
         for notice in notices {
             self.append(&Event::Notice(notice), turn, None)?;
@@ -495,9 +515,12 @@ impl Loop {
         // one kept, after the results the resumed turn just wrote, never
         // between a call and its result.
         while let Some(first) = self.lifecycle.start_contexts.first().cloned() {
+            #[cfg(test)]
+            tests::before_state_context_commit();
             let cancel = Arc::clone(&self.cancel);
             let written = cancel.commit(cancel::Commit::Step, || {
-                self.append(&Event::ContextAdded(first), turn, None)
+                self.write_carried(first.1, Some(turn))?;
+                self.append(&Event::ContextAdded(first.0), turn, None)
             });
             match written {
                 // Refused: the contexts stay for the next step.
@@ -517,6 +540,7 @@ impl Loop {
         let cancel = Arc::clone(&self.cancel);
         let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
             for item in &held {
+                self.write_carried(item.state.clone(), Some(turn))?;
                 self.append(
                     &Event::SteeringApplied(SteeringApplied {
                         content: vec![ContentPart::Text {

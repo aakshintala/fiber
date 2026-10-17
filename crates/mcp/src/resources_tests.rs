@@ -9,6 +9,7 @@ use contract::tool::Tool;
 use serde_json::{Map, Value, json};
 
 use super::{Request, contents, page, request, servers_text};
+use crate::error::McpError;
 use crate::start::{DEFAULT_CALL_TIMEOUT, ServerSpec};
 use crate::test_support::{FakeImages, Setup, WITHIN};
 
@@ -26,7 +27,7 @@ fn emit() -> fakes::Recorder {
 
 #[test]
 fn request_reads_each_action() {
-    let rows: &[(&str, Value, Result<Request, &str>)] = &[
+    let rows: &[(&str, Value, Result<Request, McpError>)] = &[
         (
             "list without a server names the servers",
             json!({"action": "list"}),
@@ -80,49 +81,49 @@ fn request_reads_each_action() {
         (
             "read without a uri fails",
             json!({"action": "read", "server": "docs"}),
-            Err("`read` needs `server` and `uri`."),
+            Err(McpError::ResourceReadNeedsServerAndUri),
         ),
         (
             "read without a server fails",
             json!({"action": "read", "uri": "u"}),
-            Err("`read` needs `server` and `uri`."),
+            Err(McpError::ResourceReadNeedsServerAndUri),
         ),
         (
             "another action fails",
             json!({"action": "write"}),
-            Err("`action` must be `list` or `read`."),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "no action fails",
             json!({}),
-            Err("`action` must be `list` or `read`."),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "a non-string action fails",
             json!({"action": 7}),
-            Err("`action` must be `list` or `read`."),
+            Err(McpError::ResourceActionUnknown),
         ),
         (
             "a non-string server fails",
             json!({"action": "list", "server": 5}),
-            Err("`server` must be a string."),
+            Err(McpError::ResourceFieldNotString { field: "server" }),
         ),
         (
             "a non-string uri fails",
             json!({"action": "read", "server": "docs", "uri": 5}),
-            Err("`uri` must be a string."),
+            Err(McpError::ResourceFieldNotString { field: "uri" }),
         ),
         (
             "a non-string cursor fails",
             json!({"action": "list", "server": "docs", "cursor": 5}),
-            Err("`cursor` must be a string."),
+            Err(McpError::ResourceFieldNotString { field: "cursor" }),
         ),
     ];
     for (name, arguments, expected) in rows {
         let parsed = request(&args(arguments.clone()));
         match expected {
             Ok(expected) => assert_eq!(&parsed.expect("parsed"), expected, "row: {name}"),
-            Err(message) => assert_eq!(&parsed.expect_err("rejected"), message, "row: {name}"),
+            Err(expected) => assert_eq!(&parsed.expect_err("rejected"), expected, "row: {name}"),
         }
     }
 }
@@ -185,10 +186,9 @@ fn a_page_that_is_not_a_list_is_a_tool_error() {
     ] {
         assert_eq!(
             page("docs", value),
-            Err(
-                "The MCP server `docs` answered `resources/list` without a resource list."
-                    .to_owned()
-            ),
+            Err(McpError::ResourceListMissing {
+                server: "docs".to_owned(),
+            }),
             "row: {name}",
         );
     }

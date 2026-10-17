@@ -732,6 +732,7 @@ fn bounded_parts(
                 None,
                 reads,
                 log::diag::Process::Session,
+                extensions::StateSeed::new(),
             )
         },
     )
