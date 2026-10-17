@@ -192,6 +192,7 @@ impl Tool for SendTool {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

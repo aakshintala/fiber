@@ -85,6 +85,10 @@ fn build_skills(id: String, ctx: &Ctx<'_>) -> Open {
 pub(in crate::app) struct ConfigViews {
     /// The seam `main` passed, if any.
     seam: Option<Arc<dyn Configure>>,
+    /// Hub-only operations; the configuration seam also points here remotely.
+    remote: Option<Arc<crate::remote::Remote>>,
+    /// The sole owner of an outstanding hub editor copy.
+    copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
     open: Option<Open>,
     /// A theme chosen and not yet applied by the loop.
@@ -104,6 +108,17 @@ impl App {
     /// Sets the seam the views read and write through.
     pub(crate) fn set_configure(&mut self, seam: Option<Arc<dyn Configure>>) {
         self.config_views.seam = seam;
+    }
+
+    /// Installs the hub seam and its remote editor and search operations.
+    pub(crate) fn set_remote(&mut self, remote: Arc<crate::remote::Remote>) {
+        self.config_views.seam = Some(Arc::clone(&remote) as Arc<dyn Configure>);
+        self.config_views.remote = Some(remote);
+    }
+
+    /// The remote operations, absent on local terminals.
+    pub(crate) fn remote(&self) -> Option<Arc<crate::remote::Remote>> {
+        self.config_views.remote.clone()
     }
 
     /// The seam the views and the model picker write through, if any.
@@ -341,7 +356,40 @@ impl App {
                 self.config_views.theme = Some(setting);
                 Effect::None
             }
-            Act::Open(file) => Effect::OpenFile(file),
+            Act::OpenLocal(file) => {
+                let file = file
+                    .or_else(|| self.remote().map(|remote| remote.local_global_file()))
+                    .or_else(|| self.configure_seam().map(|seam| seam.global_file()));
+                file.map_or(Effect::None, Effect::OpenFile)
+            }
+            Act::Open(file) => {
+                let Some(remote) = self.remote() else {
+                    return Effect::OpenFile(file);
+                };
+                let copy = remote
+                    .fetch_file(&self.workspace(), &file)
+                    .map_err(|error| error.message)
+                    .and_then(|(text, version)| {
+                        crate::remote::RemoteCopy::create(
+                            &std::env::temp_dir(),
+                            &file,
+                            &text,
+                            version,
+                        )
+                        .map_err(|error| error.to_string())
+                    });
+                match copy {
+                    Ok(copy) => {
+                        let temp = copy.temp.clone();
+                        self.config_views.copy = Some(copy);
+                        Effect::OpenFile(temp)
+                    }
+                    Err(message) => {
+                        self.notices.push("io_failed", message);
+                        Effect::None
+                    }
+                }
+            }
             Act::Login(name) => {
                 // Tickets stay distinct until the counter saturates at
                 // `u64::MAX`, which is then handed out again for every
@@ -466,6 +514,22 @@ impl App {
     /// The editor Ctrl+G opened returned: the open view reads its rows
     /// again, and an error is a notice.
     pub(crate) fn config_file_closed(&mut self, result: Result<(), String>) {
+        let result =
+            if let (Some(remote), Some(copy)) = (self.remote(), self.config_views.copy.take()) {
+                let result = result
+                    .and_then(|()| {
+                        std::fs::read_to_string(&copy.temp).map_err(|error| error.to_string())
+                    })
+                    .and_then(|text| {
+                        remote
+                            .store_file(&self.workspace(), &copy.hub, &text, &copy.version)
+                            .map_err(|error| error.message)
+                    });
+                drop(copy);
+                result
+            } else {
+                result
+            };
         if let Err(message) = result {
             self.notices.push("io_failed", message);
         }

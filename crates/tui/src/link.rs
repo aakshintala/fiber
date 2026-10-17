@@ -65,6 +65,8 @@ pub(crate) fn history_answer(line: &Envelope) -> Result<Vec<Envelope>, String> {
 
 /// Writes one command line.
 pub(crate) fn write_line(mut stream: &UnixStream, line: &str) -> std::io::Result<()> {
+    static WRITE: Mutex<()> = Mutex::new(());
+    let _write = support::lock(&WRITE);
     stream.write_all(format!("{line}\n").as_bytes())?;
     stream.flush()
 }
@@ -90,6 +92,17 @@ struct State {
     held: usize,
     epoch: u64,
     waiting: usize,
+    lends: usize,
+}
+
+/// Extra queue capacity held while the loop waits for a routed answer.
+pub(crate) struct Lend(Arc<Credits>);
+
+impl Drop for Lend {
+    fn drop(&mut self) {
+        support::lock(&self.0.state).lends -= 1;
+        self.0.changed.notify_all();
+    }
 }
 
 impl Credits {
@@ -101,6 +114,7 @@ impl Credits {
                 held: 0,
                 epoch: 0,
                 waiting: 0,
+                lends: 0,
             }),
             changed: Condvar::new(),
         })
@@ -122,18 +136,25 @@ impl Credits {
         // a test that sees a waiter knows it parked: with the cap
         // filled first, the waiter can only be in the wait below.
         state.waiting += 1;
-        while state.held >= self.cap && state.epoch == epoch {
+        while state.held >= self.cap && state.epoch == epoch && state.lends == 0 {
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(|poison| poison.into_inner());
         }
         state.waiting -= 1;
-        if state.epoch != epoch {
+        if state.epoch != epoch || state.held >= self.cap.saturating_add(QUEUE) {
             return false;
         }
         state.held += 1;
         true
+    }
+
+    /// Lends one extra bounded queue and wakes a capacity-blocked reader.
+    pub(crate) fn lend(self: &Arc<Self>) -> Lend {
+        support::lock(&self.state).lends += 1;
+        self.changed.notify_all();
+        Lend(Arc::clone(self))
     }
 
     /// How many lanes wait for a unit. Tests fill the cap first on
@@ -170,20 +191,35 @@ pub(crate) struct Feed {
     tx: Sender<Input>,
     credits: Arc<Credits>,
     epoch: u64,
+    router: Option<Arc<crate::remote::Router>>,
 }
 
 impl Feed {
     /// Sends on `tx`, taking at `credits`.
     pub(crate) fn new(tx: Sender<Input>, credits: Arc<Credits>) -> Feed {
         let epoch = credits.epoch();
-        Self { tx, credits, epoch }
+        Self {
+            tx,
+            credits,
+            epoch,
+            router: None,
+        }
     }
 
     /// The lane this reader sends on: the same sender and credits at the
     /// current epoch, captured before `Retry` tracks the stream, so a
     /// reader `Retry` stops is always a cancelled reader.
     pub(crate) fn lane(&self) -> Feed {
-        Self::new(self.tx.clone(), Arc::clone(&self.credits))
+        let mut lane = Self::new(self.tx.clone(), Arc::clone(&self.credits));
+        lane.router = self.router.clone();
+        lane
+    }
+
+    /// Takes registered answers off this connection before queue accounting.
+    pub(crate) fn routed(mut self, router: Arc<crate::remote::Router>) -> Self {
+        router.set_feed(self.tx.clone(), Arc::clone(&self.credits));
+        self.router = Some(router);
+        self
     }
 
     /// Sends `input` without taking a unit: everything but parsed lines.
@@ -193,6 +229,15 @@ impl Feed {
         reason = "the error is the channel's own send error"
     )]
     pub(crate) fn send(&self, input: Input) -> Result<(), SendError<Input>> {
+        if let Some(router) = &self.router {
+            if let Input::Connected(stream, _) = &input {
+                if let Ok(stream) = stream.try_clone() {
+                    router.attach(stream);
+                }
+            } else if matches!(input, Input::Disconnected) {
+                router.detach();
+            }
+        }
         self.tx.send(input)
     }
 }
@@ -223,6 +268,13 @@ pub(crate) fn read_lines(stream: impl std::io::Read, feed: &Feed) {
         let Some(line) = parse_line(buf.trim_end_matches(['\r', '\n'])) else {
             continue;
         };
+        if feed
+            .router
+            .as_ref()
+            .is_some_and(|router| router.route(&line))
+        {
+            continue;
+        }
         if !feed.credits.take(feed.epoch) {
             break;
         }

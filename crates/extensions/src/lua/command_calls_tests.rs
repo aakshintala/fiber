@@ -24,6 +24,7 @@ fn completion() -> Box<ToolCallCompleted> {
         content: vec![contract::shapes::ContentPart::Text {
             text: "answer".into(),
         }],
+        hosts_surfaced: Vec::new(),
     })
 }
 

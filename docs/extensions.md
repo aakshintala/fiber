@@ -247,13 +247,14 @@ fiber.command(name, { description, timeout, run })
 
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
-A tool's `effects` is a table, `{ effects, paths?, reversible }` as
-`docs/permissions.md`, "Effects", declares, or a function of the call's
+A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
+`docs/permissions.md`, "Effects", and `docs/tools.md`, "What a tool declares",
+declare, or a function of the call's
 arguments that returns one. The function is bounded by the tool's `timeout`,
 and an error fails the call `tool_error` before it runs. `run` returns a
 string, one text part, or `{ content, details?, error = { code, message }?,
-control? }`, where `control` takes the fields any tool may set
-(`docs/tools.md`, "What a result carries"). A raised error fails the call
+control?, hosts_surfaced? }`, where `control` and `hosts_surfaced` take what
+any tool may set (`docs/tools.md`, "What a result carries"). A raised error fails the call
 `tool_error` with its message. When two extensions register one tool name,
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).

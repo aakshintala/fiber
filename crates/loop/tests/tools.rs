@@ -1055,6 +1055,7 @@ impl Tool for HostedSearch {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -1104,6 +1105,7 @@ fn hosted_action() -> contract::provider::ReplyAction {
             control: None,
             changed_by: None,
             provider_item: Some(search_result_block()),
+            hosts_surfaced: vec!["https://www.rust-lang.org/".into()],
         },
     })
 }
@@ -1262,6 +1264,7 @@ impl Tool for AlwaysReviewedSearch {
             subject: Some(String::new()),
             prefix: None,
             always_reviewed: true,
+            hosts: None,
         })
     }
 
@@ -1312,5 +1315,69 @@ fn a_hosted_calls_start_keeps_the_registered_tools_always_reviewed() {
         .unwrap();
     assert_eq!(started.payload["effects"], json!(["network"]));
     assert_eq!(started.payload["always_reviewed"], true);
+    assert!(reviewer.requests().is_empty());
+}
+
+#[test]
+fn known_hosts_hosted_search_surfaces_hosts_before_network_calls_are_judged() {
+    let mut lookup = TestTool::declaring("lookup", "Fetched.", vec![Effect::Network], None);
+    lookup.hosts = Some(vec!["https://www.rust-lang.org/learn".into()]);
+    let lookup = Arc::new(lookup);
+    let mut session = Session::with_tools(
+        vec![
+            hosted_reply(calls_reply("", &[("lookup", paris())])),
+            calls_reply("", &[("lookup", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![Arc::new(HostedSearch), lookup.clone()],
+    );
+    let reviewer = session.reviewer(vec![]);
+    session.inbox.send(delivery("search")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed"
+        ]
+    );
+    assert_eq!(
+        completed(&lines)[0].payload["hosts_surfaced"],
+        json!(["https://www.rust-lang.org/"])
+    );
+    assert_eq!(lookup.ran().len(), 2);
     assert!(reviewer.requests().is_empty());
 }

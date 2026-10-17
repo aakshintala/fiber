@@ -225,6 +225,7 @@ impl Tool for ReadsTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 
@@ -2212,6 +2213,7 @@ impl Tool for ExecTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
 

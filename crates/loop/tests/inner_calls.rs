@@ -52,6 +52,7 @@ impl FakeTool {
                 subject: Some("x".into()),
                 prefix: None,
                 always_reviewed: false,
+                hosts: None,
             },
             effects_error: None,
             paths: Mutex::default(),

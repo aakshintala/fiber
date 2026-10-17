@@ -1677,6 +1677,7 @@ fn the_recorded_openai_search_decodes_its_query_and_sources() {
             .flatten()
             .filter_map(|source| source.get("url").and_then(Value::as_str))
             .collect();
+        assert_eq!(pair.completed.hosts_surfaced, urls);
         assert!(!urls.is_empty(), "the recording asked for sources");
         assert_eq!(hosted_text(pair), urls.join("\n"));
     }
@@ -1870,6 +1871,7 @@ fn a_web_search_call_that_did_not_complete_completes_failed_with_its_status() {
     };
     let failed = content(Some("failed"));
     assert_eq!(failed.status, contract::events::CallStatus::Failed);
+    assert!(failed.hosts_surfaced.is_empty());
     assert_eq!(
         failed.content,
         vec![contract::shapes::ContentPart::Text {

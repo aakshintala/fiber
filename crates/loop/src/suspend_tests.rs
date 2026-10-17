@@ -46,6 +46,7 @@ fn completed(text: &str) -> Box<ToolCallCompleted> {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     })
 }
 

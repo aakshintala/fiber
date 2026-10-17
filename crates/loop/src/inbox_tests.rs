@@ -136,6 +136,7 @@ impl contract::tool::Tool for CommandTool {
             subject: None,
             prefix: None,
             always_reviewed: false,
+            hosts: None,
         })
     }
     fn run(
