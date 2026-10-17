@@ -154,7 +154,10 @@ pub(crate) fn page_with_total(
                 + 1
         }
     };
-    let total = total_of(&listed, running);
+    let total = listed
+        .iter()
+        .filter(|row| !running.contains(&row.session_id.0))
+        .count();
     let rows = listed
         .into_iter()
         .skip(start)
@@ -162,14 +165,6 @@ pub(crate) fn page_with_total(
         .take(RECENT_PAGE)
         .collect();
     Ok((rows, total))
-}
-
-/// How many of `listed` no running session holds.
-fn total_of(listed: &[RecentRow], running: &BTreeSet<String>) -> usize {
-    listed
-        .iter()
-        .filter(|row| !running.contains(&row.session_id.0))
-        .count()
 }
 
 /// The rows the hub seeds its feed from at start: of the newest

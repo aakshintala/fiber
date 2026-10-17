@@ -239,7 +239,7 @@ fn a_delegate_row_is_skipped_and_pages_stay_full() {
 }
 
 #[test]
-fn count_covers_every_row_past_the_page() {
+fn total_covers_every_row_past_the_page() {
     let temp = Temp::new();
     for n in 0..53 {
         temp.append(&temp.row(n, "p", Left::Exited, None));
@@ -254,7 +254,7 @@ fn count_covers_every_row_past_the_page() {
 }
 
 #[test]
-fn count_skips_running_delegate_and_missing_directory_rows() {
+fn total_skips_running_delegate_and_missing_directory_rows() {
     let temp = Temp::new();
     temp.append(&temp.row(1, "p", Left::Exited, None));
     temp.append(&temp.row(2, "p", Left::Exited, None));
@@ -271,19 +271,6 @@ fn count_skips_running_delegate_and_missing_directory_rows() {
     assert_eq!(unfiltered, 2);
     let (_, project) = page_with_total(&temp.dir, None, Some("p"), &running).unwrap();
     assert_eq!(project, 2);
-}
-
-#[test]
-fn count_is_not_capped_at_the_page_size() {
-    let temp = Temp::new();
-    for n in 0..RECENT_PAGE as u64 {
-        temp.append(&temp.row(n, "p", Left::Exited, None));
-    }
-    let (_, total) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
-    assert_eq!(total, RECENT_PAGE);
-    temp.append(&temp.row(RECENT_PAGE as u64, "p", Left::Exited, None));
-    let (_, total) = page_with_total(&temp.dir, None, None, &BTreeSet::new()).unwrap();
-    assert_eq!(total, RECENT_PAGE + 1);
 }
 
 #[test]
