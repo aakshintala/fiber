@@ -113,7 +113,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   when an `after_tool` hook returned text for the artifact.
 - `kept`: on a cut result, the byte ranges of the full output that `content`
   holds ("Bounded results"), so a client marks the edges of the model's view
-  without reading the cut notice.
+  without reading the cut notice. The ranges index the text or raw stream the
+  cut saw, after any `after_tool` hook replaced `content`. When a hook returns
+  separate artifact text, the ranges do not index it, and a client must not
+  slice that artifact with them.
 - `control`: instructions to the loop, absent on most results. Four fields
   are defined. `handoff`, a handoff note: the loop restarts the model's
   context from it at the step boundary (`docs/handoff.md`). `questions`, a
@@ -1358,7 +1361,8 @@ Each provider credential label has one cache holding its last value, when it was
 any fetch in flight. Concurrent readers share one fetch. What the person is
 shown reads the same cache, and shows no age.
 
-The first `quota` driver command starts a loader on its own thread. It starts
+The first `quota` driver command or `delegate_models` call starts a loader on
+its own thread. It starts
 providers that have a credential label and checks whether they register
 `quota()` before reading any key. Each label's key is read once per process,
 as a model switch to that label reads it. A provider whose `quota()` is asked
