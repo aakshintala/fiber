@@ -2359,6 +2359,7 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
             changes: None,
             control: None,
             changed_by: None,
+            hosts_surfaced: Vec::new(),
             provider_item: None,
         },
         0,
