@@ -139,7 +139,7 @@ fn rebuild_with_cut(
             if let Event::ModelChanged(changed) = &event {
                 stamped = changed.after.model.clone();
             }
-            if matches!(event, Event::AssistantMessageStarted(_)) {
+            if matches!(event, Event::AssistantMessageStarted(_)) && !rendered.carry.in_summary() {
                 sent = Some(rendered.conversation.len());
             }
             // The context a completed handoff starts has had no request.
@@ -463,6 +463,10 @@ pub(crate) fn render(
     }
     match event {
         Event::TurnStarted(started) => {
+            if started.input.iter().any(|item| matches!(item, InputItem::Rewind { .. })) {
+                carry.open_summary(conversation.len());
+                return;
+            }
             carry.input.clear();
             for item in &started.input {
                 match item {
@@ -538,7 +542,11 @@ pub(crate) fn render(
         }
         // A new process, so a window left open was cut short by the death of
         // the old one.
-        Event::FiberStarted(_) => carry.close_window(conversation),
+        Event::FiberStarted(_) => {
+            carry.close_window(conversation);
+            carry.close_summary(conversation);
+        }
+        Event::TurnCompleted(_) => carry.close_summary(conversation),
         Event::ContextNudged(nudged) => {
             conversation.push(Input::User {
                 text: carry.nudge_text(nudged),
@@ -658,7 +666,9 @@ pub(crate) fn render(
             }
         }
         // A new reply starts a new step's calls.
-        Event::AssistantMessageStarted(_) => carry.step.clear(),
+        Event::AssistantMessageStarted(_) => {
+            if !carry.in_summary() { carry.step.clear(); }
+        }
         // A reply's closing line sends nothing: its text parts were already
         // rendered, and a failed call sends nothing. Its retry is a new action.
         Event::AssistantMessageCompleted(_)
@@ -670,7 +680,6 @@ pub(crate) fn render(
         | Event::FiberExited(_)
         | Event::Rewound(_)
         | Event::StepStarted(_)
-        | Event::TurnCompleted(_)
         | Event::SteeringQueue(_)
         | Event::ShellCommand(_)
         | Event::SessionNamed(_)

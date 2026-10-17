@@ -37,6 +37,25 @@ pub struct Reviewed {
     pub input: Input,
 }
 
+/// Skips a rewind summary turn, including its start and completion. A process
+/// start closes an unfinished summary window after a crash. The history fold
+/// and review jig share this gate with the live conversation's summary window.
+pub fn summary_skips(inside: &mut bool, event: &Event) -> bool {
+    if let Event::TurnStarted(started) = event
+        && started
+            .input
+            .iter()
+            .any(|item| matches!(item, InputItem::Rewind { .. }))
+    {
+        *inside = true;
+    }
+    let skipped = *inside;
+    if matches!(event, Event::TurnCompleted(_) | Event::FiberStarted(_)) {
+        *inside = false;
+    }
+    skipped
+}
+
 /// Adds what `event` puts in what the reviewer is shown: each person's
 /// message, each tool call, and the reply each person message answers,
 /// nothing else. `seq` is the durable line's

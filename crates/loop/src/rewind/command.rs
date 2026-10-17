@@ -254,7 +254,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
 }
 
 /// The point `requested` names in the point log's `lines`, or the default
-/// point: the latest `turn_started` at or before the bound, minus one. The
+/// point: the latest non-summary `turn_started` at or before the bound, minus one. The
 /// point is a step boundary: the log holds a `turn_started` or a
 /// `step_started` just after it, and no tool call before it is answered
 /// after it (`docs/events.md`, "Rewind"). A point past the bound is not in
@@ -270,6 +270,16 @@ pub(crate) fn point_for(
                 .iter()
                 .filter(|line| {
                     line.kind == "turn_started"
+                        && !line
+                            .payload
+                            .get("input")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|items| {
+                                items.iter().any(|item| {
+                                    item.get("type").and_then(serde_json::Value::as_str)
+                                        == Some("rewind")
+                                })
+                            })
                         && target
                             .bound
                             .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))

@@ -185,6 +185,21 @@ fn the_default_point_is_the_latest_turn_start_minus_one() {
 }
 
 #[test]
+fn the_default_point_ignores_summary_turns() {
+    let mut lines = two_turns();
+    let mut summary = line("turn_started", 7, None);
+    summary.payload.insert(
+        "input".into(),
+        serde_json::json!([{"type":"rewind", "command_id":"any"}]),
+    );
+    lines.push(summary.clone());
+    assert_eq!(point_for(&lines, &own_target(), None), Ok(4));
+    let refused = point_for(&[summary], &own_target(), None).unwrap_err();
+    assert_eq!(refused.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(refused.message, "This session has no turn to rewind to.");
+}
+
+#[test]
 fn the_default_point_with_one_turn_is_before_it() {
     let lines = vec![
         line("session_started", 0, None),
