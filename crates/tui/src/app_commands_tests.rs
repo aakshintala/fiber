@@ -1685,6 +1685,20 @@ fn remote_search_errors_are_panel_errors_and_stale_changes_nothing() {
 }
 
 #[test]
+fn remote_search_write_failure_is_a_panel_error() {
+    let (mut app, router, _lines, _inputs) = remote_search_app("/remote/ws");
+    let (client, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    router.attach(client);
+    drop(peer);
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
+    assert_eq!(
+        app.overlays.files.as_ref().unwrap().result,
+        Some(Err("connection lost".into()))
+    );
+    assert_eq!(router.registered(), 0);
+}
+
+#[test]
 fn remote_mentions_without_workspace_or_link_do_not_fall_back_to_client_disk() {
     for empty in [false, true] {
         let (mut app, router, lines, _inputs) =
@@ -1695,7 +1709,12 @@ fn remote_mentions_without_workspace_or_link_do_not_fall_back_to_client_disk() {
         assert_eq!(app.on_key(Key::Char('@'), now()), Effect::None);
         assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
         assert!(lines.try_recv().is_err());
-        assert!(app.overlays.files.as_ref().unwrap().result.is_none());
+        let expected = if empty {
+            None
+        } else {
+            Some(Err("connection lost".into()))
+        };
+        assert_eq!(app.overlays.files.as_ref().unwrap().result, expected);
     }
     let mut local = connected();
     assert_eq!(local.on_key(Key::Char('@'), now()), Effect::ListFiles);

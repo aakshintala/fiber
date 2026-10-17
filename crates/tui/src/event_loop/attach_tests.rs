@@ -717,10 +717,34 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
                 hub.credits().received(input);
             }
             retry.give(Duration::ZERO);
-            assert!(matches!(
-                d.recv_or_fail(&rx, "reconnected after lend overflow"),
-                Input::Connected(..)
-            ));
+            let connected = d.recv_or_fail(&rx, "reconnected after lend overflow");
+            assert!(matches!(connected, Input::Connected(..)));
+            let peer = next_hub.try_clone().unwrap();
+            let (sent, feed_sent) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                BufReader::new(peer).read_line(&mut text).unwrap();
+                sent.send(serde_json::from_str::<serde_json::Value>(&text).unwrap())
+                    .unwrap();
+            });
+            let (handled, handle_done) = mpsc::channel();
+            std::thread::spawn(move || {
+                let (mut terminal, old_peer, _, _) = opened();
+                drop(old_peer);
+                terminal.app = crate::app::App::new("/w".into());
+                terminal.app.set_home(crate::Launch::default());
+                let initial = terminal.app.on_line(Line::Hub(hello()));
+                let initial: serde_json::Value = serde_json::from_str(&initial[0]).unwrap();
+                assert_eq!(initial["command"], "feed");
+                assert_eq!(terminal.handle(Input::Disconnected), None);
+                assert_eq!(terminal.handle(connected), None);
+                handled.send(()).unwrap();
+            });
+            assert_eq!(
+                d.recv_or_fail(&feed_sent, "feed resent after overflow reconnect")["command"],
+                "feed"
+            );
+            d.recv_or_fail(&handle_done, "loop handled overflow reconnect");
         }
         d.recv_or_fail(&server_done, "flood server done");
         drop(next_hub);

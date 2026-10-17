@@ -357,13 +357,14 @@ impl App {
     }
 
     /// Remote panels never start a client-side walk, including while detached.
-    fn search_files(&self, query: String, fresh: bool) -> Effect {
+    fn search_files(&mut self, query: String, fresh: bool) -> Effect {
         if let Some(remote) = self.remote() {
             let workspace = self.workspace();
-            if !workspace.as_os_str().is_empty() {
-                remote
-                    .search(&workspace, &query, fresh, self.overlays.generation)
-                    .unwrap_or(());
+            if !workspace.as_os_str().is_empty()
+                && let Err(error) =
+                    remote.search(&workspace, &query, fresh, self.overlays.generation)
+            {
+                self.on_files(self.overlays.generation, Err(error.to_string()));
             }
             Effect::None
         } else if fresh {

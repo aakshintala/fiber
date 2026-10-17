@@ -11,8 +11,7 @@ type Pause = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
 
 enum LoginState {
     Idle,
-    Started { epoch: u64 },
-    Waiting { epoch: u64 },
+    Active { epoch: u64 },
     Cancelled,
 }
 
@@ -70,7 +69,7 @@ impl BrowserLogin for RemoteLogin {
             pause(&self.pause_before_start);
             match self.router.send("device_login", json!({"name":self.name})) {
                 Ok(pending) => {
-                    *state = LoginState::Started {
+                    *state = LoginState::Active {
                         epoch: pending.epoch(),
                     };
                     break pending;
@@ -99,18 +98,15 @@ impl BrowserLogin for RemoteLogin {
         #[cfg(test)]
         pause(&self.pause_before_result);
         let pending = {
-            let mut state = support::lock(&self.state);
+            let state = support::lock(&self.state);
             if matches!(*state, LoginState::Cancelled) {
                 return Err(super::ask_error(super::AskError::Cancelled));
             }
             #[cfg(test)]
             pause(&self.pause_before_result_send);
-            let pending = self
-                .router
+            self.router
                 .send_on(epoch, "device_login_result", json!({}))
-                .map_err(super::ask_error)?;
-            *state = LoginState::Waiting { epoch };
-            pending
+                .map_err(super::ask_error)?
         };
         let line = pending.wait().map_err(super::ask_error)?;
         let answer = decode::result(&line, "device_login_result")?;
@@ -131,7 +127,7 @@ impl BrowserLogin for RemoteLogin {
             self.router.wake();
             match previous {
                 LoginState::Idle | LoginState::Cancelled => return,
-                LoginState::Started { epoch } | LoginState::Waiting { epoch } => {
+                LoginState::Active { epoch } => {
                     self.router.send_on(epoch, "device_login_cancel", json!({}))
                 }
             }

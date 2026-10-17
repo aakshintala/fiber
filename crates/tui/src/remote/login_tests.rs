@@ -65,6 +65,17 @@ impl Hub {
             rx,
         )
     }
+    fn barrier(&self, deadline: &Deadline) {
+        let router = Arc::clone(&self.router);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            tx.send(router.ask("sentinel", json!({}), crate::remote::Caller::Loop))
+                .unwrap();
+        });
+        let sentinel = self.line(deadline, "sentinel");
+        self.reply(&sentinel, json!(null));
+        assert!(deadline.recv_or_fail(&rx, "sentinel answer").is_ok());
+    }
     fn line(&self, deadline: &Deadline, command: &str) -> Value {
         let line = deadline.recv_or_fail(&self.lines, command);
         assert_eq!(line["command"], command);
@@ -365,7 +376,7 @@ fn cancelling_a_before_b_starts_prevents_as_result_from_reaching_b() {
         d.recv_or_fail(&b_result, "B stored").unwrap().path,
         "B stored"
     );
-    no_answer(&hub.lines);
+    hub.barrier(&d);
 }
 
 #[test]
@@ -389,9 +400,9 @@ fn reconnect_before_result_never_writes_to_the_new_connection() {
         "connection changed"
     );
     assert_eq!(hub.router.registered(), 0);
-    no_answer(&hub.lines);
+    hub.barrier(&d);
     d.recv_or_fail(&cancel(&login), "cancel older epoch");
-    no_answer(&hub.lines);
+    hub.barrier(&d);
 }
 
 #[test]
@@ -418,8 +429,11 @@ fn lost_start_and_lost_result_end_run_and_cancel_without_retry() {
             "connection lost"
         );
         d.recv_or_fail(&cancel(&login), "detached cancel");
-        let new_lines = Hub::attach(&hub.router);
+        let reconnected = Hub {
+            router: Arc::clone(&hub.router),
+            lines: Hub::attach(&hub.router),
+        };
         d.recv_or_fail(&cancel(&login), "reattached cancelled login");
-        no_answer(&new_lines);
+        reconnected.barrier(&d);
     }
 }

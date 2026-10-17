@@ -169,6 +169,8 @@ fn ask_error(error: AskError) -> ConfigureError {
         message: error.to_string(),
     }
 }
+// debt: three write-side enum matches and decode::layer's reverse match;
+// consolidate into shared tables when a second enum needs wire decoding.
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Global => "global",
@@ -181,9 +183,6 @@ fn scope_name(scope: SwitchScope) -> &'static str {
         SwitchScope::Project => "project",
         SwitchScope::Everywhere => "everywhere",
     }
-}
-fn unit(_: &Value) -> Option<()> {
-    Some(())
 }
 
 /// Ownership follows the first key segment, never the file path.
@@ -315,7 +314,7 @@ impl Configure for Remote {
             "set_reviewer",
             json!({"name":name,"id":id}),
             Caller::Loop,
-            unit,
+            |_| Some(()),
         )
     }
     fn themes(&self, _workspace: &Path) -> Vec<String> {
@@ -344,7 +343,7 @@ impl Configure for Remote {
             ToolGroup::Mcp(name) => json!({"mcp":name}),
             ToolGroup::Extension(name) => json!({"extension":name}),
         };
-        self.call("switch_tool",json!({"workspace":self.workspace(workspace)?,"group":group,"tool":tool,"scope":scope_name(scope),"on":on}),Caller::Loop,unit)
+        self.call("switch_tool",json!({"workspace":self.workspace(workspace)?,"group":group,"tool":tool,"scope":scope_name(scope),"on":on}),Caller::Loop,|_| Some(()))
     }
     fn skills_disabled(&self, workspace: &Path) -> Result<SkillsDisabled, ConfigureError> {
         self.call(
@@ -361,7 +360,7 @@ impl Configure for Remote {
         scope: SwitchScope,
         on: bool,
     ) -> Result<(), ConfigureError> {
-        self.call("switch_skill",json!({"workspace":self.workspace(workspace)?,"name":name,"scope":scope_name(scope),"on":on}),Caller::Loop,unit)
+        self.call("switch_skill",json!({"workspace":self.workspace(workspace)?,"name":name,"scope":scope_name(scope),"on":on}),Caller::Loop,|_| Some(()))
     }
     fn skill_text(&self, path: &Path) -> Result<String, ConfigureError> {
         self.call(

@@ -92,14 +92,12 @@ fn epochs_reject_a_result_on_another_connection() {
         Err(AskError::OtherConnection)
     ));
     assert_eq!(router.registered(), 0);
-    assert!(
-        Deadline::after(std::time::Duration::from_millis(100))
-            .recv(&lines)
-            .is_err()
-    );
-    let pending = router.send_on(2, "device_login_result", json!({})).unwrap();
+    let pending = router
+        .send_on(2, "device_login_result", json!({"probe":"current epoch"}))
+        .unwrap();
     assert_eq!(pending.epoch(), 2);
     let line = deadline.recv_or_fail(&lines, "new result");
+    assert_eq!(line["args"], json!({"probe":"current epoch"}));
     assert!(router.route(&answer(line["id"].as_str().unwrap(), "command_accepted")));
     assert!(deadline.recv_or_fail(&wait(pending), "new answer").is_ok());
     router.detach();
