@@ -52,8 +52,9 @@ fn is_stopped(completed: &JobCompleted) -> bool {
 
 /// The jobs a rewind stopped, read from the old session's own log: the
 /// run of job-record lines directly before the last line, when that line
-/// is `rewound`, in log order. A log not ending in `rewound` yields
-/// nothing, as does a run with no listed end.
+/// is `rewound`, in log order, each joined to its `job_started` across
+/// the whole log for its description. A log not ending in `rewound`
+/// yields nothing, as does a run with no listed end.
 ///
 /// Sound because `stop_jobs_for_rewind` is the only writer between
 /// `write_last_settled` and `rewound`, and it writes only job-record
@@ -66,6 +67,17 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
     if last.kind != "rewound" {
         return Ok(Vec::new());
     }
+    // A start is written when its job starts, long before the trailing
+    // run, so the join is by id across the whole log. A job with no
+    // `job_started` in the log is listed by id alone.
+    let mut descriptions = HashMap::new();
+    for line in &lines {
+        if let Some(Event::JobStarted(started)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+        {
+            descriptions.insert(started.job_id.clone(), started.description.clone());
+        }
+    }
     let mut run = Vec::new();
     for line in lines.iter().rev().skip(1) {
         if !is_job_record(&line.kind) {
@@ -74,14 +86,6 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
         run.push(line);
     }
     run.reverse();
-    let mut descriptions = HashMap::new();
-    for line in &run {
-        if let Some(Event::JobStarted(started)) =
-            Event::from_envelope(line).map_err(Error::Unreadable)?
-        {
-            descriptions.insert(started.job_id.clone(), started.description.clone());
-        }
-    }
     let mut stopped = Vec::new();
     for line in &run {
         if let Some(Event::JobCompleted(completed)) =

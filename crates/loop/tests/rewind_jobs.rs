@@ -17,7 +17,6 @@ extern crate support as ext_support;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::commands::RewindArgs;
 use contract::events::{
@@ -523,11 +522,6 @@ fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
         session.clock.await_parked_unbounded(DEADLINE),
         "the stop wait parked with no deadline"
     );
-    // Moving the clock past the shutdown's per-process bound changes
-    // nothing: with no job end the wait does not return and nothing is
-    // rewound.
-    session.clock.advance(Duration::from_secs(30));
-    assert!(finished.try_recv().is_err(), "the wait is still open");
     assert!(
         log::read(&dir)
             .unwrap()

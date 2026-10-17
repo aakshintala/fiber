@@ -218,8 +218,9 @@ fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> 
 /// so it is the same bytes whenever it is rendered.
 ///
 /// debt: `pub` only for the integration tests in `crates/loop/tests/`,
-/// ceiling one re-export; make it crate-private and move those tests to
-/// [`rewind_note_with_jobs`] when `lib.rs` is touched for another reason.
+/// ceiling one re-export; move the callers in `rewind.rs` and
+/// `approved_code.rs` there to [`rewind_note_with_jobs`], after which
+/// `rewind_note` goes crate-private.
 pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
     let (paths, calls) = changes(dir, point)?;
     Ok(note(&paths, &calls, &[]))

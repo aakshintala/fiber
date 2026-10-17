@@ -278,6 +278,24 @@ fn jobs_section(note: &str) -> &str {
 }
 
 #[test]
+fn a_start_before_the_trailing_run_still_describes_the_stop() {
+    // The start is written when the job starts, long before the trailing
+    // run: the note joins it by id across the whole log, past the lines
+    // between, so the stop keeps its description.
+    let (_home, old) = session_log(&[
+        session_start(),
+        started("j_1", "npm run dev"),
+        turn_done(),
+        turn_done(),
+        cancelled("j_1"),
+        rewound_line(),
+    ]);
+    let (_point_home, dir) = session_log(&[session_start()]);
+    let note = rewind_note_with_jobs(&old, &dir, Seq(0)).unwrap();
+    assert!(jobs_section(&note).contains("- j_1: npm run dev"), "{note}");
+}
+
+#[test]
 fn with_jobs_and_no_file_changes_the_section_follows_unchanged() {
     let (_home, old) = session_log(&[
         session_start(),
