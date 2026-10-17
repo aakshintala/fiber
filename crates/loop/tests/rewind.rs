@@ -1340,7 +1340,7 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
         .iter()
         .filter_map(|input| match input {
             Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
-            _ => None,
+            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
         })
         .collect();
     for text in [
@@ -1400,7 +1400,7 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
         .iter()
         .filter_map(|input| match input {
             Input::User { text, .. } | Input::Assistant { text, .. } => Some(text.as_str()),
-            _ => None,
+            Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. } => None,
         })
         .collect();
     for text in ["hi", "working", "Done.", "again", "Again."] {
