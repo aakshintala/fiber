@@ -1589,7 +1589,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         ),
         (
             Scripted::text("  "),
-            "The summary reply held no text.",
+            "the summary reply held no text.",
             "completed",
             vec![
                 "assistant_message_started",
@@ -1600,7 +1600,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         ),
         (
             calls_reply("Do not keep this", &[("write_file", paris())]),
-            "The summary reply made tool calls.",
+            "the summary reply made tool calls.",
             "completed",
             vec![
                 "assistant_message_started",
@@ -1613,7 +1613,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         ),
         (
             truncated,
-            "The summary reached the output limit.",
+            "the summary reached the output limit.",
             "completed",
             vec![
                 "assistant_message_started",

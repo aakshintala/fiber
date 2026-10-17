@@ -58,8 +58,9 @@ impl Loop {
     /// in order, then `rewound` as the last line, naming the minted new
     /// session and the point, and the new session's id as the answer. Every
     /// refusal before the optional summary leaves the log byte for byte.
-    /// A failed summary keeps only its turn and usage. On success the loop stops late-cost lookups and
-    /// writes what settled, appends `rewound`, sets `rewound`, and only
+    /// A failed summary keeps only its turn and usage. On success the loop
+    /// stops late-cost lookups and writes what settled, appends `rewound`,
+    /// sets `rewound`, and only
     /// then accepts, so the acknowledgement is sent after `rewound` is
     /// written.
     pub(crate) fn take_rewind(
@@ -266,26 +267,23 @@ pub(crate) fn point_for(
 ) -> Result<u64, Rejection> {
     match requested {
         None => {
-            let latest = lines
-                .iter()
-                .filter(|line| {
-                    line.kind == "turn_started"
-                        && !line
-                            .payload
-                            .get("input")
-                            .and_then(serde_json::Value::as_array)
-                            .is_some_and(|items| {
-                                items.iter().any(|item| {
-                                    item.get("type").and_then(serde_json::Value::as_str)
-                                        == Some("rewind")
-                                })
-                            })
-                        && target
-                            .bound
-                            .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))
-                })
-                .filter_map(|line| line.seq.map(|seq| seq.0))
-                .max();
+            let mut latest = None;
+            for line in lines.iter().filter(|line| {
+                line.kind == "turn_started"
+                    && target
+                        .bound
+                        .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))
+            }) {
+                let event = Event::from_envelope(line).map_err(|error| Rejection {
+                    code: ErrorCode::LogCorrupt,
+                    message: error.to_string(),
+                })?;
+                if let Some(Event::TurnStarted(started)) = event
+                    && !crate::reviewer::summary_turn(&started)
+                {
+                    latest = latest.max(line.seq.map(|seq| seq.0));
+                }
+            }
             match latest.and_then(|start| start.checked_sub(1)) {
                 Some(point) => Ok(point),
                 None => Err(Rejection {

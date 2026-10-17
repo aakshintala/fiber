@@ -84,7 +84,7 @@ impl Loop {
             &self.model.reference,
             forked.seed,
         )?;
-        let point = excerpt(lines.get(cut..).unwrap_or_default())
+        let point = excerpt(lines.get(cut..).unwrap_or_default())?
             .map(|excerpt| fill(message("rewind-summary-point"), &[("excerpt", &excerpt)]))
             .unwrap_or_default();
         conversation.push(Input::User {
@@ -98,7 +98,7 @@ impl Loop {
                     TurnOutcome::Failed,
                     Some(failure(
                         ErrorCode::LogCorrupt,
-                        "The preamble was not built.",
+                        "the preamble was not built.",
                     )),
                 ),
             );
@@ -129,17 +129,17 @@ impl Loop {
                 let result = if called {
                     Err(failure(
                         ErrorCode::SummaryFailed,
-                        "The summary reply made tool calls.",
+                        "the summary reply made tool calls.",
                     ))
                 } else if finish == Finish::OutputLimit {
                     Err(failure(
                         ErrorCode::SummaryFailed,
-                        "The summary reached the output limit.",
+                        "the summary reached the output limit.",
                     ))
                 } else if text.trim().is_empty() {
                     Err(failure(
                         ErrorCode::SummaryFailed,
-                        "The summary reply held no text.",
+                        "the summary reply held no text.",
                     ))
                 } else {
                     Ok(text)
@@ -177,22 +177,13 @@ impl Loop {
 mod tests;
 
 /// The first message, reply text or tool call after the point.
-fn excerpt(lines: &[Envelope]) -> Option<String> {
+fn excerpt(lines: &[Envelope]) -> Result<Option<String>, Error> {
     let mut inside = false;
     for line in lines {
-        let Some(event) = Event::from_envelope(line).ok().flatten() else {
+        let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
             continue;
         };
-        if let Event::TurnStarted(started) = &event {
-            inside = started
-                .input
-                .iter()
-                .any(|item| matches!(item, InputItem::Rewind { .. }));
-        }
-        if inside {
-            if matches!(event, Event::TurnCompleted(_) | Event::FiberStarted(_)) {
-                inside = false;
-            }
+        if crate::reviewer::summary_skips(&mut inside, &event) {
             continue;
         }
         let text = if let Event::TurnStarted(started) = event {
@@ -211,8 +202,8 @@ fn excerpt(lines: &[Envelope]) -> Option<String> {
             None
         };
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
-            return Some(text);
+            return Ok(Some(text));
         }
     }
-    None
+    Ok(None)
 }

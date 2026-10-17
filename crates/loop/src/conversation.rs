@@ -463,7 +463,7 @@ pub(crate) fn render(
     }
     match event {
         Event::TurnStarted(started) => {
-            if started.input.iter().any(|item| matches!(item, InputItem::Rewind { .. })) {
+            if crate::reviewer::summary_turn(started) {
                 carry.open_summary(conversation.len());
                 return;
             }
@@ -667,7 +667,9 @@ pub(crate) fn render(
         }
         // A new reply starts a new step's calls.
         Event::AssistantMessageStarted(_) => {
-            if !carry.in_summary() { carry.step.clear(); }
+            if !carry.in_summary() {
+                carry.step.clear();
+            }
         }
         // A reply's closing line sends nothing: its text parts were already
         // rendered, and a failed call sends nothing. Its retry is a new action.

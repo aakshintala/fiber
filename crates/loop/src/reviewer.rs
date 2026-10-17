@@ -21,6 +21,7 @@ mod request;
 mod selection;
 mod shown;
 
+pub(crate) use shown::summary_turn;
 /// What the reviewer is shown, and how the loop renders it
 /// (`docs/permissions.md`, "What it is shown"). Public for the `review`
 /// jig's replay, which folds a source log through the same renderer

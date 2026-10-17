@@ -2,7 +2,9 @@
 //! each person's message, each tool call, and the reply each person message
 //! answers, nothing else.
 
-use contract::events::{Event, InputItem, KeptMessage, MessageOutcome, Outcome, TurnOutcome};
+use contract::events::{
+    Event, InputItem, KeptMessage, MessageOutcome, Outcome, TurnOutcome, TurnStarted,
+};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin};
 use contract::{ActionId, Seq};
@@ -37,15 +39,20 @@ pub struct Reviewed {
     pub input: Input,
 }
 
+/// Whether this turn was requested solely to summarise a rewind.
+pub(crate) fn summary_turn(started: &TurnStarted) -> bool {
+    started
+        .input
+        .iter()
+        .any(|item| matches!(item, InputItem::Rewind { .. }))
+}
+
 /// Skips a rewind summary turn, including its start and completion. A process
 /// start closes an unfinished summary window after a crash. The history fold
 /// and review jig share this gate with the live conversation's summary window.
 pub fn summary_skips(inside: &mut bool, event: &Event) -> bool {
     if let Event::TurnStarted(started) = event
-        && started
-            .input
-            .iter()
-            .any(|item| matches!(item, InputItem::Rewind { .. }))
+        && summary_turn(started)
     {
         *inside = true;
     }

@@ -22,7 +22,14 @@ fn line(kind: &str, seq: u64, action: Option<&str>) -> Envelope {
         turn_id: None,
         action_id: action.map(|action| ActionId(action.into())),
         seq: Some(Seq(seq)),
-        payload: serde_json::Map::new(),
+        payload: if kind == "turn_started" {
+            serde_json::json!({"input": []})
+                .as_object()
+                .unwrap()
+                .clone()
+        } else {
+            serde_json::Map::new()
+        },
     }
 }
 
@@ -182,6 +189,15 @@ fn a_point_past_the_bound_is_not_in_this_sessions_history() {
 fn the_default_point_is_the_latest_turn_start_minus_one() {
     let lines = two_turns();
     assert_eq!(point_for(&lines, &own_target(), None), Ok(4));
+}
+
+#[test]
+fn the_default_point_rejects_an_unreadable_turn() {
+    let mut broken = line("turn_started", 7, None);
+    broken.payload.insert("input".into(), serde_json::json!(7));
+    let refused = point_for(&[broken], &own_target(), None).unwrap_err();
+    assert_eq!(refused.code, contract::ErrorCode::LogCorrupt);
+    assert!(refused.message.contains("sequence"), "{}", refused.message);
 }
 
 #[test]

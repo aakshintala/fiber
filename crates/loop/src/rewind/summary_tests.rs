@@ -41,7 +41,7 @@ fn a_message_quotes_its_text_parts_in_order_before_later_text() {
     }, {"type":"message", "command_id":"d", "source":"driver", "content":[{"type":"text","text":"later message"}]}]}),
     );
     assert_eq!(
-        excerpt(&[message, text("later reply")]),
+        excerpt(&[message, text("later reply")]).unwrap(),
         Some("first\nsecond".into())
     );
 }
@@ -56,7 +56,8 @@ fn jobs_alone_leave_the_quote_to_the_reply() {
             ),
             text("reply"),
             text("later")
-        ]),
+        ])
+        .unwrap(),
         Some("reply".into())
     );
 }
@@ -70,7 +71,8 @@ fn a_tool_call_names_the_tool_before_later_text() {
                 json!({"name":"read_file","arguments":{}})
             ),
             text("later")
-        ]),
+        ])
+        .unwrap(),
         Some("A call to the `read_file` tool.".into())
     );
 }
@@ -81,7 +83,8 @@ fn reasoning_is_not_quoted() {
         excerpt(&[
             line("reasoning_completed", json!({"text":"private thought"})),
             text("public reply")
-        ]),
+        ])
+        .unwrap(),
         Some("public reply".into())
     );
 }
@@ -94,10 +97,14 @@ fn a_completed_summary_is_skipped_with_its_start_and_end() {
             text("earlier summary"),
             line("turn_completed", json!({"outcome":"completed"})),
             text("real reply")
-        ]),
+        ])
+        .unwrap(),
         Some("real reply".into())
     );
-    assert_eq!(excerpt(&[summary(), text("still summarising")]), None);
+    assert_eq!(
+        excerpt(&[summary(), text("still summarising")]).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -108,7 +115,8 @@ fn a_crashed_summary_stops_being_skipped_at_the_process_start() {
             text("crashed summary"),
             line("fiber_started", json!({"version":"0.0.1","resumed":true})),
             text("after crash")
-        ]),
+        ])
+        .unwrap(),
         Some("after crash".into())
     );
 }
@@ -177,32 +185,40 @@ fn summary_rendering_preserves_the_persons_input_and_last_step() {
 
 #[test]
 fn no_qualifying_line_has_no_quote() {
-    assert_eq!(excerpt(&[]), None);
+    assert_eq!(excerpt(&[]).unwrap(), None);
     assert_eq!(
         excerpt(&[
             line("step_started", json!({})),
             line("reasoning_completed", json!({"text":"thought"}))
-        ]),
+        ])
+        .unwrap(),
         None
     );
-    assert_eq!(
-        excerpt(&[
-            line("future_kind", json!({})),
-            line("text_completed", json!({"text":7}))
-        ]),
-        None
-    );
+    assert_eq!(excerpt(&[line("future_kind", json!({}))]).unwrap(), None);
+}
+
+#[test]
+fn unreadable_excerpt_lines_fail_instead_of_quoting_later_text() {
+    for prefix in [vec![], vec![summary()]] {
+        let mut lines = prefix;
+        lines.push(line("text_completed", json!({"text":7})));
+        lines.push(text("later reply"));
+        assert!(matches!(excerpt(&lines), Err(crate::Error::Unreadable(_))));
+    }
 }
 
 #[test]
 fn blank_reply_text_and_empty_messages_are_skipped() {
     assert_eq!(
-        excerpt(&[text(" \n\t"), text("usable")]),
+        excerpt(&[text(" \n\t"), text("usable")]).unwrap(),
         Some("usable".into())
     );
     let message = line(
         "turn_started",
         json!({"input":[{"type":"message", "command_id":"c", "source":"driver", "content":[]}]}),
     );
-    assert_eq!(excerpt(&[message, text("usable")]), Some("usable".into()));
+    assert_eq!(
+        excerpt(&[message, text("usable")]).unwrap(),
+        Some("usable".into())
+    );
 }
