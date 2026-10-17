@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -217,14 +218,34 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
     }
     let mut killed = child.0.take().unwrap();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || match tx.send(killed.wait()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
+    thread::spawn(move || {
+        let result = killed.wait().and_then(|status| {
+            let mut stderr = String::new();
+            match killed.stderr.take() {
+                Some(mut pipe) => {
+                    use std::io::Read;
+                    pipe.read_to_string(&mut stderr).map(|_| (status, stderr))
+                }
+                None => Ok((status, stderr)),
+            }
+        });
+        match tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
     });
-    Deadline::after(DEADLINE)
+    let (status, stderr) = Deadline::after(DEADLINE)
         .recv(&rx)
         .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
         .unwrap();
-    assert!(leftover.exists(), "the kill left {}", leftover.display());
+    assert!(
+        status.signal() == Some(9),
+        "the child did not die by SIGKILL: {status}; its stderr: {stderr:?}"
+    );
+    assert!(
+        leftover.exists(),
+        "the kill left {}; the child's stderr: {stderr:?}",
+        leftover.display()
+    );
 
     let next = TempDir::new("fk");
     assert_ne!(next.path(), leftover);
