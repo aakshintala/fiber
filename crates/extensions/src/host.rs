@@ -327,6 +327,7 @@ impl Request {
             | Self::Ask(_)
             | Self::Tool(_)
             | Self::Drive(_)
+            | Self::Model(_)
             | Self::Exec(_)
             | Self::Lock => false,
         }
