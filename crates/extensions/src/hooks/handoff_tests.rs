@@ -642,11 +642,8 @@ const GATE_WAIT: Duration = Duration::from_secs(10);
 
 #[test]
 fn a_cancel_between_two_hooks_runs_no_later_hook() {
-    let server = ProviderServer::start([
-        Response::status(200, "{}"),
-        Response::status(200, "{}"),
-    ])
-    .unwrap();
+    let server =
+        ProviderServer::start([Response::status(200, "{}"), Response::status(200, "{}")]).unwrap();
     let url = server.url();
     server.hold();
     // Every request the hook sends reaches the server: the test owns
