@@ -258,6 +258,47 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
     assert!(!leftover.exists());
 }
 
+#[test]
+fn a_closed_stdin_lets_the_child_exit_and_clean_up() {
+    let mut child = spawn_child();
+    let leftover = printed_dir(&mut child);
+    drop(child.0.as_mut().unwrap().stdin.take());
+    let mut exited = child.0.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = exited.wait().and_then(|status| {
+            let mut stderr = String::new();
+            match exited.stderr.take() {
+                Some(mut pipe) => {
+                    use std::io::Read;
+                    pipe.read_to_string(&mut stderr).map(|_| (status, stderr))
+                }
+                None => Ok((status, stderr)),
+            }
+        });
+        match tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    let (status, stderr) = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to exit after stdin closed"))
+        .unwrap();
+    assert!(
+        status.code() == Some(0),
+        "the child did not exit cleanly: {status}; its stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("read_line: Ok(0)"),
+        "the child's stderr did not report a clean stdin close: {stderr:?}"
+    );
+    assert!(
+        !leftover.exists(),
+        "closing stdin left {}; the child's stderr: {stderr:?}",
+        leftover.display()
+    );
+}
+
 /// Kills the child unless it was already reaped, so a failed wait does not
 /// leave it running.
 struct ChildGuard(Option<Child>);
