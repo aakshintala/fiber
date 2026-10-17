@@ -22,6 +22,11 @@ use serde_json::Value;
 use crate::progress::SharedWake;
 use crate::{Error, Step};
 
+/// How many times in a row a turn continues a paused reply before failing
+/// it with `paused_too_long` (`docs/loop.md`, "A reply paused by a hosted
+/// tool"). Picked, not measured.
+const MAX_CONTINUATIONS: u32 = 5;
+
 /// How a failed model call is retried (`docs/configuration.md`): `attempts`
 /// retries after the first call, so up to `attempts + 1` calls, with the
 /// wait before retry `n` (from 1) at `min(initial * 2^(n-1), max)`.
@@ -141,8 +146,7 @@ impl crate::Loop {
         // A step's paused replies and continuations, ending with the step:
         // each resend carries every paused reply's blocks so far, and the
         // fifth continuation is the last one the turn takes.
-        let base = request.clone();
-        let mut request = base.clone();
+        let mut request = request.clone();
         let mut paused: Vec<Value> = Vec::new();
         let mut continuations = 0u32;
         loop {
@@ -153,10 +157,34 @@ impl crate::Loop {
                     message,
                 } => {
                     Self::resolve_orphans(&mut reply, &paused);
-                    if !pausable(&reply) {
-                        return self.record(reply, reasoning, turn, &message);
-                    }
-                    let blocks = self.write_paused(reply, reasoning, turn, &message)?;
+                    // One match on the reply's end, here: a pause with a
+                    // resendable block and no client tool call continues the
+                    // turn, and anything else takes the normal path. The
+                    // guards stay for a scripted provider, which may build a
+                    // `Paused` the decoder never would (empty, or with a
+                    // client call a pause never carries).
+                    let blocks = match &reply.finish {
+                        Finish::Paused { content }
+                            if !content.is_empty()
+                                && !reply
+                                    .actions
+                                    .iter()
+                                    .any(|action| matches!(action, ReplyAction::ToolCall(_))) =>
+                        {
+                            content.clone()
+                        }
+                        Finish::Completed | Finish::OutputLimit | Finish::Paused { .. } => {
+                            return self.record(reply, reasoning, turn, &message);
+                        }
+                    };
+                    self.write_paused(reply, reasoning, turn, &message)?;
+                    request
+                        .conversation
+                        .extend(blocks.iter().map(|block| Input::Assistant {
+                            model: self.model.reference.clone(),
+                            text: String::new(),
+                            provider_item: Some(block.clone()),
+                        }));
                     paused.extend(blocks);
                     if self.turn_cancelled() {
                         return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
@@ -164,27 +192,20 @@ impl crate::Loop {
                     if let Some(completed) = self.over_budget() {
                         return Ok(Step::Ended(self.budget_end(completed)));
                     }
-                    if continuations >= 5 {
+                    if continuations >= MAX_CONTINUATIONS {
                         return Ok(Step::Ended(crate::ended(
                             TurnOutcome::Failed,
                             Some(Failure {
                                 code: ErrorCode::PausedTooLong,
-                                message: "The reply was still paused (`pause_turn`) after 5 continuations."
-                                    .to_owned(),
+                                message: format!(
+                                    "The reply was still paused (`pause_turn`) after {MAX_CONTINUATIONS} continuations."
+                                ),
                                 retry_after_ms: None,
                                 provider: None,
                             }),
                         )));
                     }
                     continuations += 1;
-                    let mut next = base.clone();
-                    next.conversation
-                        .extend(paused.iter().map(|block| Input::Assistant {
-                            model: self.model.reference.clone(),
-                            text: String::new(),
-                            provider_item: Some(block.clone()),
-                        }));
-                    request = next;
                 }
                 Attempted::Failed(failure) if failure.code == ErrorCode::ContextOverflow => {
                     return self.overflowed(turn, Some(failure));
@@ -322,17 +343,6 @@ impl crate::Loop {
             wake.park(clock.as_ref(), Some(until));
         }
     }
-}
-
-/// Whether `reply` continues the turn inside itself: a paused reply with
-/// a resendable block and no client tool call, which a pause never carries.
-/// Anything else takes the normal path.
-fn pausable(reply: &Reply) -> bool {
-    matches!(&reply.finish, Finish::Paused { content } if !content.is_empty())
-        && !reply
-            .actions
-            .iter()
-            .any(|action| matches!(action, ReplyAction::ToolCall(_)))
 }
 
 /// A delay as whole milliseconds for `retry_scheduled.delay_ms`, saturating.

@@ -431,6 +431,8 @@ impl Decoder {
             self.content.insert(index, raw);
         }
     }
+
+    /// The reply, once message_stop has arrived.
     fn finish(&mut self) -> Result<Reply, Error> {
         let finish = match self.stop_reason.as_deref() {
             Some("end_turn" | "tool_use" | "stop_sequence") => Finish::Completed,

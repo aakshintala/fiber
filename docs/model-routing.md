@@ -880,7 +880,7 @@ so the idle limit is long. Either failure is `connection_failed` and is
 retried like a dropped connection. Neither is a configuration key.
 
 A response header `x-should-retry` overrides the status: `true` retries the
-failure, `false` does not. Fiber never retries quota or billing errors, or an
+failure, `false` does not. Fiber never retries quota or billing errors, an
 `unknown_stop_reason` or a `paused_too_long`, whatever the header says.
 
 Among the responses probed, only Anthropic sent `x-should-retry`: `false` on its

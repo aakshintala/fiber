@@ -248,25 +248,22 @@ impl Loop {
         Ok((calls, reply.finish))
     }
 
-    /// Writes a paused reply's actions, usage and completion like any reply,
-    /// and returns its raw blocks: the loop sends them back unchanged with
-    /// the next request. The hosted pair a pause split reaches the log here,
-    /// through the reply's own `Hosted` actions.
+    /// Writes a paused reply's actions, usage and completion like any reply.
+    /// The caller kept the reply's raw blocks before this moved it: the loop
+    /// sends them back unchanged with the next request. The hosted pair a
+    /// pause split reaches the log here, through the reply's own `Hosted`
+    /// actions.
     pub(crate) fn write_paused(
         &mut self,
         reply: Reply,
         opened: VecDeque<ActionId>,
         turn: &TurnId,
         message: &ActionId,
-    ) -> Result<Vec<Value>, Error> {
-        let content = match &reply.finish {
-            Finish::Paused { content } => content.clone(),
-            Finish::Completed | Finish::OutputLimit => Vec::new(),
-        };
+    ) -> Result<(), Error> {
         let tokens = reply.tokens.clone();
         self.write_reply(reply, opened, turn, message)?;
         self.measure(&tokens);
-        Ok(content)
+        Ok(())
     }
 
     /// Joins a hosted result that arrived without its call against the
