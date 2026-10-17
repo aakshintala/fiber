@@ -338,6 +338,28 @@ pub(super) fn admit<'a>(
                 }
             }
         }
+        Request::Model(spec) => {
+            // Task 3 replaces this arm with the real call; the stub reads
+            // each field so `dead_code` stays quiet until then.
+            let host::model::ModelRequestSpec {
+                model,
+                system,
+                messages,
+                max_tokens,
+            } = spec;
+            drop((model, system, max_tokens));
+            for message in messages {
+                drop((
+                    matches!(message.role, host::model::Role::User),
+                    message.content,
+                ));
+            }
+            drop(shared);
+            Admitted::Replied(Reply::Model(Err((
+                contract::ErrorCode::Closing,
+                "host.model: not available here".to_owned(),
+            ))))
+        }
         Request::Lock => {
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as

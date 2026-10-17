@@ -602,6 +602,7 @@ fn settle(
         host::Request::Ask(_)
         | host::Request::Tool(_)
         | host::Request::Drive(_)
+        | host::Request::Model(_)
         | host::Request::Exec(_)
         | host::Request::Callback { .. }
         | host::Request::Lock

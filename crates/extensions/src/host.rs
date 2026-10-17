@@ -26,6 +26,7 @@ pub(crate) mod exec;
 pub(crate) mod failure;
 mod fs;
 mod log;
+pub(crate) mod model;
 pub(crate) mod script;
 mod settings;
 pub(crate) mod state;
@@ -222,6 +223,7 @@ pub(crate) fn install(
         failure.clone(),
         note_failure,
     )?;
+    model::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
     drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
     tool::install(lua, &host, &tag, Rc::clone(&entry))?;
     ask::install(lua, &host, &tag, entry)?;
@@ -301,6 +303,8 @@ pub(crate) enum Request {
     Drive(DriveRequest),
     /// `host.exec`: run a program in its own process group.
     Exec(exec::ExecRequest),
+    /// `host.model`: one model request through the session's routing.
+    Model(model::ModelRequestSpec),
     /// `host.oauth.callback`: serve one request on this localhost port,
     /// answering only `path` when set.
     Callback { port: u16, path: Option<String> },
@@ -341,6 +345,9 @@ pub(crate) enum Reply {
     /// it, or the string the Lua half raises for an error in the calling
     /// code.
     Tool(Result<Value, String>),
+    /// How a `host.model` call ended: its text, tokens and cost, or the
+    /// code and message the callback raises as `{ code, message }`.
+    Model(Result<contract::model::HostModelReply, (contract::ErrorCode, String)>),
     /// The query parameters of the one request the callback served, or the
     /// code and message `host.oauth.callback` raises.
     Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
@@ -367,6 +374,7 @@ pub(crate) fn request_from(
         ("tool", Some(LuaValue::Table(spec))) => Request::Tool(tool::request(spec)?),
         ("drive", Some(LuaValue::Table(spec))) => Request::Drive(drive_request(spec)?),
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
+        ("model", Some(LuaValue::Table(spec))) => Request::Model(model::request(spec)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
             port: opts.get("port")?,
             path: opts.get("path")?,
@@ -695,6 +703,7 @@ pub(crate) fn resume_values(
         Reply::Http(Err(failed_with))
         | Reply::Drive(Err(failed_with))
         | Reply::Exec(Err(failed_with))
+        | Reply::Model(Err(failed_with))
         | Reply::Query(Err(failed_with)) => failed(failed_with),
         Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
         Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
@@ -708,6 +717,13 @@ pub(crate) fn resume_values(
             LuaValue::Nil,
             LuaValue::String(lua.create_string(message)?),
         ])),
+        // A `host.model` answer is one table: its text and its usage,
+        // whose `cost` is nil when the provider reported none and no price
+        // applied.
+        Reply::Model(Ok(answered)) => {
+            let result = model::reply(lua, &answered.text, &answered.tokens, answered.cost)?;
+            Ok(MultiValue::from_vec(vec![LuaValue::Table(result)]))
+        }
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {
