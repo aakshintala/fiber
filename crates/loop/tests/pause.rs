@@ -12,11 +12,11 @@
 
 mod support;
 
+use contract::ProviderCallId;
 use contract::events::{
     CallStatus, TextCompleted, ToolCallCompleted, ToolCallRequested, TurnOutcome,
 };
 use contract::provider::{Finish, HostedCall, Input, ReplyAction};
-use contract::ProviderCallId;
 use fakes::{Scripted, call_usage};
 use serde_json::{Value, json};
 
