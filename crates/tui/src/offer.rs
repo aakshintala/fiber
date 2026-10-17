@@ -12,8 +12,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::{read, session_command};
+use crate::diff::{diff_lines, gutter_text, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
 use crate::markdown::{Role, style};
+use crate::swapped::Ink;
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";
@@ -640,28 +642,26 @@ fn clipped(line: Line<'static>, spots: Vec<(u16, u16, Spot)>, width: u16) -> Row
     }
 }
 
-/// A changed item's diff: each hunk's `@@` line dim, removed lines in
-/// removed and added lines in added, as "Changed files" draws a hunk
-/// (`docs/tui.md`, "Swapped views"). `str::lines` drops a trailing `\r`,
-/// so a CRLF diff draws as an LF one.
+/// A changed item's diff through the shared renderer, indented as
+/// before: the dim gutter, `@@` lines dim, `-` lines in `removed` and
+/// `+` lines in `added`, the words that differ in reverse video when
+/// one removed line pairs with one added line, as "Changed files"
+/// draws a hunk (`docs/tui.md`, "Swapped views").
 fn diff_rows(diff: &str) -> Vec<Row> {
-    diff.lines()
+    let drawn = diff_lines(diff);
+    let gutter = gutter_width(drawn.iter().filter_map(|line| line.number));
+    drawn
+        .into_iter()
         .map(|line| {
-            let ink = if line.starts_with("@@") {
-                style(Role::Muted)
-            } else if ["+++", "---"].iter().any(|head| line.starts_with(head)) {
-                style(Role::Keyword)
-            } else if line.starts_with('+') {
-                style(Role::Added)
-            } else if line.starts_with('-') {
-                style(Role::Removed)
-            } else {
-                Style::new()
-            };
-            Row::text(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(line.to_owned(), ink),
-            ]))
+            let mut spans = vec![Span::raw("    ")];
+            if gutter > 0 {
+                spans.push(Span::styled(
+                    gutter_text(line.number, gutter),
+                    Ink::Muted.style(),
+                ));
+            }
+            spans.extend(styled_spans(&line));
+            Row::text(Line::from(spans))
         })
         .collect()
 }

@@ -119,6 +119,18 @@ impl Rows {
         (self.rows, self.texts)
     }
 
+    /// Takes the row at `at`, leaving blank placeholders: the pad
+    /// loop moves each row out once instead of cloning it per row.
+    /// None when either side has no row there.
+    fn take_row(&mut self, at: usize) -> Option<((Line<'static>, Option<Target>), RowText)> {
+        let row = self.rows.get_mut(at)?;
+        let text = self.texts.get_mut(at)?;
+        let line = std::mem::take(&mut row.0);
+        let target = row.1.take();
+        let meta = std::mem::replace(text, RowText::plain());
+        Some(((line, target), meta))
+    }
+
     /// Prefixes every row from `from` with `pad` blank cells, splitting
     /// any row wider than `inner` first (`docs/tui.md`, "Turns":
     /// nothing inside the card is indented past its one-column padding).
@@ -134,9 +146,9 @@ impl Rows {
         let mut at = from;
         let original_len = self.rows.len();
         for _ in from..original_len {
-            let (Some((line, target)), Some(text)) =
-                (self.rows.get(at).cloned(), self.texts.get(at).cloned())
-            else {
+            // The row moves out without cloning: fitting rows move back
+            // below, split rows move into their pieces.
+            let Some(((line, target), text)) = self.take_row(at) else {
                 break;
             };
             let cells = cells_of(&line);
@@ -145,9 +157,12 @@ impl Rows {
             let room = usize::from(inner);
             let plans = plan(&cells, room);
             if plans.is_empty() || total <= room {
-                if let (Some(row), Some(row_text)) = (self.rows.get_mut(at), self.texts.get_mut(at))
-                {
-                    prefix_row(&mut row.0, row_text, pad);
+                let mut row = (line, target);
+                let mut row_text = text;
+                prefix_row(&mut row.0, &mut row_text, pad);
+                if let (Some(slot), Some(meta)) = (self.rows.get_mut(at), self.texts.get_mut(at)) {
+                    *slot = row;
+                    *meta = row_text;
                 }
                 at = at.saturating_add(1);
                 continue;
@@ -195,11 +210,16 @@ impl Rows {
                 pieces.push((row, piece_text));
             }
             let end = at + 1;
-            self.rows
-                .splice(at..end, pieces.iter().map(|(row, _)| row.clone()));
-            self.texts
-                .splice(at..end, pieces.iter().map(|(_, text)| text.clone()));
-            at = at.saturating_add(pieces.len());
+            let mut grown_rows = Vec::with_capacity(pieces.len());
+            let mut grown_texts = Vec::with_capacity(pieces.len());
+            for ((line, target), text) in pieces {
+                grown_rows.push((line, target));
+                grown_texts.push(text);
+            }
+            let grown = grown_rows.len();
+            self.rows.splice(at..end, grown_rows);
+            self.texts.splice(at..end, grown_texts);
+            at = at.saturating_add(grown);
         }
     }
 
@@ -259,7 +279,103 @@ impl Rows {
 /// it fits): the one split rule both the draw and the row counts use
 /// (`docs/tui.md`, "Turns").
 pub(crate) fn fitted(line: &Line<'_>, inner: u16) -> usize {
-    plan(&cells_of(line), usize::from(inner)).len().max(1)
+    fitted_count(line, usize::from(inner)).max(1)
+}
+
+/// How many pieces [`plan`] cuts `line` into at `inner`: the same split
+/// rule over the same glyphs [`cells_of`] flattens, counted in one pass
+/// without building the cell vector. Only the open piece's used width,
+/// its last space and the widths after that space are kept, so the count
+/// path allocates nothing per glyph. A piece holds at most `inner`
+/// widths, breaking after its last space (dropped) or cutting hard, and
+/// a glyph wider than `inner` stands alone. Zero when the line is empty
+/// or `inner` is 0; the caller maps that to one piece.
+fn fitted_count(line: &Line<'_>, inner: usize) -> usize {
+    if inner == 0 {
+        return 0;
+    }
+    let mut pieces: usize = 0;
+    // First cell of the open piece, its used widths, its last space,
+    // the widths after that space, and the cells seen so far.
+    let mut at: usize = 0;
+    let mut used: usize = 0;
+    let mut space: Option<usize> = None;
+    let mut after: usize = 0;
+    let mut cells: usize = 0;
+    for span in &line.spans {
+        // Ratatui excludes `\n` here because a line break is not a drawn glyph.
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let here = cells;
+            cells = cells.saturating_add(1);
+            let width = crate::format::width(grapheme.symbol);
+            if used.saturating_add(width) <= inner {
+                used = used.saturating_add(width);
+                if grapheme.symbol == " " {
+                    space = Some(here);
+                    after = 0;
+                } else {
+                    // Before the first space this is garbage the next
+                    // space wipes; a split only reads `after` past one.
+                    after = after.saturating_add(width);
+                }
+                continue;
+            }
+            // The window from `at` is full: this glyph starts a new piece.
+            match space {
+                Some(found) if found > at => {
+                    pieces = pieces.saturating_add(1);
+                    // The next piece restarts after the dropped space over
+                    // the glyphs this window already scanned, whose widths
+                    // `after` totals (within `inner`, so they fit).
+                    used = after;
+                    space = None;
+                    after = 0;
+                    at = found.saturating_add(1);
+                    if used.saturating_add(width) <= inner {
+                        used = used.saturating_add(width);
+                        if grapheme.symbol == " " {
+                            space = Some(here);
+                        }
+                        continue;
+                    }
+                    // The glyph fits no restarted window either: the
+                    // restart is one hard-cut piece holding the scanned
+                    // glyphs, unless it is empty (the space ended the
+                    // window).
+                    if at < here {
+                        pieces = pieces.saturating_add(1);
+                    }
+                    at = here;
+                    used = 0;
+                }
+                _ => {
+                    // Hard cut (a space at the piece start cuts hard too).
+                    if here > at {
+                        pieces = pieces.saturating_add(1);
+                    }
+                    at = here;
+                    used = 0;
+                    space = None;
+                    after = 0;
+                }
+            }
+            // The glyph opens the piece at `at`: wider than `inner` it
+            // stands alone, else it starts the used widths. No space is
+            // recorded: the piece starts at this glyph, and a split needs
+            // a space strictly inside its window, so a space here could
+            // never split (a later space overwrites it as usual).
+            if width > inner {
+                pieces = pieces.saturating_add(1);
+                at = here.saturating_add(1);
+            } else {
+                used = width;
+            }
+        }
+    }
+    if at < cells {
+        pieces = pieces.saturating_add(1);
+    }
+    pieces
 }
 
 /// One drawn glyph with its style.

@@ -348,7 +348,8 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     run.turn_finished(from);
 
     // A click on the a.txt read row shows its output indented eight
-    // columns: 20 lines, then "… 5 more lines" dim. The grid is fresh
+    // columns with the line-number gutter: 20 lines, then
+    // "… 5 more lines (Enter to view)" dim. The grid is fresh
     // from after the completion, and the card edges move with it.
     let grid = run.wait_screen("the open ledger", |grid| {
         grid.rows
@@ -370,13 +371,15 @@ fn the_group_line_and_the_ledger_match_the_doc() {
         .as_bytes(),
     );
     let grid = run.wait_screen("the opened read", |grid| {
-        grid.rows.iter().any(|row| row.contains("… 5 more lines"))
+        grid.rows
+            .iter()
+            .any(|row| row.contains("… 5 more lines (Enter to view)"))
     });
     let y = find_row(&grid.rows, "thought 4 times").expect("the group row");
     let (left, right) = card_edges(&grid, y, 2);
     let gutter = left + 1;
     for n in 1..=20u16 {
-        let needle = format!("A{n:04}");
+        let needle = format!("{:>2} A{n:04}", n);
         assert!(
             grid.rows.iter().any(|row| {
                 row.chars()
@@ -384,14 +387,14 @@ fn the_group_line_and_the_ledger_match_the_doc() {
                     .collect::<String>()
                     .starts_with(&needle)
             }),
-            "{needle} at eight columns"
+            "{needle} after the gutter"
         );
     }
     assert!(
         !grid.rows.iter().any(|row| row.contains("A0021")),
         "only twenty lines draw"
     );
-    let more = find_row(&grid.rows, "… 5 more lines").expect("the more row");
+    let more = find_row(&grid.rows, "… 5 more lines (Enter to view)").expect("the more row");
     assert_dim(&grid, more, gutter + 8, right - 1, "the more row");
 
     // Ctrl+O closes the ledger: the finished row reads as the running
