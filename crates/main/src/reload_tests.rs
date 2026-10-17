@@ -213,10 +213,10 @@ fn reviewer_credentials_publish_only_when_installed_and_are_reused_afterwards() 
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x");
     drop(prepared);
     let prepared = fixture.prepare();
-    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "xx");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x");
     (prepared.installed)();
     let prepared = fixture.prepare();
-    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "xx");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "x");
     (prepared.installed)();
     let switching = fixture.state.switching.clone();
     let switched = fakes::within(
@@ -245,7 +245,7 @@ fn reviewer_credentials_publish_only_when_installed_and_are_reused_afterwards() 
         switched.reviewer.as_ref().unwrap().model.reference,
         "judge/m"
     );
-    assert_eq!(std::fs::read_to_string(marker).unwrap(), "xx");
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "x");
 }
 
 #[test]
