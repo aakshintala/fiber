@@ -981,10 +981,26 @@ fn each_stop_reason_maps_as_the_docs_say_and_an_unknown_one_fails() {
     );
     assert_eq!(code, ErrorCode::Refused);
     assert!(message.contains("This looks like malware."), "{message}");
-    // No doc says what Fiber does with a paused hosted-tool loop.
-    let (code, message) = error_code(end("pause_turn"));
+    // A paused hosted-tool loop comes back as `Paused` with its blocks.
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        text_block(0, "searching")[0].clone(),
+        text_block(0, "searching")[1].clone(),
+        stopped(0),
+        finished("pause_turn")[0].clone(),
+        finished("pause_turn")[1].clone(),
+    ]));
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply.finish,
+        Finish::Paused {
+            content: vec![json!({"type": "text", "text": "searching"})],
+        }
+    );
+    // A reason no protocol maps still fails as unknown.
+    let (code, message) = error_code(end("frobnicate"));
     assert_eq!(code, ErrorCode::UnknownStopReason);
-    assert!(message.contains("pause_turn"), "{message}");
+    assert!(message.contains("frobnicate"), "{message}");
 }
 
 #[test]
@@ -1786,6 +1802,208 @@ fn a_hosted_call_with_no_result_and_a_result_with_no_call_are_left_out() {
         hosted.call.provider_id,
         Some(ProviderCallId("srvtoolu_02".into()))
     );
+}
+
+/// A paused stream: `started`, `events`, then a `pause_turn` close.
+fn paused(events: Vec<Value>) -> Vec<u8> {
+    let mut all = vec![started()];
+    all.extend(events);
+    all.extend(finished("pause_turn"));
+    stream(&all)
+}
+
+#[test]
+fn a_paused_server_tool_use_decodes_to_paused_with_its_block() {
+    let (reply, _) = decoded(&paused(search_call(0, "srvtoolu_01")));
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply.finish,
+        Finish::Paused {
+            content: vec![json!({"type": "server_tool_use", "id": "srvtoolu_01",
+                "name": "web_search", "input": {"query": "rust 1.90"}})],
+        }
+    );
+    assert!(reply.actions.is_empty());
+}
+
+#[test]
+fn a_paused_reply_comes_back_block_for_block_as_sent() {
+    let cite = citation("https://blog.rust-lang.org/");
+    let text = "Rust 1.90 is out.";
+    let thinking_block =
+        json!({"type": "thinking", "thinking": "let me search", "signature": "sig1"});
+    let call_block = json!({"type": "server_tool_use", "id": "srvtoolu_01",
+        "name": "web_search", "caller": {"type": "direct"}, "input": {"query": "fiber"}});
+    let result_block = json!({"type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01", "content": two_results()});
+    let unknown_block = json!({"type": "input_something_new", "opaque": [1, 2]});
+    let mut events = vec![
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "citations_delta", "citation": cite}}),
+        stopped(0),
+        json!({"type": "content_block_start", "index": 1, "content_block": thinking_block}),
+        stopped(1),
+        json!({"type": "content_block_start", "index": 2, "content_block":
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+             "caller": {"type": "direct"}, "input": {}}}),
+        json!({"type": "content_block_delta", "index": 2,
+            "delta": {"type": "input_json_delta", "partial_json": "{\"query\":\"fiber\"}" }}),
+        stopped(2),
+    ];
+    events.extend(search_result(3, "srvtoolu_01", two_results()));
+    events.push(json!({"type": "content_block_start", "index": 4, "content_block": unknown_block}));
+    events.push(stopped(4));
+    let (reply, _) = decoded(&paused(events));
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply.finish,
+        Finish::Paused {
+            content: vec![
+                json!({"type": "text", "text": text, "citations": [cite]}),
+                thinking_block,
+                call_block,
+                result_block,
+                unknown_block,
+            ],
+        }
+    );
+    assert!(
+        reply
+            .actions
+            .iter()
+            .any(|action| matches!(action, ReplyAction::Hosted(_))),
+        "a pair inside one reply still decodes as a hosted action"
+    );
+}
+
+#[test]
+fn a_pause_with_no_blocks_is_completed() {
+    let (reply, _) = decoded(&paused(Vec::new()));
+    assert_eq!(reply.unwrap().finish, Finish::Completed);
+    // An empty text block is no resendable block either.
+    let (reply, _) = decoded(&paused(vec![
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        stopped(0),
+    ]));
+    assert_eq!(reply.unwrap().finish, Finish::Completed);
+}
+
+#[test]
+fn a_pause_holding_a_client_tool_use_is_completed() {
+    let events = vec![
+        json!({"type": "content_block_start", "index": 0, "content_block":
+            {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "{\"city\":"}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "\"Paris\"}" }}),
+        stopped(0),
+    ];
+    let (reply, _) = decoded(&paused(events));
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    assert!(
+        reply
+            .actions
+            .iter()
+            .any(|action| matches!(action, ReplyAction::ToolCall(_)))
+    );
+}
+
+#[test]
+fn a_one_shot_pause_equals_its_streamed_form_and_keeps_a_null_citations() {
+    // A streamed text whose start carries `"citations": null` and no
+    // citations delta comes back with `"citations": null`, not `[]`.
+    let streamed = vec![
+        json!({"type": "content_block_start", "index": 0, "content_block":
+            {"type": "text", "text": "", "citations": null}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"}}),
+        stopped(0),
+    ];
+    let (reply, _) = decoded(&paused(streamed));
+    assert_eq!(
+        reply.unwrap().finish,
+        Finish::Paused {
+            content: vec![json!({"type": "text", "text": "hi", "citations": null})],
+        }
+    );
+
+    // One-shot blocks, carrying their whole value in the start event, come
+    // back equal to the blocks sent, as their streamed forms do.
+    let cite = citation("https://blog.rust-lang.org/");
+    let text = json!({"type": "text", "text": "hi", "citations": [cite]});
+    let call = json!({"type": "server_tool_use", "id": "srvtoolu_01",
+        "name": "web_search", "input": {"query": "rust 1.90"}});
+    let thinking = json!({"type": "thinking", "thinking": "hmm", "signature": "sig"});
+    let one_shot = vec![
+        json!({"type": "content_block_start", "index": 0, "content_block": text}),
+        stopped(0),
+        json!({"type": "content_block_start", "index": 1, "content_block": call}),
+        stopped(1),
+        json!({"type": "content_block_start", "index": 2, "content_block": thinking}),
+        stopped(2),
+    ];
+    let mut streamed_same = vec![
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "citations_delta", "citation": cite}}),
+        stopped(0),
+    ];
+    streamed_same.extend(search_call(1, "srvtoolu_01"));
+    streamed_same.extend(vec![
+        json!({"type": "content_block_start", "index": 2, "content_block":
+            {"type": "thinking", "thinking": "", "signature": ""}}),
+        json!({"type": "content_block_delta", "index": 2,
+            "delta": {"type": "thinking_delta", "thinking": "hmm"}}),
+        json!({"type": "content_block_delta", "index": 2,
+            "delta": {"type": "signature_delta", "signature": "sig"}}),
+        stopped(2),
+    ]);
+    let (one, _) = decoded(&paused(one_shot));
+    let (two, _) = decoded(&paused(streamed_same));
+    let (one, two) = (one.unwrap(), two.unwrap());
+    assert_eq!(one.finish, two.finish);
+    assert_eq!(
+        one.finish,
+        Finish::Paused {
+            content: vec![text, call, thinking],
+        }
+    );
+}
+
+#[test]
+fn a_result_with_no_call_is_a_stub_on_the_call_path_and_nothing_on_decode() {
+    let block = json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_99",
+        "content": two_results()});
+    let bytes = hosted_stream(vec![search_result(0, "srvtoolu_99", two_results())]);
+    let (reply, _) = decoded(&bytes);
+    assert!(reply.unwrap().actions.is_empty());
+    let server = ProviderServer::start([Response::stream(bytes)]).unwrap();
+    let (reply, _) = run(Box::new(
+        Messages::new(endpoint(&server)).request(&request()),
+    ));
+    let reply = reply.unwrap();
+    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.name, "");
+    assert_eq!(hosted.call.arguments, json!({}));
+    assert_eq!(
+        hosted.call.provider_id,
+        Some(ProviderCallId("srvtoolu_99".into()))
+    );
+    assert_eq!(hosted.call.provider_item, None);
+    assert_eq!(hosted.completed.provider_item, Some(block));
+    assert_eq!(reply.finish, Finish::Completed);
 }
 
 #[test]

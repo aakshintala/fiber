@@ -21,7 +21,7 @@ use crate::wire::{args_value, str_at};
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
-    decode_tracked(stream, sink).map_err(|(error, _)| error)
+    read(false, stream, sink).map_err(|(error, _)| error)
 }
 
 /// As [`decode`], also carrying what the stream had seen when it failed:
@@ -34,7 +34,25 @@ pub(crate) fn decode_tracked(
     stream: impl BufRead,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
-    let mut reply = Decoder::default();
+    read(true, stream, sink)
+}
+
+/// Reads one reply stream; `keep_orphans` keeps a hosted result whose call
+/// came in an earlier reply as a stub for the loop to resolve, while the
+/// public entry point leaves it out.
+#[allow(
+    clippy::result_large_err,
+    reason = "the decode carries its partial alongside the error for the call's usage"
+)]
+fn read(
+    keep_orphans: bool,
+    stream: impl BufRead,
+    sink: &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)> {
+    let mut reply = Decoder {
+        keep_orphans,
+        ..Decoder::default()
+    };
     let mut end = None;
     let read = crate::sse::read(stream, |data| {
         let event: Value = serde_json::from_str(data)
@@ -91,6 +109,15 @@ struct Decoder {
     id: String,
     actions: Vec<ReplyAction>,
     blocks: BTreeMap<u64, Block>,
+    /// Each block as it arrived in its opening event, patched at
+    /// `content_block_stop` with the streamed fields, so a paused reply
+    /// goes back unchanged.
+    raw: BTreeMap<u64, Value>,
+    /// The closed blocks in order, as `finish` sends a paused reply back.
+    content: BTreeMap<u64, Value>,
+    /// Whether a hosted result whose call is not in this reply is kept as
+    /// a stub for the loop to resolve, rather than left out.
+    keep_orphans: bool,
     /// Each tool-use block's position among tool calls, by its index.
     call_order: BTreeMap<u64, u32>,
     /// Hosted calls whose result has not arrived, by the provider's id.
@@ -167,6 +194,7 @@ impl Decoder {
     /// (`research/anthropic-messages-probe`).
     fn start(&mut self, event: &Value) {
         let block = &event["content_block"];
+        self.raw.insert(index(event), block.clone());
         let block = match str_at(block, "type") {
             "text" => Block::Text {
                 text: str_at(block, "text").to_owned(),
@@ -252,6 +280,9 @@ impl Decoder {
             Some(Block::Text { text, citations }) if !text.is_empty() => {
                 // A citing text goes back whole: Anthropic refuses a request
                 // whose citations were changed or dropped.
+                self.patch(index, "text", &text);
+                self.patch_citations(index, &citations);
+                self.closed(index);
                 let provider_item = (!citations.is_empty())
                     .then(|| json!({"type": "text", "text": text, "citations": citations}));
                 self.actions.push(ReplyAction::Text(TextCompleted {
@@ -259,8 +290,14 @@ impl Decoder {
                     provider_item,
                 }));
             }
-            Some(Block::Text { .. }) => {}
+            Some(Block::Text { .. }) => {
+                // An empty text block is left out: the API rejects it, so
+                // a paused reply never sends one back.
+                self.raw.remove(&index);
+            }
             Some(Block::HostedCall { id, name, input }) => {
+                self.patch_input(index, &input);
+                self.closed(index);
                 let arguments = args_value(input);
                 let item = json!({
                     "type": "server_tool_use",
@@ -281,6 +318,7 @@ impl Decoder {
                 );
             }
             Some(Block::HostedResult(block)) => {
+                self.closed(index);
                 // Anthropic runs the search before it sends the result, so a
                 // call with no result never ran, and a result with no call
                 // cannot be sent back: both are left out.
@@ -288,12 +326,33 @@ impl Decoder {
                     let completed = hosted_completion(&block);
                     self.actions
                         .push(ReplyAction::Hosted(HostedCall { call, completed }));
+                } else if self.keep_orphans {
+                    // The call came in an earlier reply, split by a pause:
+                    // the loop joins it against the paused content. A stub
+                    // carries no `provider_item` on its call, which marks it.
+                    let completed = hosted_completion(&block);
+                    self.actions.push(ReplyAction::Hosted(HostedCall {
+                        call: ToolCallRequested {
+                            name: String::new(),
+                            arguments: Value::Object(Map::new()),
+                            provider_id: Some(ProviderCallId(
+                                str_at(&block, "tool_use_id").to_owned(),
+                            )),
+                            repair: None,
+                            ran_by: None,
+                            provider_item: None,
+                        },
+                        completed,
+                    }));
                 }
             }
             Some(Block::Thinking {
                 thinking,
                 signature,
             }) => {
+                self.patch(index, "thinking", &thinking);
+                self.patch(index, "signature", &signature);
+                self.closed(index);
                 self.actions
                     .push(ReplyAction::Reasoning(ReasoningCompleted {
                         text: thinking.clone(),
@@ -309,6 +368,8 @@ impl Decoder {
                 name,
                 arguments,
             }) => {
+                self.patch_input(index, &arguments);
+                self.closed(index);
                 let arguments = args_value(arguments);
                 self.actions.push(ReplyAction::ToolCall(ToolCallRequested {
                     name,
@@ -320,17 +381,56 @@ impl Decoder {
                 }));
             }
             Some(Block::Redacted(item)) => {
+                self.closed(index);
                 self.actions
                     .push(ReplyAction::Reasoning(ReasoningCompleted {
                         text: String::new(),
                         provider_item: Some(item),
                     }));
             }
-            Some(Block::Other) | None => {}
+            Some(Block::Other) | None => {
+                self.closed(index);
+            }
         }
     }
 
-    /// The reply, once `message_stop` has arrived.
+    /// Lays one streamed field over its block's opening JSON, only when the
+    /// stream added one: the opening block's own value (a start block's
+    /// `"citations": null`, a one-shot block's whole value) survives.
+    fn patch(&mut self, index: u64, key: &str, value: &str) {
+        if !value.is_empty()
+            && let Some(raw) = self.raw.get_mut(&index)
+        {
+            raw[key] = Value::String(value.to_owned());
+        }
+    }
+
+    /// Lays streamed citations over the opening block, only when the stream
+    /// added some.
+    fn patch_citations(&mut self, index: u64, citations: &[Value]) {
+        if !citations.is_empty()
+            && let Some(raw) = self.raw.get_mut(&index)
+        {
+            raw["citations"] = Value::Array(citations.to_vec());
+        }
+    }
+
+    /// Lays a streamed tool input over the opening block, only when the
+    /// stream added one.
+    fn patch_input(&mut self, index: u64, input: &str) {
+        if !input.is_empty()
+            && let Some(raw) = self.raw.get_mut(&index)
+        {
+            raw["input"] = args_value(input.to_owned());
+        }
+    }
+
+    /// Moves a closed block's raw JSON into the paused content, in order.
+    fn closed(&mut self, index: u64) {
+        if let Some(raw) = self.raw.remove(&index) {
+            self.content.insert(index, raw);
+        }
+    }
     fn finish(&mut self) -> Result<Reply, Error> {
         let finish = match self.stop_reason.as_deref() {
             Some("end_turn" | "tool_use" | "stop_sequence") => Finish::Completed,
@@ -347,8 +447,23 @@ impl Decoder {
                     "the reply reached the end of the model's context window".into(),
                 ));
             }
-            // debt: pause_turn (a hosted tool's loop paused) stays an unknown
-            // stop reason until #372 continues it.
+            // A hosted tool's loop paused (`docs/loop.md`, "A reply paused by
+            // a hosted tool"): the reply comes back as its blocks, sent
+            // unchanged with the next request. No resendable block, or a
+            // client tool call a pause never carries, reads as completed.
+            Some("pause_turn") => {
+                let content: Vec<Value> = std::mem::take(&mut self.content).into_values().collect();
+                if content.is_empty()
+                    || self
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action, ReplyAction::ToolCall(_)))
+                {
+                    Finish::Completed
+                } else {
+                    Finish::Paused { content }
+                }
+            }
             Some(other) => return Err(Error::UnknownStopReason(other.to_owned())),
             None => {
                 return Err(Error::StreamIncomplete(
