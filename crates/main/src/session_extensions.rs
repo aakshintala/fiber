@@ -2,7 +2,25 @@
 //! (`docs/extensions.md`, "Registering"): `extensions_loaded` after
 //! `fiber_started`, and the hooks on the loop when any registered one.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+
+/// The extension set installed in a running session.
+pub(crate) struct Current(Mutex<Arc<SessionExtensions>>);
+
+impl Current {
+    pub(crate) fn new(extensions: Arc<SessionExtensions>) -> Self {
+        Self(Mutex::new(extensions))
+    }
+    pub(crate) fn get(&self) -> Arc<SessionExtensions> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    pub(crate) fn swap(&self, extensions: Arc<SessionExtensions>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = extensions;
+    }
+}
 
 use contract::hook::Hooks;
 use extensions::SessionExtensions;
@@ -27,10 +45,11 @@ pub(crate) fn fetch(clock: &Arc<dyn contract::clock::Clock>) -> extensions::Fetc
 
 /// Attaches loaded extensions, including empty hook chains whose state
 /// still needs to reach the loop's drains.
-pub(crate) fn hooked(looped: Loop, extensions: &Arc<SessionExtensions>) -> Loop {
+pub(crate) fn hooked(looped: Loop, current: &Current) -> Loop {
+    let extensions = current.get();
     if !extensions.has_extensions() {
         return looped;
     }
-    let hooks: Arc<dyn Hooks> = Arc::clone(extensions) as Arc<dyn Hooks>;
+    let hooks: Arc<dyn Hooks> = extensions as Arc<dyn Hooks>;
     looped.hooks(hooks)
 }

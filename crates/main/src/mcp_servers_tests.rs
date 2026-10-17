@@ -891,6 +891,33 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
 }
 
 #[test]
+fn an_extension_replacement_keeps_the_original_mcp_info_for_reload() {
+    let rig = offer_rig();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    approve_db(&rig, &clock);
+    let (tools, session) = wired(&rig, vec![pair("fiber.test/replacement", "mcp__db__echo")]);
+    assert_eq!(session.server_names, ["db"]);
+    let row = session
+        .kept_infos
+        .iter()
+        .find(|info| info.name == "mcp__db__echo")
+        .unwrap();
+    assert!(
+        matches!(&row.source, contract::events::ToolSource::Mcp { server, tool } if server == "db" && tool == "echo")
+    );
+    assert!(session.kept_infos.iter().any(|info| info.name == "read"));
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|(_, tool)| tool.definition().name == "mcp__db__echo")
+            .map(|(owner, _)| owner.as_str())
+            .collect::<Vec<_>>(),
+        ["db", "fiber.test/replacement"]
+    );
+    session.servers.stop();
+}
+
+#[test]
 fn an_extensions_mcp_resources_survives_the_post_offer_load() {
     let rig = offer_rig();
     let (tools, session) = wired(&rig, vec![pair("fiber.test/res", "mcp_resources")]);

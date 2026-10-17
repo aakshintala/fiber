@@ -317,6 +317,7 @@ pub(crate) fn run_new(
     // names it.
     parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
     let Parts {
+        sources,
         provider,
         observe,
         reviewer_observe,
@@ -462,9 +463,14 @@ pub(crate) fn run_new(
     };
     // What the session loads once its offer step has run, before its first
     // preamble: the repository code approved since the process started.
-    let load = session_servers
-        .later
-        .into_load(session.declarer(), caps.clone());
+    let late = Arc::new(std::sync::Mutex::new(crate::reload::Late::default()));
+    let load = crate::reload::record_load(
+        session_servers.later.into_load(
+            crate::reload::record_declarations(session.declarer(), late.clone()),
+            caps.clone(),
+        ),
+        late.clone(),
+    );
     session.shell(driver);
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
@@ -497,6 +503,37 @@ pub(crate) fn run_new(
         hosted_stands,
         backend: extensions.search_backend(),
     };
+    let names = tools
+        .iter()
+        .map(|(_, tool)| tool.definition().name)
+        .collect();
+    let base_tools = tools[..tools.len() - extensions.tools().len()]
+        .iter()
+        .filter(|(owner, tool)| !(owner == "builtin" && tool.definition().name == "web_search"))
+        .cloned()
+        .collect();
+    let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    let (switcher, switching) = switching.diagnostics(Arc::clone(&diag)).split(door);
+    let reloader = crate::reload::State {
+        sources,
+        template: prompt_inputs.clone(),
+        current: current.clone(),
+        switching: switching.clone(),
+        tools: base_tools,
+        kept_infos: session_servers.kept_infos,
+        server_names: session_servers.server_names,
+        prompt_rows: prompt_rows.clone(),
+        late,
+        declare: session.declarer(),
+        replace: session.reloader(),
+        drive: session.driver(),
+        attended: session.attended(),
+        answerable: !one_turn,
+        log: log.clone(),
+        diag: diag.clone(),
+        names: std::sync::Mutex::new(names),
+    }
+    .preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     let reads = switching.reads();
@@ -533,7 +570,7 @@ pub(crate) fn run_new(
         run_one_turn,
         cancel,
         &diag,
-        &extensions,
+        &current,
         |inbox, cancel| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`
@@ -582,7 +619,7 @@ pub(crate) fn run_new(
                 };
                 started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                    session_extensions::written(&log, &extensions)?;
+                    session_extensions::written(&log, &current.get())?;
                     r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
                     Ok(looped)
                 })
@@ -593,7 +630,7 @@ pub(crate) fn run_new(
             };
             finish(
                 started.map(|looped| {
-                    let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
+                    let looped = session_extensions::hooked(looped.jobs(jobs), &current);
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)
@@ -601,10 +638,8 @@ pub(crate) fn run_new(
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(
-                            switching.diagnostics(Arc::clone(&diag)).closure(door),
-                            switchable,
-                        )
+                        .switcher(switcher, switchable)
+                        .reloader(reloader)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)

@@ -273,6 +273,7 @@ fn provider_start_and_registration_failures_are_unreachable_for_every_label() {
         let fixture = fixture(false, false, &[]);
         let dir = fixture
             .switching
+            .reloadable()
             .loader
             .extensions
             .dirs()

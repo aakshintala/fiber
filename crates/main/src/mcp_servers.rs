@@ -233,6 +233,10 @@ enum Entry {
 /// What a session started: the failures for the log and the running
 /// servers for the session's end.
 pub(crate) struct SessionServers {
+    /// Built-in and MCP declarations before extension replacements.
+    pub kept_infos: Vec<ToolInfo>,
+    /// Startup servers that did not fail, in specification order.
+    pub server_names: Vec<String>,
     /// One per server that failed to start or missed its deadline.
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
@@ -322,6 +326,7 @@ pub(crate) fn session_tools(
     let mut specs = specs;
     specs.extend(prepared.ready);
     let cache = config::mcp_cache_dir(home);
+    let mut server_names: Vec<_> = specs.iter().map(|spec| spec.name.clone()).collect();
     let started = mcp::start_observed(
         specs,
         workspace,
@@ -341,8 +346,10 @@ pub(crate) fn session_tools(
             provider: None,
         });
     }
+    server_names.retain(|name| !started.failed.iter().any(|failure| failure.server == *name));
     tools.extend(started.tools);
     infos.extend(started.infos);
+    let kept_infos = infos.clone();
     if let Err(failure) = add_extension_tools(&mut tools, &mut infos, extension_tools) {
         started.servers.stop();
         return Err(failure);
@@ -367,6 +374,8 @@ pub(crate) fn session_tools(
         servers: Arc::clone(&servers),
     };
     let servers = SessionServers {
+        kept_infos,
+        server_names,
         failed,
         servers,
         prompts: started.prompts,
@@ -392,7 +401,7 @@ fn declares_resources(tools: &[(String, Arc<dyn Tool>)]) -> bool {
 /// of them share a name: the extensions settled that. The `tools` answer
 /// lists the tool that is declared, so a replaced row goes. Infos end
 /// sorted by name.
-fn add_extension_tools(
+pub(crate) fn add_extension_tools(
     tools: &mut Vec<(String, Arc<dyn Tool>)>,
     infos: &mut Vec<ToolInfo>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
