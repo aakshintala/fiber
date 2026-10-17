@@ -215,7 +215,6 @@ fn sentinels(server_url: &str) -> Vec<String> {
         server_url.to_owned(),
         "/lua-models".to_owned(),
         "/lua-token".to_owned(),
-        "/lua-quota".to_owned(),
         "/lua-cost".to_owned(),
     ]
 }
@@ -233,7 +232,7 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
     // Every Lua purpose but cost ran actual HTTP, plus the native model
     // call: the cost lookup's 30 seconds outlive an ask, so it never runs
     // here.
-    for path in ["/lua-models", "/lua-token", "/lua-quota", "/v1/responses"] {
+    for path in ["/lua-models", "/lua-token", "/v1/responses"] {
         assert!(
             server.requests().iter().any(|request| request.path == path),
             "received {path}: {:?}",
@@ -352,7 +351,7 @@ fn default_ask_runs_silent() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), hook_kinds());
     // The same provider and hook work runs and its requests arrive.
-    for path in ["/lua-models", "/lua-token", "/lua-quota", "/v1/responses"] {
+    for path in ["/lua-models", "/lua-token", "/v1/responses"] {
         assert!(
             server.requests().iter().any(|request| request.path == path),
             "received {path}"
@@ -386,7 +385,7 @@ fn repository_debug_stays_silent_with_a_notice() {
     );
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    for path in ["/lua-models", "/lua-token", "/lua-quota", "/v1/responses"] {
+    for path in ["/lua-models", "/lua-token", "/v1/responses"] {
         assert!(
             server.requests().iter().any(|request| request.path == path),
             "received {path}"
