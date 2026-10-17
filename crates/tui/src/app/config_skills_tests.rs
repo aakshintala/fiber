@@ -43,8 +43,11 @@ fn fake() -> Arc<Fake> {
 fn home(seam: Option<Arc<Fake>>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));

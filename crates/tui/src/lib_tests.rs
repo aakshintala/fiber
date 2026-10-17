@@ -21,9 +21,11 @@ use std::time::Duration;
 /// The launch description `run` tests start from: `/w`, outside git.
 pub(super) fn launch() -> super::Launch {
     super::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("p/m".to_owned()),

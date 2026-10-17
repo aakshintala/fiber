@@ -57,8 +57,11 @@ fn slash_keys(app: &mut App) {
 /// The launch description: `/w`, outside git, default shares.
 fn launch() -> Launch {
     Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     }
 }

@@ -12,7 +12,7 @@ use serde_json::Value;
 /// toggle heading the list, the workspace chip opening the workspace
 /// picker, the new worktree switch, the model chip opening the model
 /// picker, the thinking chip opening it at the model's thinking chips,
-/// one picker row by its index in the list fixed at open, one
+/// one picker row by its index in the current picker list, one
 /// quit choice while the quit question is open, the delete question's
 /// ✕, and the delete frame itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,7 @@ pub(crate) enum Spot {
     /// The thinking chip: clicking it, or Enter on it while focused,
     /// opens the model picker at the model's thinking chips.
     Thinking,
-    /// A picker row, by its index in the list fixed at open.
+    /// A picker row, by its index in the current picker list.
     Pick(usize),
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
@@ -99,15 +99,66 @@ pub(crate) enum QuitChoice {
     Stay,
 }
 
-/// What the terminal knows about where it was launched.
+/// The terminal's local launch directory or its listed hub.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LaunchLocation {
+    /// A local terminal has a launch workspace and project.
+    Local {
+        /// The launch directory; `start`'s default workspace.
+        workspace: PathBuf,
+        /// Its project key (`docs/state.md`, "Projects").
+        project: String,
+        /// The launch directory is inside a git repository.
+        git: bool,
+    },
+    /// A listed hub has no client launch workspace or project.
+    Remote {
+        /// The listed hub's name.
+        hub: String,
+    },
+}
+
+impl Default for LaunchLocation {
+    fn default() -> Self {
+        Self::Local {
+            workspace: PathBuf::new(),
+            project: String::new(),
+            git: false,
+        }
+    }
+}
+
+impl LaunchLocation {
+    /// The launch directory: a listed hub has none.
+    pub(crate) fn workspace(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Local { workspace, .. } => Some(workspace),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    /// The launch directory's project key: a listed hub has none.
+    pub(crate) fn project(&self) -> Option<&str> {
+        match self {
+            Self::Local { project, .. } => Some(project),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    pub(crate) fn hub(&self) -> Option<&str> {
+        match self {
+            Self::Local { .. } => None,
+            Self::Remote { hub } => Some(hub),
+        }
+    }
+}
+
+/// What the terminal knows about where it was launched, with settings
+/// shared by local and remote terminals.
 #[derive(Default)]
 pub struct Launch {
-    /// The launch directory; `start`'s default workspace.
-    pub workspace: PathBuf,
-    /// Its project key (`docs/state.md`, "Projects").
-    pub project: String,
-    /// The launch directory is inside a git repository.
-    pub git: bool,
+    /// The launch workspace or listed hub.
+    pub location: LaunchLocation,
     /// Where the terminal opens (`docs/invocation.md`, "Commands and flags").
     pub open_at: crate::OpenAt,
     /// `tui.hover`: with it off, mouse mode 1003 is never sent and nothing
@@ -167,15 +218,25 @@ pub struct Launch {
     pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
+/// One chip on home's chip row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Chip {
+    /// What a click on it opens, if anything.
+    pub(crate) spot: Option<Spot>,
+    /// It draws dim: the workspace chip while no workspace is chosen.
+    pub(crate) dim: bool,
+    /// Its text.
+    pub(crate) text: String,
+}
+
 /// What home draws, built by [`crate::app::App::home_screen`].
 pub(crate) struct HomeScreen {
     /// Fiber's version, for the logo.
     pub(crate) version: String,
     /// The glyph before the name in the one-row logo.
     pub(crate) glyph: String,
-    /// The chip row, left to right: each chip's text, and its click
-    /// target when it has one.
-    pub(crate) chips: Vec<(Option<Spot>, String)>,
+    /// The chip row, left to right.
+    pub(crate) chips: Vec<Chip>,
     /// Counts across all live sessions and the summed spend.
     pub(crate) header: Header,
     /// Project sections in display order.
@@ -185,7 +246,7 @@ pub(crate) struct HomeScreen {
     /// The rejected `start`'s message, above the box until the next
     /// `start` goes out.
     pub(crate) blockers: Vec<String>,
-    /// The workspace picker above the box: its recents fixed at open,
+    /// The workspace picker above the box: its current recents,
     /// the focused row, and the typed path once a key opens its row.
     pub(crate) picker: Option<PickerScreen>,
     /// The foot hint, or the quit hint while Ctrl+C is armed.
@@ -253,7 +314,9 @@ pub(crate) enum ListLine {
 /// What the open workspace picker draws (`docs/tui.md`, "Home").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PickerScreen {
-    /// The recent workspaces, fixed at open.
+    /// Esc may close the picker because a workspace is already in use.
+    pub(crate) escapes: bool,
+    /// The recent workspaces, refreshed until a key touches the picker.
     pub(crate) recents: Vec<String>,
     /// The focused row's index over the completions then the recents
     /// while typing, over the recents alone otherwise; `None` with
@@ -460,7 +523,7 @@ impl Sessions {
 
     /// Project sections: launch first, live projects in feed order, exited-only
     /// projects by their earliest loaded start, with loaded order breaking ties.
-    pub(crate) fn sections(&self, launch_project: &str) -> Vec<Section<'_>> {
+    pub(crate) fn sections(&self, launch_project: Option<&str>) -> Vec<Section<'_>> {
         let mut sections: Vec<Section<'_>> = Vec::new();
         for row in self.all() {
             if sections
@@ -507,7 +570,7 @@ impl Sessions {
             });
         }
         sections.sort_by_key(|section| {
-            let category = if section.project == launch_project {
+            let category = if Some(section.project) == launch_project {
                 0
             } else if !section.live.is_empty() {
                 1
@@ -637,6 +700,16 @@ impl Sessions {
     /// The last recent row, whose id pages the older `recent` rows.
     pub(crate) fn last_recent(&self) -> Option<&Row> {
         self.recent.last()
+    }
+
+    /// The project of the newest row in this workspace, first row on ties.
+    pub(crate) fn project_of(&self, workspace: &str) -> Option<&str> {
+        self.all()
+            .into_iter()
+            .filter(|row| row.workspace == workspace)
+            // min_by_key keeps the first row on equal timestamps.
+            .min_by_key(|row| std::cmp::Reverse(row.status.as_ref().map(|status| status.since)))
+            .map(|row| row.project.as_str())
     }
 
     /// Whether any row, live or exited, is in `workspace` inside git.
@@ -850,8 +923,9 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
 /// A resume line on exit: the session's id and the command resuming
 /// it. The terminal is restored first, and one line prints per live
 /// session.
-pub(crate) fn exit_line(id: &SessionId) -> String {
-    format!("{}  fiber resume {}", id.0, id.0)
+pub(crate) fn exit_line(id: &SessionId, hub: Option<&str>) -> String {
+    let suffix = hub.map(|hub| format!(" --hub {hub}")).unwrap_or_default();
+    format!("{}  fiber resume {}{suffix}", id.0, id.0)
 }
 
 /// The delete question on the foot: the session and that deleting is
@@ -952,13 +1026,13 @@ pub(crate) fn glyph(row: &Row) -> &'static str {
 /// A row's line: the glyph, the name or the id, the detail, and the
 /// workspace's last path segment outside the launch project, joined by
 /// two spaces with empty parts left out.
-pub(crate) fn line(row: &Row, launch_project: &str) -> String {
+pub(crate) fn line(row: &Row, launch_project: Option<&str>) -> String {
     line_with(row, launch_project, glyph(row))
 }
 
 /// A row's line with `glyph` drawn first: the frame's spinner while the
 /// row works, else the still glyph.
-pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String {
+pub(crate) fn line_with(row: &Row, launch_project: Option<&str>, glyph: &str) -> String {
     let name = title(row);
     let mut detail = row.note.clone().unwrap_or_default();
     if detail.is_empty() {
@@ -976,7 +1050,7 @@ pub(crate) fn line_with(row: &Row, launch_project: &str, glyph: &str) -> String 
         }
     }
     let mut segment = String::new();
-    if row.project != launch_project {
+    if Some(row.project.as_str()) != launch_project {
         segment = row
             .workspace
             .split('/')

@@ -26,8 +26,11 @@ fn now() -> Instant {
 fn home(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.set_size(width, height);
@@ -45,8 +48,11 @@ fn attached(width: u16, height: u16) -> App {
 fn scoped_home(scoped: &[&str]) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         scoped_models: scoped.iter().map(|name| (*name).to_owned()).collect(),
         ..Default::default()
     });

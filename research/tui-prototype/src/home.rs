@@ -73,7 +73,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "full-picker",
         help: "the workspace picker open over the fleet",
-        check: "the picker centred over the fleet with `Workspaces` bold accent, four recent workspaces, the first `›` on the bar, and the bold-key legend foot.",
+        check: "the picker centred over the fleet with `Workspaces` bold accent; the typed row `› ~/work/fiber/█` with the launch directory's listing, the first `›` on the bar; a blank row, dim `── recents ──` and the four recents dim, the launch directory first; the bold-key legend foot with `Esc closes`.",
         build: || Look {
             sel: Some(0),
             fleet: FleetUi {
@@ -84,6 +84,18 @@ const CASES: &[Case<Look>] = &[
             },
             ..base()
         },
+    },
+    Case {
+        name: "full-remote-empty",
+        help: "remote home before a workspace choice, with no recents",
+        check: "the dim `▣ no workspace` chip; the open `Workspaces` picker with the typed row `› ~/█` and the hub's home listing, the first `›` on the bar; no divider and no recent rows; the footer `↑↓ move · Enter open`, without `Esc closes`.",
+        build: || remote(&[]),
+    },
+    Case {
+        name: "full-remote-picker",
+        help: "remote home before a workspace choice, with hub recents",
+        check: "the dim `▣ no workspace` chip; the open `Workspaces` picker with the typed row `› ~/█` and the hub's home listing, the first `›` on the bar; a blank row, dim `── recents ──` and the hub's four recents dim; the footer `↑↓ move · Enter open`, without `Esc closes`.",
+        build: || remote(HUB_RECENTS),
     },
     Case {
         name: "rail-focused",
@@ -344,6 +356,10 @@ fn projs() -> Vec<Proj> {
 }
 
 /// Recent workspaces, from `recent.jsonl`.
+/// The hub's recent workspaces on a remote home: under the hub's own
+/// home, never the local machine's.
+const HUB_RECENTS: &[&str] = &["~/src/api", "~/src/web", "~/src/infra", "~/work/deploy"];
+
 pub(crate) const RECENTS: &[&str] = &[
     "~/work/fiber",
     "~/work/fiber-worktrees",
@@ -383,6 +399,8 @@ struct Look {
     dismissed: Option<String>,
     /// the rail-focused still: the conversation view, not the fleet
     rail: bool,
+    /// Remote stills use only the hub's rows, with no launch directory.
+    remote_rows: Option<&'static [&'static str]>,
 }
 
 /// The stills' fleet state: the launch workspace, a new worktree.
@@ -405,6 +423,22 @@ fn base() -> Look {
         ui: Ui::default(),
         dismissed: None,
         rail: false,
+        remote_rows: None,
+    }
+}
+
+/// The workspace chip's text while no workspace is chosen.
+const NO_WORKSPACE: &str = "no workspace";
+
+fn remote(rows: &'static [&'static str]) -> Look {
+    Look {
+        fleet: FleetUi {
+            ws: NO_WORKSPACE.into(),
+            wpick: Some(0),
+            ..fleet()
+        },
+        remote_rows: Some(rows),
+        ..base()
     }
 }
 
@@ -658,7 +692,15 @@ fn chip_defs(
         ("○ new worktree", dim())
     };
     vec![
-        (format!("▣ {workspace}"), Style::new(), on(0)),
+        (
+            format!("▣ {workspace}"),
+            if workspace == "no workspace" {
+                dim()
+            } else {
+                Style::new()
+            },
+            on(0),
+        ),
         (worktree.into(), wst, on(1)),
         (model.into(), fg(CYAN), on(2)),
         (level.into(), fg(ORANGE), on(3)),
@@ -1037,23 +1079,70 @@ fn to_rprojs(c: &Look) -> Vec<RProj<'_>> {
         .collect()
 }
 
-/// The workspace picker over the fleet: recent workspaces, the selected one
-/// on a full-width selection bar, in the shared panel frame with a bold-key
-/// legend foot.
-fn picker(wsel: usize, cols: usize) -> Vec<super::Row> {
+/// The picker's root: the chip's workspace with a trailing `/`, else `~/`
+/// with no workspace chosen. Local and remote differ only in this data.
+fn picker_root(ws: &str) -> String {
+    if ws == NO_WORKSPACE {
+        "~/".into()
+    } else {
+        format!("{ws}/")
+    }
+}
+
+/// The hub's `directories` listing of a root, as the stills draw it.
+fn listing(root: &str) -> &'static [&'static str] {
+    match root {
+        "~/" => &["notes", "src", "work"],
+        _ => &["crates", "docs", "research", "scripts"],
+    }
+}
+
+/// The workspace picker over the fleet, the same for every door: the typed
+/// row at the root, its completions with the focused one on a full-width
+/// selection bar, then a blank row, the dim `── recents ──` divider and the
+/// dim recents, in the shared panel frame with a bold-key legend foot. With
+/// no recents the divider and its rows are left out. `wsel` indexes the
+/// completions, then the recents.
+fn picker(
+    wsel: usize,
+    cols: usize,
+    root: &str,
+    recents: &[&str],
+    escapes: bool,
+) -> Vec<super::Row> {
     const TITLE: &str = "Workspaces";
-    let mut body = vec![];
-    for (i, r) in RECENTS.iter().enumerate() {
+    let mut legend = vec![("↑↓", "move"), ("Enter", "open")];
+    if escapes {
+        legend.push(("Esc", "closes"));
+    }
+    let mut body = vec![row(vec![
+        sp("› ", fg(CYAN)),
+        sp(root.to_string(), Style::new()),
+        sp("█", dim()),
+    ])];
+    let names = listing(root);
+    for (i, r) in names.iter().enumerate() {
         if i == wsel {
             body.extend(super::panel::bar(vec![row(vec![
                 sp("› ", bold()),
                 sp(r.to_string(), bold()),
             ])]));
         } else {
-            body.push(row(vec![
-                sp("  ", Style::new()),
-                sp(r.to_string(), Style::new()),
-            ]));
+            body.push(row(vec![sp("  ", dim()), sp(r.to_string(), Style::new())]));
+        }
+    }
+    if !recents.is_empty() {
+        body.push(row(vec![]));
+        body.push(row(vec![sp("── recents ──", dim())]));
+    }
+    for (i, r) in recents.iter().enumerate() {
+        if names.len() + i == wsel {
+            body.extend(super::panel::bar(vec![row(vec![
+                sp("› ", bold()),
+                sp(r.to_string(), bold()),
+            ])]));
+        } else {
+            body.push(row(vec![sp("  ", dim()), sp(r.to_string(), dim())]));
         }
     }
     let natural = body
@@ -1067,11 +1156,7 @@ fn picker(wsel: usize, cols: usize) -> Vec<super::Row> {
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
         body,
-        Some(super::panel::footer_legend(&[
-            ("↑↓", "move"),
-            ("Enter", "open"),
-            ("Esc", "closes"),
-        ])),
+        Some(super::panel::footer_legend(&legend)),
         w,
     )
 }
@@ -1200,8 +1285,14 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             hits.push(((box_top + BOX_H - 1) as u16, a as u16, b as u16, t));
         }
     }
-    if let Some(wsel) = c.fleet.wpick {
-        let prows = picker(wsel, cols);
+    if c.fleet.wpick.is_some() {
+        let prows = picker(
+            c.fleet.wsel,
+            cols,
+            &picker_root(&c.fleet.ws),
+            c.remote_rows.unwrap_or(RECENTS),
+            c.fleet.ws != NO_WORKSPACE,
+        );
         let pw = super::width(&prows[0].spans);
         let px0 = super::panel::x_for(pw, cols);
         for (k, r) in prows.into_iter().enumerate() {
@@ -1487,13 +1578,20 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         match k {
             Key::Up if !m.alt && !m.ctrl => c.fleet.wsel = c.fleet.wsel.saturating_sub(1),
             Key::Down if !m.alt && !m.ctrl => {
-                c.fleet.wsel = (c.fleet.wsel + 1).min(RECENTS.len() - 1);
+                let total = listing(&picker_root(&c.fleet.ws)).len() + RECENTS.len();
+                c.fleet.wsel = (c.fleet.wsel + 1).min(total - 1);
             }
             Key::Enter if !m.ctrl && !m.alt && !m.sup => {
-                c.fleet.ws = RECENTS[c.fleet.wsel].into();
+                let root = picker_root(&c.fleet.ws);
+                let names = listing(&root);
+                c.fleet.ws = match names.get(c.fleet.wsel) {
+                    Some(name) => format!("{root}{name}"),
+                    None => RECENTS[c.fleet.wsel - names.len()].into(),
+                };
+                c.fleet.wsel = 0;
                 c.fleet.wpick = None;
             }
-            Key::Esc => c.fleet.wpick = None,
+            Key::Esc if c.fleet.ws != NO_WORKSPACE => c.fleet.wpick = None,
             _ => {}
         }
         return Step::Stay;
@@ -1660,7 +1758,7 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
         Target::Row(_) => Step::Conversation,
         Target::Recent(i) => {
             c.fleet.ws = RECENTS[i].into();
-            c.fleet.wsel = i;
+            c.fleet.wsel = 0;
             c.fleet.wpick = None;
             Step::Stay
         }
@@ -1797,7 +1895,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 7);
+        assert_eq!(CASES.len(), 9);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -1980,9 +2078,48 @@ mod tests {
         let c = crate::cases::lookup(CASES, "full-picker").unwrap();
         let t = text(&c, 160, 48);
         assert!(t.contains("Workspaces"), "picker title missing");
+        assert!(t.contains("› ~/work/fiber/█"), "typed row missing");
+        assert!(t.contains("› crates"), "first completion not focused");
+        assert!(t.contains("── recents ──"), "divider missing");
         for ws in ["~/work/fiber", "~/work/beacon", "~/work/pi-rig"] {
-            assert!(t.contains(ws), "missing recent {ws}");
+            assert!(t.contains(&format!("  {ws}")), "missing recent {ws}");
         }
+        assert!(t.contains("Esc closes"));
+    }
+
+    fn remote_frame(name: &str, recents: &[&str]) {
+        let c = crate::cases::lookup(CASES, name).unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Workspaces"));
+        let footer = t
+            .lines()
+            .find(|l| l.contains("↑↓ move · Enter open"))
+            .unwrap();
+        assert!(!footer.contains("Esc"));
+        let buf = buffer(&c, 160, 48);
+        let (y, line) = t
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains("▣ no workspace"))
+            .unwrap();
+        let x = line[..line.find("▣ no workspace").unwrap()].chars().count();
+        assert!(buf[(x as u16, y as u16)].modifier.contains(Modifier::DIM));
+        assert!(t.contains("› ~/█"), "typed row missing");
+        assert!(t.contains("› notes"), "first completion not focused");
+        for ws in RECENTS.iter().chain(HUB_RECENTS) {
+            assert_eq!(t.contains(ws), recents.contains(ws), "workspace {ws}");
+        }
+        assert_eq!(t.contains("── recents ──"), !recents.is_empty());
+    }
+
+    #[test]
+    fn remote_empty_lists_home_with_no_recents() {
+        remote_frame("full-remote-empty", &[]);
+    }
+
+    #[test]
+    fn remote_picker_has_only_hub_recents() {
+        remote_frame("full-remote-picker", HUB_RECENTS);
     }
 
     #[test]

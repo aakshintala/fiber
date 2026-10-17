@@ -22,8 +22,11 @@ fn list(names: &[&str]) -> Vec<String> {
 fn attached_with(width: u16, height: u16, names: &[&str]) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: list(names),

@@ -1602,8 +1602,11 @@ fn the_overlay_cross_with_nothing_open_changes_nothing() {
 fn the_overlay_cross_closes_the_search_panel_on_home() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     app.set_size(80, 24);
