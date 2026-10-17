@@ -1093,12 +1093,11 @@ pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each contr
   step boundary: after the person's message and after each step, with the
   step's summary. The default is the start of the latest turn that is not a rewind's summary.
 - For the chosen point it shows the files Fiber's tools wrote since, the calls
-  that may have changed files, and that none of it is undone. Each job started
-  since that still runs has stop, the default, or adopt. Jobs started before
-  the point are listed as adopted with the session.
+  that may have changed files, and that none of it is undone. It lists every
+  job that still runs, all of which stop.
 - An optional summary, then Rewind. The conversation is cut at the point, and a
   ⟲ line names the new session and says what was not restored and which jobs
-  stopped or were adopted. The new session waits for a prompt.
+  stopped. The new session waits for a prompt.
 - `session_held` shows as the error in place of the Rewind button.
 - `summary_failed` shows the reason with three choices: retry, rewind without
   a summary, or cancel.

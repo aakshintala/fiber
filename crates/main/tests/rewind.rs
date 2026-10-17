@@ -225,7 +225,7 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
     let starts = turn_starts(&old_log);
     assert_eq!(starts.len(), 2, "{kinds:?}");
     assert_eq!(rewound["payload"]["seq"], starts[1] - 1);
-    assert_eq!(rewound["payload"]["jobs"], json!([]));
+    assert!(rewound["payload"].get("jobs").is_none());
     assert_eq!(rewound["payload"]["new_session_id"], next);
     assert!(
         rewound
@@ -258,7 +258,7 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
         first["payload"]["forked_from"],
         json!({"session_id": old, "seq": starts[1] - 1})
     );
-    assert_eq!(first["payload"]["rewind"]["jobs"], json!([]));
+    assert!(first["payload"]["rewind"].get("jobs").is_none());
     assert!(first["payload"].get("parent").is_none());
     let note = first["payload"]["rewind"]["note"].as_str().unwrap();
     assert!(note.contains("rewound to this point"), "{note}");
@@ -324,6 +324,80 @@ fn a_rewind_continues_the_session_from_the_latest_turn() {
     );
 
     hubbed.close("c1_close", &next);
+    hubbed.finish();
+}
+
+#[test]
+fn a_rewind_stops_a_running_job_and_the_note_names_it() {
+    let setup = Setup::new();
+    let sleep = function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "sleep 600", "run_in_background": true}),
+    );
+    let server = ProviderServer::start([stream(&[sleep]), hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    // A standing rule allows the command without asking.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sleep"})
+        ),
+    )
+    .unwrap();
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("c3_start", "c3_sub", "one");
+    let client = hubbed.client();
+    // The background shell started during the first turn: its
+    // `job_started` is in the old log.
+    let started_log = session_log(&setup, &old);
+    let job = started_log
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .expect("the turn started a job")["payload"]["job_id"]
+        .as_str()
+        .expect("the start names the job")
+        .to_owned();
+    client.send(&rewind("c3_rw", &old, json!({})));
+    let ack = until_ack(client, "the rewind acknowledgement", "c3_rw");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .expect("the rewind answers with a session id")
+        .to_owned();
+    // The old log ends with the stop, then `rewound`.
+    let old_log = session_log(&setup, &old);
+    let kinds: Vec<&str> = old_log
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    let tail = &kinds[kinds.len() - 2..];
+    assert_eq!(tail, ["job_completed", "rewound"], "{kinds:?}");
+    let completed = &old_log[old_log.len() - 2];
+    assert_eq!(completed["payload"]["job_id"], json!(job));
+    assert_eq!(completed["payload"]["status"], json!("cancelled"));
+    // The new session's note names the stopped job.
+    until(client, "the new session's start", |line| {
+        line["session_id"] == next && line["kind"] == "session_started"
+    });
+    let new_log = session_log(&setup, &next);
+    let note = new_log[0]["payload"]["rewind"]["note"]
+        .as_str()
+        .expect("the start carries the note");
+    assert!(note.contains(&job), "{note}");
+    assert!(note.contains("Jobs that were running"), "{note}");
+    // The new session's first request carries the note.
+    hubbed.prompt("c3_p3", &next, "three");
+    let requests = server.requests();
+    let last: Value = serde_json::from_slice(&requests.last().unwrap().body).unwrap();
+    let input = last["input"].as_array().unwrap();
+    assert!(
+        input
+            .iter()
+            .any(|item| serde_json::to_string(item).unwrap().contains(&job)),
+        "the first request carries the note: {last:?}"
+    );
+    hubbed.close("c3_close", &next);
     hubbed.finish();
 }
 

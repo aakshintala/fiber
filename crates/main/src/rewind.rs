@@ -61,7 +61,7 @@ pub(crate) fn session_rewound(
         Ok(forked) => forked,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let note = match r#loop::rewind_note(&dir, point.seq) {
+    let note = match r#loop::rewind_note_with_jobs(&old_dir, &dir, point.seq) {
         Ok(note) => note,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };

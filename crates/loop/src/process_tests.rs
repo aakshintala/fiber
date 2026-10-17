@@ -346,7 +346,6 @@ fn rewound() -> Event {
         seq: contract::Seq(1),
         from_session_id: None,
         summary: None,
-        jobs: Vec::new(),
     })
 }
 

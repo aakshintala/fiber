@@ -402,10 +402,6 @@ pub struct RewindArgs {
     /// Whether to summarise the path after the point.
     #[serde(default)]
     pub summarise: bool,
-    /// The jobs started after the point that the new session keeps; every
-    /// other such job stops.
-    #[serde(default)]
-    pub adopt: Vec<JobId>,
 }
 
 /// The `args` of `shell`.

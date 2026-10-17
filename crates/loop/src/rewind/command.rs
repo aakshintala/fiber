@@ -24,9 +24,6 @@ pub(crate) const REWOUND_CLOSING: &str = "The session was rewound and takes no m
 /// `rewind` on a delegate: its parent forks again instead.
 const DELEGATE: &str = "A delegate cannot be rewound.";
 
-/// `rewind` while jobs run: stop them before rewinding.
-const JOBS_RUNNING: &str = "Jobs are running; stop them before rewinding.";
-
 /// `rewind` with no turn to rewind to.
 const NO_TURN: &str = "This session has no turn to rewind to.";
 
@@ -55,14 +52,17 @@ fn valid_session_id(text: &str) -> bool {
 
 impl Loop {
     /// Takes `rewind` while idle (`docs/events.md`, "Rewind"): the refusals
-    /// in order, then `rewound` as the last line, naming the minted new
-    /// session and the point, and the new session's id as the answer. Every
-    /// refusal before the optional summary leaves the log byte for byte.
-    /// A failed summary keeps only its turn and usage. On success the loop
-    /// stops late-cost lookups and writes what settled, appends `rewound`,
-    /// sets `rewound`, and only
-    /// then accepts, so the acknowledgement is sent after `rewound` is
-    /// written.
+    /// in order, then the optional summary, then the stop, then `rewound`
+    /// as the last line, naming the minted new session and the point, and
+    /// the new session's id as the answer. Every refusal before the
+    /// optional summary leaves the log byte for byte as it was, mints
+    /// nothing, starts nothing, and stops no job. A failed summary keeps
+    /// only its turn and usage. On success the loop stops late-cost
+    /// lookups and writes what settled, closes admission, stops every
+    /// running job and writes each end that arrives, mints the new
+    /// session, appends `rewound`, sets `rewound`, drains what came after,
+    /// and only then accepts, so the acknowledgement is sent after
+    /// `rewound` is written.
     pub(crate) fn take_rewind(
         &mut self,
         id: contract::CommandId,
@@ -104,25 +104,6 @@ impl Loop {
                 return Ok(());
             }
         };
-        let running = self.running();
-        if !running.is_empty() {
-            reject(ack, ErrorCode::Busy, JOBS_RUNNING);
-            return Ok(());
-        }
-        if !args.adopt.is_empty() {
-            let adopted = args
-                .adopt
-                .iter()
-                .map(|job| job.0.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            reject(
-                ack,
-                ErrorCode::StaleRequest,
-                &format!("The adopted jobs are not running: {adopted}."),
-            );
-            return Ok(());
-        }
         let lines = log::read(&target.dir)?;
         let point = match point_for(&lines, &target, args.seq) {
             Ok(point) => point,
@@ -150,6 +131,7 @@ impl Loop {
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
         self.close_admission();
+        self.stop_jobs_for_rewind()?;
         let new_session_id = SessionId(crate::mint("s_"));
         // `rewound` names the point's session only for an ancestor point:
         // for this session's own point the key is absent.
@@ -160,7 +142,6 @@ impl Loop {
                 seq: Seq(point),
                 from_session_id,
                 summary,
-                jobs: Vec::new(),
             }),
             None,
             None,

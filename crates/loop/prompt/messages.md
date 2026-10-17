@@ -197,6 +197,12 @@ Commands run after this point that may have changed files:
 
 No file was written and no command was run after this point.
 
+## rewind-jobs
+
+Jobs that were running when this conversation was rewound were stopped:
+{stopped}
+Start any of them again if you still need it.
+
 ## rewind-summary
 
 Fiber: this conversation will be rewound. Summarize the path after the point: what was tried, what worked, what did not, and anything worth keeping. Reply with only the summary. Do not call tools.

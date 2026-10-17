@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        5000,
-        0x711e179c8dff6351,
+        5145,
+        0xa3237796efc5f365,
     );
 }
 
@@ -216,6 +216,7 @@ fn messages_md_holds_every_section_the_doc_names() {
         "rewind-written",
         "rewind-ran",
         "rewind-unchanged",
+        "rewind-jobs",
         "skill-added",
         "skill-removed",
     ] {

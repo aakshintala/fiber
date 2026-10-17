@@ -137,8 +137,6 @@ pub struct Rewind {
     pub summary: Option<String>,
     /// Fiber's note: files written, shell calls and jobs since the point.
     pub note: String,
-    /// The jobs adopted.
-    pub jobs: Vec<JobId>,
 }
 
 /// `rewound`: the last line of a session that was rewound.
@@ -153,8 +151,6 @@ pub struct Rewound {
     /// "Rewind").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_session_id: Option<SessionId>,
-    /// The jobs handed to the new session; empty when none.
-    pub jobs: Vec<JobId>,
     /// The old session's summary of the path after the point, when requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
