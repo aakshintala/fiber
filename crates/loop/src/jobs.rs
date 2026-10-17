@@ -234,7 +234,7 @@ impl Loop {
         pieces: Vec<Queued>,
     ) -> (
         Vec<InputItem>,
-        Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
+        Vec<contract::hook::Context>,
         Vec<contract::hook::StateLine>,
     ) {
         let mut input: Vec<InputItem> = Vec::new();
@@ -320,9 +320,17 @@ impl Loop {
                         turn,
                         None,
                     )?;
-                    for (added, state) in hooked.context {
-                        self.write_carried(state, Some(turn))?;
-                        self.append(&Event::ContextAdded(added), turn, None)?;
+                    for added in hooked.context {
+                        self.write_carried(added.state, Some(turn))?;
+                        self.append(
+                            &Event::ContextAdded(ContextAdded {
+                                text: added.text,
+                                extension: added.extension,
+                                hook: "before_message".into(),
+                            }),
+                            turn,
+                            None,
+                        )?;
                     }
                     continue;
                 }

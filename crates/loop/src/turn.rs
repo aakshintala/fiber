@@ -89,9 +89,17 @@ impl Loop {
             }
             self.write_carried(state, Some(&turn))?;
             self.append(&event, &turn, None)?;
-            for (added, state) in &contexts {
-                self.write_carried(state.clone(), Some(&turn))?;
-                self.append(&Event::ContextAdded(added.clone()), &turn, None)?;
+            for added in &contexts {
+                self.write_carried(added.state.clone(), Some(&turn))?;
+                self.append(
+                    &Event::ContextAdded(contract::events::ContextAdded {
+                        text: added.text.clone(),
+                        extension: added.extension.clone(),
+                        hook: "before_message".into(),
+                    }),
+                    &turn,
+                    None,
+                )?;
             }
             Ok(())
         }) else {

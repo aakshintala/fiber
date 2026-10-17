@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use contract::events::{ContextAdded, Event};
-use contract::hook::{BeforeMessage, BeforeMessageOutcome, StateLine};
+use contract::events::Event;
+use contract::hook::{BeforeMessage, BeforeMessageOutcome, Context, StateLine};
 use contract::inbox::{Ack, Message};
 use contract::shapes::ContentPart;
 use contract::{CommandId, ErrorCode, TurnId};
@@ -31,7 +31,7 @@ pub(crate) struct Hooked {
     /// once; `Some` exactly when the message's content is a hook's.
     pub(crate) changed_by: Option<Vec<String>>,
     /// The contexts the hooks added, in run order.
-    pub(crate) context: Vec<(ContextAdded, Vec<StateLine>)>,
+    pub(crate) context: Vec<Context>,
 }
 
 impl Loop {
@@ -83,19 +83,7 @@ impl Loop {
                 let hooked = Hooked {
                     state,
                     changed_by,
-                    context: context
-                        .into_iter()
-                        .map(|added| {
-                            (
-                                ContextAdded {
-                                    text: added.text,
-                                    extension: added.extension,
-                                    hook: "before_message".to_owned(),
-                                },
-                                added.state,
-                            )
-                        })
-                        .collect(),
+                    context,
                 };
                 Ok(Some((
                     Message {
