@@ -135,6 +135,11 @@ pub enum Command {
     Command(RunCommand),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
     Close(CloseArgs),
+    /// A command this Fiber does not build: never sent by a client type,
+    /// answered `unknown_command` with the line's own command name.
+    #[serde(other)]
+    #[serde(skip_serializing)]
+    Unknown,
 }
 
 /// A content part a client sends. An image is sent as its bytes; Fiber writes
