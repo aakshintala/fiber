@@ -176,7 +176,7 @@ fn feed(client: &Socket) {
 #[track_caller]
 fn recent(client: &Socket, args: &Value) -> Vec<String> {
     client.send(&json!({"id": "c_recent", "command": "recent", "args": args}).to_string());
-    let ack = recv_reply(client, "the recent answer");
+    let ack = recv_answer(client, "c_recent", "the recent answer");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     ack["payload"]["result"]["sessions"]
         .as_array()
