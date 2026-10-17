@@ -802,9 +802,15 @@ impl HttpServer {
         match rustix::io::write(self.shared.wake_send.as_fd(), &[1]) {
             Ok(_) | Err(_) => {}
         }
-        // No wake-generation bump beside the notify: every parked wait
-        // ends on the notify, and every other waiter re-checks stopping
-        // past its millisecond poll, so no waiter sleeps past shutdown.
+        // A waiter between its park becoming visible and its condvar
+        // wait holds this mutex, so taking it holds shutdown until the
+        // waiter parks and the notify below lands after it waits.
+        drop(lock(&self.shared.wake));
+        // No wake-generation bump beside the notify: the mutex above
+        // holds shutdown until a waiter between its park and its wait
+        // has parked, so the notify ends every parked wait, and every
+        // other waiter re-checks stopping past its millisecond poll, so
+        // no waiter sleeps past shutdown.
         self.shared.wake_changed.notify_all();
         self.shared.idle_changed.notify_all();
         // Take and close the listener: the port refuses connections
