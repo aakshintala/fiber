@@ -230,9 +230,9 @@ fn debug_ask_records_lua_requests_and_hook_chains() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), hook_kinds());
-    // Every Lua purpose but cost ran actual HTTP, plus the native model
-    // call: the cost lookup's 30 seconds outlive an ask, so it never runs
-    // here.
+    // The models and credential purposes ran actual HTTP, plus the native
+    // model call: the quota and cost fetches run off the request path, so
+    // either can outlive an ask.
     for path in ["/lua-models", "/lua-token", "/v1/responses"] {
         assert!(
             server.requests().iter().any(|request| request.path == path),

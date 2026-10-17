@@ -25,6 +25,7 @@ use support::*;
 /// models, credential and quota functions each make one real HTTP request.
 /// Model URLs come from the test server, so no secret is configured
 /// anywhere.
+// debt: two copies of the test Lua provider installer and router (extension_diagnostics.rs), upgrade trigger: a third test file that needs them, which moves both into support/
 fn install_test_provider(setup: &Setup, server_url: &str) {
     let source = setup.root.path().join("luasrc");
     write_json(
