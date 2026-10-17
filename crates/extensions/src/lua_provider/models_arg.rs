@@ -1,7 +1,6 @@
 //! The argument `models()` receives (`docs/model-routing.md`, "Model
 //! discovery"): the provider's key as a session reads it, and the host each
-//! declared placeholder holds. A keyed argument reaches Lua only beside a
-//! host the person set: `Providers::models_arg` builds none while a
+//! declared placeholder holds. `Providers::models_arg` builds none while a
 //! declared placeholder has no host, so the token goes only to a host the
 //! person set.
 
