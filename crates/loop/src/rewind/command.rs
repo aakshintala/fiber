@@ -67,6 +67,7 @@ impl Loop {
     /// written.
     pub(crate) fn take_rewind(
         &mut self,
+        _id: contract::CommandId,
         args: RewindArgs,
         ack: Ack,
         input: &TurnInput,
@@ -149,6 +150,7 @@ impl Loop {
                 new_session_id: new_session_id.clone(),
                 seq: Seq(point),
                 from_session_id,
+                summary: None,
                 jobs: Vec::new(),
             }),
             None,
@@ -228,7 +230,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Reply(_, ack)
         | Delivery::Close(ack)
         | Delivery::Resolved(_, ack)
-        | Delivery::Rewind(_, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
+        | Delivery::Rewind(_, _, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Message(_)

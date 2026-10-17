@@ -349,6 +349,7 @@ Durable. The last line of a session that was rewound ("Rewind" below).
 | `seq` | integer | yes | the point |
 | `from_session_id` | string | no | the session whose log `seq` counts in, when it is not this one: a session on this session's `forked_from` chain |
 | `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
+| `summary` | string | no | the old session's summary of the path after the point |
 
 #### `turn_started`
 
@@ -366,6 +367,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
+| `rewind` | `command_id` (string) | a `rewind` command that asked for a summary: the summary's turn on the old session, between turns (`docs/events.md`, "Rewind") |
 
 #### `step_started`
 

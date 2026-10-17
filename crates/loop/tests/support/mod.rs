@@ -544,6 +544,7 @@ pub(crate) fn rewind(
     let (tx, rx) = mpsc::channel();
     (
         Delivery::Rewind(
+            CommandId("c_rewind".into()),
             args,
             Ack(Box::new(move |answer| {
                 let _sent = tx.send(answer);

@@ -1207,7 +1207,7 @@ fn a_message_after_rewound_is_refused() {
         probe_tx.send((done.is_some(), called)).unwrap();
         tx.send(answer).unwrap();
     }));
-    let rw = Delivery::Rewind(args(None, None, false, vec![]), ack);
+    let rw = Delivery::Rewind(CommandId("c_rewind".into()), args(None, None, false, vec![]), ack);
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);

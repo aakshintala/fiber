@@ -283,7 +283,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "rewound",
-            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "jobs": []}),
+            json!({"new_session_id": "s2", "seq": 4, "from_session_id": "s1", "jobs": [], "summary": "s"}),
         ),
         (
             "turn_started",
@@ -294,7 +294,8 @@ fn samples() -> Vec<(&'static str, Value)> {
              "command_id": "c"},
             {"type": "shell_command", "seq": 2},
             {"type": "jobs", "job_ids": ["j"]},
-            {"type": "handoff", "command_id": "c"}]}),
+            {"type": "handoff", "command_id": "c"},
+            {"type": "rewind", "command_id": "c"}]}),
         ),
         ("step_started", json!({})),
         (

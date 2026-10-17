@@ -1695,6 +1695,7 @@ mod window {
                 new_session_id: SessionId("s_2".into()),
                 seq: contract::Seq(0),
                 from_session_id: None,
+                summary: None,
                 jobs: vec![JobId("j_2".into())],
             }),
             None,

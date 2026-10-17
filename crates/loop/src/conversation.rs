@@ -461,7 +461,7 @@ pub(crate) fn render(
                             });
                         }
                     }
-                    InputItem::Unknown => {}
+                    InputItem::Rewind { .. } | InputItem::Unknown => {}
                 }
             }
         }
