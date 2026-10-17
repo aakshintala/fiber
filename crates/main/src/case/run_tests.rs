@@ -675,8 +675,9 @@ fn the_case_config_is_written_whole_into_a_missing_home() {
     let home = root.path().join("home");
     assert!(!home.exists(), "the home starts missing");
     let config = json!({"handoff": {"tokens": 5}, "model": "a/b"});
-    write_config(&home, &config).unwrap();
-    let text = fs::read_to_string(home.join("config.json")).unwrap();
+    let file = home.join("config.json");
+    write_config(&file, &config).unwrap();
+    let text = fs::read_to_string(&file).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), config);
     let leftovers: Vec<std::path::PathBuf> = fs::read_dir(&home)
         .unwrap()
@@ -691,7 +692,8 @@ fn an_unwritable_home_names_the_file() {
     let root = fakes::TempDir::new("fiber-case-config-unwritable");
     let home = root.path().join("home");
     fs::write(&home, "in the way").unwrap();
-    let err = write_config(&home, &json!({"model": "a/b"})).unwrap_err();
+    let file = home.join("config.json");
+    let err = write_config(&file, &json!({"model": "a/b"})).unwrap_err();
     assert!(
         err.contains(&home.display().to_string()),
         "the error names the home: {err}"
