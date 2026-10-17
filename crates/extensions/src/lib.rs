@@ -33,6 +33,7 @@ mod resolve;
 mod search;
 #[cfg(test)]
 mod stall;
+mod startable;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub use repository::{
     ServerApproval, SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name,
     mcp_server_item, pending, repository_servers,
 };
+pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").
