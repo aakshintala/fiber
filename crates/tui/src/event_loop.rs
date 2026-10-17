@@ -105,7 +105,13 @@ pub(crate) fn run_with(
     let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return Ok(1);
     };
-    let mut app = App::new(launch.workspace.clone());
+    let mut app = App::new(
+        launch
+            .location
+            .workspace()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default(),
+    );
     app.set_zone(jiff::tz::TimeZone::system());
     let mut launch = launch;
     let (look, notice) = Look::new(std::mem::take(&mut launch.theme), &|name| {

@@ -198,8 +198,11 @@ fn wide() -> super::Loop<TestBackend> {
         .resize(160, 40)
         .unwrap_or_else(|err| panic!("resize: {err}"));
     lp.app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         rail_share: 15.0,
         panel_share: 21.0,
         panel_cards: ["session", "changed_files", "delegates", "jobs", "quota"]
@@ -349,8 +352,11 @@ fn the_wheel_on_home_scrolls_nothing() {
     use std::path::PathBuf;
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     assert!(lp.app.on_home());
@@ -810,8 +816,11 @@ fn live(inputs: Vec<Input>) -> super::Loop<TestBackend> {
     use std::path::PathBuf;
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app.set_home(crate::home::Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         ..Default::default()
     });
     lp.app

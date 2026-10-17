@@ -78,7 +78,7 @@ fn shown(sessions: &Sessions) -> Vec<String> {
     sessions
         .all()
         .iter()
-        .map(|row| line(row, PROJECT))
+        .map(|row| line(row, Some(PROJECT)))
         .collect()
 }
 
@@ -117,7 +117,7 @@ fn sections_put_the_launch_project_first_then_first_start_order() {
     for (id, project) in [("s_a", "other"), ("s_b", PROJECT), ("s_c", "third")] {
         sessions.status(section_row(id, project, 0));
     }
-    let sections = sessions.sections(PROJECT);
+    let sections = sessions.sections(Some(PROJECT));
     assert_eq!(
         sections.iter().map(|s| s.project).collect::<Vec<_>>(),
         [PROJECT, "other", "third"]
@@ -126,7 +126,7 @@ fn sections_put_the_launch_project_first_then_first_start_order() {
     assert_eq!(sections[1].start, Some(sections[1].live[0].key));
     assert_eq!(
         sessions
-            .sections("absent")
+            .sections(Some("absent"))
             .iter()
             .map(|s| s.project)
             .collect::<Vec<_>>(),
@@ -155,13 +155,13 @@ fn an_exited_only_project_sorts_after_live_projects_by_earliest_started() {
     sessions.left(&SessionId("s_e".into()), Left::Exited);
     assert_eq!(
         sessions
-            .sections("absent")
+            .sections(Some("absent"))
             .iter()
             .map(|s| s.project)
             .collect::<Vec<_>>(),
         ["live", "early", "late", "tie", "missing"]
     );
-    assert_eq!(sessions.sections("late")[0].project, "late");
+    assert_eq!(sessions.sections(Some("late"))[0].project, "late");
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn a_crashed_feed_row_is_live_in_counts_and_spend() {
         sessions.status(row);
     }
     sessions.left(&SessionId("s_c".into()), Left::Crashed);
-    let sections = sessions.sections(PROJECT);
+    let sections = sessions.sections(Some(PROJECT));
     assert_eq!(sections[0].live.len(), 5);
     assert_eq!(
         crate::format::money(sections[0].live.iter().map(|r| r.spend).sum()),
@@ -200,7 +200,7 @@ fn a_feed_row_that_left_exited_joins_the_exited_rows_newest_first() {
         recent_rows(&result(vec![recent_row("s_d", "recent", "exited", None)])),
         true,
     );
-    let sections = sessions.sections(PROJECT);
+    let sections = sessions.sections(Some(PROJECT));
     assert_eq!(
         sections[0]
             .live
@@ -232,7 +232,7 @@ fn exited_rows_cap_at_three_and_count_the_rest() {
             )),
             true,
         );
-        let sections = sessions.sections(PROJECT);
+        let sections = sessions.sections(Some(PROJECT));
         assert_eq!(sections[0].shown_exited, count.min(3));
         assert_eq!(sections[0].hidden(), count.saturating_sub(3));
     }
@@ -250,13 +250,13 @@ fn expanding_a_project_shows_every_loaded_exited_row_and_only_that_project() {
     }
     sessions.expand(PROJECT);
     sessions.expand(PROJECT);
-    let sections = sessions.sections(PROJECT);
+    let sections = sessions.sections(Some(PROJECT));
     assert_eq!(sections[0].shown_exited, 4);
     assert_eq!(sections[0].hidden(), 0);
     assert_eq!(sections[1].shown_exited, 3);
     assert_eq!(sections[1].hidden(), 1);
     sessions.recent(Vec::new(), true);
-    assert_eq!(sessions.sections(PROJECT)[0].shown_exited, 4);
+    assert_eq!(sessions.sections(Some(PROJECT))[0].shown_exited, 4);
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn an_unreadable_row_stays_in_its_stored_project() {
     row.status = None;
     row.workspace.clear();
     sessions.status(row);
-    let sections = sessions.sections(PROJECT);
+    let sections = sessions.sections(Some(PROJECT));
     assert_eq!(sections[0].project, "stored");
     assert_eq!(sections[0].name, "stored");
     assert_eq!(sections[0].start, None);
@@ -518,7 +518,7 @@ fn spend_adds_cost_and_subscription_cost() {
         ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "streaming"}))
     });
     assert!((row.spend - 0.60).abs() < 1e-9);
-    assert_eq!(line(&row, PROJECT), "●  fix the parser  $0.60");
+    assert_eq!(line(&row, Some(PROJECT)), "●  fix the parser  $0.60");
 }
 
 #[test]
@@ -672,18 +672,18 @@ fn each_state_has_its_glyph() {
     ];
     for (state, glyph) in states {
         let row = from_status(&envelope("s_aaaaaaaaaaaaaaaa", state));
-        assert!(line(&row, PROJECT).starts_with(glyph), "{row:?}");
+        assert!(line(&row, Some(PROJECT)).starts_with(glyph), "{row:?}");
     }
     let mut live = from_status(&envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "idle"})));
     live.left = Some(Left::Exited);
-    assert!(line(&live, PROJECT).starts_with("○"));
+    assert!(line(&live, Some(PROJECT)).starts_with("○"));
     live.left = Some(Left::Crashed);
-    assert!(line(&live, PROJECT).starts_with("✗"));
+    assert!(line(&live, Some(PROJECT)).starts_with("✗"));
     let unreadable = from_status(&Envelope {
         payload: [("state".to_owned(), json!("idle"))].into_iter().collect(),
         ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "idle"}))
     });
-    assert!(line(&unreadable, PROJECT).starts_with("?"));
+    assert!(line(&unreadable, Some(PROJECT)).starts_with("?"));
 }
 
 #[test]
@@ -699,7 +699,7 @@ fn the_line_shows_waiting_text_for_an_approval_and_a_question() {
     });
     assert!(approval.waiting.is_some());
     assert_eq!(
-        line(&approval, PROJECT),
+        line(&approval, Some(PROJECT)),
         "!  fix the parser  approval: shell cargo publish --dry-run · $0.41"
     );
     let question = from_status(&envelope(
@@ -708,7 +708,7 @@ fn the_line_shows_waiting_text_for_an_approval_and_a_question() {
             "kind": "question", "summary": "2 of 3 answered"}}),
     ));
     assert_eq!(
-        line(&question, PROJECT),
+        line(&question, Some(PROJECT)),
         "!  fix the parser  question: 2 of 3 answered"
     );
     let offer = from_status(&envelope(
@@ -717,7 +717,7 @@ fn the_line_shows_waiting_text_for_an_approval_and_a_question() {
             "kind": "offer", "summary": "switch to plan mode"}}),
     ));
     assert_eq!(
-        line(&offer, PROJECT),
+        line(&offer, Some(PROJECT)),
         "!  fix the parser  offer: switch to plan mode"
     );
 }
@@ -774,7 +774,7 @@ fn an_empty_name_shows_the_id() {
         payload: payload.as_object().cloned().unwrap_or_default(),
         ..envelope("s_aaaaaaaaaaaaaaaa", json!({"state": "idle"}))
     });
-    assert_eq!(line(&row, PROJECT), "✓  s_aaaaaaaaaaaaaaaa");
+    assert_eq!(line(&row, Some(PROJECT)), "✓  s_aaaaaaaaaaaaaaaa");
 }
 
 #[test]
@@ -797,7 +797,7 @@ fn a_note_replaces_the_detail() {
         status: None,
     };
     assert_eq!(
-        line(&row, PROJECT),
+        line(&row, Some(PROJECT)),
         "!  fix the parser  held by another process"
     );
 }
@@ -828,7 +828,7 @@ fn control_characters_in_a_name_draw_as_spaces_in_the_row_line() {
     // Every control character draws as a space: the printable chars
     // around them stay, so flipping the `is_control` predicate fails.
     let row = named("a\nb\tc\u{1b}d\u{07}e");
-    assert_eq!(line(&row, PROJECT), "✓  a b c d e");
+    assert_eq!(line(&row, Some(PROJECT)), "✓  a b c d e");
     assert_eq!(
         row.name, "a\nb\tc\u{1b}d\u{07}e",
         "the stored name keeps its characters",
@@ -852,7 +852,7 @@ fn control_characters_in_a_name_draw_as_spaces_in_the_delete_question() {
 #[test]
 fn a_name_without_control_characters_draws_unchanged() {
     let row = named("fix the parser");
-    assert_eq!(line(&row, PROJECT), "✓  fix the parser");
+    assert_eq!(line(&row, Some(PROJECT)), "✓  fix the parser");
     assert_eq!(
         delete_line(&row),
         "Delete fix the parser (s_aaaaaaaaaaaaaaaa)? \
@@ -1048,8 +1048,14 @@ fn line_with_draws_the_glyph_it_is_given() {
         "s_aaaaaaaaaaaaaaaa",
         json!({"state": "streaming"}),
     ));
-    assert!(line_with(&row, PROJECT, "⠋").starts_with("⠋"), "{row:?}");
-    assert!(line_with(&row, PROJECT, "●").starts_with("●"), "{row:?}");
+    assert!(
+        line_with(&row, Some(PROJECT), "⠋").starts_with("⠋"),
+        "{row:?}"
+    );
+    assert!(
+        line_with(&row, Some(PROJECT), "●").starts_with("●"),
+        "{row:?}"
+    );
 }
 
 #[test]
@@ -1061,6 +1067,9 @@ fn line_is_line_with_the_still_glyph() {
         json!({"state": "idle"}),
     ] {
         let row = from_status(&envelope("s_aaaaaaaaaaaaaaaa", state));
-        assert_eq!(line(&row, PROJECT), line_with(&row, PROJECT, glyph(&row)));
+        assert_eq!(
+            line(&row, Some(PROJECT)),
+            line_with(&row, Some(PROJECT), glyph(&row))
+        );
     }
 }

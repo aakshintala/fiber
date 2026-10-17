@@ -13,7 +13,7 @@ if [ ! -x "$BIN" ]; then
   CARGO_BUILD_JOBS=3 cargo build --release
 fi
 mkdir -p "$OUT/sgr"
-for c in full-sessions full-empty full-focus-exited full-closing full-picker rail-focused; do
+for c in full-sessions full-empty full-focus-exited full-closing full-picker full-remote-empty full-remote-picker rail-focused; do
   tmux kill-session -t home1657 2>/dev/null || true
   # shellcheck disable=SC2086
   tmux new-session -d -x 160 -y 48 -s home1657 "$BIN $FIX --static --home $c"

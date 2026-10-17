@@ -136,6 +136,77 @@ fn with_own(app: &mut App, prompts: &[&str]) {
     }
 }
 
+fn remote_history() -> App {
+    let mut app = connected();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        ..Default::default()
+    });
+    app
+}
+
+fn remote_history_row(app: &mut App, id: &str, project: &str, workspace: &str, since: u64) {
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(), session_id: contract::SessionId(id.to_owned()), ts:0,
+        schema_version: contract::SCHEMA_VERSION, turn_id:None, action_id:None, seq:None,
+        payload: json!({"name":"row", "project":project,"workspace":workspace,"since":since,"state":"idle",
+            "started":0,"calls":0,"delegates":0,"jobs":0,"clients":0,"model":"test/model",
+            "spend":{"tokens":{"input":0,"output":0,"cache_read":0,"cache_write":{}},"cost":0.0,"subscription_cost":0.0}}).as_object().unwrap().clone()
+    }));
+}
+
+#[test]
+fn remote_history_waits_for_a_known_project_then_uses_the_newest_row() {
+    let mut app = remote_history();
+    assert_eq!(app.recall_key(&Key::Up), Some(Effect::None));
+    assert_eq!(app.draft(), "");
+    assert_eq!(app.open_search(), Effect::None);
+    app.close_search();
+    remote_history_row(&mut app, S_A, "p", "/remote", 1);
+    remote_history_row(&mut app, S_B, "q", "/remote", 2);
+    app.home_click(crate::home::Spot::Pick(0));
+    app.attach(contract::SessionId(S_A.to_owned()));
+    let request = asks(&mut app, Key::Up);
+    assert_eq!(request["args"], json!({"project":"q"}));
+}
+
+#[test]
+fn remote_unknown_project_recalls_only_this_sessions_own_prompts() {
+    let mut app = remote_history();
+    with_own(&mut app, &["own prompt"]);
+    assert_eq!(press(&mut app, Key::Up), Effect::None);
+    assert_eq!(app.draft(), "own prompt");
+    assert_eq!(press(&mut app, Key::Up), Effect::None);
+    assert_eq!(app.draft(), "own prompt");
+}
+
+#[test]
+fn remote_history_workspace_switch_drops_pages_and_restarts_paging() {
+    let mut app = remote_history();
+    remote_history_row(&mut app, S_A, "p", "/p", 1);
+    remote_history_row(&mut app, S_B, "q", "/q", 2);
+    app.home_click(crate::home::Spot::Pick(0));
+    app.attach(contract::SessionId(S_A.to_owned()));
+    let request = asks(&mut app, Key::Up);
+    assert_eq!(request["args"], json!({"project":"p"}));
+    answer(&mut app, &request, &[line(S_B, "p prompt")], Some(9));
+    assert_eq!(app.draft(), "p prompt");
+    app.go_home();
+    app.home_click(crate::home::Spot::Workspace);
+    app.home_click(crate::home::Spot::Pick(1));
+    app.attach(contract::SessionId(S_B.to_owned()));
+    app.draft.clear();
+    let request = asks(&mut app, Key::Up);
+    assert_eq!(request["args"], json!({"project":"q"}));
+    assert_eq!(app.draft(), "");
+    answer(&mut app, &request, &[line(S_A, "q prompt")], Some(8));
+    assert_eq!(app.draft(), "q prompt");
+    let next = asks(&mut app, Key::Up);
+    assert_eq!(next["args"], json!({"project":"q", "before":8}));
+}
+
 #[test]
 fn the_first_up_asks_once_and_a_second_before_the_answer_sends_nothing() {
     let mut app = connected();

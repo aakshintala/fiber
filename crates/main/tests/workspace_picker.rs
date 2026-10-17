@@ -78,12 +78,15 @@ fn the_picker_completes_a_typed_path_and_starts_there() {
     // key goes out; every later key waits on the grid state it needs.
     run.ready();
     // ↓ focuses the chip row on the workspace chip; Enter opens the
-    // picker on its recents.
+    // picker browsing the launch directory.
     run.write(b"\x1b[B");
     run.write(b"\r");
     run.wait_screen("the open picker", |screen| {
         shows(screen, "Workspaces") && shows(screen, "↑↓ move · Enter open · Esc closes")
     });
+    // Backspace past the launch directory's path empties the typed row,
+    // whatever the platform's temporary root; extra presses do nothing.
+    run.write(&[0x7f; 512]);
     // The `~/` listing answers with the root's `tree` directory.
     run.write(b"~/tr");
     run.wait_screen("the tree completion", |screen| {

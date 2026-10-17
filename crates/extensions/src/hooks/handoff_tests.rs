@@ -10,8 +10,6 @@
     reason = "test code"
 )]
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -23,7 +21,7 @@ use contract::events::{HandoffTrigger, ToolCallRequested};
 use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, Hooks};
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::tool::Cancel;
-use fakes::Deadline;
+use fakes::{Deadline, ProviderServer, Response};
 use serde_json::{Value, json};
 
 use super::super::SessionExtensions;
@@ -642,38 +640,13 @@ fn a_conversation_over_the_memory_cap_fails_the_hook() {
 /// How long a test waits for the hook to reach its gate before failing.
 const GATE_WAIT: Duration = Duration::from_secs(10);
 
-/// Reads one HTTP request head from `stream`, runs `then`, and answers `{}`.
-/// The read carries a deadline, so a hook that never sends its request
-/// fails the test instead of hanging it.
-fn gate_then(stream: &mut TcpStream, then: impl FnOnce()) {
-    stream.set_read_timeout(Some(GATE_WAIT)).unwrap();
-    let mut head = Vec::new();
-    let mut byte = [0];
-    loop {
-        match stream.read(&mut byte) {
-            Ok(_) => {
-                head.push(byte[0]);
-                if head.ends_with(b"\r\n\r\n") {
-                    break;
-                }
-            }
-            Err(e) => panic!("waited for the hook's request: {e}"),
-        }
-    }
-    then();
-    stream
-        .write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{}",
-        )
-        .unwrap();
-    stream.flush().unwrap();
-}
-
 #[test]
 fn a_cancel_between_two_hooks_runs_no_later_hook() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    // Every connection the hook opens reaches this channel: the test owns
+    let server =
+        ProviderServer::start([Response::status(200, "{}"), Response::status(200, "{}")]).unwrap();
+    let url = server.url();
+    server.hold();
+    // Every request the hook sends reaches the server: the test owns
     // both waits, each under a deadline.
     let home = Home::new();
     home.install(
@@ -681,7 +654,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         &format!(
             "fiber.hook(\"before_handoff\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
                run = function(call)\n\
-                 host.http({{ url = \"http://127.0.0.1:{port}/gate\" }})\n\
+                 host.http({{ url = \"{url}/gate\" }})\n\
                  return {{ note = \"first:\" .. tostring(seen2 or 0) }}\n\
                end }})\n\
              fiber.hook(\"before_handoff\", {{ timeout = 30000, on_failure = \"non-blocking\",\n\
@@ -703,19 +676,6 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     };
     // The first run: the cancel turns on while the first hook waits at its
     // gate. The hook returns its note, but the chain stops between hooks.
-    let (conn_tx, conn_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        for incoming in listener.incoming() {
-            match incoming {
-                Ok(stream) => {
-                    if conn_tx.send(stream).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
     let (done_tx, done_rx) = mpsc::channel();
     let first = Arc::clone(&session);
     std::thread::spawn(move || {
@@ -727,16 +687,18 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         });
         let _sent = done_tx.send(answer);
     });
-    // The hook signals it reached its gate by connecting; anything else,
-    // such as an early answer, fails the test.
-    let mut stream = Deadline::after(GATE_WAIT)
-        .recv(&conn_rx)
-        .expect("waited for the hook to reach its gate");
+    // The hook signals it reached its gate with its recorded request;
+    // anything else, such as an early answer, fails the test.
+    assert!(
+        server.await_requests(1, GATE_WAIT),
+        "waited for the hook to reach its gate"
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the chain answered before its hook reached the gate"
     );
-    gate_then(&mut stream, || cancel.fired.store(true, Ordering::SeqCst));
+    cancel.fired.store(true, Ordering::SeqCst);
+    server.release();
     let answer: BeforeHandoffAnswer = Deadline::after(GATE_WAIT)
         .recv(&done_rx)
         .expect("waited for the chain");
@@ -759,10 +721,10 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         });
         let _sent = done_tx.send(answer);
     });
-    let mut stream = Deadline::after(GATE_WAIT)
-        .recv(&conn_rx)
-        .expect("waited for the hook to reach its gate");
-    gate_then(&mut stream, || {});
+    assert!(
+        server.await_requests(2, GATE_WAIT),
+        "waited for the second hook to reach its gate"
+    );
     let answer: BeforeHandoffAnswer = Deadline::after(GATE_WAIT)
         .recv(&done_rx)
         .expect("waited for the chain");

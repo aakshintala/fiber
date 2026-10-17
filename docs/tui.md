@@ -79,34 +79,46 @@ and leaving creates nothing. The first turn waits for any MCP server that
 starts with the session (`docs/mcp.md`, "Starting servers"), and the working
 line says so: "Connecting 2 MCP servers…".
 
-**The workspace chip** defaults to the directory the terminal was launched in.
-Clicking it opens a picker of recent workspaces, from `recent.jsonl`
-(`docs/state.md`). A remote client has no launch directory, so it always
-shows the picker. The picker is an overlay centred over home ("Look",
-"Overlays"): the title "Workspaces", one row per recent workspace with the
-first focused, and the footer "↑↓ move · Enter open · Esc closes".
+**The workspace chip** names the workspace in use: the one last picked, else
+the directory the terminal was launched in. Clicking it opens the workspace
+picker, the same on every client. It is an overlay centred over home, unless
+that would cover the input box's top row: then its bottom edge sits on the
+row above the box ("Look", "Overlays", "Placement").
 
-The picker also takes a typed path, so a workspace never used before can be
-picked:
-
-- Typing in the picker opens a row above the recents: "› " in `info`, the
-  text and the cursor. The completions sit under it, the focused one on the
-  selection bar, then a blank row, "── recents ──" dim and the recents, dim.
-  Backspace past the first character returns to the recents alone.
+- It opens browsing, under the title "Workspaces". The first row is the typed
+  path, "› " in `info`, the text and the cursor, filled with the chip's
+  workspace and a trailing `/`, or `~/` while no workspace is chosen. The
+  completions sit under it, the focused one on the selection bar, then a
+  blank row, "── recents ──" dim and the recent rows, dim. With no recent rows
+  the divider is left out too. The footer is "↑↓ move · Enter open · Esc
+  closes".
+- The recent rows are one list: the launch directory, when there is one, then
+  the recent workspaces from `recent.jsonl` (`docs/state.md`), the live
+  sessions' workspaces then the exited ones', distinct and absolute, ten rows
+  at most. The list refills as sessions arrive until a key is pressed in the
+  picker, and again on every row that arrives once Backspace leaves the
+  recents alone.
 - The completions are the subdirectories of the directory up to the typed
   path's last `/` whose names start with the text after it: one listing of
   that directory, filtered at each keystroke, never a walk of the tree. A
   hidden directory is listed only when the typed name starts with `.`. `~`
   is the hub's home, and a path that is neither absolute nor starts with `~`
   has no completions. The listing is the hub's `directories` command
-  (`docs/invocation.md`, "What the hub speaks"), so a remote client's completions list
-  the hub's machine.
+  (`docs/invocation.md`, "What the hub speaks"), so a remote client's
+  completions list the hub's machine.
 - The first completion is focused. ↑ and ↓ move through the completions,
-  then the recents. Tab puts the focused completion into the path with a
-  trailing `/` and lists that directory. Enter opens the focused row as the
-  workspace. With no completion matching, Enter takes the typed path when it
-  names a directory; otherwise nothing opens and the list holds one dim row,
-  "no such directory". The footer stays as it is.
+  then the recents. Typing edits the path. Tab puts the focused completion
+  into the path with a trailing `/` and lists that directory. Enter opens the
+  focused row as the workspace. With no completion matching, Enter takes the
+  typed path when it names a directory; otherwise nothing opens and the list
+  holds one dim row, "no such directory". Backspace past the last character
+  leaves the recents alone, the first focused.
+
+While no workspace is chosen, the chip reads "no workspace", dim, the
+picker's footer is "↑↓ move · Enter open", and Esc does not close it. Enter
+on a prompt in that state reopens the picker, sends nothing and keeps the
+prompt. A remote client has no launch directory, so its home starts in that
+state, with the picker open on `~/`.
 
 Until the typed path's directory has answered, the picker shows the typed
 row and the recents with no completions, and Enter does nothing. While the
@@ -1348,8 +1360,9 @@ what it started keeps running.
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
-- **Esc closes whatever is on top,** returns focus to the input box from the
-  conversation, and interrupts the turn only when nothing is open and the
+- **Esc closes whatever is on top,** except the workspace picker while no
+  workspace is chosen ("Home"). It returns focus to the input box from
+  the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
@@ -1866,7 +1879,9 @@ the model picker inside its view.
   less four columns on a narrower screen.
 - **Placement.** An overlay is centred across the area it covers. A question,
   a notice, the Ctrl+R panel and the workspace picker are also centred down
-  it. The key map docks at the bottom, full width. The completion panels
+  it, unless that would cover the input box's top row: then the workspace
+  picker, when it fits there, sits with its bottom edge on the row above the
+  box. The key map docks at the bottom, full width. The completion panels
   sit above the input box, and the model picker under its view's top row.
   The overlay's side margins are blank, with no tint, so the screen behind
   reads around it.

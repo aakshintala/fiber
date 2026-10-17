@@ -49,7 +49,9 @@ impl HeldTokenFile for CredentialLock {
                 | ConfigError::CredentialMissing { .. }
                 | ConfigError::CredentialFailed { .. }
                 | ConfigError::DuplicateExtension { .. }
-                | ConfigError::SecretName { .. } => TokenFileError::Unwritable(detail),
+                | ConfigError::SecretName { .. }
+                | ConfigError::ThemeRead(..)
+                | ConfigError::BadThemeName => TokenFileError::Unwritable(detail),
             }
         })
     }
@@ -70,7 +72,9 @@ fn read_error(error: ConfigError) -> TokenFileError {
         | ConfigError::CredentialMissing { .. }
         | ConfigError::CredentialFailed { .. }
         | ConfigError::DuplicateExtension { .. }
-        | ConfigError::SecretName { .. } => TokenFileError::Unreadable(detail),
+        | ConfigError::SecretName { .. }
+        | ConfigError::ThemeRead(..)
+        | ConfigError::BadThemeName => TokenFileError::Unreadable(detail),
     }
 }
 #[cfg(test)]

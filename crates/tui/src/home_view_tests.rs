@@ -11,6 +11,43 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
 
+#[test]
+fn remote_home_draws_an_unset_dim_chip_and_non_escaping_footer() {
+    for typed in [false, true] {
+        let mut app = home(80, 24);
+        app.set_home(Launch {
+            location: crate::LaunchLocation::Remote {
+                hub: "box".to_owned(),
+            },
+            ..Default::default()
+        });
+        if typed {
+            app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
+        }
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        let drawn = text(&buf);
+        assert!(drawn.contains("[no workspace]"), "{drawn}");
+        let footer = drawn
+            .lines()
+            .find(|line| line.contains("↑↓ move · Enter open"))
+            .unwrap();
+        assert!(!footer.contains("Esc"));
+        let y = drawn
+            .lines()
+            .position(|line| line.contains("[no workspace]"))
+            .unwrap();
+        let line = drawn.lines().nth(y).unwrap();
+        let x = line[..line.find("[no workspace]").unwrap()].chars().count();
+        assert!(
+            buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
+                .modifier
+                .contains(ratatui::style::Modifier::DIM)
+        );
+    }
+}
+
 /// An app on home at `width` by `height`.
 fn home(width: u16, height: u16) -> App {
     home_with_glyph(width, height, "⌇")
@@ -20,9 +57,11 @@ fn home(width: u16, height: u16) -> App {
 fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -43,9 +82,11 @@ fn home_with_glyph(width: u16, height: u16, glyph: &str) -> App {
 fn git_home(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: true,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: None,
@@ -515,7 +556,7 @@ fn the_picker_keeps_its_selection_drawn() {
             &format!("/repo{n}"),
         ));
     }
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     // Ten entries, fewer rows above the box: every selection draws,
     // scrolling the list around it. A picker row shares its row with
@@ -1016,9 +1057,11 @@ fn home_chips() {
     // The workspace, the model, the thinking level, and what Enter does.
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some("test/model".to_owned()),
@@ -1034,12 +1077,79 @@ fn home_chips() {
     insta::assert_snapshot!("home_chips", screen(&app, 80, 24));
 }
 
+/// A remote home before a choice, with the same four workspaces as the
+/// prototype's remote picker, expressed as absolute paths on the hub.
+fn remote_picker_frame(recents: bool) -> String {
+    let mut app = home(80, 24);
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        version: "0.0.1".to_owned(),
+        logo_glyph: "⌇".to_owned(),
+        model: Some("test/model".to_owned()),
+        thinking: Some("high".to_owned()),
+        ..Default::default()
+    });
+    // The picker opens on `~/` and asks for the hub's home listing.
+    let sent = directories(Effect::Send(app.on_line(hello())));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].1, "~/");
+    answer(&mut app, &sent[0].0, &["notes", "src", "work"], "/hub");
+    if recents {
+        for (i, workspace) in [
+            "/hub/work/fiber",
+            "/hub/work/fiber-worktrees",
+            "/hub/work/beacon",
+            "/hub/work/pi-rig",
+        ]
+        .iter()
+        .enumerate()
+        {
+            app.on_line(status_in(&format!("s_{i:016x}"), "hub session", workspace));
+        }
+    }
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let frame = text(&buf);
+    let (y, line) = frame
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("[no workspace]"))
+        .unwrap();
+    let x = line[..line.find("[no workspace]").unwrap()].chars().count();
+    assert!(
+        buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    assert!(frame.contains("Workspaces"));
+    let footer = frame
+        .lines()
+        .find(|line| line.contains("↑↓ move · Enter open"))
+        .unwrap();
+    assert!(!footer.contains("Esc"));
+    assert!(!frame.contains("/sentinel/launch-dir"));
+    frame
+}
+
+#[test]
+fn home_remote_picker_empty() {
+    insta::assert_snapshot!("home_remote_picker_empty", remote_picker_frame(false));
+}
+
+#[test]
+fn home_remote_picker_recent() {
+    insta::assert_snapshot!("home_remote_picker_recent", remote_picker_frame(true));
+}
+
 #[test]
 fn home_picker_open() {
     let mut app = home(80, 24);
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_listed(&mut app, &["crates", "docs", "research", "scripts"]);
     insta::assert_snapshot!("home_picker_open", screen(&app, 80, 24));
 }
 
@@ -1943,9 +2053,11 @@ fn a_chip_starting_on_the_box_edge_takes_no_target_at_any_width() {
         for width in 1..=120 {
             let mut app = App::new(PathBuf::from("/w"));
             app.set_home(Launch {
-                workspace: PathBuf::from("/w"),
-                project: "-w".to_owned(),
-                git: true,
+                location: crate::LaunchLocation::Local {
+                    workspace: PathBuf::from("/w"),
+                    project: "-w".to_owned(),
+                    git: true,
+                },
                 hover: true,
                 version: "0.0.1".to_owned(),
                 model: model.map(str::to_owned),
@@ -2004,7 +2116,7 @@ fn only_the_selected_picker_row_sits_on_the_bar() {
     app.on_line(hello());
     app.on_line(status_in("s_aaaaaaaaaaaaaaaa", "first", "/alpha"));
     app.on_line(status_in("s_bbbbbbbbbbbbbbbb", "second", "/beta"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     assert_eq!(
         app.home_screen()
             .and_then(|screen| screen.picker.map(|picker| picker.focus)),
@@ -2222,12 +2334,26 @@ fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
 }
 
 /// An app on home at `width` by `height` with the workspace picker open
-/// over two recent workspaces.
+/// browsing the launch directory over two recent workspaces.
 fn picking(width: u16, height: u16) -> App {
     let mut app = home(width, height);
     app.on_line(hello());
     app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_listed(&mut app, &["crates", "docs", "research", "scripts"]);
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_some())
+    );
+    app
+}
+
+/// An app on home at `width` by `height` with the workspace picker
+/// showing its two recent workspaces alone.
+fn picking_recents(width: u16, height: u16) -> App {
+    let mut app = home(width, height);
+    app.on_line(hello());
+    app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
+    open_cleared(&mut app);
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_some())
@@ -2247,7 +2373,7 @@ fn home_picker_overlay_160x48() {
 /// legend footer, centred across and down home.
 #[test]
 fn the_picker_draws_centred_with_a_bar_and_a_legend() {
-    let app = picking(80, 24);
+    let app = picking_recents(80, 24);
     let buf = buffer(&app, 80, 24);
     let shown = screen(&app, 80, 24);
     // Cell columns, not byte indices: home's rows may hold a
@@ -2376,7 +2502,7 @@ fn short_picker_keeps_its_selection_barred() {
             &format!("/repo{n}"),
         ));
     }
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    open_cleared(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..9 {
         app.on_key(Key::Down, now);
@@ -2553,9 +2679,11 @@ fn home_focus_first_row() {
 fn focus_home_no_hover() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: true,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: true,
+        },
         hover: false,
         version: "0.0.1".to_owned(),
         model: None,
@@ -2628,9 +2756,11 @@ fn a_chip_past_the_box_has_no_target() {
     let model = "m".repeat(36);
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
-        workspace: PathBuf::from("/w"),
-        project: "-w".to_owned(),
-        git: false,
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
         hover: true,
         version: "0.0.1".to_owned(),
         model: Some(model.clone()),
@@ -2706,6 +2836,53 @@ fn type_path(app: &mut App, text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The `(id, path)` of every `directories` line `effect` sends.
+fn directories(effect: Effect) -> Vec<(String, String)> {
+    let Effect::Send(lines) = effect else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .filter_map(|line| {
+            let line: serde_json::Value = serde_json::from_str(line).ok()?;
+            (line["command"] == "directories").then(|| {
+                (
+                    line["id"].as_str().unwrap_or_default().to_owned(),
+                    line["args"]["path"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Whether the open picker shows its typed row.
+fn typed_open(app: &App) -> bool {
+    app.home_screen()
+        .and_then(|screen| screen.picker)
+        .is_some_and(|picker| picker.typed.is_some())
+}
+
+/// Clicks the workspace chip: the picker opens browsing its root.
+/// Answers the root's listing with `names`.
+fn open_listed(app: &mut App, names: &[&str]) {
+    let sent = directories(app.on_click(crate::mouse::TargetId::Home(Spot::Workspace)));
+    assert_eq!(sent.len(), 1, "the root's one listing");
+    answer(app, &sent[0].0, names, "/w");
+}
+
+/// Clicks the workspace chip, then presses Backspace past the root,
+/// leaving the recents alone. Returns the parent listings Backspace
+/// asked for on the way, in send order.
+fn open_cleared(app: &mut App) -> Vec<(String, String)> {
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let now = fakes::clock::FakeClock::new().now();
+    let mut sent = Vec::new();
+    while typed_open(app) {
+        sent.extend(directories(app.on_key(Key::Backspace, now)));
+    }
+    sent
+}
+
 /// Answers the `directories` request `id` with `names` at `path`.
 fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
     app.on_line(accepted(
@@ -2720,8 +2897,8 @@ fn typing(width: u16, height: u16, text: &str) -> (App, Vec<(String, String)>) {
     let mut app = home(width, height);
     app.on_line(hello());
     app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, text);
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, text));
     (app, sent)
 }
 
@@ -3029,8 +3206,8 @@ fn the_typed_body_beside_a_focused_recent_without_completions() {
 fn a_short_screen_keeps_the_focused_completion_drawn() {
     let mut app = home(80, 12);
     app.on_line(hello());
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, "/");
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, "/"));
     let mut all = Vec::new();
     for n in 0..30 {
         all.push(format!("c{n:02}"));
@@ -3064,8 +3241,8 @@ fn a_short_screen_keeps_the_focused_completion_drawn() {
 fn a_short_screen_keeps_the_focused_recent_drawn() {
     let mut app = home(80, 10);
     app.on_line(hello());
-    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
-    let sent = type_path(&mut app, "/a");
+    let mut sent = open_cleared(&mut app);
+    sent.extend(type_path(&mut app, "/a"));
     let mut all = Vec::new();
     for n in 0..30 {
         all.push(format!("a{n:02}"));
@@ -3106,7 +3283,7 @@ fn the_reconnect_banner_draws_over_home() {
 /// typed row open the terminal cursor hides.
 #[test]
 fn the_cursor_hides_while_typing_a_path() {
-    let mut app = picking(80, 24);
+    let mut app = picking_recents(80, 24);
     let area = Rect::new(0, 0, 80, 24);
     let screen = app.home_screen().expect("home draws");
     assert!(super::cursor(&app, &screen, area).is_some());
@@ -3331,4 +3508,51 @@ fn the_search_panel_gives_way_on_a_short_home() {
     assert!(shown.contains("Prompt history"), "{shown}");
     assert!(shown.contains("›"), "{shown}");
     assert!(!shown.contains("no matching prompts"), "{shown}");
+}
+
+/// The rows of the typed picker's `Workspaces` title and footer, and of
+/// the input box's top edge, on a home `height` rows tall with the
+/// picker browsing `/w/` over two completions and the `/w` recent: a
+/// picker 14 rows tall.
+fn typed_picker_rows(height: u16) -> (usize, usize, usize) {
+    let mut app = home(80, height);
+    app.on_line(hello());
+    open_listed(&mut app, &["a", "b"]);
+    let shown = screen(&app, 80, height);
+    let lines: Vec<&str> = shown.lines().collect();
+    let find = |piece: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(piece))
+            .unwrap_or_else(|| panic!("{piece} draws: {shown}"))
+    };
+    let title = find("Workspaces");
+    let footer = find("↑↓ move · Enter open");
+    let box_top = find("▌ › ").saturating_sub(1);
+    (title, footer, box_top)
+}
+
+/// With room above the box exactly the picker's height, the picker
+/// fills it: its top edge on the first row, its bottom edge on the row
+/// above the box.
+#[test]
+fn a_picker_exactly_as_tall_as_the_room_above_the_box_sits_above_it() {
+    let (title, footer, box_top) = typed_picker_rows(20);
+    assert_eq!(box_top, 14, "the room above the box is the picker's height");
+    // The top edge, then a pad row, then the title.
+    assert_eq!(title, 2);
+    // The footer, its pad row, then the bottom edge on the row above the box.
+    assert_eq!(footer + 2, box_top - 1);
+}
+
+/// One row short of the picker's height above the box, the picker
+/// stays centred over home, reaching over the box.
+#[test]
+fn a_picker_one_row_taller_than_the_room_above_the_box_stays_centred() {
+    let (title, footer, box_top) = typed_picker_rows(19);
+    assert_eq!(box_top, 13, "the room above the box is one row short");
+    // Centred in 19 rows: the 14-row picker starts on row 2.
+    assert_eq!(title, 4);
+    assert_eq!(footer + 2, 15);
+    assert!(footer + 2 >= box_top, "the centred picker reaches the box");
 }

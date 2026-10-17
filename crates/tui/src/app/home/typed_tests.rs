@@ -684,3 +684,25 @@ fn the_recent_is_the_focused_recent_index() {
     typed.move_focus(true, 2);
     assert_eq!(typed.recent(), Some(1));
 }
+
+#[test]
+fn at_holds_the_root_and_queues_only_its_listing() {
+    for (root, asked) in [("/w/", "/w/"), ("~/", "~/"), ("/", "/")] {
+        let mut typed = Typed::at(root);
+        assert_eq!(typed.text(), root);
+        assert_eq!(typed.focus(), &Focus::Nothing);
+        let sent: Vec<String> = mint()
+            .run(&mut typed)
+            .into_iter()
+            .map(|(_, dir)| dir)
+            .collect();
+        assert_eq!(sent, vec![asked.to_owned()]);
+    }
+    let mut typed = Typed::at("/a/b/");
+    let sent: Vec<String> = mint()
+        .run(&mut typed)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .collect();
+    assert_eq!(sent, vec!["/a/b/".to_owned()]);
+}
