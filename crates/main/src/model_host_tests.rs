@@ -1192,6 +1192,45 @@ fn retry_wait_at_exactly_the_deadline_parks_then_fails() {
     assert_eq!(provider.requests().len(), 1);
 }
 
+/// A retry wait ending exactly at the deadline parks the call thread's own
+/// wait before failing `timeout` with no second send. Naming the call
+/// thread keeps the attempt watcher's same-instant park from standing in
+/// for it: a mutant failing at once never parks, and
+/// `advance_when_parked` fails on its wall-clock deadline.
+#[test]
+fn retry_wait_at_exactly_the_deadline_parks_the_call_thread_then_fails() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let origin = clock.now();
+    let deadline = origin + Duration::from_secs(60);
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    let provider = Arc::new(ScriptedProvider::new([
+        Scripted::failed_after(fail(ErrorCode::RateLimited, Some(60_000)), seen("g_1")),
+        Scripted::text("ok"),
+    ]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    let thread_clock = Arc::clone(&clock);
+    let call = std::thread::spawn(move || {
+        let _sent = done_tx.send(host.call(
+            "tag",
+            request("scripted/s.json"),
+            bound(thread_clock, Some(deadline), held),
+        ));
+    });
+    let _mark = clock.advance_when_parked(
+        Some(deadline),
+        Some(call.thread().id()),
+        Duration::from_secs(60),
+        &Deadline::after(WAIT),
+    );
+    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the exact retry wait to fail"));
+    assert_eq!(failure.code, ErrorCode::Timeout);
+    assert_eq!(provider.requests().len(), 1);
+}
+
 /// Cancelling mid-retry-wait ends `timeout` with no second send, although
 /// the deadline never expires: either disjunct ends the wait. On a thread
 /// with a wall-clock deadline, so a mutant needing both fails in seconds

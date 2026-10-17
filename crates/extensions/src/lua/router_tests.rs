@@ -531,6 +531,19 @@ fn model_answers_only_while_live() {
     assert!(hub.model().is_none(), "nothing calls before model_to");
 }
 
+/// A model set after the seal still never answers: the sealed edge alone
+/// leaves no call, however late the model arrives.
+#[test]
+fn model_set_after_the_seal_still_never_answers() {
+    let hub = Hub::new(FakeClock::new());
+    hub.seal();
+    hub.set_model(Arc::new(StubModel));
+    assert!(
+        hub.model().is_none(),
+        "nothing calls after the seal, however late the model"
+    );
+}
+
 /// The status text of an `ExtensionUi` status event, if that is what it is.
 fn status_text(event: &Event) -> Option<&str> {
     if let Event::ExtensionUi(ui) = event
