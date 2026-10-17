@@ -5,6 +5,7 @@ use contract::hook::*;
 use serde_json::{Map, json};
 
 use super::SessionExtensions;
+use crate::ModelsArg;
 use crate::test_support::{Home, bounded};
 
 #[test]
@@ -214,7 +215,7 @@ fn state_late_provider_vm_uses_the_sessions_live_registry() {
                 )
                 .unwrap();
             assert!(provider.registers("models").unwrap());
-            assert!(provider.models().unwrap().is_empty());
+            assert!(provider.models(&ModelsArg::default()).unwrap().is_empty());
         });
         let expected = if hooked { 10 } else { 2 };
         let store = session.state.store("fiber.test/goal");

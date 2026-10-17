@@ -909,6 +909,7 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
                 new_session_id: SessionId("s_9e2b0000000000b2".into()),
                 seq: contract::Seq(3),
                 from_session_id: None,
+                summary: None,
                 jobs: Vec::new(),
             }),
             None,

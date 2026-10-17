@@ -751,7 +751,7 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
 
 use contract::GenerationId;
 use contract::signing::{SignRequest, Signer};
-use extensions::{CredentialPair, HostScript, HttpEntry, LuaProvider};
+use extensions::{CredentialPair, HostScript, HttpEntry, LuaProvider, ModelsArg};
 
 /// A sink that signals each record it is given.
 struct Watching {
@@ -881,7 +881,7 @@ fn provider_purposes_record_once_per_attempt() {
     let credentials = LuaProvider::new(Arc::clone(&ext), "c");
     let listed = within({
         let models = Arc::clone(&models);
-        move || models.list_models()
+        move || models.list_models(&ModelsArg::default())
     })
     .expect("discovery succeeds");
     assert_eq!(listed.0.len(), 1);
@@ -965,7 +965,7 @@ fn two_calls_in_one_callback_emit_two_attempt_ones() {
     let provider = LuaProvider::new(ext, "p");
     within({
         let provider = Arc::clone(&provider);
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("two HTTP calls in one callback succeed");
     assert_eq!(server.requests().len(), 2);
@@ -993,13 +993,13 @@ fn cache_hits_and_scripted_replies_emit_nothing() {
     let provider = LuaProvider::new(Arc::clone(&ext), "p");
     within({
         let provider = Arc::clone(&provider);
-        move || provider.models()
+        move || provider.models(&ModelsArg::default())
     })
     .expect("discovery succeeds");
     // Served from memory now: no HTTP, no record.
     within({
         let provider = Arc::clone(&provider);
-        move || provider.models()
+        move || provider.models(&ModelsArg::default())
     })
     .expect("the cached list serves");
     assert_eq!(server.requests().len(), 1);
@@ -1038,7 +1038,8 @@ fn cache_hits_and_scripted_replies_emit_nothing() {
         .with_diagnostics(sink.clone() as Arc<dyn DebugLog>),
     );
     let quoted = LuaProvider::new(scripted_ext, "sq");
-    let (listed, _) = within(move || quoted.list_models()).expect("the scripted reply parses");
+    let (listed, _) = within(move || quoted.list_models(&ModelsArg::default()))
+        .expect("the scripted reply parses");
     assert_eq!(
         listed
             .iter()
@@ -1103,7 +1104,7 @@ fn sign_command_and_entry_load_send_unobserved() {
     let provider = LuaProvider::new(ext, "p");
     within({
         let provider = Arc::clone(&provider);
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("discovery succeeds");
     let paths: Vec<String> = server
@@ -1171,7 +1172,7 @@ fn request_lines_carry_no_url_or_content() {
     let query_ext = observed_ext(&query_dir, FakeClock::new(), &sink);
     within({
         let provider = LuaProvider::new(query_ext, "p");
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("the query-string request succeeds");
     let requests = server.requests();
@@ -1187,7 +1188,7 @@ fn request_lines_carry_no_url_or_content() {
     let user_ext = observed_ext(&user_dir, FakeClock::new(), &sink);
     within({
         let provider = LuaProvider::new(user_ext, "p");
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("the userinfo request succeeds");
     assert_eq!(server.requests().len(), 2);
@@ -1197,7 +1198,7 @@ fn request_lines_carry_no_url_or_content() {
     let dns_ext = observed_ext(&dns_dir, FakeClock::new(), &sink);
     let dns_err = within({
         let provider = LuaProvider::new(dns_ext, "p");
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .unwrap_err();
     assert_eq!(dns_err.code(), contract::ErrorCode::ExtensionFailed);
@@ -1269,7 +1270,7 @@ fn without_a_sink_or_below_debug_nothing_records() {
     ));
     within({
         let provider = LuaProvider::new(plain_ext, "p");
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("a request without a sink succeeds");
     assert_eq!(server.requests().len(), 1);
@@ -1282,7 +1283,7 @@ fn without_a_sink_or_below_debug_nothing_records() {
     );
     within({
         let provider = LuaProvider::new(dark_ext, "p");
-        move || provider.list_models()
+        move || provider.list_models(&ModelsArg::default())
     })
     .expect("a request below debug succeeds");
     assert_eq!(server.requests().len(), 2);
@@ -1297,7 +1298,9 @@ fn background_refresh_is_observed() {
     let (sink, _) = Watching::new();
     let ext = observed_ext(&dir, FakeClock::new(), &sink);
     let provider = LuaProvider::new(ext, "p");
-    let handle = provider.refresh(None).expect("a stale list refreshes");
+    let handle = provider
+        .refresh(None, ModelsArg::default())
+        .expect("a stale list refreshes");
     within(move || handle.join())
         .expect("the refresh thread joins")
         .expect("the background refresh succeeds");
@@ -1379,7 +1382,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     let provider_p = LuaProvider::new(Arc::clone(&ext_a), "p");
     let (models_tx, models_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = models_tx.send(provider_p.list_models());
+        let _sent = models_tx.send(provider_p.list_models(&ModelsArg::default()));
     });
     assert!(
         held_p.await_requests(1, WAIT),
@@ -1399,7 +1402,8 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     });
     assert!(matches!(quota, extensions::QuotaEntry::Reported(_)));
     let provider_r = LuaProvider::new(ext_b, "r");
-    within(move || provider_r.models()).expect("the second VM lists its models");
+    within(move || provider_r.models(&ModelsArg::default()))
+        .expect("the second VM lists its models");
     // Release p's requests in order, then the command: p's callback issues
     // its second HTTP after its resume.
     held_p.release();
@@ -1570,12 +1574,14 @@ fn session_discovery_and_refresh_carry_the_sink() {
     let models = provider_named(&session, "p");
     within({
         let models = Arc::clone(&models);
-        move || models.list_models()
+        move || models.list_models(&ModelsArg::default())
     })
     .expect("discovery succeeds");
     // A stale-list refresh runs detached: its request is received while
     // held, and its completion is collected through its JoinHandle.
-    let refreshed = models.refresh(None).expect("a stale list refreshes");
+    let refreshed = models
+        .refresh(None, ModelsArg::default())
+        .expect("a stale list refreshes");
     assert!(
         server.await_requests(2, WAIT),
         "the refresh reached its request"
@@ -1587,7 +1593,7 @@ fn session_discovery_and_refresh_carry_the_sink() {
     // The cache serves from here: no HTTP, no record.
     within({
         let models = Arc::clone(&models);
-        move || models.models()
+        move || models.models(&ModelsArg::default())
     })
     .expect("the cached list serves");
     assert_eq!(server.requests().len(), 2);
@@ -1692,7 +1698,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
             "model_list" => {
                 within({
                     let started = Arc::clone(&started);
-                    move || started.list_models()
+                    move || started.list_models(&ModelsArg::default())
                 })
                 .expect("fresh models() succeeds");
             }
@@ -1742,7 +1748,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
     .expect("the held VM restarts its provider");
     within({
         let reused = Arc::clone(&reused);
-        move || reused.list_models()
+        move || reused.list_models(&ModelsArg::default())
     })
     .expect("reused models() succeeds");
     let pair = CredentialPair {
@@ -1768,7 +1774,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
     // its providers all still work.
     within({
         let held_p = Arc::clone(&held_p);
-        move || held_p.list_models()
+        move || held_p.list_models(&ModelsArg::default())
     })
     .expect("the held provider still lists");
     let content = vec![ContentPart::Text { text: "hi".into() }];
@@ -1869,7 +1875,7 @@ fn failed_provider_loads_record_nothing_and_silent_loads_stay_silent() {
     let models = provider_named(&plain, "p");
     within({
         let models = Arc::clone(&models);
-        move || models.list_models()
+        move || models.list_models(&ModelsArg::default())
     })
     .expect("silent discovery succeeds");
     assert_eq!(server.requests().len(), 1);
@@ -1886,7 +1892,7 @@ fn failures_retain_the_cached_list_without_observation() {
     let first = diagnosed_session(&setup, FakeClock::new(), &sink1);
     let before = within({
         let models = provider_named(&first, "p");
-        move || models.models()
+        move || models.models(&ModelsArg::default())
     })
     .expect("discovery writes the cache");
     assert_eq!(server.requests().len(), 1);
@@ -1905,7 +1911,7 @@ fn failures_retain_the_cached_list_without_observation() {
     let second = diagnosed_session(&setup, FakeClock::new(), &sink2);
     let after = within({
         let models = provider_named(&second, "p");
-        move || models.models()
+        move || models.models(&ModelsArg::default())
     })
     .expect("the retained list serves");
     assert_eq!(

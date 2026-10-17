@@ -952,6 +952,7 @@ fn only_the_first_text_part_expands_and_the_rest_is_kept() {
 
 fn row(name: &str, description: &str, hint: Option<&str>, tag: &str) -> CommandInfo {
     CommandInfo {
+        extension: false,
         name: name.into(),
         description: description.into(),
         argument_hint: hint.map(str::to_owned),
@@ -1037,7 +1038,7 @@ fn the_session_commands_are_read_from_the_repository_top_level() {
     inputs.skills_disabled = vec!["gone".into()];
     skill(&tree.home().join("skills"), "a", "gone", "d");
     assert_eq!(
-        crate::commands(&inputs, &workspace, &[]).rows,
+        crate::commands(&inputs, &workspace, &[], &[]).rows,
         [row("top", "d", None, "skill")]
     );
 }

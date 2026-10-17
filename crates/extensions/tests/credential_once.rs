@@ -69,8 +69,13 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
 
     // Discovery: no model cache, so `add_lua` asks for the credential.
     let (discovered, config) = within(move || {
-        let notices =
-            providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
+        let notices = providers.add_lua(
+            "acme-ext",
+            &lua,
+            &config,
+            &fakes::children::grouped_output,
+            &|_| None,
+        );
         assert!(notices.is_empty(), "{notices:?}");
         (providers, config)
     });

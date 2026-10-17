@@ -505,8 +505,11 @@ pub struct CommandInfo {
     /// The skill's `argument-hint`, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
-    /// `skill`, `template`, or the extension's name.
+    /// `skill`, `template`, the extension's name, or the MCP server's name.
     pub tag: String,
+    /// True on an extension's command, absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub extension: bool,
 }
 
 /// Where a tool comes from, keyed by `source`.

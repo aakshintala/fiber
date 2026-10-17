@@ -20,6 +20,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use fakes::children::Ready;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::*;
@@ -1407,23 +1408,6 @@ fn install_other(setup: &Setup, server: &ProviderServer, credential: &Value) {
     );
 }
 
-/// Waits under the test's deadline for `file` to hold a whole line, and
-/// returns it trimmed.
-#[track_caller]
-fn ready_line(setup: &Setup, file: &Path) -> String {
-    let file = file.to_path_buf();
-    fakes::within("the ready file", setup.deadline.left(), move || {
-        loop {
-            if let Ok(text) = fs::read_to_string(&file)
-                && text.ends_with('\n')
-            {
-                return text.trim().to_owned();
-            }
-            thread::yield_now();
-        }
-    })
-}
-
 /// Makes a FIFO at `path` for a switch-read handshake: the credential
 /// command blocks opening it until the test opens the other end, so the
 /// rendezvous proves the read is in flight without reading the clock.
@@ -1707,8 +1691,8 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
-    let script = format!("echo $$ > '{}'; exec sleep 30", ready.display());
+    let ready = Ready::new(setup.root.path());
+    let script = format!("echo $$ > '{}'; exec sleep 30", ready.path().display());
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
     let id = doors::mint("s_");
     let running = start_session(&setup, &id, &[]);
@@ -1721,7 +1705,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     let session = running.group;
     assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
@@ -1773,12 +1757,12 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
+    let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
     make_fifo(&setup, &release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
-        ready.display(),
+        ready.path().display(),
         release.display()
     );
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
@@ -1793,7 +1777,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     // The open blocks until the switch's read opens the FIFO: the
     // rendezvous proves the read is in flight, and the line the test
@@ -1854,12 +1838,12 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     install_switch_provider(&setup, &server);
-    let ready = setup.root.path().join("ready");
+    let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
     make_fifo(&setup, &release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
-        ready.display(),
+        ready.path().display(),
         release.display()
     );
     install_other(&setup, &server, &json!({"command": ["sh", "-c", script]}));
@@ -1874,7 +1858,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
         line["kind"] == "turn_completed"
     });
     model(&client, "c_model", "other/om", None);
-    let command: u32 = ready_line(&setup, &ready).parse().unwrap();
+    let command: u32 = ready.wait(setup.deadline.left())[0];
     let watchdog = Watchdog::group(command);
     // The write's open rendezvouses with the switch's read, and the line
     // releases it: waiting for `model_changed` next proves the read

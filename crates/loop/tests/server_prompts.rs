@@ -57,6 +57,7 @@ fn plain() -> Vec<&'static str> {
 
 fn row(name: &str, tag: &str) -> CommandInfo {
     CommandInfo {
+        extension: false,
         name: name.into(),
         description: "A server's prompt.".into(),
         argument_hint: None,

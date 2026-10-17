@@ -9,6 +9,6 @@ use crate::client::{Conn, inbox_ack};
 
 /// Runs `rewind`: delivers it with the inbox acknowledgement.
 pub(crate) fn run(conn: &mut Conn, id: CommandId, args: RewindArgs) {
-    let ack = inbox_ack(conn, id);
-    conn.gate.deliver(Delivery::Rewind(args, ack));
+    let ack = inbox_ack(conn, id.clone());
+    conn.gate.deliver(Delivery::Rewind(id, args, ack));
 }

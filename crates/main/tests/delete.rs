@@ -78,57 +78,53 @@ fn delete(setup: &Setup, args: &[&str]) -> std::process::Output {
 }
 
 /// Waits under the test's [`Deadline`] until `socket` is gone, naming
-/// `what`.
+/// `what`: the hub holds the `run/` flock until `serve` returns, after
+/// unlinking the socket, so a returned flock means the hub is gone.
 #[track_caller]
 fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
+    let run = socket.parent().map(Path::to_owned);
     let socket = socket.to_owned();
-    let (done, reached) = mpsc::channel();
-    thread::spawn(move || {
-        while socket.exists() {
-            thread::yield_now();
+    let what = what.to_owned();
+    bounded(deadline, &what.clone(), move || {
+        if let Some(run) = run
+            && let Ok(file) = File::open(&run)
+        {
+            file.lock().unwrap();
         }
-        done.send(()).unwrap_or(());
+        assert!(
+            !socket.exists(),
+            "{what}: the hub exited but left its socket"
+        );
     });
-    assert!(
-        deadline.recv(&reached).is_ok(),
-        "waited until the deadline for {what}"
-    );
 }
 
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Accepts one connection within the test deadline, yielding the thread
-/// while none waits. `None` is the stand-in ending: `stop` set or the
-/// deadline with no time left.
-fn accept_within(
-    listener: &UnixListener,
-    deadline: Deadline,
-    stop: &AtomicBool,
-) -> Option<UnixStream> {
-    while !stop.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => return Some(stream),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if deadline.left().is_zero() {
-                    return None;
-                }
-                thread::yield_now();
-            }
-            Err(_) => return None,
-        }
+/// Accepts one connection, blocking: `None` is the stand-in ending,
+/// `stop` set before a client connected.
+fn accept_unless_stopped(listener: &UnixListener, stop: &AtomicBool) -> Option<UnixStream> {
+    match listener.accept() {
+        Ok((stream, _)) if !stop.load(Ordering::SeqCst) => Some(stream),
+        _ => None,
     }
-    None
 }
 
-/// Sets `stop` when dropped, so the stand-in thread ends on every path,
-/// including a test panic.
-struct StopGuard(Arc<AtomicBool>);
+/// Sets `stop` when dropped, then connects to the socket so a thread
+/// blocked in `accept` wakes and ends on every path, including a test
+/// panic. The stream drops at once.
+struct StopGuard {
+    stop: Arc<AtomicBool>,
+    socket: PathBuf,
+}
 
 impl Drop for StopGuard {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.stop.store(true, Ordering::SeqCst);
+        match UnixStream::connect(&self.socket) {
+            Ok(_) | Err(_) => {}
+        }
     }
 }
 
@@ -138,7 +134,10 @@ fn a_delete_that_meets_an_exiting_hub_waits_and_starts_a_new_one() {
     let dir = session(&setup, ROOT, None);
     fs::create_dir_all(setup.home().join("run")).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
-    let _guard = StopGuard(Arc::clone(&stop));
+    let _guard = StopGuard {
+        stop: Arc::clone(&stop),
+        socket: setup.hub_socket(),
+    };
     let (ready_tx, ready_rx) = mpsc::channel();
     let (released_tx, released_rx) = mpsc::channel();
     let home = setup.home();
@@ -159,15 +158,14 @@ fn a_delete_that_meets_an_exiting_hub_waits_and_starts_a_new_one() {
             return;
         };
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap_or(());
-        listener.set_nonblocking(true).unwrap_or(());
         ready_tx.send(()).unwrap_or(());
-        let Some(first) = accept_within(&listener, deadline, &thread_stop) else {
+        let Some(first) = accept_unless_stopped(&listener, &thread_stop) else {
             drop(locked);
             fs::remove_file(&socket).unwrap_or(());
             return;
         };
         drop(first);
-        let Some(held) = accept_within(&listener, deadline, &thread_stop) else {
+        let Some(held) = accept_unless_stopped(&listener, &thread_stop) else {
             drop(locked);
             fs::remove_file(&socket).unwrap_or(());
             return;

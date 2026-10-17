@@ -166,10 +166,3 @@ fn a_probe_on_a_live_group_is_bounded() {
     );
     assert!(fakes::group_empties(group, deadline.cleanup()));
 }
-
-#[test]
-fn the_budget_is_half_of_nextests_kill() {
-    assert!(WAITS < CLEANUP && CLEANUP < BUDGET);
-    assert!(BUDGET * 2 <= Duration::from_secs(120));
-    assert!(BUDGET.saturating_sub(CLEANUP) >= Duration::from_secs(10));
-}

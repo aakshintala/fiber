@@ -1,0 +1,15 @@
+{
+  "call": {
+    "provider": "databricks",
+    "function": "models",
+    "arg": {
+      "placeholders": {
+        "workspace": "adb-1.azuredatabricks.net"
+      }
+    }
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/databricks`: databricks models: no token; set DATABRICKS_TOKEN or run `fiber login databricks`"
+  }
+}
