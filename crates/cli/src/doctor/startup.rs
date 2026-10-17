@@ -1,0 +1,549 @@
+//! Data-only startup: the ordered blocker checks `fiber doctor` runs
+//! without loading Lua, connecting, or running a credential command.
+//! The order is the session's (`parts_in`): configuration, extensions,
+//! the model choice and its checks, the selected key, then the required
+//! `mcp.servers` entries. Only the first blocker is reported.
+
+use std::path::Path;
+
+use config::{
+    Config, ConfigError, Origin, Presence, ProviderData, ScriptRead, Sources, mcp_servers,
+    read_script,
+};
+use contract::ErrorCode;
+use extensions::{Model, Providers};
+
+use super::files::clean;
+use crate::project_of;
+
+#[cfg(test)]
+#[path = "startup_tests.rs"]
+mod tests;
+
+/// Why the report's exit is 1: the session's code for the same cause, its
+/// line, and whether it annotates a fresh session's matching failure.
+pub(crate) struct Blocker {
+    /// The session's code for the same cause.
+    pub code: ErrorCode,
+    /// The report line, cleaned.
+    pub line: String,
+    /// A key error (Ruling 4) or the selected label's error (Ruling 5):
+    /// the only blockers `with_fix` annotates with.
+    pub key: bool,
+}
+
+/// The report's middle: the model, providers, permissions and MCP lines,
+/// the first blocker, and the loaded configuration and providers.
+pub(crate) struct Startup {
+    /// The model, providers, permissions and MCP lines, in order.
+    pub lines: Vec<String>,
+    /// The first blocker, if any.
+    pub blocker: Option<Blocker>,
+    /// The loaded configuration, absent when it does not load. Task 6
+    /// reads it for the secrets section.
+    #[allow(dead_code, reason = "the secrets section reads this in Task 6")]
+    pub config: Option<Config>,
+    /// The installed providers, absent when they do not load. Task 6
+    /// reads them for the secrets section.
+    #[allow(dead_code, reason = "the secrets section reads this in Task 6")]
+    pub providers: Option<Providers>,
+    /// The configuration and extension notices for stderr.
+    pub notices: Vec<contract::events::Notice>,
+}
+
+/// Loads the configuration, extensions and model choice and checks each
+/// blocker in the session's order, reading no key but the selected label's
+/// (only to test whether it is blank), running no command and starting
+/// nothing.
+pub(crate) fn startup(
+    home: &Path,
+    workspace: &Path,
+    overrides: &[String],
+    env: &dyn Fn(&str) -> Option<String>,
+    has_userinfo: &dyn Fn(&str) -> bool,
+) -> Startup {
+    let (_, project) = match project_of(home, workspace) {
+        Ok(found) => found,
+        Err(failure) => {
+            let line = configuration_line(&failure.message, failure.code.clone());
+            return Startup {
+                lines: vec![line.clone()],
+                blocker: Some(Blocker {
+                    code: failure.code,
+                    line,
+                    key: false,
+                }),
+                config: None,
+                providers: None,
+                notices: Vec::new(),
+            };
+        }
+    };
+    let config = match Config::load(Sources {
+        home: home.to_owned(),
+        workspace: workspace.to_owned(),
+        project,
+        overrides: overrides.to_vec(),
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            let line = configuration_line(&error.to_string(), error.code());
+            return Startup {
+                lines: vec![line.clone()],
+                blocker: Some(Blocker {
+                    code: error.code(),
+                    line,
+                    key: false,
+                }),
+                config: None,
+                providers: None,
+                notices: Vec::new(),
+            };
+        }
+    };
+    let mut notices: Vec<contract::events::Notice> = config.notices().to_vec();
+    let inventory = match Providers::load(home) {
+        Ok((providers, _)) => providers,
+        Err(error) => {
+            let blocker = extension_blocker(&error);
+            return Startup {
+                lines: vec![blocker.line.clone()],
+                blocker: Some(blocker),
+                config: None,
+                providers: None,
+                notices,
+            };
+        }
+    };
+    let mut enabled = match Providers::load_enabled(home, &config) {
+        Ok((providers, loaded)) => {
+            notices.extend(loaded);
+            providers
+        }
+        Err(error) => {
+            let blocker = extension_blocker(&error);
+            return Startup {
+                lines: vec![blocker.line.clone()],
+                blocker: Some(blocker),
+                config: None,
+                providers: None,
+                notices,
+            };
+        }
+    };
+    match enabled.fill_placeholders(&config, env) {
+        Ok(filled) => notices.extend(filled),
+        Err(error) => {
+            let blocker = extension_blocker(&error);
+            return Startup {
+                lines: vec![blocker.line.clone()],
+                blocker: Some(blocker),
+                config: None,
+                providers: None,
+                notices,
+            };
+        }
+    }
+    if let Some((serde_json::Value::String(typed), _)) = config.get("model", None) {
+        enabled.add_scripted(&typed);
+    }
+    let mut checked = Checked {
+        lines: Vec::new(),
+        blocker: None,
+        outcome: Outcome::None,
+        workspace,
+        config: &config,
+        inventory: &inventory,
+        enabled: &enabled,
+        env,
+        has_userinfo,
+    };
+    checked.model();
+    checked.providers();
+    checked.permissions();
+    checked.mcp();
+    Startup {
+        lines: checked.lines,
+        blocker: checked.blocker,
+        config: Some(config),
+        providers: Some(inventory),
+        notices,
+    }
+}
+
+/// The configuration failure's line: the load error, plus the one fix
+/// when the error names none. An unreadable file's error says only
+/// that it cannot be read; an invalid file's error already says to fix
+/// it and try again.
+fn configuration_line(message: &str, code: ErrorCode) -> String {
+    let message = clean(message);
+    if code == ErrorCode::IoFailed {
+        format!("configuration does not load: {message} Check that you can read that file.")
+    } else {
+        format!("configuration does not load: {message}")
+    }
+}
+
+/// The extension load failure's line: the load error plus the one fix.
+fn extension_blocker(error: &extensions::Error) -> Blocker {
+    Blocker {
+        code: error.code(),
+        line: format!(
+            "extensions do not load: {} Remove the extension it names with \
+             `fiber extension remove <name>`, then install it again.",
+            clean(&error.to_string())
+        ),
+        key: false,
+    }
+}
+
+/// The model, providers, permissions and MCP lines with the first blocker.
+struct Checked<'a> {
+    lines: Vec<String>,
+    blocker: Option<Blocker>,
+    outcome: Outcome,
+    workspace: &'a Path,
+    config: &'a Config,
+    inventory: &'a Providers,
+    enabled: &'a Providers,
+    env: &'a dyn Fn(&str) -> Option<String>,
+    has_userinfo: &'a dyn Fn(&str) -> bool,
+}
+
+/// What the model choice resolved to: data, extension code, an error, or
+/// nothing chosen.
+#[derive(Clone, PartialEq, Eq)]
+enum Outcome {
+    /// No model was chosen.
+    None,
+    /// The chosen model's provider, from data (`scripted` included).
+    Chosen(String),
+    /// The chosen model's provider, absent from data but registrable by
+    /// an enabled extension's code.
+    Code(String),
+    /// The choice failed.
+    Failed,
+}
+
+/// One label's row: its listed origin, or the selected label's missing
+/// source, which is not an error.
+enum Row {
+    /// The origin `credential_origins` listed, possibly an error.
+    Listed(Result<Origin, ConfigError>),
+    /// The selected label has nothing stored or configured under it.
+    Missing,
+}
+
+impl Checked<'_> {
+    /// The configured model, or the `NoModel` line when none is chosen.
+    fn typed(&self) -> Option<String> {
+        self.config
+            .get("model", None)
+            .and_then(|(value, _)| value.as_str().map(str::to_owned))
+    }
+
+    /// The model line and its checks: the window, the `:level` suffix,
+    /// the protocol and the scripted script.
+    fn model(&mut self) {
+        let Some(typed) = self.typed() else {
+            let line = clean(&extensions::Error::NoModel.to_string());
+            self.block(line.clone(), ErrorCode::NoModel, false);
+            self.lines.push(line);
+            return;
+        };
+        let shown = clean(&typed);
+        match self.enabled.resolve(&typed) {
+            Err(extensions::Error::ProviderMissing { provider })
+                if self.enabled.could_register(&provider) =>
+            {
+                // An enabled extension could register the provider once a
+                // session runs its code: not checked, not a blocker. The
+                // line prints here: the provider is absent from data, so
+                // the label blocks below never list it.
+                self.outcome = Outcome::Code(provider.clone());
+                self.lines.push(format!("model: {shown}"));
+                self.lines.push(format!(
+                    "{}: registered by extension code, not checked",
+                    clean(&provider)
+                ));
+            }
+            Err(error) => {
+                self.outcome = Outcome::Failed;
+                self.lines.push(format!("model: {shown}"));
+                let line = clean(&error.to_string());
+                self.block(line.clone(), error.code(), false);
+                self.lines.push(line);
+            }
+            Ok(model) => {
+                let provider = clean(&model.provider.name);
+                self.outcome = Outcome::Chosen(model.provider.name.clone());
+                self.lines
+                    .push(format!("model: {shown} (provider {provider})"));
+                self.window(&model);
+                self.thinking(&model);
+                self.protocol(&model);
+                self.script(&model);
+            }
+        }
+    }
+
+    /// The first blocker wins: each later check needs the earlier one.
+    fn block(&mut self, line: String, code: ErrorCode, key: bool) {
+        if self.blocker.is_none() {
+            self.blocker = Some(Blocker { code, line, key });
+        }
+    }
+
+    /// The model must declare a positive context window. A model without
+    /// one never reaches here: the load leaves it out, so resolving it is
+    /// `UnknownModel`; this refusal is pinned through the shared function.
+    fn window(&mut self, model: &Model<'_>) {
+        if let Err(message) = extensions::context_window(model.model, &model.reference()) {
+            self.block(
+                format!(
+                    "{} Run `fiber models` and set another with \
+                     `fiber config set model <provider/model>`.",
+                    clean(&message)
+                ),
+                ErrorCode::NoModel,
+                false,
+            );
+        }
+    }
+
+    /// The `:level` suffix must name a level the model takes.
+    fn thinking(&mut self, model: &Model<'_>) {
+        let Some(level) = model.thinking else {
+            return;
+        };
+        if let Some(message) = extensions::thinking_refusal(level, model.model, &model.reference())
+        {
+            self.block(
+                format!(
+                    "{} Drop the `:<level>` suffix from `model`, or use a level it lists.",
+                    clean(&message)
+                ),
+                ErrorCode::InvalidArguments,
+                false,
+            );
+        }
+    }
+
+    /// The model's protocol must be one Fiber speaks.
+    fn protocol(&mut self, model: &Model<'_>) {
+        if let Some(message) =
+            extensions::protocol_refusal(model.model.protocol, &model.reference())
+        {
+            self.block(
+                format!(
+                    "{} Run `fiber models` and set another with \
+                     `fiber config set model <provider/model>`.",
+                    clean(&message)
+                ),
+                ErrorCode::ProtocolUnsupported,
+                false,
+            );
+        }
+    }
+
+    /// A scripted model's file must read. It is never parsed or run, and
+    /// a file that is not regular is never waited on.
+    fn script(&mut self, model: &Model<'_>) {
+        if model.provider.name != "scripted" {
+            return;
+        }
+        let path = self.workspace.join(&model.model.id);
+        match read_script(&path) {
+            Ok(ScriptRead::Readable | ScriptRead::NotChecked) => {}
+            Err(error) => self.block(
+                format!(
+                    "The script `{}` could not be read: {error}. Check that path, \
+                     resolved against the workspace, and that you can read the file.",
+                    clean(&path.display().to_string())
+                ),
+                ErrorCode::IoFailed,
+                false,
+            ),
+        }
+    }
+
+    /// Every installed provider's label block, with the selected key's
+    /// check on the chosen model's provider alone.
+    fn providers(&mut self) {
+        for name in self.inventory.names() {
+            let Some(data) = self.inventory.get(name) else {
+                continue;
+            };
+            self.lines.push(format!("{}:", clean(name)));
+            let selected = self.config.credentials().credential_label(data);
+            let mut rows: Vec<(String, Row)> = self
+                .config
+                .credentials()
+                .credential_origins(data)
+                .into_iter()
+                .map(|(label, origin)| (label, Row::Listed(origin)))
+                .collect();
+            if rows.iter().all(|(label, _)| label != &selected) {
+                // The selected label has nothing under it: the mark still
+                // shows, with no source.
+                rows.push((selected.clone(), Row::Missing));
+            }
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+            let chosen = self.outcome == Outcome::Chosen(name.to_owned());
+            for (label, row) in &rows {
+                let mark = if label == &selected { "*" } else { " " };
+                let (origin, note) = self.label_row(data, &selected, label, row, chosen);
+                self.lines.push(format!(
+                    "  {mark} {label:<width$}  {origin}{note}",
+                    label = clean(label),
+                    origin = clean(&origin),
+                ));
+            }
+            if chosen
+                && let Some(blocker) = self.blocker.as_ref()
+                && blocker.key
+            {
+                self.lines.push(blocker.line.clone());
+            }
+        }
+    }
+
+    /// One label's origin text and, for the chosen model's selected label
+    /// alone, its presence note. No other key is read.
+    fn label_row(
+        &mut self,
+        data: &ProviderData,
+        selected: &str,
+        label: &str,
+        row: &Row,
+        chosen: bool,
+    ) -> (String, &'static str) {
+        let origin = match row {
+            Row::Listed(Ok(Origin::Stored)) => {
+                let stored = data.credential_name.as_deref().unwrap_or(&data.name);
+                format!("stored in credentials/{stored}/{label}")
+            }
+            Row::Listed(Ok(Origin::Env(variable))) => {
+                format!("environment variable {variable}")
+            }
+            Row::Listed(Ok(Origin::File(file))) => format!("file {}", file.display()),
+            Row::Listed(Ok(Origin::Command(program))) => {
+                format!("command {program} (not run)")
+            }
+            Row::Listed(Err(error)) => format!("cannot be read: {error}"),
+            Row::Missing => "nothing stored or configured".to_owned(),
+        };
+        if !chosen || label != selected {
+            return (origin, "");
+        }
+        match self
+            .config
+            .credentials()
+            .key_presence(data, label, self.env)
+        {
+            Ok(Presence::Present) => (origin, ""),
+            Ok(Presence::Absent) => {
+                self.block(
+                    missing_line(&data.name, label),
+                    ErrorCode::CredentialMissing,
+                    true,
+                );
+                (origin, " (no key)")
+            }
+            Ok(Presence::Empty) => {
+                self.block(
+                    format!(
+                        "the stored key for {} under {label} is empty: run `fiber logout \
+                         {0} --as {label}`, then `fiber login {0} --as {label}`.",
+                        clean(&data.name)
+                    ),
+                    ErrorCode::CredentialFailed,
+                    true,
+                );
+                (origin, " (empty)")
+            }
+            Ok(Presence::Unchecked) => (origin, " (not run)"),
+            Err(error) => {
+                let code = error.code();
+                let line = key_error_line(&data.name, label, &error);
+                self.block(line, code, true);
+                (origin, "")
+            }
+        }
+    }
+
+    /// The constant permission line.
+    fn permissions(&mut self) {
+        self.lines.push("permissions: auto".to_owned());
+    }
+
+    /// The MCP count and the first required refusal, if any.
+    fn mcp(&mut self) {
+        let count = match self.config.get("mcp.servers", None) {
+            Some((serde_json::Value::Object(servers), _)) => servers.len(),
+            _ => 0,
+        };
+        self.lines.push(format!("MCP servers: {count}"));
+        if let Err(refusal) = mcp_servers(self.config, self.has_userinfo) {
+            let line = clean(&refusal.message());
+            self.block(line.clone(), ErrorCode::ConfigInvalid, false);
+            self.lines.push(line);
+        }
+    }
+}
+
+/// The missing-key line: the plain default wording, or the `--as` one.
+fn missing_line(provider: &str, label: &str) -> String {
+    let provider = clean(provider);
+    if label == "default" {
+        format!("no key for {provider}: run `fiber login {provider}`")
+    } else {
+        format!(
+            "no key for {provider} under {}: run `fiber login {provider} --as {}`",
+            clean(label),
+            clean(label)
+        )
+    }
+}
+
+/// The selected label's read error: the invalid label, the unusable
+/// stored path, or the unreadable key, each with its fix.
+fn key_error_line(provider: &str, label: &str, error: &ConfigError) -> String {
+    let provider = clean(provider);
+    let label = clean(label);
+    let login = if label == "default" {
+        format!("`fiber login {provider}`")
+    } else {
+        format!("`fiber login {provider} --as {label}`")
+    };
+    match error {
+        ConfigError::SecretName { .. } => format!(
+            "the credential label {label} for {provider} is not a valid label: set another \
+             with `fiber config set providers.\"{provider}\".credential {label}`"
+        ),
+        ConfigError::NotPlain { .. } => format!(
+            "the stored key for {provider} under {label} cannot be used: {} Remove that \
+             path, then run {login}.",
+            clean(&error.to_string())
+        ),
+        ConfigError::Json { .. }
+        | ConfigError::WrongType { .. }
+        | ConfigError::Io { .. }
+        | ConfigError::Unsynced { .. }
+        | ConfigError::FiberHome(_)
+        | ConfigError::Override { .. }
+        | ConfigError::Refused { .. }
+        | ConfigError::ProjectKey { .. }
+        | ConfigError::Shape { .. }
+        | ConfigError::CredentialMissing { .. }
+        | ConfigError::CredentialFailed { .. }
+        | ConfigError::DuplicateExtension { .. }
+        | ConfigError::BadThemeName
+        | ConfigError::ThemeRead(_) => format!(
+            "the key for {provider} under {label} cannot be read: {} Check that you can \
+             read that file, or run {login}.",
+            clean(&error.to_string())
+        ),
+    }
+}

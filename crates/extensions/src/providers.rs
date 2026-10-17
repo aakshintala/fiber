@@ -53,6 +53,13 @@ pub struct Providers {
     /// `process` program, an `init.lua`, or a `providers/*.lua` script.
     /// Doctor checks only providers whose extension is not in here.
     coded: BTreeSet<String>,
+    /// The providers an enabled, healthy, compatible extension declared
+    /// with Lua code that could register, by provider name: an `init.lua`
+    /// can register any of its extension's declared providers, and a
+    /// `providers/<name>.lua` script its own. Recorded during the load
+    /// without running code; a process-only package supplies no Lua, and
+    /// disabled, damaged or incompatible extensions record nothing.
+    code_candidates: BTreeSet<String>,
 }
 
 // `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
@@ -358,6 +365,7 @@ impl Providers {
             providers
                 .declared
                 .insert(manifest.name.clone(), manifest.providers.clone());
+            providers.record_code_candidates(&dir, &manifest);
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
@@ -403,6 +411,27 @@ impl Providers {
             }
         }
         Ok((providers, notices))
+    }
+
+    /// Records the declared providers Lua code could register: every
+    /// declared provider when an `init.lua` is present — the
+    /// conservative criterion, an uncertain registration is never a
+    /// definite absence — else only the providers with their own
+    /// `providers/<name>.lua` script. A process-only package supplies
+    /// no Lua. Runs during the load, without running code.
+    fn record_code_candidates(&mut self, dir: &Path, manifest: &config::Manifest) {
+        let init = dir.join("init.lua").is_file();
+        let scripts = provider_scripts(dir).unwrap_or_default();
+        if !init && scripts.is_empty() {
+            return;
+        }
+        if let Some(declared) = self.declared.get(&manifest.name) {
+            for provider in declared.keys() {
+                if init || scripts.iter().any(|script| script == provider) {
+                    self.code_candidates.insert(provider.clone());
+                }
+            }
+        }
     }
 
     /// Leaves out the models `extension` may not serve: first the invalid
@@ -479,15 +508,18 @@ impl Providers {
     }
 
     /// Whether the provider can be checked without running extension
-    /// code: it is registered from the data files of a loaded extension
-    /// that serves it with no `process` program, `init.lua` or
-    /// `providers/*.lua` script. A disabled, damaged or incompatible
-    /// extension's providers are absent, and a Lua-registered provider
-    /// needs its code, so neither registers.
+    /// code. A provider in data is checkable when its extension serves
+    /// it with no `process` program, `init.lua` or `providers/*.lua`
+    /// script. A provider absent from data is uncertain, never checked:
+    /// it could register when an enabled, healthy, compatible extension
+    /// declared it with Lua code that could register it. A disabled,
+    /// damaged or incompatible extension's providers are absent, and a
+    /// Lua-registered provider needs its code, so neither registers.
     pub fn could_register(&self, provider: &str) -> bool {
-        self.extension_of
-            .get(provider)
-            .is_some_and(|owner| !self.coded.contains(owner))
+        if let Some(owner) = self.extension_of.get(provider) {
+            return !self.coded.contains(owner);
+        }
+        self.code_candidates.contains(provider)
     }
 
     /// The secrets the installed extensions declare, sorted, each once.

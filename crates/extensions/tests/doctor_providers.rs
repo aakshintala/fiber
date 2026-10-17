@@ -119,3 +119,100 @@ fn an_unknown_provider_registers_nothing() {
     installed(&setup, "acme", manifest("acme"));
     assert!(!loaded(&setup).could_register("missing"));
 }
+
+/// Installs the source package `short` with this manifest, an `init.lua`
+/// and no provider data file, and returns nothing.
+fn installed_code_only(setup: &Setup, short: &str, mut listed: serde_json::Value) {
+    if let Some(into) = listed.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": ["http://127.0.0.1:1/v1"]}),
+        );
+    }
+    let source = setup.source(short, &listed, &[]);
+    write(&source.join("init.lua"), "this is not lua (((");
+    install(&setup.home(), &source, "0.1.0").unwrap();
+}
+
+/// Hand-places the package `short` with this manifest, an `init.lua` and
+/// no provider data file: installing already refuses another API.
+fn placed_code_only(setup: &Setup, short: &str, mut listed: serde_json::Value) {
+    if let Some(into) = listed.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": ["http://127.0.0.1:1/v1"]}),
+        );
+    }
+    let dir = setup.home().join("extensions").join(short);
+    write(&dir.join("extension.json"), &listed.to_string());
+    write(&dir.join("init.lua"), "this is not lua (((");
+    common::write_record(&dir);
+}
+
+#[test]
+fn an_enabled_init_may_register_its_declared_provider() {
+    let setup = Setup::new();
+    installed_code_only(&setup, "acme", manifest("acme"));
+    let providers = loaded(&setup);
+    assert!(providers.names().next().is_none());
+    assert!(providers.could_register("fake"));
+}
+
+#[test]
+fn a_disabled_init_registers_nothing() {
+    let setup = Setup::new();
+    installed_code_only(&setup, "acme", manifest("acme"));
+    let configuration = common::config(&setup, &["extensions.acme.enabled=false"]);
+    let (providers, notices) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(!providers.could_register("fake"));
+}
+
+#[test]
+fn an_incompatible_init_registers_nothing() {
+    let setup = Setup::new();
+    let mut listed = manifest("acme");
+    if let Some(into) = listed.as_object_mut() {
+        into.insert("api".to_owned(), json!(999));
+    }
+    placed_code_only(&setup, "acme", listed);
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(!notices.is_empty());
+    assert!(!providers.could_register("fake"));
+}
+
+#[test]
+fn a_provider_script_may_register_its_named_provider() {
+    let setup = Setup::new();
+    let mut listed = manifest("acme");
+    listed["providers"] =
+        json!({"fake": ["http://127.0.0.1:1/v1"], "other": ["http://127.0.0.1:1/v1"]});
+    let source = setup.source("acme", &listed, &[]);
+    write(
+        &source.join("providers/fake.lua"),
+        "-- a provider script, never run by the check",
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let providers = loaded(&setup);
+    assert!(providers.could_register("fake"));
+    assert!(!providers.could_register("other"));
+}
+
+#[test]
+fn a_process_only_package_supplies_no_lua_registration() {
+    let setup = Setup::new();
+    let mut listed = manifest("acme");
+    if let Some(into) = listed.as_object_mut() {
+        into.insert("process".to_owned(), json!({"program": "run"}));
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": ["http://127.0.0.1:1/v1"]}),
+        );
+    }
+    // No `init.lua`: process-only, with no Lua that could register.
+    let source = setup.source("acme", &listed, &[]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let providers = loaded(&setup);
+    assert!(providers.names().next().is_none());
+    assert!(!providers.could_register("fake"));
+}
