@@ -4857,7 +4857,10 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
             Arc::new(tool)
         })
         .collect();
-    let reviewer = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("allow"),
+        Scripted::text("allow"),
+    ]));
     let looped = history
         .resume(
             tools
@@ -4900,6 +4903,8 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
             "assistant_message_completed",
             "usage_recorded",
             "permission_resolved",
+            "usage_recorded",
+            "permission_resolved",
             "tool_call_started",
             "tool_call_started",
             "tool_call_started",
@@ -4918,16 +4923,21 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
             "turn_completed"
         ]
     );
-    assert_eq!(reviewer.requests().len(), 1);
-    let resolved = history
+    assert_eq!(reviewer.requests().len(), 2);
+    let resolved: Vec<_> = history
         .new_lines()
         .into_iter()
-        .find(|line| line.kind == "permission_resolved")
-        .unwrap();
-    assert_eq!(
-        resolved.payload["hosts"],
-        json!(["https://unknown.test/path?q=1"])
-    );
+        .filter(|line| line.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 2);
+    for (line, host) in resolved.iter().zip(["instructions", "unknown"]) {
+        assert_eq!(
+            line.payload["hosts"],
+            json!([format!("https://{host}.test/path?q=1")])
+        );
+        assert_eq!(line.payload["decision"], "allow");
+        assert_eq!(line.payload["decided_by"], "reviewer");
+    }
     for tool in tools {
         assert_eq!(tool.ran().len(), 1);
     }
