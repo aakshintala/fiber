@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use contract::commands::RewindArgs;
+use contract::commands::{Reply, ReplyAnswer, RewindArgs};
 use contract::events::{
     CommandResult, Parent, SessionStarted, TurnOutcome, Variables, VariablesSource,
 };
@@ -1826,6 +1826,13 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let last = session.provider.requests().last().unwrap().clone();
     let looped = session.looped.as_mut().unwrap();
     let turn = contract::TurnId("t_summary_crashed".into());
+    let usage = log::read(&session.dir)
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|line| line.kind == "usage_recorded")
+        .and_then(|line| contract::events::Event::from_envelope(line).unwrap())
+        .unwrap();
     let events = [
         contract::events::Event::TurnStarted(contract::events::TurnStarted {
             input: vec![contract::events::InputItem::Rewind {
@@ -1836,6 +1843,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
             text: "incomplete summary".into(),
             provider_item: None,
         }),
+        usage,
         contract::events::Event::FiberStarted(contract::events::FiberStarted {
             version: "0.0.1".into(),
             resumed: true,
@@ -1848,7 +1856,9 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let reviewer = session.reviewer(vec![Scripted::text("allow")]);
     session.inbox.send(delivery("after crash")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let live = reviewer.requests()[0].conversation.clone();
+    let mut live = reviewer.requests()[0].conversation.clone();
+    // The last two messages describe only the current call and review stage.
+    live.truncate(live.len() - 2);
     assert!(
         live.iter()
             .any(|input| matches!(input, Input::User { text, .. } if text.contains("after crash")))
@@ -1880,10 +1890,123 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let rebuilt = reviewer.requests()[0].conversation.clone();
     assert_eq!(&rebuilt[..live.len()], live.as_slice());
     assert!(
+        rebuilt
+            .iter()
+            .any(|input| matches!(input, Input::User { text, .. } if text == "The agent: done"))
+    );
+    assert!(
         rebuilt.iter().any(
             |input| matches!(input, Input::User { text, .. } if text.contains("later prompt"))
         )
     );
+}
+
+struct SummaryRepository;
+
+impl contract::repository::RepositoryCode for SummaryRepository {
+    fn unapproved(
+        &self,
+    ) -> Result<Vec<contract::repository::Unapproved>, contract::shapes::Failure> {
+        Ok(vec![])
+    }
+    fn decide(
+        &self,
+        _: &contract::events::OfferedItem,
+        _: contract::events::OfferDecision,
+    ) -> Result<contract::repository::Decided, contract::shapes::Failure> {
+        Ok(contract::repository::Decided::Recorded)
+    }
+}
+
+#[test]
+fn prompts_deferred_by_the_repository_offer_are_answered_after_the_summary() {
+    use contract::events::{
+        Clients, Event, OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered,
+    };
+    for success in [true, false] {
+        let session = run_a();
+        let offer = contract::RequestId("r_summary_offer".into());
+        session
+            .log
+            .append(&Event::Clients(Clients { count: 1 }), None, None)
+            .unwrap();
+        session
+            .log
+            .append(
+                &Event::RepositoryCodeOffered(RepositoryCodeOffered {
+                    request_id: offer.clone(),
+                    items: vec![OfferedItem {
+                        kind: OfferedKind::McpServer,
+                        name: "summary-code".into(),
+                        hash: "h1".into(),
+                        required: false,
+                        summary: "test repository code".into(),
+                        version: None,
+                        diff: None,
+                    }],
+                }),
+                None,
+                None,
+            )
+            .unwrap();
+        let script = if success {
+            Scripted::text("Tried X.")
+        } else {
+            Scripted::failed(summary_failure("summary failed"))
+        };
+        let (looped, tx, provider) =
+            resume_existing(&session, "s_test", vec![script, Scripted::text("next")]);
+        let mut looped = looped.repository_code(Arc::new(SummaryRepository));
+        let (rw, answer) = rewind(args(None, None, true, vec![]));
+        let (prompt_send, prompt_answer) = mpsc::channel();
+        let prompt_ack = Ack(Box::new(move |answer| {
+            prompt_send.send(answer).unwrap();
+        }));
+        tx.send(rw).unwrap();
+        tx.send(Delivery::Prompt(message("deferred prompt"), prompt_ack))
+            .unwrap();
+        tx.send(Delivery::Reply(
+            Reply {
+                request_id: offer,
+                answer: ReplyAnswer::Decisions {
+                    decisions: vec![OfferDecision::Approve],
+                },
+            },
+            ignore(),
+        ))
+        .unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let result = looped.turn();
+            done.send(result).unwrap();
+        });
+        let outcome = Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the offer and summary ended")
+            .unwrap();
+        let lines = log::read(&session.dir).unwrap();
+        if success {
+            assert_eq!(outcome, None);
+            accepted(answer_of(answer));
+            let rejection = rejected(answer_of(prompt_answer));
+            assert_eq!(rejection.code, ErrorCode::Closing);
+            assert_eq!(
+                rejection.message,
+                "The session was rewound and takes no more commands."
+            );
+            assert_eq!(lines.last().unwrap().kind, "rewound");
+            assert_eq!(provider.requests().len(), 1);
+        } else {
+            assert_eq!(outcome, Some(TurnOutcome::Completed));
+            assert_eq!(rejected(answer_of(answer)).code, ErrorCode::SummaryFailed);
+            assert!(answer_of(prompt_answer).is_ok());
+            assert!(lines.iter().all(|line| line.kind != "rewound"));
+            assert_eq!(provider.requests().len(), 2);
+            assert!(
+                matches!(provider.requests()[1].conversation.last(), Some(Input::User { text, .. }) if text == "deferred prompt")
+            );
+        }
+    }
 }
 
 #[test]
