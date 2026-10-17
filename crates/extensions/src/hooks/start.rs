@@ -111,8 +111,8 @@ impl SessionExtensions {
     /// The Lua provider `provider` of the loaded extension `extension`. An
     /// extension the session keeps for its hooks or commands lends its
     /// running VM; any other gets a fresh one, started as session start
-    /// starts it, with no emit, driver or inbox, and its hooks and commands
-    /// are not registered. A start that fails, or a VM that does not
+    /// starts it, with the session's browser and any installed emitter, but
+    /// no driver or inbox. Its hooks and commands are not registered. A start that fails, or a VM that does not
     /// register `provider`, fails with `extension_failed`.
     pub fn start_provider(
         &self,

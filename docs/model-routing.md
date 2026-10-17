@@ -856,6 +856,9 @@ refresh.
 
 A headless run whose credential has expired and cannot be refreshed fails with
 `authentication_failed`. It never prompts, because nobody is there to answer.
+Mid-session, with a `full` client attached, `credential()` may run the provider's
+login instead, and the client receives its URL (`docs/extensions.md`, "Host
+calls"). At startup nobody is attached yet.
 
 ## When a model call fails
 
