@@ -22,9 +22,10 @@ const INIT: &str = include_str!("../../../providers/opencode/providers/opencode-
 const LIVE_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_OPENCODE_KEY; run with --run-ignored only"]
 fn a_live_opencode_quota_fetch_reports_three_windows() {
     let Ok(key) = std::env::var("FIBER_LIVE_OPENCODE_KEY") else {
-        return;
+        panic!("the live opencode test needs FIBER_LIVE_OPENCODE_KEY set");
     };
     let root = fakes::TempDir::new("fiber-live-opencode-quota");
     let home = root.path().join("home");

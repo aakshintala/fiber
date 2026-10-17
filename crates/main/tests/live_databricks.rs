@@ -53,10 +53,10 @@ struct Live {
 /// id fails the test naming its variable.
 fn live_setup(id_var: &str) -> Option<Live> {
     let Ok(key) = std::env::var("FIBER_LIVE_DATABRICKS_KEY") else {
-        return None;
+        panic!("the live databricks test needs FIBER_LIVE_DATABRICKS_KEY set");
     };
     let Ok(host) = std::env::var("FIBER_LIVE_DATABRICKS_HOST") else {
-        return None;
+        panic!("the live databricks test needs FIBER_LIVE_DATABRICKS_HOST set");
     };
     let id = std::env::var(id_var)
         .unwrap_or_else(|_| panic!("{id_var} names the live model id for this protocol"));
@@ -121,16 +121,19 @@ fn live_turn(id_var: &str) {
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_CLAUDE; run with --run-ignored only"]
 fn live_claude_turn_answers_on_the_anthropic_route() {
     live_turn("FIBER_LIVE_DATABRICKS_CLAUDE");
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_RESPONSES; run with --run-ignored only"]
 fn live_responses_turn_answers_on_the_codex_route() {
     live_turn("FIBER_LIVE_DATABRICKS_RESPONSES");
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_COMPLETIONS; run with --run-ignored only"]
 fn live_completions_turn_answers_on_the_mlflow_route() {
     live_turn("FIBER_LIVE_DATABRICKS_COMPLETIONS");
 }
