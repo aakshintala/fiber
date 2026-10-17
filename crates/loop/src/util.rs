@@ -61,6 +61,7 @@ pub(crate) struct Transcript<'a> {
     pub(crate) had: &'a mut BTreeMap<String, String>,
     /// The render state a handoff reads.
     pub(crate) carry: &'a mut crate::handoff::Carry,
+    /// The session's known network hosts, folded from the same durable events.
     pub(crate) known: &'a mut crate::known_hosts::KnownHosts,
 }
 

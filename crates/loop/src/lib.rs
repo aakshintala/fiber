@@ -199,6 +199,7 @@ pub struct Loop {
     /// The session grants this loop's answers added, in order: the fold of
     /// the `permission_resolved` lines this loop wrote.
     grants: Vec<Grant>,
+    /// The session's known network hosts, folded from trusted durable events.
     known_hosts: known_hosts::KnownHosts,
     /// What judges step 7's calls; `Err(no_model)` until `reviewer` sets
     /// one (`docs/permissions.md`, "How it runs").

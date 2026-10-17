@@ -8,6 +8,7 @@ use contract::shapes::{ContentPart, Origin};
 
 type Host = (String, u16);
 
+/// The URL's host and port, normalised to the scheme's default port when absent.
 fn host_of(url: &str) -> Option<Host> {
     let (scheme, rest) = url.split_once("://")?;
     let default = if scheme.eq_ignore_ascii_case("https") {
@@ -61,6 +62,7 @@ fn named_in(text: &str) -> impl Iterator<Item = Host> + '_ {
     })
 }
 
+/// The session's known network hosts, folded only from trusted durable sources.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct KnownHosts {
     hosts: BTreeSet<Host>,
@@ -68,44 +70,49 @@ pub(crate) struct KnownHosts {
 
 impl KnownHosts {
     pub(crate) fn fold(&mut self, event: &Event) {
-        if let Event::TurnStarted(turn) = event {
-            for item in &turn.input {
-                if let InputItem::Message {
-                    content, sender, ..
-                } = item
-                    && sender.origin == Origin::Driver
-                {
-                    self.message(content);
+        match event {
+            Event::TurnStarted(turn) => {
+                for item in &turn.input {
+                    if let InputItem::Message {
+                        content, sender, ..
+                    } = item
+                        && sender.origin == Origin::Driver
+                    {
+                        self.message(content);
+                    }
                 }
             }
-        }
-        if let Event::SteeringApplied(steering) = event
-            && steering.sender.origin == Origin::Driver
-        {
-            self.message(&steering.content);
-        }
-        if let Event::OpeningMessage(opening) = event {
-            for file in &opening.instruction_files {
-                self.hosts.extend(named_in(&file.content));
+            Event::SteeringApplied(steering) => {
+                if steering.sender.origin == Origin::Driver {
+                    self.message(&steering.content);
+                }
             }
-        }
-        if let Event::InstructionFile(file) = event
-            && file.extension.is_none()
-            && let Some(content) = &file.content
-        {
-            self.hosts.extend(named_in(content));
-        }
-        if let Event::ToolCallCompleted(result) = event {
-            self.hosts
-                .extend(result.hosts_surfaced.iter().filter_map(|url| host_of(url)));
-        }
-        if let Event::PermissionResolved(resolved) = event
-            && resolved.decision == Decision::Allow
-            && matches!(resolved.decided_by, DecidedBy::Person | DecidedBy::Reviewer)
-            && let Some(hosts) = &resolved.hosts
-        {
-            self.hosts
-                .extend(hosts.iter().filter_map(|url| host_of(url)));
+            Event::OpeningMessage(opening) => {
+                for file in &opening.instruction_files {
+                    self.hosts.extend(named_in(&file.content));
+                }
+            }
+            Event::InstructionFile(file) => {
+                if file.extension.is_none()
+                    && let Some(content) = &file.content
+                {
+                    self.hosts.extend(named_in(content));
+                }
+            }
+            Event::ToolCallCompleted(result) => {
+                self.hosts
+                    .extend(result.hosts_surfaced.iter().filter_map(|url| host_of(url)));
+            }
+            Event::PermissionResolved(resolved) => {
+                if resolved.decision == Decision::Allow
+                    && matches!(resolved.decided_by, DecidedBy::Person | DecidedBy::Reviewer)
+                    && let Some(hosts) = &resolved.hosts
+                {
+                    self.hosts
+                        .extend(hosts.iter().filter_map(|url| host_of(url)));
+                }
+            }
+            _ => {}
         }
     }
 
