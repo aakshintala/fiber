@@ -1444,15 +1444,17 @@ earlier point. A person starts one from the terminal, a driver with the
   whether it started before the point or after it. A job is a child of the
   process that started it (`docs/tools.md`, "Background jobs"), and the new
   session runs in a new process, so it starts with no jobs. Stopping is the
-  normal job stop. The note tells the model which jobs stopped, so it can start
+  normal job stop, so a job ends `cancelled`, or `failed` with
+  `indeterminate`; the note lists both as stopped, so it can start
   again any it still needs.
 - **It keeps the name.** The new session's first lines after `session_started` include the parent's latest `session_named`, unchanged, when there is one. A fork does not.
 - **It never starts a turn.** The new session waits for a prompt, whichever
   point it continues from, including one just after the person's input or
   after a step.
 - **The old session is closed first.** While the process still holds the old
-  session's lock, it writes a `job_completed` with `status: cancelled` for each
-  job still running. The summary's model call, when there is one,
+  session's lock, each job still running ends as the normal stop ends it,
+  `cancelled` or `failed` with `indeterminate`, before `rewound`, and the
+  note lists both as stopped. The summary's model call, when there is one,
   is made on the old session, and its `usage_recorded` goes in the old
   session's log. Then it writes `rewound`, naming the new session and the
   point. `rewound` is the last line the process writes

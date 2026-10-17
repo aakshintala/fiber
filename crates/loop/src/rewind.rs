@@ -216,6 +216,10 @@ fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> 
 /// written and the shell calls run after the point, from [`changes`]
 /// (`docs/events.md`, "Rewind"). The text comes only from logged fields,
 /// so it is the same bytes whenever it is rendered.
+///
+/// debt: `pub` only for the integration tests in `crates/loop/tests/`,
+/// ceiling one re-export; make it crate-private and move those tests to
+/// [`rewind_note_with_jobs`] when `lib.rs` is touched for another reason.
 pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
     let (paths, calls) = changes(dir, point)?;
     Ok(note(&paths, &calls, &[]))

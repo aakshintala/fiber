@@ -27,6 +27,10 @@ pub(crate) struct StoppedJob {
 /// Whether `kind` is a job-record line: the four kinds the stop wait writes
 /// between `write_last_settled` and `rewound`, so nothing else in the run
 /// is the stop's.
+///
+/// debt: raw kind strings duplicating the `Event` variants, ceiling four
+/// kinds and two passes; decode each line once and match on the variants
+/// when this reader grows a third pass or a fifth kind.
 fn is_job_record(kind: &str) -> bool {
     matches!(
         kind,
