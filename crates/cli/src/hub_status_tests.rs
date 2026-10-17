@@ -366,6 +366,17 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
             Err(error) => panic!("flooding the send buffer: {error}"),
         }
     }
+    // A large write can refuse outright instead of filling the last
+    // room, so top up byte by byte: the loop ends only on a blocked
+    // probe, which makes the worker's write below the first thing that
+    // can block.
+    loop {
+        match worker_side.write(&[0x70]) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("topping up the send buffer: {error}"),
+        }
+    }
     peer.set_nonblocking(true).unwrap();
     // Before the worker can exit: a read timeout set after its end
     // closes is refused, so it goes on while the pair is whole. It only
