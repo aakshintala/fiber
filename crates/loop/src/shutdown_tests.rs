@@ -910,7 +910,6 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
                 seq: contract::Seq(3),
                 from_session_id: None,
                 summary: None,
-                jobs: Vec::new(),
             }),
             None,
             None,

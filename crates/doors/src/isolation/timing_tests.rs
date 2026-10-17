@@ -695,7 +695,6 @@ fn kept_paths_write_no_remove_line() {
                         seq: contract::Seq(1),
                         from_session_id: None,
                         summary: None,
-                        jobs: Vec::new(),
                     }),
                     None,
                     None,

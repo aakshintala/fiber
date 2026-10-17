@@ -3140,7 +3140,6 @@ fn close_keeps_a_started_rewound_session_with_no_prompt() {
             rewind: Some(Rewind {
                 summary: None,
                 note: "n".into(),
-                jobs: Vec::new(),
             }),
             worktree: None,
         })
@@ -3219,7 +3218,6 @@ fn print_ends_at_rewound_while_the_log_is_held() {
             seq: contract::Seq(5),
             from_session_id: None,
             summary: None,
-            jobs: Vec::new(),
         }),
     ] {
         log.append(&event, None, None).unwrap();

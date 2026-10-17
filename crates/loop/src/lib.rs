@@ -101,7 +101,7 @@ pub use retry::Retry;
 pub use reviewer::{
     BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed, summary_skips,
 };
-pub use rewind::{Rewound, latest_name, rewind_note};
+pub use rewind::{Rewound, latest_name, rewind_note, rewind_note_with_jobs};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use slash::{FetchPrompt, ServerPrompts};

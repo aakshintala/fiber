@@ -1389,7 +1389,6 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                     assert_eq!(args.seq, Some(contract::Seq(5)));
                     assert_eq!(args.from_session_id, None);
                     assert!(!args.summarise);
-                    assert!(args.adopt.is_empty());
                     ack.0(Ok(Some(CommandResult::Rewind {
                         new_session_id: SessionId("s_9e2b0000000000b2".into()),
                     })));
