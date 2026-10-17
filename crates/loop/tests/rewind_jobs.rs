@@ -747,7 +747,7 @@ fn refusals_send_no_stop_with_jobs_running() {
 
 #[test]
 fn a_job_end_admitted_with_the_rewind_refuses_busy() {
-    // Queued job news is refused busy as before: the rewind is refused
+    // Queued job news is refused busy: the rewind is refused
     // without stopping a job or writing `rewound`. The admitted end
     // still starts its own turn afterwards.
     let mut session = run_a_with_id(A_ID);

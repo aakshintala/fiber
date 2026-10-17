@@ -1445,7 +1445,7 @@ earlier point. A person starts one from the terminal, a driver with the
   process that started it (`docs/tools.md`, "Background jobs"), and the new
   session runs in a new process, so it starts with no jobs. Stopping is the
   normal job stop, so a job ends `cancelled`, or `failed` with
-  `indeterminate`; the note lists both as stopped, so it can start
+  `indeterminate`; the note lists both as stopped, so the model can start
   again any it still needs.
 - **It keeps the name.** The new session's first lines after `session_started` include the parent's latest `session_named`, unchanged, when there is one. A fork does not.
 - **It never starts a turn.** The new session waits for a prompt, whichever
