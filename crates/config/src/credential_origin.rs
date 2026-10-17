@@ -121,7 +121,7 @@ impl Credentials {
                     // A stored file owns its label even when it vanishes
                     // before its check: that is its failure, never a
                     // silent fall back to another source.
-                    Err(OpenFail::NotFound) => Err(ConfigError::Io {
+                    Err(OpenFail::NotFound(_)) => Err(ConfigError::Io {
                         file: path,
                         source: io::Error::from(ErrorKind::NotFound),
                     }),
@@ -148,7 +148,7 @@ impl Credentials {
                         }),
                         // A missing file holds no key, as a session's
                         // `NotFound`-to-missing arm says.
-                        Err(OpenFail::NotFound) => Ok(Presence::Absent),
+                        Err(OpenFail::NotFound(_)) => Ok(Presence::Absent),
                         // A directory where the key file should be is the
                         // session's non-`NotFound` `Io` arm, without
                         // opening or reading it.
@@ -230,8 +230,9 @@ pub(crate) fn is_directory_error() -> io::Error {
 /// Why a validated read gave no text.
 #[derive(Debug)]
 pub(crate) enum OpenFail {
-    /// Nothing is there.
-    NotFound,
+    /// Nothing is there, with the operating system's error, so a reader
+    /// that reports it names the same failure `fs::read` would.
+    NotFound(io::Error),
     /// A directory is there, unread.
     IsDir,
     /// A symbolic link, FIFO or any other non-regular file is there: never
@@ -259,7 +260,7 @@ pub(crate) fn open_validated(path: &Path, nofollow: bool) -> Result<std::fs::Fil
         fs::metadata(path)
     };
     match meta {
-        Err(error) if error.kind() == ErrorKind::NotFound => return Err(OpenFail::NotFound),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err(OpenFail::NotFound(error)),
         Err(error) => return Err(OpenFail::Other(error)),
         Ok(meta) => {
             if meta.is_dir() {
@@ -279,7 +280,9 @@ pub(crate) fn open_validated(path: &Path, nofollow: bool) -> Result<std::fs::Fil
     }
     let fd = match rustix::fs::open(path, flags, rustix::fs::Mode::empty()) {
         Ok(fd) => fd,
-        Err(error) if error == rustix::io::Errno::NOENT => return Err(OpenFail::NotFound),
+        Err(error) if error == rustix::io::Errno::NOENT => {
+            return Err(OpenFail::NotFound(io::Error::from(error)));
+        }
         Err(error) if nofollow && error == rustix::io::Errno::LOOP => {
             return Err(OpenFail::NotRegular);
         }

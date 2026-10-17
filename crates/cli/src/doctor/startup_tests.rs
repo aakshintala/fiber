@@ -850,6 +850,14 @@ fn a_missing_scripted_file_blocks_as_io() {
     assert_eq!(blocker.code, ErrorCode::IoFailed);
     assert!(blocker.line.starts_with("The script `"), "{}", blocker.line);
     assert!(blocker.line.contains("missing.lua"), "{}", blocker.line);
+    // The blocker prints under the model line.
+    assert!(
+        checked.lines[0].starts_with("model: "),
+        "{:?}",
+        checked.lines
+    );
+    assert_eq!(checked.lines[1], blocker.line, "{:?}", checked.lines);
+    assert!(blocker.line.contains("missing.lua"), "{}", blocker.line);
     assert!(
         blocker.line.ends_with(
             "Check that path, resolved against the workspace, and that you can read the file."

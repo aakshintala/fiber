@@ -393,12 +393,7 @@ pub fn read_script(path: &Path) -> io::Result<ScriptRead> {
         Err(crate::credential_origin::OpenFail::IsDir) => {
             return Err(crate::credential_origin::is_directory_error());
         }
-        Err(crate::credential_origin::OpenFail::NotFound) => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{}: no such file or directory", path.display()),
-            ));
-        }
+        Err(crate::credential_origin::OpenFail::NotFound(error)) => return Err(error),
         Err(crate::credential_origin::OpenFail::Other(error)) => return Err(error),
     };
     crate::credential_origin::seam::note_read(path);

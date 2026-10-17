@@ -288,15 +288,13 @@ impl Checked<'_> {
     /// `UnknownModel`; this refusal is pinned through the shared function.
     fn window(&mut self, model: &Model<'_>) {
         if let Err(message) = extensions::context_window(model.model, &model.reference()) {
-            self.block(
-                format!(
-                    "{} Run `fiber models` and set another with \
-                     `fiber config set model <provider/model>`.",
-                    clean(&message)
-                ),
-                ErrorCode::NoModel,
-                false,
+            let line = format!(
+                "{} Run `fiber models` and set another with \
+                 `fiber config set model <provider/model>`.",
+                clean(&message)
             );
+            self.block(line.clone(), ErrorCode::NoModel, false);
+            self.lines.push(line);
         }
     }
 
@@ -307,14 +305,12 @@ impl Checked<'_> {
         };
         if let Some(message) = extensions::thinking_refusal(level, model.model, &model.reference())
         {
-            self.block(
-                format!(
-                    "{} Drop the `:<level>` suffix from `model`, or use a level it lists.",
-                    clean(&message)
-                ),
-                ErrorCode::InvalidArguments,
-                false,
+            let line = format!(
+                "{} Drop the `:<level>` suffix from `model`, or use a level it lists.",
+                clean(&message)
             );
+            self.block(line.clone(), ErrorCode::InvalidArguments, false);
+            self.lines.push(line);
         }
     }
 
@@ -323,15 +319,13 @@ impl Checked<'_> {
         if let Some(message) =
             extensions::protocol_refusal(model.model.protocol, &model.reference())
         {
-            self.block(
-                format!(
-                    "{} Run `fiber models` and set another with \
-                     `fiber config set model <provider/model>`.",
-                    clean(&message)
-                ),
-                ErrorCode::ProtocolUnsupported,
-                false,
+            let line = format!(
+                "{} Run `fiber models` and set another with \
+                 `fiber config set model <provider/model>`.",
+                clean(&message)
             );
+            self.block(line.clone(), ErrorCode::ProtocolUnsupported, false);
+            self.lines.push(line);
         }
     }
 
@@ -344,15 +338,15 @@ impl Checked<'_> {
         let path = self.workspace.join(&model.model.id);
         match read_script(&path) {
             Ok(ScriptRead::Readable | ScriptRead::NotChecked) => {}
-            Err(error) => self.block(
-                format!(
+            Err(error) => {
+                let line = format!(
                     "The script `{}` could not be read: {error}. Check that path, \
                      resolved against the workspace, and that you can read the file.",
                     clean(&path.display().to_string())
-                ),
-                ErrorCode::IoFailed,
-                false,
-            ),
+                );
+                self.block(line.clone(), ErrorCode::IoFailed, false);
+                self.lines.push(line);
+            }
         }
     }
 
