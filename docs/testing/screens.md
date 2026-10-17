@@ -36,7 +36,7 @@ dark terminal.
 
 `scripts/look-diff` compares one look test's final screen to a prototype
 capture: it runs the named look test with a switch that dumps the output
-at the final screen wait, replays the dump through the same `vt100`
+through the last grid wait the test completes, replays the dump through the same `vt100`
 parser into a grid, and compares the grid to the capture row by row with
 trailing spaces trimmed, plus each cell's colours and attributes when
 the `.ansi` capture is given. It prints one verdict line: `look: match

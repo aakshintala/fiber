@@ -411,6 +411,13 @@ pub(crate) struct Shared {
     sync_tail: Vec<u8>,
     pending_size: Option<(u16, u16)>,
     ended: bool,
+    /// The output length at the last grid snapshot: the bytes a
+    /// replay needs to reach the snapshotted grid.
+    snapshot_len: usize,
+    /// The output length at the last grid wait the test completed:
+    /// the dump holds the output through it, never a snapshot taken
+    /// after quit.
+    dump_len: Option<usize>,
 }
 
 impl Shared {
@@ -427,6 +434,8 @@ impl Shared {
             sync_tail: Vec::new(),
             pending_size: None,
             ended: false,
+            snapshot_len: 0,
+            dump_len: None,
         }
     }
 
@@ -443,10 +452,12 @@ impl Shared {
     /// after a resize draws at the new size; then the chunk is appended,
     /// parsed, and snapshotted unless a synchronized-output block is open.
     /// When `LOOK_DIFF_GRID` names a path, each snapshot also overwrites
-    /// that path with the raw output bytes read so far, so the last write
-    /// is the final screen wait; unset, no file is written. The write
-    /// failure is ignored: a bad path surfaces as a missing dump where
-    /// the dump is read, never as a look-test failure.
+    /// that path with the output through the last grid wait the test
+    /// completed (the whole output when no grid wait completed yet), so
+    /// the dump holds the output through the last grid wait the test
+    /// completes, never a snapshot taken after quit. Unset, no file is
+    /// written. The write failure is ignored: a bad path surfaces as a
+    /// missing dump where the dump is read, never as a look-test failure.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
@@ -456,8 +467,13 @@ impl Shared {
         self.sync_through(bytes);
         if !self.sync_open {
             self.grid = Grid::of(&self.parser);
+            self.snapshot_len = self.output.len();
             if let Some(path) = std::env::var_os("LOOK_DIFF_GRID") {
-                drop(std::fs::write(path, &self.output));
+                let end = self
+                    .dump_len
+                    .unwrap_or(self.snapshot_len)
+                    .min(self.output.len());
+                drop(std::fs::write(path, &self.output[..end]));
             }
         }
     }
@@ -726,16 +742,31 @@ impl Run {
 
     /// Waits under one named deadline for the whole wait until the grid
     /// matches, however many frames arrive, and returns the matching
-    /// grid. When the terminal ends first the panic names the wait and
-    /// shows the last grid, so a stall says how far the journey got.
+    /// grid. A completed wait records the output through its grid, and
+    /// when `LOOK_DIFF_GRID` names a path rewrites the dump with the
+    /// output through the last grid wait the test completed, so the dump
+    /// holds the output through the last grid wait the test completes,
+    /// never a snapshot taken after quit. When the terminal ends first
+    /// the panic names the wait and shows the last grid, so a stall says
+    /// how far the journey got.
     #[track_caller]
     pub(crate) fn wait_screen(&mut self, what: &str, mut done: impl FnMut(&Grid) -> bool) -> Grid {
         loop {
-            let (grid, ended) = {
+            let (grid, ended, snapshot_len) = {
                 let shared = self.shared.lock().unwrap();
-                (shared.grid.clone(), shared.ended)
+                (shared.grid.clone(), shared.ended, shared.snapshot_len)
             };
             if done(&grid) {
+                let dump = {
+                    let mut shared = self.shared.lock().unwrap();
+                    shared.dump_len = Some(snapshot_len.min(shared.output.len()));
+                    let end = shared.dump_len.unwrap_or(0).min(shared.output.len());
+                    std::env::var_os("LOOK_DIFF_GRID")
+                        .map(|path| (path, shared.output[..end].to_vec()))
+                };
+                if let Some((path, bytes)) = dump {
+                    drop(std::fs::write(path, &bytes));
+                }
                 return grid;
             }
             if ended {
