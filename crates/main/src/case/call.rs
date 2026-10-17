@@ -195,7 +195,7 @@ fn invoke(
                 })),
             }
         }
-        Ready::Models => match provider.list_models() {
+        Ready::Models => match provider.list_models(&extensions::ModelsArg::default()) {
             Ok((_, returned)) => Ok(returned),
             Err(error) => Err(json!({
                 "code": error.code(),

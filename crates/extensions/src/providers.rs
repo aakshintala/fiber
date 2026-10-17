@@ -8,13 +8,13 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use config::{Config, ConfigError, ModelData, ProviderData};
+use config::{Config, ModelData, ProviderData};
 use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
 
 use crate::git::short_name;
-use crate::{API, Error, LuaProvider, SessionExtensions};
+use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
 use contract::ThinkingLevel;
 
 mod declared;
@@ -415,6 +415,7 @@ impl Providers {
         extensions: &SessionExtensions,
         config: &Config,
         run: config::Runner<'_>,
+        env: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<Notice> {
         for name in extensions.rejected() {
             let dropped: Vec<String> = self
@@ -433,7 +434,7 @@ impl Providers {
         }
         let mut notices = Vec::new();
         for (extension, provider) in extensions.lua_providers() {
-            notices.extend(self.add_lua(extension, provider, config, run));
+            notices.extend(self.add_lua(extension, provider, config, run, env));
         }
         notices
     }
@@ -470,6 +471,7 @@ impl Providers {
         provider: &Arc<LuaProvider>,
         config: &Config,
         run: config::Runner<'_>,
+        env: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         if name == scripted::SCRIPTED {
@@ -494,16 +496,36 @@ impl Providers {
         }
         self.lua.insert(name.clone(), Arc::clone(provider));
         // A provider that registers no `models`, such as one with only
-        // `cost()`, keeps its data file's models.
-        if !provider.has_model_cache() {
+        // `cost()`, keeps its data file's models. With a cached copy the
+        // cache serves and `models()` never runs, so the argument stays
+        // empty.
+        let arg = if provider.has_model_cache() {
+            ModelsArg::default()
+        } else {
             if matches!(provider.registers("models"), Ok(false)) {
                 return Vec::new();
             }
             if !provider.has_credential(config, &self.data(&name), run) {
                 return Vec::new();
             }
-        }
-        let mut models = match provider.models() {
+            match self.models_arg(extension, provider, config, run, env) {
+                Ok(Some(arg)) => arg,
+                // A declared placeholder has no host: `models()` is not
+                // called, and the provider serves its data file's
+                // models, which `fill_placeholders` leaves out with
+                // `model_unconfigured` (`docs/model-routing.md`, "A
+                // per-account host").
+                Ok(None) => return Vec::new(),
+                Err(error) => {
+                    return vec![Notice {
+                        code: error.code(),
+                        message: error.to_string(),
+                        extension: Some(extension.to_owned()),
+                    }];
+                }
+            }
+        };
+        let mut models = match provider.models(&arg) {
             Ok(models) => models,
             Err(e) => {
                 return vec![Notice {
@@ -547,6 +569,43 @@ impl Providers {
         notices
     }
 
+    /// The argument `provider`'s `models()` receives: the session's key,
+    /// absent when the provider registers `credential()` or no key is
+    /// found, beside the host each declared placeholder holds
+    /// (`docs/model-routing.md`, "Model discovery"). `None` when a
+    /// declared placeholder has no host: `models()` is not called, and
+    /// with no cached copy the data file's models serve until
+    /// `fill_placeholders` leaves them out with `model_unconfigured`. A
+    /// settings file that cannot be read is `Error::Config`.
+    fn models_arg(
+        &self,
+        extension: &str,
+        provider: &LuaProvider,
+        config: &Config,
+        run: config::Runner<'_>,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Option<ModelsArg>, Error> {
+        let key = if provider.registers("credential").unwrap_or(false) {
+            None
+        } else {
+            let data = self.data(provider.name());
+            config
+                .credentials()
+                .credential_with(&data, &config.credentials().credential_label(&data), run)
+                .ok()
+                .map(|read| read.secret)
+        };
+        let declared = self.data(provider.name()).placeholders;
+        let lookup = |name: &str| placeholders::value(config, extension, &declared, name, env);
+        let Some(hosts) = placeholders::hosts(&declared, &lookup)? else {
+            return Ok(None);
+        };
+        Ok(Some(ModelsArg {
+            key,
+            placeholders: hosts,
+        }))
+    }
+
     /// Fills every `{name}` in every model's `base_url` from the provider's
     /// extension's setting `name`, never the repository's file, else the
     /// environment variable `placeholders.<name>.env` names, read through
@@ -579,37 +638,8 @@ impl Providers {
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
-                    let lookup = |name: &str| -> Result<
-                        Option<(String, placeholders::Source)>,
-                        ConfigError,
-                    > {
-                        match config.extensions().get(&extension, &[], name)? {
-                            Some(Value::String(value)) if !value.is_empty() => {
-                                Ok(Some((value, placeholders::Source::Setting)))
-                            }
-                            // Absent, JSON null, or an empty string leaves the
-                            // environment fallback in play. Any other present
-                            // value is the setting's: it is never a host, so it
-                            // fills as `Source::Setting` without consulting the
-                            // environment. The stand-in never reaches a URL or a
-                            // notice: `fill` reports it as not-a-host, and that
-                            // notice never repeats the value.
-                            Some(Value::String(_)) | Some(Value::Null) | None => {
-                                if let Some(variable) = placeholders
-                                    .get(name)
-                                    .and_then(|placeholder| placeholder.env.as_deref())
-                                    && let Some(value) = env(variable)
-                                    && !value.is_empty()
-                                {
-                                    return Ok(Some((
-                                        value,
-                                        placeholders::Source::Env(variable.to_owned()),
-                                    )));
-                                }
-                                Ok(None)
-                            }
-                            Some(_) => Ok(Some((" ".to_owned(), placeholders::Source::Setting))),
-                        }
+                    let lookup = |name: &str| {
+                        placeholders::value(config, &extension, &placeholders, name, env)
                     };
                     match placeholders::fill(&template, &lookup)? {
                         placeholders::Filled::Url(url) => {
@@ -894,6 +924,7 @@ pub fn refresh_lists(
     config: &Config,
     max_age: Option<Duration>,
     run: config::Runner<'_>,
+    env: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<StartedRefresh> {
     let mut started = Vec::new();
     for provider in lua {
@@ -903,7 +934,18 @@ pub fn refresh_lists(
         if !provider.has_credential(config, &providers.data(provider.name()), run) {
             continue;
         }
-        if let Some(handle) = provider.refresh(max_age) {
+        // A declared placeholder with no host starts nothing: the same
+        // read would fail `fill_placeholders`, which every caller
+        // already reports (`docs/model-routing.md`, "A per-account
+        // host").
+        let extension = providers
+            .extension_of(provider.name())
+            .unwrap_or(provider.name());
+        let arg = match providers.models_arg(extension, provider, config, run, env) {
+            Ok(Some(arg)) => arg,
+            Ok(None) | Err(_) => continue,
+        };
+        if let Some(handle) = provider.refresh(max_age, arg) {
             started.push((provider.name().to_owned(), handle));
         }
     }

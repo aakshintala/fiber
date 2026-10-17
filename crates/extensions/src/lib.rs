@@ -58,8 +58,8 @@ pub use installed::{
 pub use login::login_provider;
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{
-    CredentialPair, LoggedIn, LoginMethod, LuaProvider, Quota, QuotaEntry, REFRESH_BEFORE,
-    StoredLogin, Window, WindowUse,
+    CredentialPair, LoggedIn, LoginMethod, LuaProvider, ModelsArg, Quota, QuotaEntry,
+    REFRESH_BEFORE, StoredLogin, Window, WindowUse,
 };
 pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
