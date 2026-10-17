@@ -159,7 +159,7 @@ fn remote_rail_has_no_launch_project() {
     app.on_line(live(A, json!({"project":"other"})));
     app.on_line(live(B, json!({"project":"sentinel-project"})));
     let (cards, project) = app.rail_cards().unwrap();
-    assert_eq!(project, "");
+    assert_eq!(project, None);
     assert_eq!(
         cards
             .iter()
