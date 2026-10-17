@@ -279,7 +279,103 @@ impl Rows {
 /// it fits): the one split rule both the draw and the row counts use
 /// (`docs/tui.md`, "Turns").
 pub(crate) fn fitted(line: &Line<'_>, inner: u16) -> usize {
-    plan(&cells_of(line), usize::from(inner)).len().max(1)
+    fitted_count(line, usize::from(inner)).max(1)
+}
+
+/// How many pieces [`plan`] cuts `line` into at `inner`: the same split
+/// rule over the same glyphs [`cells_of`] flattens, counted in one pass
+/// without building the cell vector. Only the open piece's used width,
+/// its last space and the widths after that space are kept, so the count
+/// path allocates nothing per glyph. A piece holds at most `inner`
+/// widths, breaking after its last space (dropped) or cutting hard, and
+/// a glyph wider than `inner` stands alone. Zero when the line is empty
+/// or `inner` is 0; the caller maps that to one piece.
+fn fitted_count(line: &Line<'_>, inner: usize) -> usize {
+    if inner == 0 {
+        return 0;
+    }
+    let mut pieces: usize = 0;
+    // First cell of the open piece, its used widths, its last space,
+    // the widths after that space, and the cells seen so far.
+    let mut at: usize = 0;
+    let mut used: usize = 0;
+    let mut space: Option<usize> = None;
+    let mut after: usize = 0;
+    let mut cells: usize = 0;
+    for span in &line.spans {
+        // Ratatui excludes `\n` here because a line break is not a drawn glyph.
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let here = cells;
+            cells = cells.saturating_add(1);
+            let width = crate::format::width(grapheme.symbol);
+            if used.saturating_add(width) <= inner {
+                used = used.saturating_add(width);
+                if grapheme.symbol == " " {
+                    space = Some(here);
+                    after = 0;
+                } else {
+                    // Before the first space this is garbage the next
+                    // space wipes; a split only reads `after` past one.
+                    after = after.saturating_add(width);
+                }
+                continue;
+            }
+            // The window from `at` is full: this glyph starts a new piece.
+            match space {
+                Some(found) if found > at => {
+                    pieces = pieces.saturating_add(1);
+                    // The next piece restarts after the dropped space over
+                    // the glyphs this window already scanned, whose widths
+                    // `after` totals (within `inner`, so they fit).
+                    used = after;
+                    space = None;
+                    after = 0;
+                    at = found.saturating_add(1);
+                    if used.saturating_add(width) <= inner {
+                        used = used.saturating_add(width);
+                        if grapheme.symbol == " " {
+                            space = Some(here);
+                        }
+                        continue;
+                    }
+                    // The glyph fits no restarted window either: the
+                    // restart is one hard-cut piece holding the scanned
+                    // glyphs, unless it is empty (the space ended the
+                    // window).
+                    if at < here {
+                        pieces = pieces.saturating_add(1);
+                    }
+                    at = here;
+                    used = 0;
+                }
+                _ => {
+                    // Hard cut (a space at the piece start cuts hard too).
+                    if here > at {
+                        pieces = pieces.saturating_add(1);
+                    }
+                    at = here;
+                    used = 0;
+                    space = None;
+                    after = 0;
+                }
+            }
+            // The glyph opens the piece at `at`: wider than `inner` it
+            // stands alone, else it starts the used widths.
+            if width > inner {
+                pieces = pieces.saturating_add(1);
+                at = here.saturating_add(1);
+            } else {
+                used = width;
+                if grapheme.symbol == " " {
+                    space = Some(here);
+                }
+            }
+        }
+    }
+    if at < cells {
+        pieces = pieces.saturating_add(1);
+    }
+    pieces
 }
 
 /// One drawn glyph with its style.

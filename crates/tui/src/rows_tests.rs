@@ -742,3 +742,128 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
     assert_eq!(out.rows.len(), 1);
     assert_eq!(out.rows[0].0.to_string(), "abc");
 }
+
+/// The old computation, kept as the reference: the plan over the built
+/// cell vector.
+fn planned(line: &Line<'_>, inner: u16) -> usize {
+    super::plan(&super::cells_of(line), usize::from(inner))
+        .len()
+        .max(1)
+}
+
+#[test]
+fn fitted_matches_plan_across_split_shapes() {
+    // Every line the count helper must agree on: plain, styled
+    // multi-span (styles change nothing), wide glyphs, empty, an exact
+    // fit, a trailing space, and lines longer than `inner`, at widths
+    // that hit every split branch including a zero inner.
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let styled: Line<'_> = Line::from(vec![
+        Span::styled("hello ", dim),
+        Span::styled("wo", bold),
+        Span::raw("rld"),
+    ]);
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::raw("hello world"),
+        styled,
+        Line::styled("aaaa bbbb cccc", dim),
+        Line::raw("界界ab界"),
+        Line::raw(""),
+        Line::raw("abcde"),
+        Line::raw("abcd "),
+        Line::raw("aaaa bbbb cccc dddd eeee ffff"),
+        Line::raw(" abcde"),
+        Line::raw("\u{301} 界"),
+        Line::raw("\u{301} a界"),
+        Line::raw("a bcdefg"),
+        Line::raw("aa bb cc"),
+        Line::raw("ab cde"),
+        Line::raw("    "),
+        Line::raw("x"),
+        Line::raw("界"),
+        Line::raw("ab"),
+        Line::raw("a  b"),
+        Line::raw("ab  "),
+        Line::raw("aa bbbbbbbb cc"),
+        Line::raw("界xy"),
+        Line::raw("x界"),
+        Line::raw("abcd"),
+        Line::raw("abcde"),
+    ];
+    lines.push(Line::raw("x".repeat(200)));
+    for line in &lines {
+        for inner in [0, 1, 2, 3, 4, 5, 6, 10, 30] {
+            assert_eq!(
+                super::fitted(line, inner),
+                planned(line, inner),
+                "{line:?} at {inner}"
+            );
+        }
+    }
+}
+
+#[test]
+fn fitted_count_is_zero_for_an_empty_line() {
+    assert_eq!(super::fitted_count(&Line::raw(""), 6), 0);
+}
+
+#[test]
+fn fitted_count_is_zero_for_a_zero_inner() {
+    assert_eq!(super::fitted_count(&Line::raw("hi"), 0), 0);
+}
+
+#[test]
+fn fitted_is_one_for_an_exact_fit() {
+    assert_eq!(super::fitted(&Line::raw("abcde"), 5), 1);
+}
+
+#[test]
+fn fitted_count_gives_a_wide_glyph_its_own_piece() {
+    assert_eq!(super::fitted_count(&Line::raw("界界"), 1), 2);
+}
+
+#[test]
+fn fitted_count_cuts_hard_after_a_leading_space() {
+    // The space sits at the piece start, so no split drops it.
+    assert_eq!(super::fitted_count(&Line::raw(" abcde"), 3), 2);
+}
+
+#[test]
+fn fitted_count_restarts_after_a_split_space() {
+    assert_eq!(super::fitted_count(&Line::raw("a bcdefg"), 5), 3);
+}
+
+#[test]
+fn fitted_count_extends_the_restart_past_its_scanned_glyphs() {
+    assert_eq!(super::fitted_count(&Line::raw("ab cde"), 4), 2);
+}
+
+#[test]
+fn fitted_count_skips_no_piece_when_a_space_ends_the_window() {
+    // The window holds only the combining mark and the space, so the
+    // restart past the space is empty and the wide glyph stands alone.
+    assert_eq!(super::fitted_count(&Line::raw("\u{301} 界"), 1), 2);
+}
+
+#[test]
+fn fitted_count_cuts_the_scanned_restart_when_it_overflows() {
+    assert_eq!(super::fitted_count(&Line::raw("\u{301} a界"), 2), 3);
+}
+
+#[test]
+fn fitted_count_joins_a_fitting_glyph_after_a_hard_cut() {
+    assert_eq!(super::fitted_count(&Line::raw("abcd"), 2), 2);
+}
+
+#[test]
+fn fitted_count_cuts_hard_without_a_space() {
+    assert_eq!(super::fitted_count(&Line::raw("abcde"), 2), 3);
+}
+
+#[test]
+fn fitted_count_cuts_a_word_longer_than_inner() {
+    assert_eq!(super::fitted_count(&Line::raw("aa bbbbbbbb cc"), 4), 4);
+}
