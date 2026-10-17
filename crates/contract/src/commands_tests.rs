@@ -107,7 +107,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "handoff", "args": {"instructions": "i"}}),
         json!({"id": "c", "command": "handoff", "args": {}}),
         json!({"id": "c", "command": "rewind", "args": {"from_session_id": "s", "seq": 7,
-            "summarise": true, "adopt": ["j"]}}),
+            "summarise": true}}),
         json!({"id": "c", "command": "shell", "args": {"command": "git status", "send": true}}),
         json!({"id": "c", "command": "command", "args": {"name": "review", "text": "all"}}),
         json!({"id": "c", "command": "close", "args": {"now": true}}),
@@ -152,7 +152,6 @@ fn defaults_fill_what_a_client_leaves_out() {
             from_session_id: None,
             seq: None,
             summarise: false,
-            adopt: vec![],
         })
     );
     let line = parse(r#"{"id":"c","command":"shell","args":{"command":"ls"}}"#).unwrap();
@@ -590,5 +589,12 @@ fn decisions_outside_the_closed_set_or_beside_another_answer_are_refused() {
     assert!(
         parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","decisions":["approve"],"decision":"allow"}}"#)
             .is_err()
+    );
+}
+
+#[test]
+fn a_rewind_with_an_unknown_key_is_refused() {
+    assert!(
+        parse(r#"{"id":"c","command":"rewind","args":{"adopt":["j"]}}"#).is_err()
     );
 }

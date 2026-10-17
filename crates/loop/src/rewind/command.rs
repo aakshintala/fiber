@@ -27,9 +27,6 @@ const DELEGATE: &str = "A delegate cannot be rewound.";
 /// `rewind` asking for a summary: no summary is built in this Fiber yet.
 const NO_SUMMARY: &str = "Summaries are not built in this Fiber yet.";
 
-/// `rewind` while jobs run: stop them before rewinding.
-const JOBS_RUNNING: &str = "Jobs are running; stop them before rewinding.";
-
 /// `rewind` with no turn to rewind to.
 const NO_TURN: &str = "This session has no turn to rewind to.";
 
@@ -109,25 +106,6 @@ impl Loop {
             reject(ack, ErrorCode::SummaryFailed, NO_SUMMARY);
             return Ok(());
         }
-        let running = self.running();
-        if !running.is_empty() {
-            reject(ack, ErrorCode::Busy, JOBS_RUNNING);
-            return Ok(());
-        }
-        if !args.adopt.is_empty() {
-            let adopted = args
-                .adopt
-                .iter()
-                .map(|job| job.0.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            reject(
-                ack,
-                ErrorCode::StaleRequest,
-                &format!("The adopted jobs are not running: {adopted}."),
-            );
-            return Ok(());
-        }
         let lines = log::read(&target.dir)?;
         let point = match point_for(&lines, &target, args.seq) {
             Ok(point) => point,
@@ -149,7 +127,6 @@ impl Loop {
                 new_session_id: new_session_id.clone(),
                 seq: Seq(point),
                 from_session_id,
-                jobs: Vec::new(),
             }),
             None,
             None,

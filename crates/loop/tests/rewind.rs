@@ -223,7 +223,7 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
         first.payload["forked_from"],
         json!({"session_id": "s_test", "seq": at})
     );
-    assert_eq!(first.payload["rewind"]["jobs"], json!([]));
+    assert!(first.payload["rewind"].get("jobs").is_none());
     assert_eq!(first.payload["rewind"]["note"], json!(note));
     assert!(first.payload.get("parent").is_none());
     assert!(first.payload["rewind"].get("summary").is_none());
@@ -236,8 +236,8 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
 
 #[test]
 fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
-    // The new session adopts no job, so a `job_started` the old log never
-    // ended writes no orphaned `job_completed` there.
+    // The rewind stopped the old session's jobs, so a `job_started` the old
+    // log never ended writes no orphaned `job_completed` there.
     use contract::events::JobStarted;
     let session = run_a();
     session
@@ -286,6 +286,74 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
         }),
         "no job notice reaches the model"
     );
+}
+
+#[test]
+fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
+    // A job started before the point with no end in the window would read
+    // as running in the new session's handoff text: the rewind stopped it
+    // in the old log, so the new session's handoff carry holds no job.
+    let session = run_a();
+    session
+        .log
+        .append(
+            &contract::events::Event::JobStarted(contract::events::JobStarted {
+                job_id: contract::JobId("j_win".into()),
+                tool: None,
+                extension: None,
+                description: "a job in the window".into(),
+                output_path: "jobs/j_win".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let lines = log::read(&session.dir).unwrap();
+    let at = lines.last().unwrap().seq.unwrap().0;
+    let (b, tx, provider, dir) = start_b(
+        &session,
+        B_ID,
+        Point {
+            session_id: SessionId("s_test".into()),
+            seq: Seq(at),
+        },
+        String::new(),
+        None,
+        vec![Scripted::text("The note."), Scripted::text("Next.")],
+    );
+    tx.send(Delivery::Handoff(
+        CommandId("c_h".into()),
+        contract::commands::Handoff { instructions: None },
+        ignore(),
+    ))
+    .unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut b = b;
+        let outcome = b.turn().unwrap();
+        done.send((b, outcome)).unwrap();
+    });
+    let (b, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the handoff turn ended in time");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let lines = log::read(&dir).unwrap();
+    assert!(
+        lines.iter().any(|line| line.kind == "handoff_completed"),
+        "the handoff ran"
+    );
+    // The next turn sends the restarted conversation: the carried input,
+    // the note, and no line for a job.
+    let b = run_turn(b, &tx, "next");
+    drop(b);
+    assert!(provider.requests().len() >= 2, "the next turn sent a request");
+    for request in provider.requests().iter().skip(1) {
+        for input in &request.conversation {
+            if let Input::User { text, .. } = input {
+                assert!(!text.contains("j_win"), "a stopped job is named: {text}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -916,12 +984,11 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
 const A_ID: &str = "s_aaaaaaaaaaaaaaaa";
 const B_ID2: &str = "s_bbbbbbbbbbbbbbbb";
 
-fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, adopt: Vec<&str>) -> RewindArgs {
+fn args(from: Option<&str>, seq: Option<u64>, summarise: bool) -> RewindArgs {
     RewindArgs {
         from_session_id: from.map(|id| SessionId(id.into())),
         seq: seq.map(Seq),
         summarise,
-        adopt: adopt.into_iter().map(|job| JobId(job.into())).collect(),
     }
 }
 
@@ -1106,48 +1173,12 @@ fn resume_b(
     (looped, tx, dir)
 }
 
-/// Jobs that list `running` as running and end nothing: what a `rewind`
-/// refusal reads.
-struct StillRunning(Vec<JobId>);
-
-impl contract::jobs::Jobs for StillRunning {
-    fn open(
-        &self,
-        _: contract::jobs::Opening,
-    ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
-        Err(contract::jobs::OpenError {
-            path: "unused".into(),
-            source: std::io::Error::other("a listed job is not opened"),
-        })
-    }
-
-    fn stop(&self, _: &JobId) -> bool {
-        false
-    }
-
-    fn stop_delegates(&self) -> usize {
-        0
-    }
-
-    fn background(&self) -> usize {
-        0
-    }
-
-    fn foreground(&self, _: contract::jobs::Foreground) {}
-
-    fn running(&self) -> Vec<JobId> {
-        self.0.clone()
-    }
-
-    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
-}
-
 #[test]
 fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let mut session = run_a();
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -1171,7 +1202,7 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let last = lines.last().unwrap();
     assert_eq!(last.payload["new_session_id"], json!(new.0));
     assert_eq!(last.payload["seq"], json!(at));
-    assert_eq!(last.payload["jobs"], json!([]));
+    assert!(last.payload.get("jobs").is_none());
     assert!(
         last.payload.get("from_session_id").is_none(),
         "this session's own point names no session"
@@ -1207,7 +1238,7 @@ fn a_message_after_rewound_is_refused() {
         probe_tx.send((done.is_some(), called)).unwrap();
         tx.send(answer).unwrap();
     }));
-    let rw = Delivery::Rewind(args(None, None, false, vec![]), ack);
+    let rw = Delivery::Rewind(args(None, None, false), ack);
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -1241,7 +1272,7 @@ fn a_refused_rewind_leaves_admission_open() {
     session.looped = Some(looped);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -1262,7 +1293,7 @@ fn an_explicit_seq_at_a_boundary_is_accepted() {
         .seq
         .unwrap()
         .0;
-    let (rw, answered) = rewind(args(None, Some(first_turn - 1), false, vec![]));
+    let (rw, answered) = rewind(args(None, Some(first_turn - 1), false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -1280,7 +1311,7 @@ fn a_seq_off_a_boundary_is_refused_and_writes_nothing() {
     let last = lines.last().unwrap().seq.unwrap().0;
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, Some(last), false, vec![]));
+    let (rw, answered) = rewind(args(None, Some(last), false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -1301,7 +1332,7 @@ fn a_seq_without_a_successor_is_refused_and_writes_nothing() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, Some(u64::MAX), false, vec![]));
+    let (rw, answered) = rewind(args(None, Some(u64::MAX), false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -1321,7 +1352,7 @@ fn a_rewind_with_no_turn_is_invalid_arguments() {
     let mut session = Session::new(vec![Scripted::text("unused")], None);
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -1401,7 +1432,7 @@ impl contract::tool::Tool for SendRewind {
         if self.close_first {
             inbox.send(Delivery::Close(ignore())).unwrap();
         }
-        let (rw, answered) = rewind(args(None, None, false, vec![]));
+        let (rw, answered) = rewind(args(None, None, false));
         inbox.send(rw).unwrap();
         *self.seen.lock().unwrap() = Some(answered);
         contract::tool::Output {
@@ -1522,7 +1553,7 @@ fn a_rewind_while_an_approval_waits_is_busy() {
             .as_str()
             .unwrap()
             .to_owned();
-        let (rw, answered) = rewind(args(None, None, false, vec![]));
+        let (rw, answered) = rewind(args(None, None, false));
         inbox.send(rw).unwrap();
         let answer = Deadline::after(DEADLINE)
             .recv(&answered)
@@ -1550,7 +1581,7 @@ fn a_rewind_after_close_is_closing_and_writes_nothing() {
     let before = log_bytes(&session.dir);
     let inbox = take_inbox(&mut session);
     inbox.send(Delivery::Close(ignore())).unwrap();
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let looped = session.looped.take().unwrap();
     session.looped = Some(drive_closed(looped, inbox, vec![rw]));
     let rejection = rejected(answer_of(answered));
@@ -1565,7 +1596,7 @@ fn a_rewind_after_close_is_closing_and_writes_nothing() {
 #[test]
 fn a_prompt_and_a_rewind_in_one_batch_runs_the_turn_and_refuses_the_rewind() {
     let mut session = Session::new(vec![Scripted::text("done")], None);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     session.inbox.send(delivery("hi")).unwrap();
     session.inbox.send(rw).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1588,7 +1619,7 @@ fn a_rewind_before_a_prompt_and_a_close_refuses_both_closing() {
     let (prompt_tx, prompted) = mpsc::channel();
     let (close_tx, closed) = mpsc::channel();
     let inbox = take_inbox(&mut session);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let prompt = Delivery::Prompt(
         message("hi"),
         contract::inbox::Ack(Box::new(move |answer| {
@@ -1640,7 +1671,7 @@ fn a_rewind_on_a_delegate_is_refused() {
         }),
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let (rw, answered) = rewind(args(None, None, false));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     let rejection = rejected(answer_of(answered));
@@ -1654,7 +1685,7 @@ fn a_rewind_naming_its_own_session_rewinds() {
     let mut session = run_a();
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
-    let (rw, answered) = rewind(args(Some("s_test"), None, false, vec![]));
+    let (rw, answered) = rewind(args(Some("s_test"), None, false));
     let looped = session.looped.take().unwrap();
     let (looped, outcome) = drive(looped, &session.inbox, rw);
     session.looped = Some(looped);
@@ -1686,7 +1717,7 @@ fn malformed_from_session_ids_are_invalid_arguments() {
         listed.sort();
         let before = log_bytes(&session.dir);
         let inbox = take_inbox(&mut session);
-        let (rw, answered) = rewind(args(Some(from), None, false, vec![]));
+        let (rw, answered) = rewind(args(Some(from), None, false));
         let looped = session.looped.take().unwrap();
         session.looped = Some(drive_closed(looped, inbox, vec![rw]));
         let rejection = rejected(answer_of(answered));
@@ -1752,7 +1783,7 @@ fn a_rewind_naming_a_session_off_the_chain_is_refused() {
         }
         let before = log_bytes(&session.dir);
         let inbox = take_inbox(&mut session);
-        let (rw, answered) = rewind(args(Some(from), None, false, vec![]));
+        let (rw, answered) = rewind(args(Some(from), None, false));
         let looped = session.looped.take().unwrap();
         session.looped = Some(drive_closed(looped, inbox, vec![rw]));
         let rejection = rejected(answer_of(answered));
@@ -1789,7 +1820,7 @@ fn a_rewind_to_an_ancestor_point_names_that_session() {
         None,
     );
     let count = log::read(&dir).unwrap().len();
-    let (rw, answered) = rewind(args(Some(A_ID), Some(first - 1), false, vec![]));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(first - 1), false));
     let (looped, outcome) = drive(looped, &tx, rw);
     drop(looped);
     accepted(answer_of(answered));
@@ -1800,7 +1831,7 @@ fn a_rewind_to_an_ancestor_point_names_that_session() {
     assert_eq!(last.kind, "rewound");
     assert_eq!(last.payload["seq"], json!(first - 1));
     assert_eq!(last.payload["from_session_id"], json!(A_ID));
-    assert_eq!(last.payload["jobs"], json!([]));
+    assert!(last.payload.get("jobs").is_none());
 }
 
 #[test]
@@ -1816,7 +1847,7 @@ fn a_seq_past_the_ancestor_bound_is_not_in_this_sessions_history() {
         None,
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(Some(A_ID), Some(second), false, vec![]));
+    let (rw, answered) = rewind(args(Some(A_ID), Some(second), false));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     let rejection = rejected(answer_of(answered));
@@ -1840,7 +1871,7 @@ fn the_default_point_under_a_bound_is_the_ancestor_turn_before_it() {
         }),
         None,
     );
-    let (rw, answered) = rewind(args(Some(A_ID), None, false, vec![]));
+    let (rw, answered) = rewind(args(Some(A_ID), None, false));
     let (looped, outcome) = drive(looped, &tx, rw);
     drop(looped);
     accepted(answer_of(answered));
@@ -1865,7 +1896,7 @@ fn a_rewind_asking_for_a_summary_fails_before_any_point() {
         None,
     );
     let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(Some(A_ID), None, true, vec![]));
+    let (rw, answered) = rewind(args(Some(A_ID), None, true));
     let looped = drive_closed(looped, tx, vec![rw]);
     drop(looped);
     let rejection = rejected(answer_of(answered));
@@ -1874,55 +1905,6 @@ fn a_rewind_asking_for_a_summary_fails_before_any_point() {
         rejection.message,
         "Summaries are not built in this Fiber yet."
     );
-    assert_eq!(log_bytes(&dir), before);
-}
-
-#[test]
-fn a_rewind_while_a_job_runs_is_busy() {
-    let (session, _, _, at) = run_chained_a();
-    let (looped, tx, dir) = resume_b(
-        &session,
-        B_ID2,
-        Some(Point {
-            session_id: SessionId(A_ID.into()),
-            seq: Seq(at),
-        }),
-        None,
-    );
-    let looped = looped
-        .jobs(Arc::new(StillRunning(vec![JobId("j_1".into())])) as Arc<dyn contract::jobs::Jobs>);
-    let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(None, None, false, vec![]));
-    let looped = drive_closed(looped, tx, vec![rw]);
-    drop(looped);
-    let rejection = rejected(answer_of(answered));
-    assert_eq!(rejection.code, ErrorCode::Busy);
-    assert_eq!(
-        rejection.message,
-        "Jobs are running; stop them before rewinding."
-    );
-    assert_eq!(log_bytes(&dir), before);
-}
-
-#[test]
-fn a_rewind_adopting_a_job_that_is_not_running_is_stale() {
-    let (session, _, _, at) = run_chained_a();
-    let (looped, tx, dir) = resume_b(
-        &session,
-        B_ID2,
-        Some(Point {
-            session_id: SessionId(A_ID.into()),
-            seq: Seq(at),
-        }),
-        None,
-    );
-    let before = log_bytes(&dir);
-    let (rw, answered) = rewind(args(None, None, false, vec!["j_x"]));
-    let looped = drive_closed(looped, tx, vec![rw]);
-    drop(looped);
-    let rejection = rejected(answer_of(answered));
-    assert_eq!(rejection.code, ErrorCode::StaleRequest);
-    assert_eq!(rejection.message, "The adopted jobs are not running: j_x.");
     assert_eq!(log_bytes(&dir), before);
 }
 

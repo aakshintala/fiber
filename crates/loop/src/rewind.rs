@@ -35,11 +35,11 @@ pub struct Rewound {
 impl Loop {
     /// Starts a session that continues another from `start.from`, whose
     /// history is the old log folded to the point: `session_started`
-    /// carries `forked_from`, the note and the jobs handed over, and the
-    /// old session's worktree, with no `parent` and no summary. The chain
+    /// carries `forked_from`, the note and the old session's worktree, with
+    /// no `parent` and no summary. The chain
     /// now includes this line, so the fold gives the new session the old
-    /// log's history to the point. The new session adopts no job, so it
-    /// clears its orphans, then builds through [`Loop::resume`], sending
+    /// log's history to the point. The new session starts with no jobs, so
+    /// it clears its orphans, then builds through [`Loop::resume`], sending
     /// the fold's latest `preamble_built` verbatim as its first request.
     /// It writes no `preamble_built`: nothing was built. Everything a new
     /// loop runs on rides [`crate::Session`].
@@ -53,7 +53,6 @@ impl Loop {
                 rewind: Some(Rewind {
                     summary: None,
                     note: start.note,
-                    jobs: Vec::new(),
                 }),
                 worktree: start.worktree,
             }),
@@ -70,13 +69,16 @@ impl Loop {
         }
         let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
-        // The new session adopts no job: nothing it folds can orphan. It
-        // continues the logged build verbatim, so it writes no
-        // `model_changed` for a label the log changed after the point
-        // (`docs/events.md`, "Rewind").
+        // The new session starts with no jobs: the jobs the folded history
+        // holds open were stopped by the rewind in the old log, not orphaned.
+        // The handoff carry drops them too, so a handoff started in the new
+        // session names no job. It continues the logged build verbatim, so it
+        // writes no `model_changed` for a label the log changed after the
+        // point (`docs/events.md`, "Rewind").
         folded.orphans = Vec::new();
         folded.settings = None;
         let mut rewound = Loop::resume(session, folded)?;
+        rewound.handoff.carry.jobs.clear();
         // A rewound session starts for its own reason, whatever the
         // preamble it adopted was built for.
         rewound.lifecycle.reason = contract::hook::StartReason::Rewind;
