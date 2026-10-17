@@ -387,8 +387,8 @@ pub(crate) fn parts_in(
         clock,
         context_window,
     );
-    prompt.system = prompt_files::system(&home, &project);
-    prompt.append = prompt_files::append(&home, &project);
+    prompt.system = config::system_prompt(&home, &project);
+    prompt.append = config::append_prompt(&home, &project);
     prompt.agents_home = agents_home;
     prompt.addendum = providers.addendum(&model).map(str::to_owned);
     prompt.extensions = extensions.prompts();

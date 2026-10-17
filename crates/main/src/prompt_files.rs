@@ -1,23 +1,8 @@
-//! The person's system prompt files (`docs/system-prompt.md`, "The
-//! person's files"): the system prompt file replaces Fiber's text and
-//! the append prompt file is appended at the end. Only `config` reads
-//! them (`docs/architecture.md`, "The call rules"); these pass on what it
-//! returns.
+//! The person's home for skills (`docs/system-prompt.md`, "The
+//! person's files"): where `~/.agents/skills` is read from.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
-
-use config::ProjectKey;
-
-/// The system prompt file: the project file wins, read through `config`.
-pub(crate) fn system(home: &Path, project: &ProjectKey) -> Option<String> {
-    config::system_prompt(home, project)
-}
-
-/// The append prompt file: the project file wins, read through `config`.
-pub(crate) fn append(home: &Path, project: &ProjectKey) -> Option<String> {
-    config::append_prompt(home, project)
-}
+use std::path::PathBuf;
 
 /// The person's home, where `~/.agents/skills` is read from: the `HOME`
 /// value, when it is set to an absolute path. Unset, empty or relative
