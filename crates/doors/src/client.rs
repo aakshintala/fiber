@@ -658,12 +658,15 @@ fn history(
     log: &log::Log,
     args: &contract::commands::HistoryArgs,
 ) -> Result<Vec<Envelope>, &'static str> {
-    let from = args.from_seq.0;
+    let from = match args.from_seq {
+        Some(from) => from.0,
+        None => return Err(UNFIT),
+    };
     if from >= log.count() {
         return Err(PAST);
     }
     let max = match args.to_seq {
-        Some(to) if to < args.from_seq => return Err(REVERSED),
+        Some(to) if args.from_seq.is_some_and(|from| to < from) => return Err(REVERSED),
         Some(to) => {
             usize::try_from(to.0 - from).map_or(HISTORY, |span| span.saturating_add(1).min(HISTORY))
         }
