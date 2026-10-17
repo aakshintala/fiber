@@ -37,6 +37,22 @@ impl Wake for Sent {
     }
 }
 
+/// A `Started` whose exit is already settled, for the default `wait_exited`.
+struct Settled(Option<Failure>);
+
+impl Started for Settled {
+    fn exited(&self) -> Option<Failure> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn wait_exited_defaults_to_exited() {
+    let failure = failure(ErrorCode::IoFailed, "gone");
+    assert_eq!(Settled(Some(failure.clone())).wait_exited(), Some(failure));
+    assert_eq!(Settled(None).wait_exited(), None);
+}
+
 #[test]
 fn arm_records_a_signal_raised_at_the_process_and_wakes() {
     let got = Arc::new(AtomicI32::new(0));
