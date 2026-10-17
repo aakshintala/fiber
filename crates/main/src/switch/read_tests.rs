@@ -19,8 +19,9 @@ use contract::clock::Clock;
 use super::{CancelOnDrop, Reads, alive, deadline_due, kill_group, signallable};
 use fakes::Deadline;
 use fakes::children::Ready;
-use fakes::clock::FakeClock;
+use fakes::clock::{FakeClock, SystemClock};
 use rustix::io::Errno;
+use support::clock::Parker;
 use support::group::GROUP_POLL;
 
 /// The deadline of each wait in these tests.
@@ -41,6 +42,25 @@ fn sh(script: &str) -> Command {
 /// The groups `reads` lists now.
 fn listed(reads: &Reads) -> Vec<u32> {
     reads.lock().groups.clone()
+}
+
+/// Waits under [`DEADLINE`] for the wake's generation to reach `target`.
+/// The park ends at once on a bump past `seen`; the wall-clock deadline
+/// bounds a wake that never comes. Always the process clock: a park on
+/// the test's `FakeClock` would corrupt the parked counts these tests
+/// assert.
+#[track_caller]
+fn generation_reaches(wake: &Arc<Parker>, target: u64, what: &str) {
+    fakes::within(what, DEADLINE, {
+        let wake = Arc::clone(wake);
+        move || loop {
+            let seen = wake.generation();
+            if seen >= target {
+                return;
+            }
+            wake.park(&SystemClock, None, seen);
+        }
+    });
 }
 
 /// Waits under [`DEADLINE`] for `file` to hold a line, and returns it.
@@ -543,15 +563,7 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     // so each advance below drives exactly one pass. The stdout reader
     // never answers while `sleep` holds the pipe, nothing is cancelled,
     // and the clock has not moved, so these are the only two.
-    fakes::within("the leader's wake", DEADLINE, {
-        let wake = Arc::clone(&reads.wake);
-        move || loop {
-            if wake.generation() >= sent + 2 {
-                return;
-            }
-            std::thread::yield_now();
-        }
-    });
+    generation_reaches(&reads.wake, sent + 2, "the leader's wake");
     assert_eq!(
         reads.wake.generation(),
         sent + 2,
@@ -874,17 +886,9 @@ fn a_completion_between_the_checks_and_the_park_is_not_missed() {
     // below already holds them in an earlier generation, so it must
     // return at once. Each thread bumps after its send, so two bumps mean
     // both answers are in.
-    let wake = Arc::clone(&reads.wake);
-    let seen = wake.generation();
+    let seen = reads.wake.generation();
     std::fs::write(&go, "").unwrap();
-    fakes::within("the two wakes", DEADLINE, move || {
-        loop {
-            if wake.generation() >= seen + 2 {
-                return;
-            }
-            std::thread::yield_now();
-        }
-    });
+    generation_reaches(&reads.wake, seen + 2, "the two wakes");
     release.send(()).unwrap();
     let output = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the interleaved read")
@@ -927,19 +931,11 @@ fn a_key_finished_after_its_timeout_is_refused() {
     // The helper finishes while the wait is held here, then the clock
     // moves past the deadline: the wait's next checks see a finish past
     // its end, which times out instead of answering the late key.
-    let wake = Arc::clone(&reads.wake);
-    let seen = wake.generation();
+    let seen = reads.wake.generation();
     {
         let _held = reads.lock();
         std::fs::write(&go, "").unwrap();
-        fakes::within("the two wakes", DEADLINE, move || {
-            loop {
-                if wake.generation() >= seen + 2 {
-                    return;
-                }
-                std::thread::yield_now();
-            }
-        });
+        generation_reaches(&reads.wake, seen + 2, "the two wakes");
         clock.advance(timeout + Duration::from_secs(1));
     }
     let error = Deadline::after(DEADLINE)
@@ -1002,15 +998,7 @@ fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving(
     // the wait is still held, which is what ends the wait. Each thread
     // bumps after its send, so two bumps mean both answers are in.
     std::fs::write(&out, "").unwrap();
-    fakes::within("the leader's wake", DEADLINE, {
-        let wake = Arc::clone(&wake);
-        move || loop {
-            if wake.generation() >= sent + 2 {
-                return;
-            }
-            std::thread::yield_now();
-        }
-    });
+    generation_reaches(&wake, sent + 2, "the leader's wake");
     release_two.send(()).unwrap();
     let output = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the cleaning-up leader")
