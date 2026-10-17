@@ -6,11 +6,13 @@
 //! terminal loads configuration with no `-c`, so no row comes from one.
 
 mod login;
+mod models;
 mod remote;
 mod skills;
 mod tools;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
@@ -19,15 +21,28 @@ use tui::{
     SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches, WriteScope,
 };
 
+use crate::switch::Reads;
+
 /// The seam over Fiber home.
 pub(crate) struct Seam {
     home: PathBuf,
+    /// The process's shared credential reads: a `models` refresh runs
+    /// its credential commands through these, so one cancel reaches
+    /// them all.
+    reads: Arc<Reads>,
+    /// The per-path locks a `models` refresh holds, the same lock the
+    /// local picker read takes.
+    locks: Arc<::tools::PathLocks>,
 }
 
 impl Seam {
     /// The seam over Fiber home `home`.
     pub(crate) fn new(home: PathBuf) -> Self {
-        Self { home }
+        Self {
+            home,
+            reads: Arc::new(Reads::default()),
+            locks: Arc::new(::tools::PathLocks::new()),
+        }
     }
 
     /// The configuration `workspace`'s project and repository give.
