@@ -3418,6 +3418,7 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
                 seq: at,
             },
             note: rewind_note(&parent.dir, at).unwrap(),
+            summary: None,
             worktree: None,
             name: None,
         },
