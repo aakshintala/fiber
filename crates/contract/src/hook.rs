@@ -283,6 +283,8 @@ pub struct StateLine {
 /// The session's hooks. Calls come from the loop thread, one at a time.
 pub trait Hooks: Send + Sync {
     /// Drains admitted non-hook and unchanged-hook writes in landing order.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn take_state_lines(&self) -> Vec<Event> {
         Vec::new()
     }
@@ -293,6 +295,8 @@ pub trait Hooks: Send + Sync {
     }
 
     /// Takes the state lines of the answer the last hook call returned.
+    // The default is an empty list either way: `vec![]` changes no behaviour a consumer sees.
+    #[cfg_attr(false, mutants::skip)]
     fn take_change_state(&self) -> Vec<StateLine> {
         Vec::new()
     }

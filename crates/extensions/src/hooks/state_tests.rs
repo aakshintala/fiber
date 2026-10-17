@@ -84,6 +84,31 @@ fn state_multiple_extensions_keep_chain_order_and_context_indices() {
 }
 
 #[test]
+fn state_without_extensions_reports_none_loaded() {
+    let home = Home::new();
+    let session = home.load(&[]);
+    assert!(!session.has_extensions());
+}
+
+#[test]
+fn state_closed_session_refuses_later_writes() {
+    let home = Home::new();
+    home.install("goal", "");
+    let session = home.load(&[]);
+    session.close_state();
+    let store = session.state.store("fiber.test/a");
+    assert!(matches!(
+        store.set(
+            crate::host::state::Scope::Other,
+            "k",
+            json!(1),
+            OnFork::AtPoint
+        ),
+        Err(crate::host::state::StateError::Closing)
+    ));
+}
+
+#[test]
 fn state_late_provider_vm_uses_the_sessions_live_registry() {
     for hooked in [false, true] {
         let home = Home::new();

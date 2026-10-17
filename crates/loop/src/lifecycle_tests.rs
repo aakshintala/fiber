@@ -551,6 +551,36 @@ fn state_lines_cancelled_hook_answers_still_drain_other_writes() {
 }
 
 #[test]
+fn turn_end_context_lines_index_past_the_contexts_already_held() {
+    let inner = Arc::new(FakeHooks::new());
+    inner.answer_turn_end(added(vec![("state", "end")]));
+    let mut world = started(Vec::new(), None);
+    let cases = StateCases {
+        counts: std::collections::BTreeMap::from([("turn_end", 2)]),
+        ..StateCases::default()
+    };
+    state_attached(&mut world, inner, cases);
+    let mut looped = world.looped.take().unwrap();
+    for text in ["held-a", "held-b"] {
+        looped.lifecycle.continued.push(Context {
+            extension: "state".into(),
+            text: text.into(),
+        });
+    }
+    let turn = TurnId("turn_end_index".into());
+    assert!(looped.replied(&turn, "reply").unwrap().is_none());
+    // Two lines, each indexed from 0 by the hook, move past the two held
+    // contexts: index plus count, not index times or minus count.
+    let indices: Vec<_> = looped
+        .lifecycle
+        .continued_state
+        .iter()
+        .map(|line| line.context)
+        .collect();
+    assert_eq!(indices, [Some(2), Some(3)]);
+}
+
+#[test]
 fn state_lines_held_contexts_and_continuations_share_their_commits() {
     for refuse in [false, true] {
         let inner = Arc::new(FakeHooks::new());

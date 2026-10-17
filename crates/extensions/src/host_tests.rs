@@ -64,6 +64,15 @@ fn host_emit_rejects_values_past_the_shared_json_depth() {
 }
 
 #[test]
+fn a_table_nested_to_the_shared_json_depth_converts() {
+    // 125 is written out, not MAX_DEPTH: the limit's own arithmetic must not
+    // be able to move this bound with it.
+    let lua = lua();
+    let value = eval(&lua, "local t={}; for _=2,125 do t={t} end; return t");
+    assert!(value.is_array());
+}
+
+#[test]
 fn an_empty_table_encodes_as_an_object_but_returns_as_a_list() {
     let lua = lua();
     // `json.encode` keeps the empty table's object shape, while a callback

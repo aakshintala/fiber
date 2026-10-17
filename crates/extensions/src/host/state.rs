@@ -240,6 +240,9 @@ impl StateRegistry {
         })
     }
 
+    // An empty seed builds the same empty registry `Default` does, so the
+    // mutant that returns a default one changes no behaviour a test can see.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn standalone() -> Arc<Self> {
         Self::new(StateSeed::new())
     }
@@ -357,14 +360,15 @@ impl ExtensionState {
         };
         let mut lines = Vec::with_capacity(pending.len());
         for pending in pending {
+            // Landings are unique, so the newer of the base and this write
+            // is the one that landed last.
             let key = store.keys.entry(pending.line.key.clone()).or_default();
-            if key
+            key.base = key
                 .base
-                .as_ref()
-                .is_none_or(|base| pending.write.landing > base.landing)
-            {
-                key.base = Some(pending.write);
-            }
+                .take()
+                .into_iter()
+                .chain([pending.write])
+                .max_by_key(|write| write.landing);
             lines.push(pending.line);
         }
         lines
