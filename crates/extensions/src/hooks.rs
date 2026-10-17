@@ -540,9 +540,7 @@ impl SessionExtensions {
                     paths.push(config::extension_data_dir(&self.home, slug).join(relative));
                 }
                 for relative in &opening.project {
-                    paths.push(
-                        config::project_data_dir(&self.home, project, slug).join(relative),
-                    );
+                    paths.push(config::project_data_dir(&self.home, project, slug).join(relative));
                 }
                 (name.clone(), paths, opening.budget_bytes)
             })

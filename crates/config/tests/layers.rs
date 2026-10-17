@@ -125,7 +125,9 @@ fn get_and_get_segments_pin_the_value_and_source_across_layers() {
     let config = setup.load(&[]).unwrap();
     assert!(config.notices().is_empty(), "{:?}", config.notices());
     let segments = |key: &[&str]| {
-        key.iter().map(|segment| (*segment).to_owned()).collect::<Vec<_>>()
+        key.iter()
+            .map(|segment| (*segment).to_owned())
+            .collect::<Vec<_>>()
     };
 
     // A scalar names the highest layer holding it.
