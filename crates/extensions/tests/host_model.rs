@@ -395,15 +395,34 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     Deadline::after(WAIT)
         .recv(&entered_rx)
         .expect("waited for the fake to enter the call");
-    // Only once the fake is inside `call` does the clock pass the
-    // callback's timeout: the callback ends `timeout`, and the door
-    // names the command in its notice. This stays a raw advance:
-    // two threads park here, the scheduler at the callback's deadline
-    // and the judge at deadline plus grace (`hub.rs`, the parked arm),
-    // so `advance_when_parked` cannot name one thread's park. The
-    // advance is still exact: a thread that parks later sees an instant
-    // at or before now and times the callback out without parking.
-    clock.advance(Duration::from_millis(51));
+    // The fake is inside `call` and the callback is parked: the
+    // scheduler waits at the callback's deadline while the waiter sits
+    // at deadline plus grace (`GRACE` in `hub.rs`, one second), so the
+    // advance names the scheduler's thread. Seeing the waiter at its
+    // grace park proves it left the deadline, leaving the scheduler
+    // alone at it; the advance then ends the callback `timeout` at its
+    // deadline, and the door names the command in its notice.
+    let deadline = clock.now() + Duration::from_millis(50);
+    let grace = deadline + Duration::from_secs(1);
+    assert!(
+        clock.mark_parked(grace, WAIT).is_some(),
+        "waited {WAIT:?} for the waiter to park at deadline plus grace",
+    );
+    let scheduler = clock
+        .mark_parked(deadline, WAIT)
+        .expect("waited for the scheduler to park at the callback deadline")
+        .threads();
+    assert_eq!(
+        scheduler.len(),
+        1,
+        "only the scheduler waits at the deadline: {scheduler:?}"
+    );
+    let _mark = clock.advance_when_parked(
+        Some(deadline),
+        Some(scheduler[0]),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let noticed = Deadline::after(WAIT)
         .recv(&emitted)
         .expect("waited for the timeout notice");
