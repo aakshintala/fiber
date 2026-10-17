@@ -69,7 +69,7 @@ end }} }})
     let loaded = ext.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(loaded.provider_functions("acme"));
+        tx.send(loaded.provider_functions("acme")).unwrap_or(());
     });
     assert_eq!(
         Deadline::after(WAIT)
@@ -119,7 +119,7 @@ fn callback_login_expires_as_authentication_failed_and_frees_its_port() {
     let deadline = clock.now().checked_add(Duration::from_secs(3)).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(provider.credential_token(&pair("acme", "default")));
+        tx.send(provider.credential_token(&pair("acme", "default"))).unwrap_or(());
     });
     advance_login_deadline(&clock, deadline);
     let error = Deadline::after(WAIT)
@@ -160,7 +160,7 @@ fn a_poll_sleep_past_the_credential_deadline_is_not_wrapped() {
     let deadline = clock.now().checked_add(Duration::from_secs(3)).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(provider.token(&pair("acme", "default")));
+        tx.send(provider.token(&pair("acme", "default"))).unwrap_or(());
     });
     assert!(
         server.await_requests(1, WAIT),
