@@ -630,379 +630,99 @@ jobs:
             --paging "$RUNNER_TEMP/release/head/paging" \
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
-      # PROBE (see #2360; dropped before merge): traces the musl jigs'
-      # scale-16 re-count mmap calls with call stacks for head and base
-      # and prints, per side, the total mmap count, the top 15 call sites
-      # with their request sizes, and the head-minus-base table. It only
-      # reports, never fails; a missing jig reports unavailable.
-      - name: Probe the paging re-count mmap call sites
+      # PROBE (see #2360; dropped before merge): times the musl jigs'
+      # scale-16 re-count for head and base in alternation (4 rounds of
+      # head then base) under /usr/bin/time -v, one line per run with
+      # wall, user, sys and page faults; then strace -c -f on one
+      # scale-16 re-count per side with the full table in the log; then
+      # the gnu scale-1 and scale-16 wall times, once each per side. It
+      # only reports, never fails; a missing jig reports unavailable.
+      - name: Probe paging sys time, faults and syscalls
         if: always()
         run: |
-          tmp=$RUNNER_TEMP/probe-mmap
-          mkdir -p "$tmp" || true
-          df -h "$tmp" || true
-          uname -r || true
+          tmp=$RUNNER_TEMP/probe-paging
+          mkdir -p "$tmp"
           if ! command -v strace >/dev/null 2>&1; then
-            echo "probe-mmap: strace not installed; installing"
+            echo "probe-paging: strace not installed; installing"
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS update || true
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS install -y --no-install-recommends strace || true
           fi
           if ! command -v perf >/dev/null 2>&1; then
-            echo "probe-mmap: perf not installed; installing"
+            echo "probe-paging: perf not installed; installing"
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS update || true
             # shellcheck disable=SC2086 # APT_OPTS is a list of options
             sudo apt-get $APT_OPTS install -y --no-install-recommends linux-tools-common linux-tools-generic || true
           fi
-          strace -V 2>&1 | grep version || true
+          strace -V || true
           perf --version || true
-          sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
-          echo "probe-mmap: build flag CARGO_PROFILE_RELEASE_DEBUG=line-tables-only on the probe builds only; the release profile files stay unchanged"
-          # perf script summarizer: one TOTAL line, one SITE line per call
-          # site, one LEN line per site and request size. The call site is
-          # the nearest stack frame in the jig or with a Rust source line,
-          # else the nearest frame. Run-specific paths and load addresses
-          # are normalized away so head and base sites match. The first
-          # lines also land in SAMPLE.
-          perfawk='
-          NR <= 30 {
-            print > SAMPLE
-          }
-          function emit(   k, p) {
-            if (cur == "") {
-              return
-            }
-            if (site == "") {
-              site = first
-            }
-            if (site == "") {
-              site = "(unresolved)"
-            }
-            gsub(/@@@/, "@ @", site)
-            site = normpath(site)
-            site = substr(site, 1, 200)
-            scount[site]++
-            lcount[site SUBSEP curlen]++
-            cur = ""
-            site = ""
-            first = ""
-            have = 0
-          }
-          function normpath(s,   i) {
-            if (JIGPATH == "") {
-              return s
-            }
-            while ((i = index(s, JIGPATH)) > 0) {
-              s = substr(s, 1, i - 1) "<jig>" substr(s, i + length(JIGPATH))
-            }
-            return s
-          }
-          /sys_enter_mmap:/ {
-            emit()
-            total++
-            curlen = "?"
-            if (match($0, /len (0x[0-9a-fA-F]+|[0-9]+)/)) {
-              curlen = substr($0, RSTART + 4, RLENGTH - 4)
-            }
-            cur = curlen
-            next
-          }
-          /^[[:space:]]+[0-9a-fA-F][0-9a-fA-F]*[[:space:]]/ {
-            if (cur != "") {
-              frame = $0
-              sub(/^[[:space:]]+[0-9a-fA-F]+[[:space:]]+/, "", frame)
-              gsub(/^[[:space:]]+/, "", frame)
-              if (first == "") {
-                first = frame
-              }
-              if (!have && (index(frame, JIG) > 0 || frame ~ /\.rs:[0-9]+/)) {
-                site = frame
-                have = 1
-              }
-            }
-            next
-          }
-          /^[[:space:]]*$/ {
-            emit()
-            next
-          }
-          {
-            next
-          }
-          END {
-            emit()
-            print "TOTAL@@@" (total + 0)
-            for (s in scount) {
-              printf "SITE@@@%d@@@%s\n", scount[s], s
-            }
-            for (k in lcount) {
-              split(k, p, SUBSEP)
-              printf "LEN@@@%s@@@%s@@@%d\n", p[1], p[2], lcount[k]
-            }
-          }
-          '
-          # strace -k summarizer, same output shape as perfawk: the call
-          # line gives the len, the ">" lines after it give the stack.
-          straceawk='
-          NR <= 30 {
-            print > SAMPLE
-          }
-          function emit(   k, p) {
-            if (cur == "") {
-              return
-            }
-            if (site == "") {
-              site = first
-            }
-            if (site == "") {
-              site = "(unresolved)"
-            }
-            gsub(/@@@/, "@ @", site)
-            site = normpath(site)
-            site = substr(site, 1, 200)
-            scount[site]++
-            lcount[site SUBSEP curlen]++
-            cur = ""
-            site = ""
-            first = ""
-            have = 0
-          }
-          function normpath(s,   i) {
-            if (JIGPATH == "") {
-              return s
-            }
-            while ((i = index(s, JIGPATH)) > 0) {
-              s = substr(s, 1, i - 1) "<jig>" substr(s, i + length(JIGPATH))
-            }
-            return s
-          }
-          {
-            line = $0
-            sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
-            sub(/^[[:space:]]+/, "", line)
-            if (line ~ /^mmap[0-9_]*/) {
-              if (line ~ /^mmap[0-9_]*\(/) {
-                emit()
-                total++
-                curlen = "?"
-                if (match(line, /mmap[0-9_]*\([^,]*,[[:space:]]*[0-9]+/)) {
-                  s = substr(line, RSTART, RLENGTH)
-                  sub(/.*,[[:space:]]*/, "", s)
-                  curlen = s
-                }
-                cur = curlen
-              }
-              next
-            }
-            if (line ~ /^>/) {
-              if (cur != "") {
-                frame = line
-                sub(/^>[[:space:]]*/, "", frame)
-                sub(/[[:space:]]*\[0x[0-9a-fA-F]+\][[:space:]]*$/, "", frame)
-                if (first == "") {
-                  first = frame
-                }
-                if (!have && (index(frame, JIG) > 0 || frame ~ /\.rs:[0-9]+/)) {
-                  site = frame
-                  have = 1
-                }
-              }
-              next
-            }
-            next
-          }
-          END {
-            emit()
-            print "TOTAL@@@" (total + 0)
-            for (s in scount) {
-              printf "SITE@@@%d@@@%s\n", scount[s], s
-            }
-            for (k in lcount) {
-              split(k, p, SUBSEP)
-              printf "LEN@@@%s@@@%s@@@%d\n", p[1], p[2], lcount[k]
-            }
-          }
-          '
-          # The probe jigs, built with line tables only, each into its own
-          # target directory so the shared target/ the benchmarks used
-          # stays untouched. A failed probe build falls back to the
-          # benchmark jig, which has no line tables.
-          musl=x86_64-unknown-linux-musl
-          rustup target add "$musl" || true
-          head_src="probe build"
-          if CARGO_TARGET_DIR="$tmp/target-head" CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
-            cargo build --release --locked --target "$musl" -p tui --example paging; then
-            cp "$tmp/target-head/$musl/release/examples/paging" "$tmp/probe-head-paging" 2>/dev/null || true
-          fi
-          if [ ! -x "$tmp/probe-head-paging" ] && [ -x "$RUNNER_TEMP/release/head/paging" ]; then
-            head_src="benchmark jig fallback, no line tables"
-            cp "$RUNNER_TEMP/release/head/paging" "$tmp/probe-head-paging" 2>/dev/null || true
-          fi
-          base_src="probe build"
-          base_commit=""
-          if [ -f "$RUNNER_TEMP/release/base/commit" ]; then
-            base_commit=$(cat "$RUNNER_TEMP/release/base/commit")
-          fi
-          if [ -n "$base_commit" ] && git worktree add --detach "$tmp/paging-base" "$base_commit" >/dev/null 2>&1; then
-            (cd "$tmp/paging-base" && rustup toolchain install >/dev/null 2>&1 || true)
-            (cd "$tmp/paging-base" && rustup target add "$musl" >/dev/null 2>&1 || true)
-            if (cd "$tmp/paging-base" && CARGO_TARGET_DIR="$tmp/target-base" CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
-              cargo build --release --locked --target "$musl" -p tui --example paging); then
-              cp "$tmp/target-base/$musl/release/examples/paging" "$tmp/probe-base-paging" 2>/dev/null || true
+          /usr/bin/time --version || true
+          # Runs the jig at $1 (side $2) at scale $3, round $4, under
+          # /usr/bin/time -v, and prints one line with wall, user and
+          # sys ms plus minor and major faults. Never fails.
+          probe_time() {
+            if [ ! -x "$1" ] || [ ! -x /usr/bin/time ]; then
+              echo "probe-paging: run round=$4 side=$2 scale=$3 wall_ms=unavailable user_ms=unavailable sys_ms=unavailable minor_faults=unavailable major_faults=unavailable"
+              return 0
             fi
-          else
-            echo "probe-mmap: base worktree unavailable"
-          fi
-          if [ ! -x "$tmp/probe-base-paging" ] && [ -x "$RUNNER_TEMP/release/base/paging" ]; then
-            base_src="benchmark jig fallback, no line tables"
-            cp "$RUNNER_TEMP/release/base/paging" "$tmp/probe-base-paging" 2>/dev/null || true
-          fi
-          file "$tmp/probe-head-paging" || true
-          file "$tmp/probe-base-paging" || true
-          echo "probe-mmap: head jig=$tmp/probe-head-paging src=$head_src"
-          echo "probe-mmap: base jig=$tmp/probe-base-paging src=$base_src"
-          df -h "$tmp" || true
-          # Traces one scale-16 run of the jig at $1 (side $2) with perf
-          # and writes the counts file. Prefers source-line fields.
-          trace_perf() {
-            data="$tmp/$2-perf.data"
-            echo "probe-mmap: $2 trace cmd: perf record -e syscalls:sys_enter_mmap --call-graph dwarf -o <data> -- <jig> 16 160 48"
+            /usr/bin/time -v "$1" "$3" 160 48 > "$tmp/$2-$4-$3.log" 2> "$tmp/$2-$4-$3.time" || true
+            line=$(grep '^slowest re-count at a new width:' "$tmp/$2-$4-$3.log" || true)
+            echo "probe-paging: $2 scale-$3 jig round $4: ${line:-missing}"
+            stats=$(awk '
+              /Elapsed \(wall clock\) time/ { w=$NF }
+              /User time \(seconds\)/ { u=$NF }
+              /System time \(seconds\)/ { s=$NF }
+              /Minor \(reclaiming a frame\) page faults/ { minor=$NF }
+              /Major \(requiring I\/O\) page faults/ { major=$NF }
+              END {
+                n = split(w, a, ":");
+                wall = 0;
+                if (n == 2) { wall = (a[1]*60 + a[2])*1000; }
+                else if (n == 3) { wall = ((a[1]*60 + a[2])*60 + a[3])*1000; }
+                printf "wall_ms=%.0f user_ms=%.0f sys_ms=%.0f minor_faults=%s major_faults=%s", wall, u*1000, s*1000, minor, major;
+              }' "$tmp/$2-$4-$3.time") || stats="wall_ms=unavailable user_ms=unavailable sys_ms=unavailable minor_faults=unavailable major_faults=unavailable"
+            echo "probe-paging: run round=$4 side=$2 scale=$3 $stats"
+          }
+          round=1
+          while [ "$round" -le 4 ]; do
+            probe_time "$RUNNER_TEMP/release/head/paging" head 16 "$round"
+            probe_time "$RUNNER_TEMP/release/base/paging" base 16 "$round"
+            round=$((round + 1))
+          done
+          # One scale-16 re-count per side under strace -c -f: the full
+          # table goes to the log, then the mmap-family and total rows.
+          probe_strace() {
             if [ ! -x "$1" ]; then
-              echo "probe-mmap: $2 perf: no jig; unavailable"
+              echo "probe-paging: strace $2: no musl jig; unavailable"
               return 0
             fi
-            : > "$tmp/$2-counts.txt" || true
-            if timeout 900 perf record -e syscalls:sys_enter_mmap --call-graph dwarf -o "$data" \
-              -- "$1" 16 160 48 > "$tmp/$2-jig.log" 2>&1; then
-              echo "probe-mmap: $2 perf record finished"
-            else
-              echo "probe-mmap: $2 perf record exited nonzero; attempting whatever it recorded"
-            fi
-            grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-mmap: $2 re-count: /" || true
-            if [ -s "$data" ]; then
-              jigbase=$(basename "$1")
-              perf script -i "$data" -F +srcline 2>/dev/null | \
-                awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-script-sample.txt" "$perfawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
-              total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$2-counts.txt" 2>/dev/null | sed -n '1p' || true)
-              if [ -z "${total:-}" ] || [ "$total" = 0 ]; then
-                echo "probe-mmap: $2 perf +srcline gave no events; retrying perf script with default fields"
-                perf script -i "$data" 2>/dev/null | \
-                  awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-script-sample.txt" "$perfawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
-                echo "probe-mmap: $2 tracer is perf with default fields" > "$tmp/$2-tracer.txt" || true
-              else
-                echo "probe-mmap: $2 tracer is perf with source-line fields" > "$tmp/$2-tracer.txt" || true
-              fi
-            else
-              echo "probe-mmap: $2 perf recorded no data"
-            fi
-            rm -f "$data" || true
-            df -h "$tmp" || true
-            return 0
+            echo "probe-paging: strace $2: tracing one scale-16 re-count"
+            strace -c -f -o "$tmp/strace-$2.log" -- "$1" 16 160 48 > "$tmp/strace-$2-jig.log" 2>&1 || true
+            grep '^slowest re-count at a new width:' "$tmp/strace-$2-jig.log" | sed "s/^/probe-paging: strace $2 re-count: /" || true
+            echo "probe-paging: strace $2: full -c table"
+            cat "$tmp/strace-$2.log" || true
+            echo "probe-paging: strace $2: mmap-family and total rows"
+            grep -E '(mmap|munmap|madvise|mremap|brk|total)' "$tmp/strace-$2.log" || true
           }
-          # Traces one scale-16 run of the jig at $1 (side $2) with
-          # strace -k, streaming the trace into the summarizer so no
-          # gigabyte trace file ever lands on disk.
-          trace_strace() {
-            echo "probe-mmap: $2 trace cmd: strace -k -f -e trace=mmap -- <jig> 16 160 48"
+          probe_strace "$RUNNER_TEMP/release/head/paging" head
+          probe_strace "$RUNNER_TEMP/release/base/paging" base
+          # The gnu scale-1 and scale-16 wall times, once each per side.
+          probe_gnu() {
             if [ ! -x "$1" ]; then
-              echo "probe-mmap: $2 strace: no jig; unavailable"
+              echo "probe-paging: gnu $2 scale-$3 wall_ms=unavailable re-count: no gnu jig; unavailable"
               return 0
             fi
-            if ! command -v strace >/dev/null 2>&1; then
-              echo "probe-mmap: $2 strace not installed; unavailable"
-              return 0
-            fi
-            jigbase=$(basename "$1")
-            timeout 900 strace -k -f -e trace=mmap -- "$1" 16 160 48 2>&1 >"$tmp/$2-jig.log" | \
-              awk -v JIG="$jigbase" -v JIGPATH="$1" -v SAMPLE="$tmp/$2-strace-sample.txt" "$straceawk" > "$tmp/$2-counts.txt" 2>/dev/null || true
-            grep '^slowest re-count at a new width:' "$tmp/$2-jig.log" | sed "s/^/probe-mmap: $2 re-count: /" || true
-            echo "probe-mmap: $2 tracer is strace -k" > "$tmp/$2-tracer.txt" || true
-            return 0
+            start=$(date +%s%N)
+            line=$("$1" "$3" 160 48 2>/dev/null | grep '^slowest re-count at a new width:' || true)
+            end=$(date +%s%N)
+            echo "probe-paging: gnu $2 scale-$3 wall_ms=$(( (end - start) / 1000000 )) re-count: ${line:-missing}"
           }
-          # Probes side $2 with the jig at $1: perf first, strace -k when
-          # perf is missing or records no mmap events.
-          probe_side() {
-            if command -v perf >/dev/null 2>&1; then
-              trace_perf "$1" "$2"
-            else
-              echo "probe-mmap: $2 perf missing; using strace -k"
-              : > "$tmp/$2-counts.txt" || true
-            fi
-            total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/$2-counts.txt" 2>/dev/null | sed -n '1p' || true)
-            if [ -z "${total:-}" ] || [ "$total" = 0 ]; then
-              echo "probe-mmap: $2 perf gave no mmap events; falling back to strace -k"
-              trace_strace "$1" "$2"
-            fi
-            return 0
-          }
-          # Prints the total and the top 15 call sites with request sizes
-          # for side $1 from its counts file.
-          report_side() {
-            f="$tmp/$1-counts.txt"
-            tracer=$(sed -n '1p' "$tmp/$1-tracer.txt" 2>/dev/null || true)
-            total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$f" 2>/dev/null | sed -n '1p' || true)
-            echo "probe-mmap: $1 ${tracer:-tracer unknown} total mmap=${total:-unknown}"
-            awk -F'@@@' '$1=="SITE" {printf "%012d@@@%s\n", $2, $3}' "$f" 2>/dev/null | sort -r | sed -n '1,15p' > "$tmp/$1-top.txt" || true
-            rank=0
-            while IFS= read -r line; do
-              [ -n "$line" ] || continue
-              rank=$((rank + 1))
-              count=$(printf '%s' "$line" | awk -F'@@@' '{print $2+0}' || true)
-              site=$(printf '%s' "$line" | sed 's/^[^@]*@@@//' || true)
-              echo "probe-mmap: $1 site rank=$rank count=$count site=$site"
-              awk -F'@@@' -v S="$site" '$1=="LEN" && $2==S {printf "%012d@@@%s\n", $4, $3}' "$f" 2>/dev/null | \
-                sort -r | sed -n '1,5p' > "$tmp/$1-lens.txt" || true
-              while IFS= read -r llen; do
-                [ -n "$llen" ] || continue
-                lcount=$(printf '%s' "$llen" | awk -F'@@@' '{print $1+0}' || true)
-                len=$(printf '%s' "$llen" | sed 's/^[^@]*@@@//' || true)
-                echo "probe-mmap: $1 site rank=$rank len=$len count=$lcount"
-              done < "$tmp/$1-lens.txt" || true
-            done < "$tmp/$1-top.txt" || true
-            return 0
-          }
-          probe_side "$tmp/probe-head-paging" head
-          probe_side "$tmp/probe-base-paging" base
-          echo "probe-mmap: head trace sample, first lines"
-          cat "$tmp/head-script-sample.txt" 2>/dev/null || cat "$tmp/head-strace-sample.txt" 2>/dev/null || true
-          echo "probe-mmap: base trace sample, first lines"
-          cat "$tmp/base-script-sample.txt" 2>/dev/null || cat "$tmp/base-strace-sample.txt" 2>/dev/null || true
-          report_side head
-          report_side base
-          # The head-minus-base table over the union of both top-15 sets.
-          {
-            sed 's/^[^@]*@@@//' "$tmp/head-top.txt" 2>/dev/null || true
-            sed 's/^[^@]*@@@//' "$tmp/base-top.txt" 2>/dev/null || true
-          } | sort -u > "$tmp/union.txt" || true
-          h_total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/head-counts.txt" 2>/dev/null | sed -n '1p' || true)
-          b_total=$(awk -F'@@@' '$1=="TOTAL" {print $2}' "$tmp/base-counts.txt" 2>/dev/null | sed -n '1p' || true)
-          h_total=${h_total:-0}
-          b_total=${b_total:-0}
-          echo "probe-mmap: totals head=$h_total base=$b_total diff=$((h_total - b_total))"
-          : > "$tmp/diff.txt" || true
-          while IFS= read -r site; do
-            [ -n "$site" ] || continue
-            h=$(awk -F'@@@' -v S="$site" '$1=="SITE" && $3==S {print $2+0}' "$tmp/head-counts.txt" 2>/dev/null | sed -n '1p' || true)
-            b=$(awk -F'@@@' -v S="$site" '$1=="SITE" && $3==S {print $2+0}' "$tmp/base-counts.txt" 2>/dev/null | sed -n '1p' || true)
-            h=${h:-0}
-            b=${b:-0}
-            printf '%s@@@%s@@@%s@@@%s\n' "$((h - b))" "$h" "$b" "$site" >> "$tmp/diff.txt" || true
-          done < "$tmp/union.txt" || true
-          awk -F'@@@' '{a=$1+0; if (a<0) a=-a; printf "%012d@@@%s\n", a, $0}' "$tmp/diff.txt" 2>/dev/null | \
-            sort -r | sed 's/^[^@]*@@@//' > "$tmp/diff-sorted.txt" || true
-          while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            d=$(printf '%s' "$line" | awk -F'@@@' '{print $1+0}' || true)
-            h=$(printf '%s' "$line" | awk -F'@@@' '{print $2+0}' || true)
-            b=$(printf '%s' "$line" | awk -F'@@@' '{print $3+0}' || true)
-            site=$(printf '%s' "$line" | sed 's/^[^@]*@@@[^@]*@@@[^@]*@@@//' || true)
-            echo "probe-mmap: diff site=$site head=$h base=$b diff=$d"
-          done < "$tmp/diff-sorted.txt" || true
-          git worktree remove --force "$tmp/paging-base" 2>/dev/null || true
-          git worktree prune || true
-          echo "probe-mmap: done"
+          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head 1
+          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base 1
+          probe_gnu "$RUNNER_TEMP/release/head/paging-gnu" head 16
+          probe_gnu "$RUNNER_TEMP/release/base/paging-gnu" base 16
       - name: Print the attach stages
         run: |
           table=$(jq -r '
