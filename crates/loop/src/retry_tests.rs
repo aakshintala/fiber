@@ -93,6 +93,7 @@ fn each_never_retried_code_fails_unchanged() {
         ErrorCode::Refused,
         ErrorCode::ModelNotFound,
         ErrorCode::InvalidRequest,
+        ErrorCode::PausedTooLong,
         ErrorCode::UnknownStopReason,
     ] {
         let failed = fail_code(retry.decide(&failure(code.clone()), None, 0));
@@ -102,7 +103,7 @@ fn each_never_retried_code_fails_unchanged() {
 }
 
 #[test]
-fn should_retry_true_retries_a_never_code_but_not_the_two_exceptions() {
+fn should_retry_true_retries_a_never_code_but_not_the_three_exceptions() {
     let retry = Retry::default();
     assert!(
         matches!(
@@ -111,7 +112,7 @@ fn should_retry_true_retries_a_never_code_but_not_the_two_exceptions() {
         ),
         "true retries invalid_request"
     );
-    // `docs/errors.md` names only these two exceptions: `context_overflow`
+    // `docs/errors.md` names only these three exceptions: `context_overflow`
     // with `true` retries, under the overflow rule's header.
     assert!(
         matches!(
@@ -120,7 +121,11 @@ fn should_retry_true_retries_a_never_code_but_not_the_two_exceptions() {
         ),
         "true retries context_overflow"
     );
-    for code in [ErrorCode::QuotaExceeded, ErrorCode::UnknownStopReason] {
+    for code in [
+        ErrorCode::QuotaExceeded,
+        ErrorCode::PausedTooLong,
+        ErrorCode::UnknownStopReason,
+    ] {
         let failed = fail_code(retry.decide(&failure(code.clone()), Some(true), 0));
         assert_eq!(
             failed.code, code,

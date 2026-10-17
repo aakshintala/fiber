@@ -13,10 +13,11 @@ use contract::clock::Wake;
 use contract::events::{
     AssistantMessageCompleted, Empty, Event, MessageOutcome, RetryScheduled, TurnOutcome,
 };
-use contract::provider::{CallError, ModelRequest, Reply};
+use contract::provider::{CallError, Finish, Input, ModelRequest, Reply, ReplyAction};
 use contract::shapes::Failure;
 use contract::tool::Cancel as _;
 use contract::{ActionId, ErrorCode, TurnId};
+use serde_json::Value;
 
 use crate::progress::SharedWake;
 use crate::{Error, Step};
@@ -67,7 +68,7 @@ impl Retry {
     ) -> Decision {
         if matches!(
             failure.code,
-            ErrorCode::QuotaExceeded | ErrorCode::UnknownStopReason
+            ErrorCode::QuotaExceeded | ErrorCode::PausedTooLong | ErrorCode::UnknownStopReason
         ) {
             return Decision::Fail(failure.clone());
         }
@@ -137,20 +138,68 @@ impl crate::Loop {
         // Stamped once per step: a retry's backoff only delays the real
         // send, so a refresh counted from here comes early, never late.
         self.warming.record(request, self.log.clock().now());
-        Ok(match self.call_with_retries(request, turn)? {
-            Attempted::Replied {
-                reply,
-                reasoning,
-                message,
-            } => return self.record(reply, reasoning, turn, &message),
-            Attempted::Failed(failure) if failure.code == ErrorCode::ContextOverflow => {
-                return self.overflowed(turn, Some(failure));
-            }
-            Attempted::Failed(failure) => {
-                Step::Ended(crate::ended(TurnOutcome::Failed, Some(failure)))
-            }
-            Attempted::Interrupted => Step::Ended(crate::ended(TurnOutcome::Interrupted, None)),
-        })
+        // A step's paused replies and continuations, ending with the step:
+        // each resend carries every paused reply's blocks so far, and the
+        // fifth continuation is the last one the turn takes.
+        let base = request.clone();
+        let mut request = base.clone();
+        let mut paused: Vec<Value> = Vec::new();
+        let mut continuations = 0u32;
+        loop {
+            match self.call_with_retries(&request, turn)? {
+                Attempted::Replied {
+                    mut reply,
+                    reasoning,
+                    message,
+                } => {
+                    Self::resolve_orphans(&mut reply, &paused);
+                    if !pausable(&reply) {
+                        return self.record(reply, reasoning, turn, &message);
+                    }
+                    let blocks = self.write_paused(reply, reasoning, turn, &message)?;
+                    paused.extend(blocks);
+                    if self.turn_cancelled() {
+                        return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                    }
+                    if let Some(completed) = self.over_budget() {
+                        return Ok(Step::Ended(self.budget_end(completed)));
+                    }
+                    if continuations >= 5 {
+                        return Ok(Step::Ended(crate::ended(
+                            TurnOutcome::Failed,
+                            Some(Failure {
+                                code: ErrorCode::PausedTooLong,
+                                message: "The reply was still paused (`pause_turn`) after 5 continuations."
+                                    .to_owned(),
+                                retry_after_ms: None,
+                                provider: None,
+                            }),
+                        )));
+                    }
+                    continuations += 1;
+                    let mut next = base.clone();
+                    next.conversation
+                        .extend(paused.iter().map(|block| Input::Assistant {
+                            model: self.model.reference.clone(),
+                            text: String::new(),
+                            provider_item: Some(block.clone()),
+                        }));
+                    request = next;
+                }
+                Attempted::Failed(failure) if failure.code == ErrorCode::ContextOverflow => {
+                    return self.overflowed(turn, Some(failure));
+                }
+                Attempted::Failed(failure) => {
+                    return Ok(Step::Ended(crate::ended(
+                        TurnOutcome::Failed,
+                        Some(failure),
+                    )));
+                }
+                Attempted::Interrupted => {
+                    return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                }
+            };
+        }
     }
 
     /// Calls the model with retries. Each attempt is a new action with its
@@ -273,6 +322,17 @@ impl crate::Loop {
             wake.park(clock.as_ref(), Some(until));
         }
     }
+}
+
+/// Whether `reply` continues the turn inside itself: a paused reply with
+/// a resendable block and no client tool call, which a pause never carries.
+/// Anything else takes the normal path.
+fn pausable(reply: &Reply) -> bool {
+    matches!(&reply.finish, Finish::Paused { content } if !content.is_empty())
+        && !reply
+            .actions
+            .iter()
+            .any(|action| matches!(action, ReplyAction::ToolCall(_)))
 }
 
 /// A delay as whole milliseconds for `retry_scheduled.delay_ms`, saturating.

@@ -12,6 +12,7 @@ use contract::events::{
 use contract::provider::{CallError, Delta, Finish, ModelRequest, Reply, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, TurnId};
+use serde_json::Value;
 
 use crate::{Error, Loop, Step, cancel, completion, ended, handoff, mint, usage, util};
 
@@ -245,6 +246,58 @@ impl Loop {
             Some(message),
         )?;
         Ok((calls, reply.finish))
+    }
+
+    /// Writes a paused reply's actions, usage and completion like any reply,
+    /// and returns its raw blocks: the loop sends them back unchanged with
+    /// the next request. The hosted pair a pause split reaches the log here,
+    /// through the reply's own `Hosted` actions.
+    pub(crate) fn write_paused(
+        &mut self,
+        reply: Reply,
+        opened: VecDeque<ActionId>,
+        turn: &TurnId,
+        message: &ActionId,
+    ) -> Result<Vec<Value>, Error> {
+        let content = match &reply.finish {
+            Finish::Paused { content } => content.clone(),
+            Finish::Completed | Finish::OutputLimit => Vec::new(),
+        };
+        let tokens = reply.tokens.clone();
+        self.write_reply(reply, opened, turn, message)?;
+        self.measure(&tokens);
+        Ok(content)
+    }
+
+    /// Joins a hosted result that arrived without its call against the
+    /// paused blocks gathered so far in this step, by the provider's id: a
+    /// pair split by a pause is logged whole. A stub carries no
+    /// `provider_item` on its call, which marks it; one no paused block
+    /// names is dropped, as a result with no call always was.
+    pub(crate) fn resolve_orphans(reply: &mut Reply, paused: &[Value]) {
+        reply.actions.retain_mut(|action| {
+            let ReplyAction::Hosted(hosted) = action else {
+                return true;
+            };
+            if hosted.call.provider_item.is_some() {
+                return true;
+            }
+            let id = hosted.call.provider_id.as_ref().map(|id| id.0.as_str());
+            let found = id.and_then(|id| {
+                paused.iter().find(|block| {
+                    block["type"] == "server_tool_use" && block["id"].as_str() == Some(id)
+                })
+            });
+            match found {
+                Some(block) => {
+                    hosted.call.name = block["name"].as_str().unwrap_or_default().to_owned();
+                    hosted.call.arguments = block.get("input").cloned().unwrap_or(Value::Null);
+                    hosted.call.provider_item = Some(block.clone());
+                    true
+                }
+                None => false,
+            }
+        });
     }
 
     /// Writes a reply and ends the step: a tool call ends it with a next
