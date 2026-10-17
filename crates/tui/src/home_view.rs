@@ -1026,9 +1026,12 @@ fn draw_typed_picker(
         .y
         .saturating_add(area.height.saturating_sub(tall) / 2)
         .saturating_add(tall);
-    let fits_above = tall <= box_top.saturating_sub(area.y);
-    let place = if centred_bottom > box_top && fits_above {
-        super::overlay::Place::Across { bottom: box_top }
+    // Above the box, the centred place when it is clear of the box,
+    // else the bottom edge on the row above it: one rule, no tie.
+    let place = if tall <= box_top.saturating_sub(area.y) {
+        super::overlay::Place::Across {
+            bottom: centred_bottom.min(box_top),
+        }
     } else {
         super::overlay::Place::Centre
     };

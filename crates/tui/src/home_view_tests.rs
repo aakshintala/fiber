@@ -3509,3 +3509,50 @@ fn the_search_panel_gives_way_on_a_short_home() {
     assert!(shown.contains("›"), "{shown}");
     assert!(!shown.contains("no matching prompts"), "{shown}");
 }
+
+/// The rows of the typed picker's `Workspaces` title and footer, and of
+/// the input box's top edge, on a home `height` rows tall with the
+/// picker browsing `/w/` over two completions and the `/w` recent: a
+/// picker 14 rows tall.
+fn typed_picker_rows(height: u16) -> (usize, usize, usize) {
+    let mut app = home(80, height);
+    app.on_line(hello());
+    open_listed(&mut app, &["a", "b"]);
+    let shown = screen(&app, 80, height);
+    let lines: Vec<&str> = shown.lines().collect();
+    let find = |piece: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(piece))
+            .unwrap_or_else(|| panic!("{piece} draws: {shown}"))
+    };
+    let title = find("Workspaces");
+    let footer = find("↑↓ move · Enter open");
+    let box_top = find("▌ › ").saturating_sub(1);
+    (title, footer, box_top)
+}
+
+/// With room above the box exactly the picker's height, the picker
+/// fills it: its top edge on the first row, its bottom edge on the row
+/// above the box.
+#[test]
+fn a_picker_exactly_as_tall_as_the_room_above_the_box_sits_above_it() {
+    let (title, footer, box_top) = typed_picker_rows(20);
+    assert_eq!(box_top, 14, "the room above the box is the picker's height");
+    // The top edge, then a pad row, then the title.
+    assert_eq!(title, 2);
+    // The footer, its pad row, then the bottom edge on the row above the box.
+    assert_eq!(footer + 2, box_top - 1);
+}
+
+/// One row short of the picker's height above the box, the picker
+/// stays centred over home, reaching over the box.
+#[test]
+fn a_picker_one_row_taller_than_the_room_above_the_box_stays_centred() {
+    let (title, footer, box_top) = typed_picker_rows(19);
+    assert_eq!(box_top, 13, "the room above the box is one row short");
+    // Centred in 19 rows: the 14-row picker starts on row 2.
+    assert_eq!(title, 4);
+    assert_eq!(footer + 2, 15);
+    assert!(footer + 2 >= box_top, "the centred picker reaches the box");
+}
