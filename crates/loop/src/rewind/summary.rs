@@ -177,6 +177,10 @@ impl Loop {
     }
 }
 
+#[cfg(test)]
+#[path = "summary_tests.rs"]
+mod tests;
+
 /// The first message, reply text or tool call after the point.
 fn excerpt(lines: &[Envelope]) -> Option<String> {
     let mut inside = false;

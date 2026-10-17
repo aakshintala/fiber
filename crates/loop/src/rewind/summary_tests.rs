@@ -1,0 +1,146 @@
+//! The summary quote is the first usable content after the cut.
+
+#![allow(clippy::unwrap_used, reason = "test fixtures must parse")]
+
+use contract::{Envelope, SessionId};
+use serde_json::{Value, json};
+
+use super::excerpt;
+
+fn line(kind: &str, payload: Value) -> Envelope {
+    Envelope {
+        kind: kind.into(),
+        session_id: SessionId("s_quote".into()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().unwrap().clone(),
+    }
+}
+
+fn text(text: &str) -> Envelope {
+    line("text_completed", json!({"text": text}))
+}
+
+fn summary() -> Envelope {
+    line(
+        "turn_started",
+        json!({"input":[{"type":"rewind","command_id":"any-id"}]}),
+    )
+}
+
+#[test]
+fn a_message_quotes_its_text_parts_in_order_before_later_text() {
+    let message = line(
+        "turn_started",
+        json!({"input":[{
+        "type":"message", "command_id":"c", "origin":"driver",
+        "content":[{"type":"text","text":"first"}, {"type":"text","text":"second"}]
+    }, {"type":"message", "command_id":"d", "origin":"driver", "content":[{"type":"text","text":"later message"}]}]}),
+    );
+    assert_eq!(
+        excerpt(&[message, text("later reply")]),
+        Some("first\nsecond".into())
+    );
+}
+
+#[test]
+fn jobs_alone_leave_the_quote_to_the_reply() {
+    assert_eq!(
+        excerpt(&[
+            line(
+                "turn_started",
+                json!({"input":[{"type":"jobs","job_ids":["j_1"]}]})
+            ),
+            text("reply"),
+            text("later")
+        ]),
+        Some("reply".into())
+    );
+}
+
+#[test]
+fn a_tool_call_names_the_tool_before_later_text() {
+    assert_eq!(
+        excerpt(&[
+            line(
+                "tool_call_requested",
+                json!({"name":"read_file","arguments":{}})
+            ),
+            text("later")
+        ]),
+        Some("A call to the `read_file` tool.".into())
+    );
+}
+
+#[test]
+fn reasoning_is_not_quoted() {
+    assert_eq!(
+        excerpt(&[
+            line("reasoning_completed", json!({"text":"private thought"})),
+            text("public reply")
+        ]),
+        Some("public reply".into())
+    );
+}
+
+#[test]
+fn a_completed_summary_is_skipped_with_its_start_and_end() {
+    assert_eq!(
+        excerpt(&[
+            summary(),
+            text("earlier summary"),
+            line("turn_completed", json!({"outcome":"completed"})),
+            text("real reply")
+        ]),
+        Some("real reply".into())
+    );
+    assert_eq!(excerpt(&[summary(), text("still summarising")]), None);
+}
+
+#[test]
+fn a_crashed_summary_stops_being_skipped_at_the_process_start() {
+    assert_eq!(
+        excerpt(&[
+            summary(),
+            text("crashed summary"),
+            line("fiber_started", json!({"version":"0.0.1","resumed":true})),
+            text("after crash")
+        ]),
+        Some("after crash".into())
+    );
+}
+
+#[test]
+fn no_qualifying_line_has_no_quote() {
+    assert_eq!(excerpt(&[]), None);
+    assert_eq!(
+        excerpt(&[
+            line("step_started", json!({})),
+            line("reasoning_completed", json!({"text":"thought"}))
+        ]),
+        None
+    );
+    assert_eq!(
+        excerpt(&[
+            line("future_kind", json!({})),
+            line("text_completed", json!({"text":7}))
+        ]),
+        None
+    );
+}
+
+#[test]
+fn blank_reply_text_and_empty_messages_are_skipped() {
+    assert_eq!(
+        excerpt(&[text(" \n\t"), text("usable")]),
+        Some("usable".into())
+    );
+    let message = line(
+        "turn_started",
+        json!({"input":[{"type":"message", "command_id":"c", "origin":"driver", "content":[]}]}),
+    );
+    assert_eq!(excerpt(&[message, text("usable")]), Some("usable".into()));
+}
