@@ -119,6 +119,44 @@ fn finish_past_one_park<D>(
     }
 }
 
+/// Drives a terminal settle's group-poll parks to the guard's drop,
+/// ending at once when the drop arrives without another park. The
+/// `await_parked` names the settle's poll park, and the thread from the
+/// `mark_parked` below names it again for the advance, so the
+/// credential's 30 s timeout park held beside it is ignored. The whole
+/// drive shares `drive`.
+#[track_caller]
+fn drive_settle_polls_to_drop(
+    fake: &FakeClock,
+    poll: &mut Instant,
+    drive: &Deadline,
+    is_dropped: &mpsc::Receiver<()>,
+) {
+    loop {
+        if is_dropped.try_recv().is_ok() {
+            break;
+        }
+        if fake.await_parked(*poll, Duration::from_millis(200)) {
+            if is_dropped.try_recv().is_ok() {
+                break;
+            }
+            let settle = fake
+                .mark_parked(*poll, Duration::ZERO)
+                .expect("the settle parked at its poll")
+                .threads()
+                .into_iter()
+                .next()
+                .expect("the settle's thread");
+            fake.advance_when_parked(Some(*poll), Some(settle), GROUP_POLL, drive);
+            *poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
+        }
+        if drive.left().is_zero() {
+            drive.recv_or_fail(is_dropped, "the guard's drop");
+            break;
+        }
+    }
+}
+
 /// The watcher reaches its finish only after every cancelled group is
 /// empty: a listed sleep group and a held spawn both hold the shared
 /// shutdown. Releasing the spawn drains both, and only then does the
@@ -873,30 +911,36 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
                 left_sent.send(drop_by.left()).unwrap_or(());
                 releases.release_reaper();
             });
-            let mut poll = fake
-                .origin()
-                .checked_add(GROUP_POLL)
-                .expect("the poll is countable");
+            // Armed while the first pass is still parked, so the next pass
+            // pauses too: reaching it proves the first park woke on the
+            // reaper's bump, with the clock frozen, before any advance
+            // below. The clock stays frozen until then, so a lost first
+            // wake never reaches the drive and the drop below fails.
+            let (parked_again, is_parked_again) = mpsc::channel::<()>();
+            let (resume_again, held_again) = mpsc::channel::<()>();
+            reads.pause_at_settle_park(parked_again, held_again);
+            let mut second = false;
             loop {
                 if is_dropped.try_recv().is_ok() {
                     break;
                 }
-                if fake.await_parked(poll, Duration::from_millis(200)) {
-                    if is_dropped.try_recv().is_ok() {
-                        break;
-                    }
-                    // The await above names the settle's poll park, so the
-                    // advance below is for it even while the credential's
-                    // 30 s timeout park is held beside it; `advance` moves
-                    // past both, where `advance_when_parked` would mismatch
-                    // on the other thread's instant.
-                    fake.advance(GROUP_POLL);
-                    poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
+                if is_parked_again.try_recv().is_ok() {
+                    resume_again.send(()).expect("the settle's second release");
+                    second = true;
+                    break;
                 }
                 if drop_by.left().is_zero() {
                     drop_by.recv_or_fail(&is_dropped, "the guard's drop");
                     break;
                 }
+                std::thread::yield_now();
+            }
+            if second {
+                let mut poll = fake
+                    .origin()
+                    .checked_add(GROUP_POLL)
+                    .expect("the poll is countable");
+                drive_settle_polls_to_drop(&fake, &mut poll, &drop_by, &is_dropped);
             }
             match Deadline::after(DEADLINE).recv(&is_left) {
                 Ok(left) => assert!(!left.is_zero(), "waited {bound:?} for the guard's drop"),
@@ -914,25 +958,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
                 .origin()
                 .checked_add(GROUP_POLL)
                 .expect("the poll is countable");
-            loop {
-                if is_dropped.try_recv().is_ok() {
-                    break;
-                }
-                if fake.await_parked(poll, Duration::from_millis(200)) {
-                    if is_dropped.try_recv().is_ok() {
-                        break;
-                    }
-                    // Same named-park advance as the held-reaper loop above:
-                    // the credential's 30 s timeout park may sit beside the
-                    // settle's poll park, so a plain advance survives it.
-                    fake.advance(GROUP_POLL);
-                    poll = poll.checked_add(GROUP_POLL).expect("the poll is countable");
-                }
-                if drive.left().is_zero() {
-                    drive.recv_or_fail(&is_dropped, "the guard's drop");
-                    break;
-                }
-            }
+            drive_settle_polls_to_drop(&fake, &mut poll, &drive, &is_dropped);
         }
     }
     let error = Deadline::after(DEADLINE)

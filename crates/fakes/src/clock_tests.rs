@@ -705,6 +705,24 @@ fn mark_parked_is_none_when_nobody_parks() {
 }
 
 #[test]
+fn mark_threads_returns_the_parked_threads() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let mark = clock
+        .mark_parked(until, Duration::from_secs(5))
+        .expect("waited for a thread to park at the deadline");
+    assert_eq!(mark.threads(), vec![id]);
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
 fn a_later_park_after_mark_parked_matches() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);

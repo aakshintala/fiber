@@ -53,6 +53,13 @@ struct State {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mark(Vec<(ThreadId, u64)>);
 
+impl Mark {
+    /// The threads in this mark, one entry per thread it holds.
+    pub fn threads(&self) -> Vec<ThreadId> {
+        self.0.iter().map(|(thread, _)| *thread).collect()
+    }
+}
+
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
 /// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
