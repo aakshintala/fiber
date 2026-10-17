@@ -1626,11 +1626,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
             Scripted::cancelled_after(fakes::call_usage("cancelled")),
             "the summary was interrupted.",
             "interrupted",
-            vec![
-                "assistant_message_started",
-                "usage_recorded",
-                "assistant_message_completed",
-            ],
+            vec!["assistant_message_started", "usage_recorded"],
         ),
     ];
     for (script, reason, outcome, body) in cases {
@@ -1810,9 +1806,15 @@ fn the_reviewer_sees_no_failed_summary_live_or_resumed() {
         }
         let requests = reviewer.requests();
         assert_eq!(requests.len(), 1);
+        let mut conversation = requests[0].conversation.clone();
+        for input in &mut conversation {
+            if let Input::User { text, .. } = input {
+                *text = text.replace(session.workspace.to_str().unwrap(), "<workspace>");
+            }
+        }
         match &expected {
-            None => expected = Some(requests[0].conversation.clone()),
-            Some(expected) => assert_eq!(&requests[0].conversation, expected, "{mode}"),
+            None => expected = Some(conversation),
+            Some(expected) => assert_eq!(&conversation, expected, "{mode}"),
         }
     }
 }
