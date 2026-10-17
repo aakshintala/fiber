@@ -1391,3 +1391,99 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
         "nothing past the point reaches the fork: {conversation:?}"
     );
 }
+
+fn handoff_hook_context(text: &str) -> Event {
+    Event::ContextAdded(contract::events::ContextAdded {
+        text: text.to_owned(),
+        extension: "fiber.test/session-start".to_owned(),
+        hook: "session_start".to_owned(),
+    })
+}
+
+/// The old session with a `session_start` hook context after the handoff's
+/// opening message, then a third turn. The opening is seq 7, the context
+/// seq 8.
+fn hook_context_log() -> Vec<Envelope> {
+    vec![
+        handoff_envelope(HA, 0, None, None, &handoff_session_started(None)),
+        handoff_envelope(HA, 1, Some("t_1"), None, &handoff_turn("one")),
+        handoff_envelope(HA, 2, Some("t_1"), None, &handoff_step()),
+        handoff_envelope(HA, 3, Some("t_2"), None, &handoff_turn("two")),
+        handoff_envelope(HA, 4, Some("t_2"), None, &handoff_begun()),
+        handoff_envelope(
+            HA,
+            5,
+            Some("t_2"),
+            Some("a_note"),
+            &handoff_note_text("the handoff note"),
+        ),
+        handoff_envelope(
+            HA,
+            6,
+            Some("t_2"),
+            None,
+            &handoff_done(Outcome::Completed, Some("a_note")),
+        ),
+        handoff_envelope(HA, 7, None, None, &handoff_opening()),
+        handoff_envelope(HA, 8, None, None, &handoff_hook_context("the hook context")),
+        handoff_envelope(HA, 9, Some("t_2"), None, &handoff_step()),
+        handoff_envelope(HA, 10, Some("t_3"), None, &handoff_turn("three")),
+    ]
+}
+
+fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Input> {
+    write_chain(sessions, HA, &hook_context_log());
+    write_chain(
+        sessions,
+        HB,
+        &[handoff_envelope(
+            HB,
+            0,
+            None,
+            None,
+            &handoff_session_started(Some((HA, at))),
+        )],
+    );
+    let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
+    assert_eq!(folded.window, (0, 3));
+    assert_eq!(folded.seed, Carry::default());
+    let log = log::Log::open(
+        sessions,
+        SessionId(HB.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = crate::history::read_window(&log, folded.window, folded.end).unwrap();
+    crate::conversation::rebuild(&lines, "fake/model-1").unwrap()
+}
+
+#[test]
+fn a_hook_context_after_the_handoffs_opening_is_inherited() {
+    let home = fakes::TempDir::new("loop-hook-context");
+    let sessions = home.path().join("sessions");
+    // Past the hook context: it sits between the opening message and the
+    // carried input, as a live rebuild of the old log renders it.
+    let conversation = folded_hook_context(&sessions, 9);
+    assert_eq!(conversation.len(), 4);
+    assert!(
+        matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message renders first: {conversation:?}"
+    );
+    assert_eq!(conversation[1], user_input("the hook context"));
+    assert_eq!(conversation[2], user_input("two"));
+    assert_eq!(conversation[3], user_input("the handoff note"));
+    // On the opening message's own line: the handoff applies but the
+    // context after it does not.
+    let earlier = folded_hook_context(&sessions, 7);
+    assert_eq!(earlier.len(), 3);
+    assert!(
+        matches!(&earlier[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
+        "the opening message still renders first: {earlier:?}"
+    );
+    assert_eq!(earlier[1], user_input("two"));
+    assert_eq!(earlier[2], user_input("the handoff note"));
+    assert!(
+        earlier.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the hook context"))),
+        "the context past the point stays out: {earlier:?}"
+    );
+}
