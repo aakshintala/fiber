@@ -835,8 +835,8 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
 }
 
 /// The terminal watcher's cancel-settle-drop run, shared by the plain test
-/// and the slow-drop test above. With `Some(held_for)` the credential
-/// reaper stays held for that long before the test releases it.
+/// and the slow-drop test above. The credential reaper stays held in both
+/// runs; `held_for` sets how long the hold lasts before the test releases it.
 fn terminal_watcher_run(held_for: Option<Duration>) {
     let root = fakes::TempDir::new("fiber-terminal-watch");
     let ready = Ready::new(root.path());
