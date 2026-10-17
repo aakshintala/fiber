@@ -49,6 +49,18 @@ run "$tmp/dump" look-colour "$tmp/capture.txt" "$tmp/capture.ansi"
 [ "$out" = "look: differs look-colour rows=1 cells=1 diff=$PWD/target/look-diff/look-colour.diff" ] || fail "differs verdict: $out"
 grep -Fq "cell 0,0 fg" "$PWD/target/look-diff/look-colour.diff" || fail "diff names no fg cell: $(cat "$PWD/target/look-diff/look-colour.diff")"
 
+printf 'ab\r\ncd' >"$tmp/dump2"
+printf 'ab\ncd\n' >"$tmp/capture2.txt"
+printf 'ab\ncd' >"$tmp/capture2.ansi"
+run "$tmp/dump2" look-ansi-lf "$tmp/capture2.txt" "$tmp/capture2.ansi"
+[ "$rc" -eq 0 ] || fail "ansi lf exited $rc, want 0: $out"
+[ "$out" = "look: match look-ansi-lf" ] || fail "ansi lf verdict: $out"
+
+printf 'ab\r\ncd' >"$tmp/capture3.ansi"
+run "$tmp/dump2" look-ansi-crlf "$tmp/capture2.txt" "$tmp/capture3.ansi"
+[ "$rc" -eq 0 ] || fail "ansi crlf exited $rc, want 0: $out"
+[ "$out" = "look: match look-ansi-crlf" ] || fail "ansi crlf verdict: $out"
+
 run "$tmp/dump" look-missing "$tmp/no-such-capture.txt"
 [ "$rc" -eq 2 ] || fail "missing exited $rc, want 2: $out"
 [ "$out" = "look: error look-missing capture missing: $tmp/no-such-capture.txt" ] || fail "missing verdict: $out"

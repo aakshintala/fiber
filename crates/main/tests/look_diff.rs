@@ -100,6 +100,22 @@ fn first_difference(
     None
 }
 
+/// The `.ansi` capture with `tmux capture-pane -e -p` line endings:
+/// a bare LF moves the `vt100` cursor down without returning it, so
+/// each row after the first parses shifted. Folding every LF to CRLF
+/// replays the capture where the dump's CRLF rows land; the extra CR
+/// on an existing CRLF is a no-op column reset, so no guard is needed.
+fn crlf(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for &b in bytes {
+        if b == b'\n' {
+            out.push(b'\r');
+        }
+        out.push(b);
+    }
+    out
+}
+
 /// The verdict for look test `test`, writing the readable diff to `out`
 /// when the grids differ: `match` when no row differs, `differs` with
 /// the differing row and cell counts, `error` for a missing dump or
@@ -138,7 +154,7 @@ fn compare(test: &str, out: &str) -> String {
         Some(path) => match std::fs::read(&path) {
             Ok(bytes) => {
                 let mut parser = vt100::Parser::new(ROWS, COLS, 0);
-                parser.process(&bytes);
+                parser.process(&crlf(&bytes));
                 Some(parser.screen().clone())
             }
             Err(_) => return format!("look: error {test} ansi missing: {path}"),
