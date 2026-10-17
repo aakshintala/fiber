@@ -127,8 +127,8 @@ impl Loop {
     /// The opening message and its notices follow `preamble_built`, before
     /// `turn_started`.
     pub(crate) fn ensure_preamble(&mut self) -> Result<bool, Error> {
-        if self.late_due {
-            self.late_due = false;
+        if self.load_after_reload {
+            self.load_after_reload = false;
             let held = self.tools.len();
             self.load_approved()?;
             if self.tools.len() != held {

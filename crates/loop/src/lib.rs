@@ -297,7 +297,7 @@ pub struct Loop {
     /// Prepares a replacement configuration without changing the route.
     reloader: Option<PrepareReload>,
     /// A reload built before the process's post-offer load was due.
-    late_due: bool,
+    load_after_reload: bool,
     /// Switches admitted during a turn, applied at the next turn boundary.
     pending: Vec<Prepared>,
     /// The session's own thinking choice.
@@ -583,7 +583,7 @@ impl Loop {
             warming: warm::Warming::default(),
             switcher: None,
             reloader: None,
-            late_due: false,
+            load_after_reload: false,
             pending: Vec::new(),
             chosen,
             inbox_wake: None,

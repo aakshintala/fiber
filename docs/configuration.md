@@ -350,7 +350,12 @@ them:
 - at each turn start, `skills.disabled` only, with the check for added and
   removed skills (`docs/system-prompt.md`, "Added and removed skills")
 
-A reload fails as a start does. One a start would refuse, such as invalid configuration or a required extension that fails, is rejected with the start's code and changes nothing: the session keeps its configuration, tools and extensions, and writes no `reloaded`. A failure a start goes on past, such as an extension that is not required failing to load, writes the notice a start writes, and the rest of the reload applies.
+A reload fails as a start does. One a start would refuse, such as invalid
+configuration or a required extension that fails, is rejected with the start's
+code and changes nothing: the session keeps its configuration, tools and
+extensions, and writes no `reloaded`. A failure a start goes on past, such as
+an extension that is not required failing to load, writes the notice a start
+writes, and the rest of the reload applies.
 
 Nothing watches the files, so an idle Fiber does no work. A value written with
 `host.config.set` is visible to that extension at once, and to other sessions

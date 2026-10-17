@@ -165,6 +165,62 @@ fn a_shared_prompt_reload_drain_admits_carried_state_only_through_new_hooks() {
     assert!(calls.iter().any(|call| call == "new admit"));
 }
 
+#[test]
+fn reload_to_an_empty_extension_set_keeps_replacement_hooks_attached() {
+    let mut session = Session::new(vec![Scripted::text("done")], None);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let installed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hooks = |identity| {
+        Arc::new(StateHooks {
+            identity,
+            installed: installed.clone(),
+            calls: calls.clone(),
+            pass: support::CountingHooks::new(),
+            outbox: Mutex::new(Vec::new()),
+            carried: Mutex::new(Vec::new()),
+        })
+    };
+    session.looped = Some(session.looped.take().unwrap().hooks(hooks("old")));
+    let new = hooks("new");
+    attach(
+        &mut session,
+        Arc::new(move |_| {
+            let mut next = prepared();
+            next.extensions.clear();
+            next.hooks = Some(new.clone());
+            Ok(next)
+        }),
+    );
+    session
+        .inbox
+        .send(Delivery::Reload(support::ignore()))
+        .unwrap();
+    session.inbox.send(delivery("hello")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "session_started",
+                "reloaded",
+                "extensions_loaded",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert_eq!(
+        of_kind(&lines, "extensions_loaded")[0].payload["extensions"],
+        serde_json::json!([])
+    );
+    assert!(calls.lock().unwrap().iter().any(|call| call == "new take"));
+}
+
 fn prepared() -> ReloadPrepared {
     ReloadPrepared {
         prompt: PromptPatch {
@@ -568,10 +624,20 @@ fn post_offer_load_rebuilds_only_when_it_registers_a_tool() {
 fn rejected_preparation_keeps_the_preamble_and_allows_a_later_reload() {
     for code in [ErrorCode::ConfigInvalid, ErrorCode::IoFailed] {
         let mut session = Session::new(vec![Scripted::text("one"), Scripted::text("two")], None);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        session.looped = Some(session.looped.take().unwrap().hooks(Arc::new(StateHooks {
+            identity: "old",
+            installed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            calls: calls.clone(),
+            pass: support::CountingHooks::new(),
+            outbox: Mutex::new(Vec::new()),
+            carried: Mutex::new(Vec::new()),
+        })));
         session.inbox.send(delivery("one")).unwrap();
         session.turn();
         session.lines();
         let old = session.provider.requests()[0].system_prompt.clone();
+        calls.lock().unwrap().clear();
         let rejected = code.clone();
         attach(
             &mut session,
@@ -601,5 +667,6 @@ fn rejected_preparation_keeps_the_preamble_and_allows_a_later_reload() {
         );
         assert_kinds(&session.lines(), &[&["turn_started"], STEP, REPLY, ENDED]);
         assert_eq!(session.provider.requests()[1].system_prompt, old);
+        assert!(calls.lock().unwrap().iter().any(|call| call == "old take"));
     }
 }

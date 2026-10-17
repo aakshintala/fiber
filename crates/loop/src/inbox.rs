@@ -709,7 +709,11 @@ impl Loop {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
-                    reject(ack, ErrorCode::Busy, crate::rewind::command::TURN_RUNNING);
+                    reject(
+                        ack,
+                        ErrorCode::Busy,
+                        "A turn is running; reload once it ends.",
+                    );
                 }
             }
             // The person's name starts no turn, so it is taken after

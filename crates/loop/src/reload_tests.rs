@@ -45,12 +45,48 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
         Ok(prepared())
     }));
     let (ack, rx) = ack();
+    let offer = contract::events::RepositoryCodeOffered {
+        request_id: contract::RequestId("r_reload".into()),
+        items: Vec::new(),
+    };
+    let mut folded = crate::offer::Folded::default();
+    folded.fold(&contract::events::Event::RepositoryCodeOffered(
+        offer.clone(),
+    ));
+    w.looped.repository = crate::offer::State::resumed(folded);
     w.looped
-        .deferred
-        .push_back(contract::inbox::Delivery::Reload(ack));
-    w.looped
-        .deferred
-        .push_back(contract::inbox::Delivery::Close(Ack(Box::new(|_| {}))));
+        .log
+        .append(
+            &contract::events::Event::Clients(contract::events::Clients { count: 1 }),
+            None,
+            None,
+        )
+        .unwrap();
+    w.looped.answerable = true;
+    w.looped = w.looped.repository_code(Arc::new(EmptyRepository));
+    w.inbox
+        .send(contract::inbox::Delivery::Reload(ack))
+        .unwrap();
+    w.inbox
+        .send(contract::inbox::Delivery::Reply(
+            contract::commands::Reply {
+                request_id: offer.request_id,
+                answer: contract::commands::ReplyAnswer::Decisions {
+                    decisions: Vec::new(),
+                },
+            },
+            Ack(Box::new(|_| {})),
+        ))
+        .unwrap();
+    assert!(w.looped.reraise_offer().unwrap());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        w.looped.deferred.front(),
+        Some(contract::inbox::Delivery::Reload(_))
+    ));
+    w.inbox
+        .send(contract::inbox::Delivery::Close(Ack(Box::new(|_| {}))))
+        .unwrap();
     assert!(w.looped.turn().unwrap().is_none());
     assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -58,11 +94,26 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
         kinds(&w.looped),
         [
             "session_started",
+            "repository_code_offered",
+            "repository_code_resolved",
             "reloaded",
             "extensions_loaded",
             "preamble_built"
         ]
     );
+}
+struct EmptyRepository;
+impl contract::repository::RepositoryCode for EmptyRepository {
+    fn unapproved(&self) -> Result<Vec<contract::repository::Unapproved>, Failure> {
+        Ok(Vec::new())
+    }
+    fn decide(
+        &self,
+        _: &contract::events::OfferedItem,
+        _: contract::events::OfferDecision,
+    ) -> Result<contract::repository::Decided, Failure> {
+        unreachable!("the pending offer has no items")
+    }
 }
 struct EmptyRules;
 impl Rules for EmptyRules {
@@ -76,6 +127,7 @@ impl Rules for EmptyRules {
 
 struct World {
     looped: Loop,
+    inbox: mpsc::Sender<contract::inbox::Delivery>,
     _home: fakes::TempDir,
 }
 fn world() -> World {
@@ -84,7 +136,7 @@ fn world() -> World {
     let log = Arc::new(
         log::Log::create(home.path(), SessionId("s_reload".into()), clock.clone()).unwrap(),
     );
-    let (_, inbox) = mpsc::channel();
+    let (sender, inbox) = mpsc::channel();
     let looped = Loop::start(
         crate::Session {
             log,
@@ -115,6 +167,7 @@ fn world() -> World {
     .unwrap();
     World {
         looped,
+        inbox: sender,
         _home: home,
     }
 }
@@ -199,8 +252,12 @@ fn closing_busy_and_rewound_refuse_without_preparing_or_writing() {
                     .unwrap();
             }
         }
+        let rejection = Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err();
+        if state == "busy" {
+            assert_eq!(rejection.message, "A turn is running; reload once it ends.");
+        }
         assert_eq!(
-            Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err().code,
+            rejection.code,
             if state == "busy" {
                 ErrorCode::Busy
             } else {
@@ -290,6 +347,8 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
 
 #[test]
 fn a_preparer_cancel_rejects_without_applying() {
+    // debt: Part 1 tests the cancellation rejection only; Part 2's shutdown
+    // wiring must prove that cancelling the prepare wait ends the loop.
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         Err(Rejection {
