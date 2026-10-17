@@ -54,13 +54,17 @@ impl Messages {
     )]
     pub fn request(&self, request: &ModelRequest) -> Call {
         let endpoint = &self.endpoint;
+        let auth = endpoint.key.as_ref().map(|key| {
+            if endpoint.compat.bearer {
+                ("authorization", format!("Bearer {}", key.expose()))
+            } else {
+                ("x-api-key", key.expose().to_owned())
+            }
+        });
         let headers = crate::call::base_headers(
             endpoint,
             &[("anthropic-version", ANTHROPIC_VERSION)],
-            endpoint
-                .key
-                .as_ref()
-                .map(|key| ("x-api-key", key.expose().to_owned())),
+            auth,
             self.cache_key_header.as_deref(),
             &request.cache_key,
         );

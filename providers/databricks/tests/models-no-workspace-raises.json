@@ -1,0 +1,13 @@
+{
+  "call": {
+    "provider": "databricks",
+    "function": "models",
+    "arg": {
+      "key": "dapi-test"
+    }
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/databricks`: databricks models: no workspace host"
+  }
+}

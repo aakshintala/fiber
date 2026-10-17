@@ -130,7 +130,7 @@ fn refreshed(
     let loaded = load(config);
     notices.extend(
         providers
-            .add_session(&loaded, config, run)
+            .add_session(&loaded, config, run, &|name| std::env::var(name).ok())
             .into_iter()
             .map(|notice| notice.message),
     );
@@ -139,7 +139,11 @@ fn refreshed(
         .iter()
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
-    for (name, handle) in extensions::refresh_lists(&wanted, providers, config, max_age, run) {
+    for (name, handle) in
+        extensions::refresh_lists(&wanted, providers, config, max_age, run, &|name| {
+            std::env::var(name).ok()
+        })
+    {
         match handle.join() {
             Ok(Ok(models)) => {
                 // The caller exposes text, not notice extension metadata.

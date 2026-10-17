@@ -487,11 +487,14 @@ pub(crate) fn run_new(
     // them through the fetch below (`docs/mcp.md`, "Prompts and
     // resources"). Shadowed prompts join the startup notices.
     let prompt_rows = session_servers.prompts.commands();
-    let listed = r#loop::commands(&prompt_inputs, &workspace, &prompt_rows);
+    let listed = r#loop::commands(
+        &prompt_inputs,
+        &workspace,
+        &prompt_rows,
+        &extensions.commands(),
+    );
     mcp.notices.extend(listed.notices);
-    let mut all_commands = listed.rows;
-    all_commands.extend(extensions.commands());
-    session.commands(all_commands);
+    session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
         declare: session.declarer(),

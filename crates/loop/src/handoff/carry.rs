@@ -20,6 +20,8 @@ pub(crate) struct Carry {
     pub(crate) inner: HashSet<ActionId>,
     /// The conversation's length at the open `handoff_started`.
     pub(crate) window: Option<usize>,
+    /// The conversation's length before the rewind summary turn.
+    pub(crate) summary: Option<usize>,
     /// This turn's input: its message items and the steering messages
     /// applied, in log order. A handoff carries it verbatim.
     pub(crate) input: Vec<Input>,
@@ -58,6 +60,23 @@ pub(crate) struct Carry {
 }
 
 impl Carry {
+    /// Opens the summary's temporary conversation without replacing turn input.
+    pub(crate) fn open_summary(&mut self, at: usize) {
+        self.summary = Some(at);
+    }
+
+    /// Removes the summary turn's context on completion or after a crash.
+    pub(crate) fn close_summary(&mut self, conversation: &mut Vec<Input>) {
+        if let Some(at) = self.summary.take() {
+            conversation.truncate(at);
+        }
+    }
+
+    /// Whether rendered lines belong to a rewind summary turn.
+    pub(crate) fn in_summary(&self) -> bool {
+        self.summary.is_some()
+    }
+
     /// Takes the opening slot: every rendered durable event clears it,
     /// and the opening and context arms below set what follows.
     pub(crate) fn take_after_opening(&mut self) -> Option<usize> {
@@ -194,6 +213,9 @@ impl Carry {
 
     /// A call of the last reply was requested.
     pub(crate) fn call_requested(&mut self, action: &ActionId, call: &Input) {
+        if self.in_summary() {
+            return;
+        }
         self.step.push(StepCall {
             action: action.clone(),
             call: call.clone(),

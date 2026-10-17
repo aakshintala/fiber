@@ -568,8 +568,8 @@ impl Loop {
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
-            Delivery::Rewind(args, ack) => {
-                self.take_rewind(args, ack, input)?;
+            Delivery::Rewind(id, args, ack) => {
+                self.take_rewind(id, args, ack, input)?;
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -722,7 +722,7 @@ impl Loop {
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
             // While a turn runs the session cannot close first: rewind
             // once it ends.
-            Delivery::Rewind(_, ack) => {
+            Delivery::Rewind(_, _, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {

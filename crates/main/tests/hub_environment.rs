@@ -13,7 +13,7 @@
 
 mod support;
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -370,15 +370,24 @@ impl FakeShell {
 }
 
 /// Waits under the test's [`Deadline`] until `socket` is gone, naming
-/// `what`.
+/// `what`: the hub holds the `run/` flock until `serve` returns, after
+/// unlinking the socket, so a returned flock means the hub is gone.
 #[track_caller]
 fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
-    while socket.exists() {
-        if deadline.left().is_zero() {
-            panic!("waited until the deadline for {what}");
+    let run = socket.parent().map(Path::to_owned);
+    let socket = socket.to_owned();
+    let what = what.to_owned();
+    bounded(deadline, &what.clone(), move || {
+        if let Some(run) = run
+            && let Ok(file) = File::open(&run)
+        {
+            file.lock().unwrap();
         }
-        thread::yield_now();
-    }
+        assert!(
+            !socket.exists(),
+            "{what}: the hub exited but left its socket"
+        );
+    });
 }
 
 #[test]
