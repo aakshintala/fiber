@@ -240,7 +240,7 @@ fn lock_of(path: &Path) -> PathBuf {
 #[test]
 fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello(), write_call("note.txt", "hi\n"), hello()]).unwrap();
+    let server = ProviderServer::start([support::hello(), write_call("note.txt", "hi\n"), support::hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
@@ -360,7 +360,7 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
 #[test]
 fn a_hub_resume_removes_a_clean_recreated_worktree_at_the_end() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
@@ -429,9 +429,9 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
     let setup = Setup::new();
     let server = ProviderServer::start([
         write_call("kept.txt", "x"),
-        hello(),
+        support::hello(),
         write_call("again.txt", "y"),
-        hello(),
+        support::hello(),
     ])
     .unwrap();
     setup.provider(&server);
@@ -539,7 +539,7 @@ fn a_hub_resume_of_a_kept_worktree_runs_in_it_and_never_removes_it() {
 #[test]
 fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_nothing() {
     let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([support::hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
