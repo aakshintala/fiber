@@ -323,6 +323,7 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
         commands.iter().any(|c| c["name"] == "sync-now"
             && c["description"] == "Sync now."
             && c["tag"] == "fiber.test/worker"
+            && c["extension"] == true
             && c.get("argument_hint").is_none()),
         "{result}"
     );
@@ -1044,4 +1045,94 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
         ]
     );
     assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.lua("worker", SYNC);
+    let dir = setup.workspace().join(".agents/skills/sync-now");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: sync-now\ndescription: Syncs the workspace.\n---\nBody.\n",
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let lines = until(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    let commands = result["commands"].as_array().unwrap();
+    let syncs: Vec<&Value> = commands
+        .iter()
+        .filter(|c| c["name"] == "sync-now")
+        .collect();
+    assert_eq!(syncs.len(), 1, "{result}");
+    assert_eq!(syncs[0]["tag"], "skill", "{result}");
+    assert!(syncs[0].get("extension").is_none(), "{result}");
+    send(
+        &client,
+        r#"{"id":"c_run","command":"command","args":{"name":"sync-now","text":"x"}}"#,
+    );
+    let ran = until(&client, "the command answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
+    });
+    assert!(!ran.is_empty());
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    // `clients` is set aside: written when the connection attaches, with
+    // no position against the session's other lines (`docs/testing.md`,
+    // "Event streams"); one attach writes exactly one.
+    assert_eq!(
+        kinds(&out)
+            .into_iter()
+            .filter(|kind| *kind != "clients")
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "extension_ui",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        kinds(&out)
+            .iter()
+            .filter(|kind| **kind == "clients")
+            .count(),
+        1
+    );
+    let notices: Vec<&Value> = out
+        .iter()
+        .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "skill_shadowed")
+        .collect();
+    assert_eq!(notices.len(), 1, "{out:?}");
+    assert!(
+        notices[0]["payload"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fiber.test/worker")
+            && notices[0]["payload"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sync-now"),
+        "{:?}",
+        notices[0]
+    );
 }

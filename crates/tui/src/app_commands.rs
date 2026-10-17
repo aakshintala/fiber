@@ -36,6 +36,9 @@ pub(super) struct Overlays {
     /// The `/` list: built-in commands, then the attached session's
     /// `commands` answer.
     slash_rows: Vec<slash::Row>,
+    /// The extension commands of the latest `commands` answer, in answer
+    /// order: only its answer fills the list.
+    extensions: Vec<String>,
     /// The id of the latest `commands` sent; only its answer fills the list.
     commands_id: Option<String>,
     /// Esc closed the `/` panel for this draft.
@@ -55,6 +58,7 @@ impl Default for Overlays {
     fn default() -> Self {
         Self {
             slash_rows: slash::rows(&[]),
+            extensions: Vec::new(),
             commands_id: None,
             slash_closed: false,
             selected: 0,
@@ -444,10 +448,10 @@ impl App {
         Some(Effect::None)
     }
 
-    /// Runs the draft when its first word is a built-in command; `None`
-    /// when it is not one, and the draft goes out as typed. A draft
-    /// holding an image is never a built-in command: Enter sends it as a
-    /// prompt.
+    /// Runs the draft when its first word is an extension command or a
+    /// built-in command; `None` when it is neither, and the draft goes out
+    /// as typed. A draft holding an image is never a command: Enter sends
+    /// it as a prompt.
     pub(super) fn built_in(&mut self) -> Option<Effect> {
         if self.draft.has_image() {
             return None;
@@ -456,6 +460,15 @@ impl App {
         let draft = draft.trim();
         let (head, rest) = draft.split_once(char::is_whitespace).unwrap_or((draft, ""));
         let name = head.strip_prefix('/')?;
+        if self.overlays.extensions.iter().any(|known| known == name) {
+            let rest = rest.trim();
+            let args = if rest.is_empty() {
+                Some(json!({"name": name}))
+            } else {
+                Some(json!({"name": name, "text": rest}))
+            };
+            return Some(self.send_command("command", args));
+        }
         if !slash::is_built_in(name) {
             return None;
         }
@@ -504,11 +517,13 @@ impl App {
             "rules" => self.open_config_view(super::ConfigView::Rules),
             "login" => self.open_config_view(super::ConfigView::Login),
             // `?` and `help`.
-            _ => {
+            "?" | "help" => {
                 self.draft.clear();
                 self.overlays.keymap = Some(KeyMap::default());
                 Effect::None
             }
+            // A built-in the terminal does not run goes out as typed.
+            _ => return None,
         };
         Some(effect)
     }
@@ -538,6 +553,7 @@ impl App {
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();
         self.overlays.slash_rows = slash::rows(&[]);
+        self.overlays.extensions.clear();
         self.overlays.commands_id = None;
     }
 
@@ -624,9 +640,12 @@ impl App {
 
     /// A `commands` line for `session`, sent on attach and after each
     /// `reloaded`; its answer, and no older one, fills the `/` list.
+    /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         let id = mint();
         let line = session_command(&id, "commands", session, None).to_string();
+        self.overlays.slash_rows = slash::rows(&[]);
+        self.overlays.extensions.clear();
         self.overlays.commands_id = Some(id);
         line
     }
@@ -639,6 +658,7 @@ impl App {
         }
         if let Some(CommandResult::Commands { commands }) = &accepted.result {
             self.overlays.slash_rows = slash::rows(commands);
+            self.overlays.extensions = slash::extensions(commands);
             self.overlays.commands_id = None;
         }
     }

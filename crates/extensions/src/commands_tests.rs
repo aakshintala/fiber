@@ -129,6 +129,7 @@ fn list_is_sorted_with_tags_and_no_argument_hint() {
     let built = SessionCommands::build(&all, &config_with(&home, &[]));
     let list = built.list();
     assert_eq!(list.len(), 2);
+    assert!(list.iter().all(|row| row.extension), "{list:?}");
     assert_eq!(list[0].name, "alpha");
     assert_eq!(list[0].description, "A");
     assert_eq!(list[0].argument_hint, None);
