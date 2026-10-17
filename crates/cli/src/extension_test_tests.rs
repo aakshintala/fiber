@@ -28,8 +28,8 @@ use serde_json::json;
 
 use super::{
     ChildEnvironment, MAX_SOCKET_PATH, RunDirectory, RunOptions, RunTimeouts, WaitSignal,
-    child_command, discover_cases, extension_test, extension_test_with, group_alive,
-    longest_planned_socket, process_group_id, signal_group,
+    child_command, default_group_probe, default_group_signal, discover_cases, extension_test,
+    extension_test_with, longest_planned_socket,
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
@@ -83,8 +83,8 @@ impl Setup {
             },
             temp_root: PathBuf::from("/tmp"),
             fiber_prefix,
-            group_signal: Arc::new(signal_group),
-            group_probe: group_alive,
+            group_signal: Arc::new(default_group_signal),
+            group_probe: default_group_probe,
         }
     }
 }
@@ -474,7 +474,7 @@ fn group_alive_distinguishes_a_reaped_group_from_a_live_group() {
         .unwrap();
     let exited_group = exited.id();
     assert!(wait_child(exited).success());
-    assert!(!group_alive(exited_group).unwrap());
+    assert!(!default_group_probe(exited_group).unwrap());
 
     let live = Command::new("/bin/sleep")
         .arg("60")
@@ -483,10 +483,10 @@ fn group_alive_distinguishes_a_reaped_group_from_a_live_group() {
         .unwrap();
     let live_group = live.id();
     let watchdog = Watchdog::group(live_group);
-    assert!(group_alive(live_group).unwrap());
+    assert!(default_group_probe(live_group).unwrap());
     assert!(fakes::kill_group(live_group, "KILL").unwrap());
     let _status = wait_child(live);
-    assert!(!group_alive(live_group).unwrap());
+    assert!(!default_group_probe(live_group).unwrap());
     watchdog.stand_down(TEST_WAIT);
 }
 
@@ -620,10 +620,10 @@ fn prepare_wait_clears_an_earlier_wake_and_a_later_wake_releases_the_wait() {
 
 #[test]
 fn process_group_ids_that_could_signal_everyone_are_refused() {
-    assert!(process_group_id(0).is_err());
-    assert!(process_group_id(1).is_err());
-    assert!(process_group_id(2).is_ok());
-    assert!(process_group_id(u32::MAX).is_err());
+    assert!(support::group::refused(0));
+    assert!(support::group::refused(1));
+    assert!(!support::group::refused(2));
+    assert!(support::group::signal(u32::MAX, Signal::TERM).is_err());
 }
 
 #[test]

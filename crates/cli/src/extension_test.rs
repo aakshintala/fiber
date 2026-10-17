@@ -17,7 +17,7 @@ use crate::{failed, finish_code, write_line};
 use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
 use extensions::{Origin, Request};
-use rustix::process::{Pid, Signal};
+use rustix::process::Signal;
 
 const CASE_DEADLINE: Duration = Duration::from_secs(60);
 const SECOND_SIGTERM_GAP: Duration = Duration::from_secs(1);
@@ -94,8 +94,8 @@ pub fn extension_test(
         environment: ChildEnvironment::from_process(),
         temp_root: std::env::temp_dir(),
         fiber_prefix: Vec::new(),
-        group_signal: Arc::new(signal_group),
-        group_probe: group_alive,
+        group_signal: Arc::new(default_group_signal),
+        group_probe: default_group_probe,
     };
     extension_test_with(
         path,
@@ -560,32 +560,23 @@ fn after(clock: &dyn Clock, duration: Duration) -> Instant {
         .unwrap_or_else(|| clock.now())
 }
 
-fn signal_group(group: u32, signal: Signal) -> io::Result<()> {
-    let id = process_group_id(group)?;
-    match rustix::process::kill_process_group(id, signal) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-        Err(error) => Err(io::Error::from_raw_os_error(error.raw_os_error())),
-    }
-}
-
-fn group_alive(group: u32) -> io::Result<bool> {
-    let id = process_group_id(group)?;
-    Ok(rustix::process::test_kill_process_group(id).is_ok())
-}
-
-/// Refuses a process-group id that could reach processes outside this case
-/// (`docs/testing.md`, "Running tests").
-fn process_group_id(group: u32) -> io::Result<Pid> {
-    if group <= 1 {
-        return Err(io::Error::new(
+/// Sends `signal` to a case group through the shared helper, keeping the
+/// runner's wording for a refused or failing id.
+fn default_group_signal(group: u32, signal: Signal) -> io::Result<()> {
+    support::group::signal(group, signal).map_err(|error| match error {
+        support::group::Error::Refused(id) => io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("refusing to signal process group {group}"),
-        ));
-    }
-    i32::try_from(group)
-        .ok()
-        .and_then(Pid::from_raw)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "process group id overflow"))
+            format!("refusing to signal process group {id}"),
+        ),
+        support::group::Error::Signal { source, .. } => source,
+        support::group::Error::Spawn(error) => error,
+    })
+}
+
+/// Probes a case group through the shared helper. A refused or vanished id
+/// reads empty, so the probe never fails.
+fn default_group_probe(group: u32) -> io::Result<bool> {
+    Ok(support::group::alive(group))
 }
 
 #[derive(Default)]
