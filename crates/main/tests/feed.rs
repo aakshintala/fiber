@@ -167,7 +167,7 @@ fn client(setup: &Setup) -> Socket {
 #[track_caller]
 fn feed(client: &Socket) {
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = recv_reply(client, "the feed acknowledgement");
+    let ack = recv_answer(client, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_feed");
 }
@@ -176,7 +176,7 @@ fn feed(client: &Socket) {
 #[track_caller]
 fn recent(client: &Socket, args: &Value) -> Vec<String> {
     client.send(&json!({"id": "c_recent", "command": "recent", "args": args}).to_string());
-    let ack = recv_reply(client, "the recent answer");
+    let ack = recv_answer(client, "c_recent", "the recent answer");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     ack["payload"]["result"]["sessions"]
         .as_array()
@@ -388,7 +388,7 @@ fn a_killed_session_is_crashed_until_dismissed() {
     fresh.send(
         &json!({"id": "c_dismiss", "command": "dismiss", "args": {"session": id}}).to_string(),
     );
-    let ack = recv(&fresh, "the dismissal");
+    let ack = recv_answer(&fresh, "c_dismiss", "the dismissal");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     let again = client(&setup);
     again.send(
