@@ -21,6 +21,42 @@ mod lua;
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub use lua::observe_load;
+
+#[cfg(any(test, feature = "test-hooks"))]
+type LoginWaitObserver = (String, Box<dyn FnOnce(std::thread::ThreadId) + Send>);
+#[cfg(any(test, feature = "test-hooks"))]
+static LOGIN_WAIT_OBSERVERS: std::sync::Mutex<Vec<LoginWaitObserver>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Runs `notify` once with the VM thread's id when the extension records a login wait.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub fn observe_login_wait(
+    extension: String,
+    notify: Box<dyn FnOnce(std::thread::ThreadId) + Send>,
+) {
+    LOGIN_WAIT_OBSERVERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((extension, notify));
+}
+
+/// Fires one login-wait observer, holding no lock while it runs.
+#[cfg(any(test, feature = "test-hooks"))]
+pub(crate) fn login_wait_recorded(extension: &str) {
+    let notify = {
+        let mut observers = LOGIN_WAIT_OBSERVERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        observers
+            .iter()
+            .position(|(name, _)| name == extension)
+            .map(|index| observers.remove(index).1)
+    };
+    if let Some(notify) = notify {
+        notify(std::thread::current().id());
+    }
+}
 mod lua_cost;
 mod lua_provider;
 mod manage;

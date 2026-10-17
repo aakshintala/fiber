@@ -51,6 +51,7 @@ fn bare(
     clock: &Arc<FakeClock>,
     browser: Arc<Recording>,
     body: &str,
+    name: &str,
 ) -> Arc<LuaProvider> {
     let dir = setup.root().join("acme");
     write(
@@ -65,7 +66,7 @@ end }} }})
         ),
     );
     let ext =
-        Arc::new(LuaExtension::new("acme", dir, setup.home(), clock.clone()).with_browser(browser));
+        Arc::new(LuaExtension::new(name, dir, setup.home(), clock.clone()).with_browser(browser));
     let loaded = ext.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -80,20 +81,26 @@ end }} }})
     LuaProvider::new(ext, "acme")
 }
 
-fn advance_login_deadline(clock: &FakeClock, deadline: std::time::Instant) {
-    let wait = Deadline::after(WAIT);
-    let grace = deadline.checked_add(Duration::from_secs(1)).unwrap();
-    assert!(
-        clock.await_parked_count(grace, 1, wait.left()),
-        "caller waiting past the deadline"
+fn login_wait(name: &str) -> mpsc::Receiver<std::thread::ThreadId> {
+    let (tx, rx) = mpsc::channel();
+    extensions::observe_login_wait(
+        name.into(),
+        Box::new(move |thread| tx.send(thread).unwrap_or(())),
     );
-    let mark = clock.mark_parked(deadline, wait.left()).unwrap();
-    let threads = mark.threads();
-    assert_eq!(threads.len(), 1, "only the VM waits at the login deadline");
+    rx
+}
+
+fn advance_login_deadline(
+    clock: &FakeClock,
+    deadline: std::time::Instant,
+    ready: &mpsc::Receiver<std::thread::ThreadId>,
+) {
+    let wait = Deadline::after(WAIT);
+    let thread = wait.recv_or_fail(ready, "the callback's login wait recorded");
     clock.advance_when_parked(
         Some(deadline),
-        threads.first().copied(),
-        Duration::from_secs(3),
+        Some(thread),
+        deadline.saturating_duration_since(clock.now()),
         &wait,
     );
 }
@@ -115,13 +122,16 @@ fn callback_login_expires_as_authentication_failed_and_frees_its_port() {
         &format!(
             "host.oauth.open('https://login.example/verify'); host.oauth.callback({{port={port}}}); return 'unused'"
         ),
+        "callback-login",
     );
+    let ready = login_wait("callback-login");
     let deadline = clock.now().checked_add(Duration::from_secs(3)).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        tx.send(provider.credential_token(&pair("acme", "default"))).unwrap_or(());
+        tx.send(provider.credential_token(&pair("acme", "default")))
+            .unwrap_or(());
     });
-    advance_login_deadline(&clock, deadline);
+    advance_login_deadline(&clock, deadline, &ready);
     let error = Deadline::after(WAIT)
         .recv_or_fail(&rx, "credential callback timed out")
         .unwrap_err();
@@ -156,18 +166,21 @@ fn a_poll_sleep_past_the_credential_deadline_is_not_wrapped() {
             "host.oauth.poll({{url='{}', body='device_code=d'}}); return 'unused'",
             server.url()
         ),
+        "poll-login",
     );
+    let ready = login_wait("poll-login");
     let deadline = clock.now().checked_add(Duration::from_secs(3)).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        tx.send(provider.token(&pair("acme", "default"))).unwrap_or(());
+        tx.send(provider.token(&pair("acme", "default")))
+            .unwrap_or(());
     });
     assert!(
         server.await_requests(1, WAIT),
         "poll request arrived; early result: {:?}",
         rx.try_recv()
     );
-    advance_login_deadline(&clock, deadline);
+    advance_login_deadline(&clock, deadline, &ready);
     let error = Deadline::after(WAIT)
         .recv_or_fail(&rx, "credential poll timed out")
         .unwrap_err();
