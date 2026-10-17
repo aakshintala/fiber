@@ -21,7 +21,7 @@ pub(crate) struct Carry {
     /// The conversation's length at the open `handoff_started`.
     pub(crate) window: Option<usize>,
     /// The conversation's length before the rewind summary turn.
-    summary: Option<usize>,
+    pub(crate) summary: Option<usize>,
     /// This turn's input: its message items and the steering messages
     /// applied, in log order. A handoff carries it verbatim.
     pub(crate) input: Vec<Input>,
