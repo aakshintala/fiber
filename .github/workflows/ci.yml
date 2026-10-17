@@ -654,27 +654,6 @@ jobs:
           fi
           perf --version || true
           sudo sh -c 'echo -1 > /proc/sys/kernel/perf_event_paranoid' || true
-          # PROBE round-3 retry: round 3 recorded nothing because tracefs
-          # denied the event read (run 38989579413). The perf hint first,
-          # the chmod fallback second; the log says which one ran.
-          if sudo mount -o remount,mode=755 /sys/kernel/tracing 2>/dev/null; then
-            echo "probe-mmap: tracefs fix ran: remount mode=755 /sys/kernel/tracing"
-          else
-            sudo chmod -R a+rX /sys/kernel/tracing /sys/kernel/debug/tracing 2>/dev/null || true
-            echo "probe-mmap: tracefs fix ran: chmod fallback (remount failed)"
-          fi
-          # Prove the event is readable before any recording or probe
-          # build. Either line working proves readability; both failing
-          # stops the probe step cleanly without failing the job.
-          perf list 'syscalls:sys_enter_mmap' 2>&1 | sed "s/^/probe-mmap: perf list: /" || true
-          mmap_id=$(cat /sys/kernel/tracing/events/syscalls/sys_enter_mmap/id 2>/dev/null || true)
-          if [ -n "$mmap_id" ]; then
-            echo "probe-mmap: tracefs event id: syscalls:sys_enter_mmap id=$mmap_id"
-          else
-            echo "probe-mmap: tracefs unreadable after fix"
-            echo "probe-mmap: done (tracefs unreadable; probe stopped cleanly)"
-            exit 0
-          fi
           echo "probe-mmap: sampler is perf record -e syscalls:sys_enter_mmap -c <c> --call-graph dwarf,16384; no frame pointers (musl static libc has none); build flag CARGO_PROFILE_RELEASE_DEBUG=line-tables-only on the probe builds only; the release profile files stay unchanged"
           # perf script summarizer, read from the script output: one TOTAL
           # line, one SITE line per call site, one LEN line per site and
