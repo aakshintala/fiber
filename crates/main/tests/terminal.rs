@@ -582,7 +582,7 @@ fn resize_redraws_the_grid_at_the_new_size() {
     let mut run = terminal(&setup, 120, 32, &[], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
-    // The footer's last word proves the last row drew before the resize.
+    // The footer's first words prove the last row drew before the resize.
     run.wait_screen("the footer", |grid| {
         grid.contents.contains("Enter opens the focused session")
     });
