@@ -62,14 +62,7 @@ fn test_host(
             subscription: false,
         })
     });
-    ModelHost::new(
-        reach,
-        budget,
-        &retry,
-        dir,
-        SessionId(id.to_owned()),
-        test_clock(),
-    )
+    ModelHost::new(reach, budget, &retry, dir, SessionId(id.to_owned()))
 }
 
 /// A retry policy that waits no time between attempts, so retry tests park
@@ -654,7 +647,6 @@ fn three_retries_make_one_reach() {
         &immediate_retry(),
         dir,
         SessionId("s_1".to_owned()),
-        test_clock(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
     let reply = ok(host.call(
@@ -705,7 +697,6 @@ fn in_flight_call_keeps_its_reached_provider() {
         &immediate_retry(),
         dir,
         SessionId("s_1".to_owned()),
-        test_clock(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
     let reply = ok(host.call(
@@ -752,7 +743,6 @@ fn reached_cost_prices_the_line() {
         &immediate_retry(),
         dir,
         SessionId("s_1".to_owned()),
-        test_clock(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
     ok(host.call(
@@ -782,7 +772,6 @@ fn reached_cost_prices_the_line() {
         &immediate_retry(),
         dir,
         SessionId("s_1".to_owned()),
-        test_clock(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
     ok(host.call(
@@ -828,7 +817,6 @@ fn reach_failure_sends_nothing_and_releases_the_gate() {
         &immediate_retry(),
         dir,
         SessionId("s_1".to_owned()),
-        test_clock(),
     );
     let held = Arc::new(Mutex::new(Vec::new()));
     let failure = err(host.call(

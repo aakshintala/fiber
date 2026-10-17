@@ -123,15 +123,13 @@ impl ModelHost {
     /// and connects it with the session's current credential label. The
     /// retry policy arrives by reference: the session's later steps still
     /// own it (`Retry` has public fields and no `Clone`, so its fields
-    /// are copied here). The clock rides the call's bound, so the build
-    /// keeps none.
+    /// are copied here).
     pub(crate) fn new(
         reach: Reach,
         budget: Option<f64>,
         retry: &r#loop::Retry,
         dir: PathBuf,
         id: SessionId,
-        _clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             reach,
