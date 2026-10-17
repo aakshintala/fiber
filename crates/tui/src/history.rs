@@ -46,8 +46,9 @@ struct Search {
 /// The recall list's sources, the paging state, browsing and search.
 #[derive(Debug, Default)]
 pub(super) struct History {
-    /// The project key `prompt_history` names.
-    project: String,
+    /// The project key `prompt_history` names; with none, no page is
+    /// asked for.
+    project: Option<String>,
     /// Prompts the terminal saw a session take, oldest first: the session
     /// and the prompt's text.
     own: Vec<(SessionId, String)>,
@@ -75,7 +76,7 @@ pub(super) struct History {
 
 impl History {
     /// Sets the project key.
-    pub(super) fn set_project(&mut self, project: String) {
+    pub(super) fn set_project(&mut self, project: Option<String>) {
         if self.project != project {
             self.project = project;
             self.hub.clear();
@@ -142,11 +143,12 @@ impl History {
     /// the last answer said older lines remain.
     fn fetch(&mut self, up: bool) -> Option<String> {
         let more = !self.started || self.before.is_some();
-        if self.project.is_empty() || !up || self.pending.is_some() || self.ended || !more {
+        let project = self.project.clone()?;
+        if !up || self.pending.is_some() || self.ended || !more {
             return None;
         }
         let id = mint();
-        let mut args = json!({ "project": self.project });
+        let mut args = json!({ "project": project });
         if let (Some(before), Some(object)) = (self.before, args.as_object_mut()) {
             object.insert("before".to_owned(), json!(before));
         }
@@ -215,22 +217,17 @@ impl History {
 }
 
 impl App {
-    fn sync_remote_project(&mut self) {
-        if self.remote_hub().is_some() {
-            let workspace = self.workspace();
-            let project = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.project_of(&workspace.display().to_string()))
-                .unwrap_or_default()
-                .to_owned();
-            self.history.set_project(project);
-        }
+    /// Names home's project for `prompt_history`: set at `set_home` and
+    /// at each workspace choice.
+    pub(crate) fn sync_project(&mut self) {
+        let project = self.home.as_ref().and_then(|home| home.history_project());
+        self.history.set_project(project);
     }
 
     /// Sets the project key `prompt_history` names.
+    #[cfg(test)]
     pub(crate) fn set_project(&mut self, project: String) {
-        self.history.set_project(project);
+        self.history.set_project(Some(project));
     }
 
     /// Whether the draft is still the entry recall put there: a
@@ -376,7 +373,6 @@ impl App {
     /// The next page while the search panel is open, one at a time until
     /// the history ends.
     fn more(&mut self) -> Effect {
-        self.sync_remote_project();
         let up = self.link == Link::Up;
         let line = self
             .history
@@ -429,7 +425,6 @@ impl App {
     /// asked for and the recall waits for it. With no more pages nothing
     /// changes.
     fn older(&mut self) -> Effect {
-        self.sync_remote_project();
         let up = self.link == Link::Up;
         let mut lines = Vec::new();
         if !self.history.started {

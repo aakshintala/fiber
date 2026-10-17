@@ -698,7 +698,8 @@ pub(super) fn render(
     let box_end = text_x
         .saturating_add(placed.inner)
         .min(area.x.saturating_add(area.width));
-    for (at, ((spot, modifier), text)) in screen.chips.iter().enumerate() {
+    for (at, chip) in screen.chips.iter().enumerate() {
+        let text = &chip.text;
         if at != 0 {
             put(
                 buf,
@@ -718,10 +719,14 @@ pub(super) fn render(
             placed.chip,
             text,
             box_end.saturating_sub(chip_x),
-            BOX_TINT.add_modifier(*modifier),
+            if chip.dim {
+                BOX_TINT.add_modifier(Modifier::DIM)
+            } else {
+                BOX_TINT
+            },
         );
         let wide = super::to_u16(width(text));
-        if let Some(spot) = spot {
+        if let Some(spot) = &chip.spot {
             let end = chip_x.saturating_add(wide).min(box_end);
             if end > chip_x {
                 targets.push(Target {
@@ -1026,8 +1031,8 @@ fn draw_typed_picker(
         .y
         .saturating_add(area.height.saturating_sub(tall) / 2)
         .saturating_add(tall);
-    // Above the box, the centred place when it is clear of the box,
-    // else the bottom edge on the row above it: one rule, no tie.
+    // Above the box: the centred place when it is clear of the box,
+    // else the bottom edge on the row above it.
     let place = if tall <= box_top.saturating_sub(area.y) {
         super::overlay::Place::Across {
             bottom: centred_bottom.min(box_top),

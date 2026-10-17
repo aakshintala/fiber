@@ -147,7 +147,7 @@ fn down_from_the_entry_bar_focuses_the_workspace_chip_at_first() {
 /// The chip row's texts, left to right.
 fn chips(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.chips.into_iter().map(|(_, text)| text).collect())
+        .map(|screen| screen.chips.into_iter().map(|chip| chip.text).collect())
         .unwrap_or_default()
 }
 

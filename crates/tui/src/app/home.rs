@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line, delete_line,
-    from_status, line, recent_rows,
+    Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
+    delete_line, from_status, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -77,18 +77,28 @@ pub(super) struct Home {
 }
 
 impl Home {
-    /// A listed hub has no client launch project.
+    /// The launch project that sections and row text compare against;
+    /// a listed hub has none, so no project matches it.
     pub(super) fn launch_project(&self) -> &str {
-        self.launch.location.project()
+        self.launch.location.project().unwrap_or_default()
+    }
+
+    /// The project `prompt_history` names: the launch project, else
+    /// the project of the chosen workspace's newest row.
+    pub(super) fn history_project(&self) -> Option<String> {
+        self.launch
+            .location
+            .project()
+            .or_else(|| {
+                self.chooser
+                    .chosen()
+                    .and_then(|workspace| self.sessions.project_of(workspace))
+            })
+            .map(str::to_owned)
     }
 }
 
 impl App {
-    /// The listed hub this terminal belongs to, if any.
-    pub(super) fn remote_hub(&self) -> Option<&str> {
-        self.home.as_ref()?.launch.location.hub()
-    }
-
     /// Stores the launch description as home, keying prompt history by its
     /// project as the run argument did. The app keeps today's screen, so
     /// the jigs and every existing app test stay byte-identical.
@@ -116,9 +126,7 @@ impl App {
             questions: Questions::default(),
             left_after_attach: None,
         });
-        if let Some(home) = self.home.as_ref() {
-            self.set_project(home.launch_project().to_owned());
-        }
+        self.sync_project();
         if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
             self.open_picker();
         }
@@ -323,18 +331,26 @@ impl App {
             version: home.launch.version.clone(),
             glyph: home.launch.logo_glyph.clone(),
             chips: {
-                use ratatui::style::Modifier;
-                let (workspace, modifier) = if home.no_workspace() {
-                    ("no workspace", Modifier::DIM)
-                } else {
-                    (segment.as_str(), Modifier::empty())
+                let chip = |spot: Option<Spot>, text: String| Chip {
+                    spot,
+                    dim: false,
+                    text,
                 };
-                let mut chips = vec![((Some(Spot::Workspace), modifier), format!("[{workspace}]"))];
+                let dim = home.no_workspace();
+                let workspace = if dim {
+                    "no workspace"
+                } else {
+                    segment.as_str()
+                };
+                let mut chips = vec![Chip {
+                    dim,
+                    ..chip(Some(Spot::Workspace), format!("[{workspace}]"))
+                }];
                 // The new worktree switch sits beside the workspace
                 // chip, shown while the workspace in use is in git.
                 if home.in_git() {
-                    chips.push((
-                        (Some(Spot::Worktree), Modifier::empty()),
+                    chips.push(chip(
+                        Some(Spot::Worktree),
                         if home.chooser.worktree() {
                             "[x] new worktree".to_owned()
                         } else {
@@ -343,21 +359,18 @@ impl App {
                     ));
                 }
                 chips.extend([
-                    (
-                        (Some(Spot::Model), Modifier::empty()),
+                    chip(
+                        Some(Spot::Model),
                         format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
-                    (
-                        (Some(Spot::Thinking), Modifier::empty()),
+                    chip(
+                        Some(Spot::Thinking),
                         format!(
                             "[thinking: {}]",
                             home.launch.thinking.as_deref().unwrap_or("default")
                         ),
                     ),
-                    (
-                        (None, Modifier::empty()),
-                        "Enter starts a session".to_owned(),
-                    ),
+                    chip(None, "Enter starts a session".to_owned()),
                 ]);
                 chips
             },
@@ -774,10 +787,8 @@ impl App {
                     .and_then(|home| home.sessions.by_key(key))
                     .map(|row| row.workspace.clone())
                     .filter(|workspace| !workspace.is_empty());
-                if let Some(workspace) = workspace
-                    && let Some(home) = self.home.as_mut()
-                {
-                    home.choose(workspace);
+                if let Some(workspace) = workspace {
+                    self.choose_workspace(workspace);
                     self.focus = None;
                 }
                 Effect::None
@@ -914,12 +925,16 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
-                let workspace = home
-                    .chooser
-                    .chosen()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| home.launch.location.workspace().display().to_string());
-                let mut args = json!({"workspace": workspace});
+                let workspace = home.chooser.chosen().map(str::to_owned).or_else(|| {
+                    home.launch
+                        .location
+                        .workspace()
+                        .map(|workspace| workspace.display().to_string())
+                });
+                let mut args = json!({});
+                if let (Some(workspace), Some(object)) = (workspace, args.as_object_mut()) {
+                    object.insert("workspace".to_owned(), Value::String(workspace));
+                }
                 if let Some(object) = args.as_object_mut() {
                     if !self.launch_overrides.is_empty() {
                         object.insert(

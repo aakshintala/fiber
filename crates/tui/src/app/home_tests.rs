@@ -2094,7 +2094,7 @@ fn y_on_a_focused_row_copies_its_line() {
 /// The chips home draws, as text left to right.
 fn chips(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.chips.into_iter().map(|(_, text)| text).collect())
+        .map(|screen| screen.chips.into_iter().map(|chip| chip.text).collect())
         .unwrap_or_default()
 }
 

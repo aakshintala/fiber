@@ -259,7 +259,7 @@ fn picker_open(app: &App) -> bool {
 /// The chips home draws, as text left to right.
 fn chips(app: &App) -> Vec<String> {
     app.home_screen()
-        .map(|screen| screen.chips.into_iter().map(|(_, text)| text).collect())
+        .map(|screen| screen.chips.into_iter().map(|chip| chip.text).collect())
         .unwrap_or_default()
 }
 
@@ -287,12 +287,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     assert!(recents(&app).is_empty());
     assert_eq!(app.home_workspace(), PathBuf::new());
     assert_eq!(chips(&app)[0], "[no workspace]");
-    assert!(
-        app.home_screen().unwrap().chips[0]
-            .0
-            .1
-            .contains(ratatui::style::Modifier::DIM)
-    );
+    assert!(app.home_screen().unwrap().chips[0].dim);
     assert!(!app.home_screen().unwrap().picker.unwrap().escapes);
     assert_eq!(key(&mut app, Key::Esc), Effect::None);
     assert!(picker_open(&app));
@@ -304,12 +299,7 @@ fn remote_starts_with_no_workspace_and_cannot_escape() {
     key(&mut app, Key::Enter);
     assert_eq!(app.home_workspace(), PathBuf::from("/remote/w"));
     assert_eq!(chips(&app)[0], "[w]");
-    assert!(
-        !app.home_screen().unwrap().chips[0]
-            .0
-            .1
-            .contains(ratatui::style::Modifier::DIM)
-    );
+    assert!(!app.home_screen().unwrap().chips[0].dim);
     app.home_click(Spot::Workspace);
     assert!(app.home_screen().unwrap().picker.unwrap().escapes);
     key(&mut app, Key::Esc);
@@ -1067,8 +1057,8 @@ fn launch_location_exposes_only_its_own_machine() {
         project: "project-key".to_owned(),
         git: true,
     };
-    assert_eq!(local.workspace(), std::path::Path::new("/launch"));
-    assert_eq!(local.project(), "project-key");
+    assert_eq!(local.workspace(), Some(std::path::Path::new("/launch")));
+    assert_eq!(local.project(), Some("project-key"));
     assert_eq!(local.hub(), None);
     assert_eq!(
         crate::LaunchLocation::default(),
@@ -1081,8 +1071,8 @@ fn launch_location_exposes_only_its_own_machine() {
     let remote = crate::LaunchLocation::Remote {
         hub: "box".to_owned(),
     };
-    assert_eq!(remote.workspace(), std::path::Path::new(""));
-    assert_eq!(remote.project(), "");
+    assert_eq!(remote.workspace(), None);
+    assert_eq!(remote.project(), None);
     assert_eq!(remote.hub(), Some("box"));
 }
 

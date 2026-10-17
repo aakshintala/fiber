@@ -95,8 +95,10 @@ impl Home {
 
     /// The launch directory, when there is one.
     fn launch_dir(&self) -> Option<String> {
-        let workspace = self.launch.location.workspace();
-        (!workspace.as_os_str().is_empty()).then(|| workspace.display().to_string())
+        self.launch
+            .location
+            .workspace()
+            .map(|workspace| workspace.display().to_string())
     }
 
     /// The directory the picker's typed row starts at: the chip's
@@ -444,10 +446,8 @@ impl App {
                 }
             }
         };
-        if let Some(workspace) = choice
-            && let Some(home) = self.home.as_mut()
-        {
-            home.choose(workspace);
+        if let Some(workspace) = choice {
+            self.choose_workspace(workspace);
         }
         // Bare `~` may have queued the home listing: send it while up.
         let asks = self.picker_asks();
@@ -458,6 +458,15 @@ impl App {
         }
     }
 
+    /// Chooses `workspace` for the next `start` and names its project
+    /// for `prompt_history`.
+    pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
+        if let Some(home) = self.home.as_mut() {
+            home.choose(workspace);
+        }
+        self.sync_project();
+    }
+
     /// Chooses the picker's selected recent for the next `start`,
     /// turning the new worktree switch off.
     fn choose_picker(&mut self) {
@@ -466,8 +475,8 @@ impl App {
             .as_ref()
             .and_then(|home| home.chooser.picker.as_ref())
             .and_then(|picker| picker.recents.get(picker.selected).cloned());
-        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.choose(workspace);
+        if let Some(workspace) = choice {
+            self.choose_workspace(workspace);
         }
     }
 
@@ -489,8 +498,8 @@ impl App {
             .as_ref()
             .and_then(|home| home.chooser.picker.as_ref())
             .and_then(|picker| picker.recents.get(at).cloned());
-        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.choose(workspace);
+        if let Some(workspace) = choice {
+            self.choose_workspace(workspace);
         }
         Effect::None
     }
@@ -515,7 +524,12 @@ impl App {
             if let Some(chosen) = &home.chooser.chosen {
                 return PathBuf::from(chosen);
             }
-            return home.launch.location.workspace().to_path_buf();
+            return home
+                .launch
+                .location
+                .workspace()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default();
         }
         self.workspace.clone()
     }

@@ -81,8 +81,9 @@ line says so: "Connecting 2 MCP servers…".
 
 **The workspace chip** names the workspace in use: the one last picked, else
 the directory the terminal was launched in. Clicking it opens the workspace
-picker, an overlay centred over home ("Look", "Overlays"), the same on every
-client:
+picker, the same on every client. It is an overlay centred over home, unless
+that would cover the input box's top row: then its bottom edge sits on the
+row above the box ("Look", "Overlays", "Placement").
 
 - It opens browsing, under the title "Workspaces". The first row is the typed
   path, "› " in `info`, the text and the cursor, filled with the chip's
@@ -94,8 +95,9 @@ client:
 - The recent rows are one list: the launch directory, when there is one, then
   the recent workspaces from `recent.jsonl` (`docs/state.md`), the live
   sessions' workspaces then the exited ones', distinct and absolute, ten rows
-  at most. Until a key is pressed in the picker the list refills as sessions
-  arrive.
+  at most. The list refills as sessions arrive until a key is pressed in the
+  picker, and again on every row that arrives once Backspace leaves the
+  recents alone.
 - The completions are the subdirectories of the directory up to the typed
   path's last `/` whose names start with the text after it: one listing of
   that directory, filtered at each keystroke, never a walk of the tree. A
@@ -1338,8 +1340,8 @@ what it started keeps running.
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
-- **Esc closes whatever is on top,** except a remote home's workspace picker
-  before a workspace is chosen ("Home"). It returns focus to the input box from
+- **Esc closes whatever is on top,** except the workspace picker while no
+  workspace is chosen ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
@@ -1857,7 +1859,9 @@ the model picker inside its view.
   less four columns on a narrower screen.
 - **Placement.** An overlay is centred across the area it covers. A question,
   a notice, the Ctrl+R panel and the workspace picker are also centred down
-  it. The key map docks at the bottom, full width. The completion panels
+  it, unless that would cover the input box's top row: then the workspace
+  picker, when it fits there, sits with its bottom edge on the row above the
+  box. The key map docks at the bottom, full width. The completion panels
   sit above the input box, and the model picker under its view's top row.
   The overlay's side margins are blank, with no tint, so the screen behind
   reads around it.

@@ -352,9 +352,7 @@ impl App {
             return Effect::None;
         };
         let effect = self.leave();
-        if let Some(home) = self.home.as_mut() {
-            home.choose(workspace);
-        }
+        self.choose_workspace(workspace);
         self.focus = None;
         effect
     }

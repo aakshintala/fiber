@@ -129,17 +129,19 @@ impl Default for LaunchLocation {
 }
 
 impl LaunchLocation {
-    pub(crate) fn workspace(&self) -> &std::path::Path {
+    /// The launch directory: a listed hub has none.
+    pub(crate) fn workspace(&self) -> Option<&std::path::Path> {
         match self {
-            Self::Local { workspace, .. } => workspace,
-            Self::Remote { .. } => std::path::Path::new(""),
+            Self::Local { workspace, .. } => Some(workspace),
+            Self::Remote { .. } => None,
         }
     }
 
-    pub(crate) fn project(&self) -> &str {
+    /// The launch directory's project key: a listed hub has none.
+    pub(crate) fn project(&self) -> Option<&str> {
         match self {
-            Self::Local { project, .. } => project,
-            Self::Remote { .. } => "",
+            Self::Local { project, .. } => Some(project),
+            Self::Remote { .. } => None,
         }
     }
 
@@ -216,15 +218,25 @@ pub struct Launch {
     pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
 }
 
+/// One chip on home's chip row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Chip {
+    /// What a click on it opens, if anything.
+    pub(crate) spot: Option<Spot>,
+    /// It draws dim: the workspace chip while no workspace is chosen.
+    pub(crate) dim: bool,
+    /// Its text.
+    pub(crate) text: String,
+}
+
 /// What home draws, built by [`crate::app::App::home_screen`].
 pub(crate) struct HomeScreen {
     /// Fiber's version, for the logo.
     pub(crate) version: String,
     /// The glyph before the name in the one-row logo.
     pub(crate) glyph: String,
-    /// The chip row, left to right: each chip's target and text modifier,
-    /// followed by its text.
-    pub(crate) chips: Vec<((Option<Spot>, ratatui::style::Modifier), String)>,
+    /// The chip row, left to right.
+    pub(crate) chips: Vec<Chip>,
     /// Counts across all live sessions and the summed spend.
     pub(crate) header: Header,
     /// Project sections in display order.

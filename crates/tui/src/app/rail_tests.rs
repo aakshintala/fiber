@@ -1042,7 +1042,7 @@ fn plus_goes_home_with_that_projects_workspace() {
     assert_eq!(on_screen(&app), None);
     let chip = app
         .home_screen()
-        .and_then(|screen| screen.chips.first().map(|(_, chip)| chip.clone()));
+        .and_then(|screen| screen.chips.first().map(|chip| chip.text.clone()));
     assert_eq!(chip.as_deref(), Some("[hub]"));
     assert_eq!(app.focused(), None);
 }
