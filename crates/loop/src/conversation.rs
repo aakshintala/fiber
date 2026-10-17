@@ -75,6 +75,29 @@ pub(crate) fn rebuild_and_sent(
     open: &HashSet<ActionId>,
     seed: Carry,
 ) -> Result<Rebuilt, Error> {
+    rebuild_with_cut(lines, model, open, seed, usize::MAX)
+}
+
+/// The cut path, keeping conversation across handoffs after `cut`.
+pub(crate) fn summary_conversation(
+    lines: &[Envelope],
+    cut: usize,
+    model: &str,
+    seed: Carry,
+) -> Result<(Vec<Input>, Option<usize>), Error> {
+    let (mut conversation, sent, mut held, _) =
+        rebuild_with_cut(lines, model, &HashSet::new(), seed, cut)?;
+    conversation.append(&mut held);
+    Ok((conversation, sent))
+}
+
+fn rebuild_with_cut(
+    lines: &[Envelope],
+    model: &str,
+    open: &HashSet<ActionId>,
+    seed: Carry,
+    cut: usize,
+) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
     // Live and rebuilt `Input`s carry the model in force at their line:
     // from the first `model_changed`'s `before`, each switch stamping
@@ -96,8 +119,15 @@ pub(crate) fn rebuild_and_sent(
         ..Rendered::default()
     };
     let mut sent = None;
-    for line in lines.iter().filter(|l| l.is_durable()) {
-        if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+    for (index, line) in lines.iter().enumerate().filter(|(_, l)| l.is_durable()) {
+        if let Some(mut event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+            if index >= cut {
+                match &mut event {
+                    Event::HandoffCompleted(done) => done.outcome = Outcome::Failed,
+                    Event::OpeningMessage(_) => continue,
+                    _ => {}
+                }
+            }
             rendered.push(
                 &event,
                 line.action_id.as_ref(),

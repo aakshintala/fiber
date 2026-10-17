@@ -197,6 +197,18 @@ Commands run after this point that may have changed files:
 
 No file was written and no command was run after this point.
 
+## rewind-summary
+
+Fiber: this conversation will be rewound. Summarize the path after the point: what was tried, what worked, what did not, and anything worth keeping. Reply with only the summary. Do not call tools.
+
+{point}
+
+## rewind-summary-point
+
+The first message or action after the point was:
+
+> {excerpt}
+
 ## skill-added
 
 Fiber: skill {name} can now be loaded: {description}

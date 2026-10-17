@@ -1315,14 +1315,14 @@ fn resume_existing(
 
 #[test]
 fn an_ancestor_summary_keeps_the_entire_cut_path() {
-    let session = run_a();
+    let session = run_a_with_id(A_ID);
     let lines = log::read(&session.dir).unwrap();
     let at = point(&lines);
     let (b, tx, _, dir) = start_b(
         &session,
         B_ID,
         Point {
-            session_id: SessionId("s_test".into()),
+            session_id: SessionId(A_ID.into()),
             seq: lines.last().unwrap().seq.unwrap(),
         },
         "B's note".into(),
@@ -1331,7 +1331,7 @@ fn an_ancestor_summary_keeps_the_entire_cut_path() {
     );
     drop(run_turn(b, &tx, "B prompt"));
     let (b, tx, provider) = resume_existing(&session, B_ID, vec![Scripted::text("All the work.")]);
-    let (rw, answer) = rewind(args(Some("s_test"), Some(at), true, vec![]));
+    let (rw, answer) = rewind(args(Some(A_ID), Some(at), true, vec![]));
     drop(drive(b, &tx, rw));
     accepted(answer_of(answer));
     let request = &provider.requests()[0];
@@ -1408,11 +1408,12 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
     }
     assert!(!texts.contains(&"The note."));
     assert_eq!(
-        texts
+        request
+            .conversation
             .iter()
-            .filter(|text| text.contains("session log"))
+            .filter(|input| matches!(input, Input::User { .. }))
             .count(),
-        1
+        4
     );
 }
 

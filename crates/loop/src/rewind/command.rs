@@ -24,9 +24,6 @@ pub(crate) const REWOUND_CLOSING: &str = "The session was rewound and takes no m
 /// `rewind` on a delegate: its parent forks again instead.
 const DELEGATE: &str = "A delegate cannot be rewound.";
 
-/// `rewind` asking for a summary: no summary is built in this Fiber yet.
-const NO_SUMMARY: &str = "Summaries are not built in this Fiber yet.";
-
 /// `rewind` while jobs run: stop them before rewinding.
 const JOBS_RUNNING: &str = "Jobs are running; stop them before rewinding.";
 
@@ -60,14 +57,14 @@ impl Loop {
     /// Takes `rewind` while idle (`docs/events.md`, "Rewind"): the refusals
     /// in order, then `rewound` as the last line, naming the minted new
     /// session and the point, and the new session's id as the answer. Every
-    /// refusal leaves the log byte for byte as it was, mints nothing and
-    /// starts nothing. On success the loop stops late-cost lookups and
+    /// refusal before the optional summary leaves the log byte for byte.
+    /// A failed summary keeps only its turn and usage. On success the loop stops late-cost lookups and
     /// writes what settled, appends `rewound`, sets `rewound`, and only
     /// then accepts, so the acknowledgement is sent after `rewound` is
     /// written.
     pub(crate) fn take_rewind(
         &mut self,
-        _id: contract::CommandId,
+        id: contract::CommandId,
         args: RewindArgs,
         ack: Ack,
         input: &TurnInput,
@@ -106,10 +103,6 @@ impl Loop {
                 return Ok(());
             }
         };
-        if args.summarise {
-            reject(ack, ErrorCode::SummaryFailed, NO_SUMMARY);
-            return Ok(());
-        }
         let running = self.running();
         if !running.is_empty() {
             reject(ack, ErrorCode::Busy, JOBS_RUNNING);
@@ -137,6 +130,21 @@ impl Loop {
                 return Ok(());
             }
         };
+        let summary = if args.summarise {
+            match self.summarise(id, &target, point)? {
+                Ok(summary) => Some(summary),
+                Err(failure) => {
+                    reject(
+                        ack,
+                        ErrorCode::SummaryFailed,
+                        &format!("The summary could not be made: {}", failure.message),
+                    );
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
         self.write_last_settled()?;
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
@@ -150,13 +158,16 @@ impl Loop {
                 new_session_id: new_session_id.clone(),
                 seq: Seq(point),
                 from_session_id,
-                summary: None,
+                summary,
                 jobs: Vec::new(),
             }),
             None,
             None,
         )?;
         self.rewound = true;
+        for delivery in self.deferred.drain(..) {
+            refuse_after_rewound(delivery);
+        }
         (ack.0)(Ok(Some(CommandResult::Rewind { new_session_id })));
         Ok(())
     }
