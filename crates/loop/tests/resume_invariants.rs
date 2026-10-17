@@ -377,6 +377,11 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
 }
 
 proptest! {
+    // Each hanging case runs out CASE_DEADLINE (2 s). Mutation testing stops
+    // a mutant's test run at 120 s, and the deadlines one test can run out in
+    // turn must add up to well under that: 10 cases plus 10 shrink iterations
+    // is at most 20 x 2 s = 40 s, while 24 cases plus 10 shrinks would be
+    // 34 x 2 s = 68 s, past BUDGET (60 s).
     #![proptest_config(ProptestConfig { cases: 10, max_shrink_iters: 10, ..ProptestConfig::default() })]
 
     /// A crashed history resumes without running an uncertain call again.

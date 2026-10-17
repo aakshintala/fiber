@@ -3307,12 +3307,14 @@ fn commands_answers_with_the_rows_it_was_given_while_the_inbox_is_unread() {
     let opened = Opened::open(vec![]);
     opened.session.commands(vec![
         CommandInfo {
+            extension: false,
             name: "review".into(),
             description: "Review a diff.".into(),
             argument_hint: Some("[base]".into()),
             tag: "template".into(),
         },
         CommandInfo {
+            extension: false,
             name: "tdd".into(),
             description: "Test first.".into(),
             argument_hint: None,

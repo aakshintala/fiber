@@ -196,6 +196,7 @@ impl Prompts {
             .iter()
             .filter(|entry| entry.prompt.runnable())
             .map(|entry| CommandInfo {
+                extension: false,
                 name: entry.prompt.name.clone(),
                 description: entry.prompt.description.clone(),
                 argument_hint: hint(&entry.prompt.arguments),

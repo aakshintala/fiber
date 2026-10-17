@@ -416,6 +416,7 @@ pub(crate) fn commands(found: &[Found], disabled: &[String]) -> Vec<CommandInfo>
         .iter()
         .filter(|skill| !disabled.contains(&skill.listed.name))
         .map(|skill| CommandInfo {
+            extension: false,
             name: skill.listed.name.clone(),
             description: skill.listed.description.clone(),
             argument_hint: skill.argument_hint.clone(),
