@@ -63,20 +63,12 @@ fn generation_reaches(wake: &Arc<Parker>, target: u64, what: &str) {
     });
 }
 
-/// Waits under [`DEADLINE`] for `file` to hold a line, and returns it.
-#[track_caller]
-fn ready_line(file: &std::path::Path) -> String {
-    let file = file.to_path_buf();
-    fakes::within("the ready file", DEADLINE, move || {
-        loop {
-            if let Ok(text) = std::fs::read_to_string(&file)
-                && text.ends_with('\n')
-            {
-                return text.trim().to_owned();
-            }
-            std::thread::yield_now();
-        }
-    })
+/// A `Ready` channel of its own: `root/name/ready.fifo`, so tests with
+/// more than one line never share a FIFO.
+fn ready_in(root: &std::path::Path, name: &str) -> Ready {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    Ready::new(&dir)
 }
 
 #[test]
@@ -171,12 +163,12 @@ fn run_after_cancel_is_closing_without_running_the_read() {
 #[test]
 fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
     let root = fakes::TempDir::new("fiber-read-group");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let go = root.path().join("go");
     let reads = Arc::new(Reads::default());
     let script = format!(
         "echo \"$$ $(ps -o pgid= -p $$ | tr -d ' ')\" > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; echo key",
-        ready.display(),
+        ready.path().display(),
         go.display()
     );
     // Before the spawn: the group is known only after it starts, so a
@@ -186,11 +178,10 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let line = ready_line(&ready);
-    let (pid, pgid) = line.split_once(' ').unwrap();
-    let pid: u32 = pid.parse().unwrap();
+    let ids = ready.wait(DEADLINE);
+    let (pid, pgid) = (ids[0], ids[1]);
     let watchdog = fakes::Watchdog::group(pid);
-    assert_eq!(pid.to_string(), pgid, "the command leads its own group");
+    assert_eq!(pid, pgid, "the command leads its own group");
     assert_eq!(listed(&reads), vec![pid], "listed while it runs");
     std::fs::write(&go, "").unwrap();
     let output = fakes::within("the command", DEADLINE, move || running.join().unwrap()).unwrap();
@@ -210,17 +201,17 @@ fn a_command_leads_its_own_group_and_is_listed_until_the_group_empties() {
 #[test]
 fn cancel_kills_a_running_command_and_it_errs() {
     let root = fakes::TempDir::new("fiber-read-cancel");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let reads = Arc::new(Reads::default());
-    let script = format!("echo $$ > '{}'; exec sleep 30", ready.display());
+    let script = format!("echo $$ > '{}'; exec sleep 30", ready.path().display());
     // Before the spawn, on the ready path the command line carries until
     // it execs; the group watchdog below takes over once the pid is known.
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let running = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pid: u32 = ready_line(&ready).parse().unwrap();
+    let pid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pid);
     reads.cancel();
     let error = fakes::within("the killed command", DEADLINE, move || {
@@ -236,21 +227,21 @@ fn cancel_kills_a_running_command_and_it_errs() {
 #[test]
 fn a_descendant_keeps_its_group_listed_and_cancel_kills_it() {
     let root = fakes::TempDir::new("fiber-read-descendant");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let reads = Arc::new(Reads::default());
     let script = format!(
         "sleep 30 >/dev/null 2>&1 & echo $$ > '{}'; echo key",
-        ready.display()
+        ready.path().display()
     );
     // Before the spawn: the shell exits fast and leaves `sleep` behind,
     // so only a command-line watchdog covers the spawn itself.
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let first = Arc::clone(&reads);
     let output = fakes::within("the first command", DEADLINE, move || {
         first.command(&mut sh(&script)).unwrap()
     });
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key\n");
-    let group: u32 = ready_line(&ready).parse().unwrap();
+    let group: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(group);
     assert!(fakes::kill_group(group, "0").unwrap(), "sleep lives"); // A later command prunes only empty groups: `sleep` keeps this one.
     let probe = Arc::clone(&reads);
@@ -1119,11 +1110,11 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
 #[test]
 fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     let root = fakes::TempDir::new("fiber-read-blocked-spawn");
-    let ready_a = root.path().join("ready-a");
+    let ready_a = ready_in(root.path(), "ready-a");
     let marker = format!("fiber-read-late-{}", root.path().display());
     let reads = Arc::new(Reads::default());
-    let script_a = format!("echo $$ > '{}'; exec sleep 30", ready_a.display());
-    let pre_a = fakes::Watchdog::matching(&ready_a.display().to_string());
+    let script_a = format!("echo $$ > '{}'; exec sleep 30", ready_a.path().display());
+    let pre_a = fakes::Watchdog::matching(&ready_a.path().display().to_string());
     // Group A pauses after it lists its group, so the assertion below
     // sees it listed on every run: the ready file alone does not prove
     // the spawn listed it yet.
@@ -1134,7 +1125,7 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script_a)))
     };
-    let pid_a: u32 = ready_line(&ready_a).parse().unwrap();
+    let pid_a: u32 = ready_a.wait(DEADLINE)[0];
     let watchdog_a = fakes::Watchdog::group(pid_a);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1229,13 +1220,13 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
 #[test]
 fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
     let root = fakes::TempDir::new("fiber-read-prune-perm-srch");
-    let ready_a = root.path().join("ready-a");
-    let ready_b = root.path().join("ready-b");
-    let ready_c = root.path().join("ready-c");
+    let ready_a = ready_in(root.path(), "ready-a");
+    let ready_b = ready_in(root.path(), "ready-b");
+    let ready_c = ready_in(root.path(), "ready-c");
     let reads = Arc::new(Reads::default());
-    let pre_a = fakes::Watchdog::matching(&ready_a.display().to_string());
-    let pre_b = fakes::Watchdog::matching(&ready_b.display().to_string());
-    let pre_c = fakes::Watchdog::matching(&ready_c.display().to_string());
+    let pre_a = fakes::Watchdog::matching(&ready_a.path().display().to_string());
+    let pre_b = fakes::Watchdog::matching(&ready_b.path().display().to_string());
+    let pre_c = fakes::Watchdog::matching(&ready_c.path().display().to_string());
     // Group A pauses after it lists its group, so the script below arms
     // only after A is really listed: the ready file alone does not prove
     // the spawn listed it yet.
@@ -1244,10 +1235,10 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
     reads.pause_at_listed(listed_tx, release_rx);
     let running_a = {
         let reads = Arc::clone(&reads);
-        let script = format!("echo $$ > '{}'; exec sleep 600", ready_a.display());
+        let script = format!("echo $$ > '{}'; exec sleep 600", ready_a.path().display());
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pid_a: u32 = ready_line(&ready_a).parse().unwrap();
+    let pid_a: u32 = ready_a.wait(DEADLINE)[0];
     let watchdog_a = fakes::Watchdog::group(pid_a);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1257,16 +1248,16 @@ fn a_spawn_prune_keeps_a_group_whose_probe_says_perm_and_retires_it_on_srch() {
     // The late spawns' prunes read only A's scripted probes; every other
     // id falls through to the real syscalls after the same validation.
     reads.script_group(pid_a, vec![Err(Errno::PERM), Err(Errno::SRCH)], vec![]);
-    let spawn_listed = |reads: &Arc<Reads>, ready: &std::path::Path| {
+    let spawn_listed = |reads: &Arc<Reads>, ready: &Ready| {
         let (listed_tx, listed_rx) = mpsc::channel::<()>();
         let (release_tx, release_rx) = mpsc::channel::<()>();
         reads.pause_at_listed(listed_tx, release_rx);
         let running = {
             let reads = Arc::clone(reads);
-            let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+            let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
             std::thread::spawn(move || reads.command(&mut sh(&script)))
         };
-        let pid: u32 = ready_line(ready).parse().unwrap();
+        let pid: u32 = ready.wait(DEADLINE)[0];
         Deadline::after(DEADLINE)
             .recv(&listed_rx)
             .expect("the group listed its group");
@@ -1529,13 +1520,13 @@ fn drive_settle_to_completion(
 #[test]
 fn settle_rekills_a_cancelled_survivor_before_answering_true() {
     let root = fakes::TempDir::new("fiber-read-settle-survivor");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let clock = FakeClock::new();
     let reads = Arc::new(Reads::default());
-    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     // Paused after listing: the acknowledgement proves the group is listed
     // with nothing in flight before the survivor state is seeded below.
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
@@ -1552,7 +1543,7 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let pgid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1605,13 +1596,13 @@ fn settle_rekills_a_cancelled_survivor_before_answering_true() {
 #[test]
 fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
     let root = fakes::TempDir::new("fiber-read-settle-withheld");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let clock = FakeClock::new();
     let reads = Arc::new(Reads::default());
-    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     // Paused after listing: the acknowledgement proves the group is listed
     // with nothing in flight before the survivor state is seeded below.
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
@@ -1628,7 +1619,7 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let pgid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1715,13 +1706,13 @@ fn settle_withheld_reap_spends_the_bound_with_the_group_listed() {
 #[test]
 fn settle_sends_again_until_srch_then_never_again() {
     let root = fakes::TempDir::new("fiber-read-settle-retry");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let clock = FakeClock::new();
     let reads = Arc::new(Reads::default());
-    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
     // Before the spawn: the group is known only after it starts, so a
     // command-line watchdog covers a spawn no later watchdog can reach.
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_tx, release_rx);
@@ -1729,7 +1720,7 @@ fn settle_sends_again_until_srch_then_never_again() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let pgid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
@@ -1795,15 +1786,15 @@ fn settle_sends_again_until_srch_then_never_again() {
 #[test]
 fn settle_drains_two_groups_together_within_one_bound() {
     let root = fakes::TempDir::new("fiber-read-settle-two-groups");
-    let ready_one = root.path().join("ready-one");
-    let ready_two = root.path().join("ready-two");
+    let ready_one = ready_in(root.path(), "ready-one");
+    let ready_two = ready_in(root.path(), "ready-two");
     let clock = FakeClock::new();
     let reads = Arc::new(Reads::default());
-    let pre_one = fakes::Watchdog::matching(&ready_one.display().to_string());
-    let pre_two = fakes::Watchdog::matching(&ready_two.display().to_string());
-    let start = |reads: &Arc<Reads>, ready: &std::path::Path| {
+    let pre_one = fakes::Watchdog::matching(&ready_one.path().display().to_string());
+    let pre_two = fakes::Watchdog::matching(&ready_two.path().display().to_string());
+    let start = |reads: &Arc<Reads>, ready: &Ready| {
         let reads = Arc::clone(reads);
-        let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
+        let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
     // Each spawn pauses after it lists its group: the acknowledgements
@@ -1844,8 +1835,8 @@ fn settle_drains_two_groups_together_within_one_bound() {
     Deadline::after(DEADLINE)
         .recv(&is_held_two)
         .expect("the second command held before its reap");
-    let pgid_one: u32 = ready_line(&ready_one).parse().unwrap();
-    let pgid_two: u32 = ready_line(&ready_two).parse().unwrap();
+    let pgid_one: u32 = ready_one.wait(DEADLINE)[0];
+    let pgid_two: u32 = ready_two.wait(DEADLINE)[0];
     let watchdog_one = fakes::Watchdog::group(pgid_one);
     let watchdog_two = fakes::Watchdog::group(pgid_two);
     assert_eq!(listed(&reads).len(), 2, "both groups listed");
@@ -1907,12 +1898,12 @@ fn settle_drains_two_groups_together_within_one_bound() {
 #[test]
 fn settle_retries_a_perm_group_until_the_bound_then_fails() {
     let root = fakes::TempDir::new("fiber-read-settle-perm");
-    let ready = root.path().join("ready");
+    let ready = Ready::new(root.path());
     let clock = FakeClock::new();
     let end = clock.origin() + doors::SHUTDOWN_BOUND;
     let reads = Arc::new(Reads::default());
-    let script = format!("echo $$ > '{}'; exec sleep 600", ready.display());
-    let pre = fakes::Watchdog::matching(&ready.display().to_string());
+    let script = format!("echo $$ > '{}'; exec sleep 600", ready.path().display());
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     let (listed_tx, listed_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     reads.pause_at_listed(listed_tx, release_rx);
@@ -1920,7 +1911,7 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid: u32 = ready_line(&ready).parse().unwrap();
+    let pgid: u32 = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&listed_rx)
