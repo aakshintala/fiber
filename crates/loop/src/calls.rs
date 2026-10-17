@@ -518,6 +518,7 @@ impl Loop {
             &prepared.effects,
             &rules,
             &self.grants,
+            &crate::known_hosts::KnownHosts::default(),
             &self.workspace,
             &self.prompt.home,
             &self.credentials,

@@ -473,6 +473,7 @@ fn a_session_remember_adds_a_grant_the_next_call_judged_matches() {
         &judged("npm test --watch"),
         &standing,
         &looped.grants,
+        &crate::known_hosts::KnownHosts::default(),
         &workspace,
         home.path(),
         &credentials,

@@ -60,6 +60,7 @@ pub(crate) fn judge(
     effects: &Effects,
     rules: &Result<StandingRules, RulesError>,
     grants: &[Grant],
+    known: &crate::known_hosts::KnownHosts,
     workspace: &Path,
     home: &Path,
     credentials: &Path,
@@ -76,7 +77,7 @@ pub(crate) fn judge(
     if effects.always_reviewed {
         return Verdict::Review;
     }
-    if fast_path(&effects.declared, workspace, home) {
+    if fast_path(&effects.declared, workspace, home) || known_network(effects, known) {
         return Verdict::Allow(None);
     }
     if grants
@@ -89,6 +90,20 @@ pub(crate) fn judge(
         return Verdict::Allow(Some(DecidedBy::StandingRule));
     }
     Verdict::Review
+}
+
+/// Network-only calls with a complete, known host list need no reviewer.
+pub(crate) fn known_network(effects: &Effects, known: &crate::known_hosts::KnownHosts) -> bool {
+    !effects.declared.effects.is_empty()
+        && effects
+            .declared
+            .effects
+            .iter()
+            .all(|effect| *effect == Effect::Network)
+        && effects
+            .hosts
+            .as_ref()
+            .is_some_and(|hosts| known.all_known(hosts))
 }
 
 /// Inner admission is the anchor; only the denies apply to an inner call.
