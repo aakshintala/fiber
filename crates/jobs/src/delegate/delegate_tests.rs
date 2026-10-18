@@ -593,11 +593,7 @@ fn eof_before_exit_reports_without_a_clock_move() {
     let rig = rig();
     let mut spawned = tool(&rig);
     let fifo = rig._dir.path().join("fifo");
-    let made = Command::new("mkfifo")
-        .arg(&fifo)
-        .status()
-        .expect("mkfifo runs");
-    assert!(made.success(), "mkfifo creates the fifo");
+    fakes::fifo(&fifo);
     let pid = rig._dir.path().join("child.pid");
     let fifo_arg = fifo.clone();
     spawned.launch = Arc::new(move |_: &Launched| {

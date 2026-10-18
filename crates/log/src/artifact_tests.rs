@@ -243,11 +243,7 @@ fn a_directory_a_link_to_one_a_dot_link_or_a_fifo_is_not_regular() {
     }
     // The FIFO is never opened: the answer arrives without a writer.
     let fifo = artifacts.join("f.png");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .output()
-        .unwrap();
-    assert!(made.status.success(), "{made:?}");
+    fakes::fifo(&fifo);
     let dir = temp.dir.clone();
     let (done, answered) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
