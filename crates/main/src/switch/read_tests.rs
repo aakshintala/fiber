@@ -74,7 +74,9 @@ fn ready_in(root: &std::path::Path, name: &str) -> Ready {
 #[test]
 fn run_returns_the_reads_value() {
     let reads = Reads::default();
-    let value = fakes::within("the read", DEADLINE, move || reads.run(|| 7));
+    let value = fakes::within("the read", DEADLINE, move || {
+        reads.run("credential read", || 7)
+    });
     assert_eq!(value.unwrap(), 7);
 }
 
@@ -87,7 +89,7 @@ fn cancel_ends_a_blocked_run_with_closing_and_a_late_value_changes_nothing() {
     let waiter = {
         let (reads, finished) = (Arc::clone(&reads), Arc::clone(&finished));
         std::thread::spawn(move || {
-            reads.run(move || {
+            reads.run("credential read", move || {
                 started.send(()).unwrap();
                 gate.recv().unwrap_or(());
                 finished.store(true, Ordering::SeqCst);
@@ -118,7 +120,7 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
     let waiter = {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || {
-            reads.run(move || {
+            reads.run("credential read", move || {
                 started.send(()).unwrap();
                 gate.recv().unwrap_or(());
                 9
@@ -132,7 +134,9 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
     // replaces A's wake, and its finish removes A's entry, so the cancel
     // below never wakes A.
     let probe = Arc::clone(&reads);
-    let quick = fakes::within("the quick run", DEADLINE, move || probe.run(|| 1));
+    let quick = fakes::within("the quick run", DEADLINE, move || {
+        probe.run("credential read", || 1)
+    });
     assert_eq!(quick.unwrap(), 1);
     reads.cancel();
     let rejected = fakes::within("the cancelled run", DEADLINE, move || {
@@ -153,7 +157,9 @@ fn run_after_cancel_is_closing_without_running_the_read() {
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
     let failure = fakes::within("the refused read", DEADLINE, move || {
-        reads.run(move || flag.store(true, Ordering::SeqCst))
+        reads.run("credential read", move || {
+            flag.store(true, Ordering::SeqCst)
+        })
     })
     .expect_err("a cancelled read");
     assert_eq!(failure.code, ErrorCode::Closing);

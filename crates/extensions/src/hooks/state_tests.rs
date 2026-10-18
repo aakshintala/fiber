@@ -8,6 +8,212 @@ use super::SessionExtensions;
 use crate::ModelsArg;
 use crate::test_support::{Home, bounded};
 
+fn reload_config(home: &Home) -> config::Config {
+    config::Config::load(config::Sources {
+        home: home.home(),
+        workspace: home.home().parent().unwrap().join("workspace"),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn reload_set(home: &Home, old: &Arc<SessionExtensions>) -> Arc<SessionExtensions> {
+    let config = reload_config(home);
+    let path = home.home();
+    let old = old.clone();
+    Arc::new(bounded(move || {
+        old.reload(
+            &path,
+            &config,
+            fakes::clock::FakeClock::new(),
+            Arc::new(fakes::FakeLock::new()),
+        )
+    }))
+}
+
+fn state_values(events: Vec<Event>) -> Vec<(String, String, serde_json::Value)> {
+    events
+        .into_iter()
+        .map(|event| {
+            let kind = event.kind().to_owned();
+            let value = serde_json::to_value(event).unwrap();
+            (
+                kind,
+                value["key"].as_str().unwrap().into(),
+                value["value"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn reload_init_reads_current_state_and_retired_hooks_remain_writable() {
+    let home = Home::new();
+    home.install(
+        "goal",
+        &("state.set('starts',(state.get('starts') or 0)+1);".to_owned()
+            + &hook(
+                "after_tool",
+                "state.set('k',state.get('starts'))",
+                "blocking",
+            )),
+    );
+    let old = home.load(&[]);
+    assert_eq!(
+        state_values(old.take_state_lines()),
+        [("extension_state_set".into(), "starts".into(), json!(1))]
+    );
+    let new = reload_set(&home, &old);
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "starts".into(), json!(2))]
+    );
+    run(&old, "after_tool");
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "k".into(), json!(2))]
+    );
+    assert!(new.take_state_lines().is_empty());
+    drop(reload_set(&home, &new));
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "starts".into(), json!(3))]
+    );
+    run(&old, "after_tool");
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "k".into(), json!(3))]
+    );
+}
+
+#[test]
+fn reload_landings_do_not_allow_carried_state_to_suppress_newer_writes() {
+    let home = Home::new();
+    home.install(
+        "goal",
+        &("state.set('k',(state.get('k') or 0)+1);".to_owned()
+            + &hook(
+                "after_tool",
+                "state.set('k',state.get('k')+1); return {content='changed'}",
+                "blocking",
+            )),
+    );
+    let old = home.load(&[]);
+    assert_eq!(
+        state_values(old.take_state_lines()),
+        [("extension_state_set".into(), "k".into(), json!(1))]
+    );
+    run(&old, "after_tool");
+    let carried = old.take_change_state();
+    assert_eq!(carried.len(), 1);
+    let new = reload_set(&home, &old);
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "k".into(), json!(3))]
+    );
+    assert!(new.admit_state_lines(carried).is_empty());
+    run(&new, "after_tool");
+    assert_eq!(
+        state_values(new.admit_state_lines(new.take_change_state())),
+        [("extension_state_set".into(), "k".into(), json!(4))]
+    );
+    new.close_state();
+    run(&old, "after_tool");
+    assert!(old.take_change_state().is_empty());
+    assert!(new.take_state_lines().is_empty());
+    assert!(matches!(
+        old.state.store("fiber.test/goal").set(
+            crate::host::state::Scope::Other,
+            "closed",
+            json!(1),
+            OnFork::AtPoint
+        ),
+        Err(crate::host::state::StateError::Closing)
+    ));
+}
+
+#[test]
+fn reload_keeps_retained_provider_state_writable() {
+    let home = Home::new();
+    home.install("goal", "");
+    install_provider(
+        &home,
+        "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',7); return {} end}})",
+    );
+    let mut old = home.load(&[]);
+    Arc::get_mut(&mut old).unwrap().retain_lua_providers(&[]);
+    let held = old.clone();
+    let config = reload_config(&home);
+    let provider = bounded(move || {
+        held.start_provider(
+            &config,
+            fakes::clock::FakeClock::new(),
+            Arc::new(fakes::FakeLock::new()),
+            "fiber.test/goal",
+            "p",
+        )
+        .unwrap()
+    });
+    let new = reload_set(&home, &old);
+    bounded(move || assert!(provider.models(&ModelsArg::default()).unwrap().is_empty()));
+    assert_eq!(
+        state_values(new.take_state_lines()),
+        [("extension_state_set".into(), "provider".into(), json!(7))]
+    );
+    assert!(new.take_state_lines().is_empty());
+}
+
+#[derive(Default)]
+struct ReloadBrowser(std::sync::Mutex<Vec<String>>);
+
+impl crate::Browser for ReloadBrowser {
+    fn open(&self, url: &str) {
+        self.0.lock().unwrap().push(url.to_owned());
+    }
+    fn show(&self, url: &str, _code: &str) {
+        self.open(url);
+    }
+    fn attended(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn reload_browser_wiring_reaches_new_vms_without_replacing_the_old_browser() {
+    let home = Home::new();
+    home.install("goal", "");
+    install_provider(
+        &home,
+        "fiber.provider('p',{credential={timeout=5000,run=function() pcall(host.oauth.refresh,function() error('refresh') end); host.oauth.open('https://login.example/verify'); return {token='token',expires_at=1800000000} end}})",
+    );
+    let old = home.load(&[]);
+    let old_browser = Arc::new(ReloadBrowser::default());
+    old.browse_with(old_browser.clone(), Arc::new(|| true));
+    let new = reload_set(&home, &old);
+    let new_browser = Arc::new(ReloadBrowser::default());
+    new.browse_with(new_browser.clone(), Arc::new(|| true));
+    for session in [&new, &old] {
+        let provider = session.lua_providers()[0].1.clone();
+        bounded(move || {
+            provider
+                .token(&crate::CredentialPair {
+                    credential: "p".into(),
+                    label: "default".into(),
+                })
+                .unwrap()
+        });
+    }
+    assert_eq!(
+        *new_browser.0.lock().unwrap(),
+        ["https://login.example/verify"]
+    );
+    assert_eq!(
+        *old_browser.0.lock().unwrap(),
+        ["https://login.example/verify"]
+    );
+}
+
 #[test]
 fn state_after_tool_each_changed_field_carries_its_writes() {
     for returned in [
@@ -180,14 +386,10 @@ fn state_late_provider_vm_uses_the_sessions_live_registry() {
             init += &hook("after_tool", "state.set('starts',10)", "blocking");
         }
         home.install("goal", &init);
-        let package = home.home().join("extensions/fiber.test-goal");
-        let manifest = package.join("extension.json");
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
-        value["providers"] = json!({"p":[]});
-        std::fs::write(manifest, value.to_string()).unwrap();
-        std::fs::create_dir(package.join("providers")).unwrap();
-        std::fs::write(package.join("providers/p.lua"), "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',state.get('starts')); return {} end}})").unwrap();
+        install_provider(
+            &home,
+            "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',state.get('starts')); return {} end}})",
+        );
         let mut session = home.load(&[]);
         assert!(session.notices().is_empty(), "{:?}", session.notices());
         if hooked {
@@ -733,4 +935,15 @@ fn state_take_between_hook_calls_passes() {
         assert_eq!(take_lines(&session, contexts).len(), 1);
         assert!(session.take_change_state().is_empty());
     }
+}
+
+fn install_provider(home: &Home, lua: &str) {
+    let package = home.home().join("extensions/fiber.test-goal");
+    let manifest = package.join("extension.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    value["providers"] = json!({"p":[]});
+    std::fs::write(manifest, value.to_string()).unwrap();
+    std::fs::create_dir(package.join("providers")).unwrap();
+    std::fs::write(package.join("providers/p.lua"), lua).unwrap();
 }

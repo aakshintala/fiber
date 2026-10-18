@@ -383,6 +383,7 @@ fn resumed_session(
     parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
     let parts = parts;
     let crate::Parts {
+        sources,
         provider,
         observe,
         reviewer_observe,
@@ -524,11 +525,6 @@ fn resumed_session(
             return Err(e);
         }
     };
-    // What the session loads once its offer step has run, before its first
-    // preamble: the repository code approved since the process started.
-    let load = session_servers
-        .later
-        .into_load(session.declarer(), caps.clone());
     session.shell(driver);
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
@@ -537,14 +533,16 @@ fn resumed_session(
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
     let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
-    extensions.model_to(Arc::new(crate::model_host::ModelHost::new(
+    let host_model = Arc::new(crate::model_host::ModelHost::new(
         switching.reacher(Arc::new(crate::connect)),
         budget,
         &retry,
         dir.to_path_buf(),
         id.clone(),
-    )));
-    extensions.answerable(!one_turn);
+    ));
+    extensions.model_to(host_model.clone());
+    let answerable = !one_turn;
+    extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
         session.attended(),
@@ -569,28 +567,44 @@ fn resumed_session(
         hosted_stands,
         backend: extensions.search_backend(),
     };
+    let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    let switcher = switching.clone().closure(door);
+    let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
+        sources,
+        prompt_inputs.clone(),
+        current.clone(),
+        switching.clone(),
+        &tools,
+        &session,
+        host_model,
+        session_servers,
+        answerable,
+        log.clone(),
+        diag.clone(),
+    );
+    let reloader = reload.preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was. The commit below
     // decides the window between `start` and the first write: a recorded
     // signal writes nothing and exits with its code.
     let reads = switching.reads();
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
-        session_servers.servers.stop();
+        servers.stop();
         close(session, log, &home, dir, &workspace, &*clock);
         return Ok(code);
     }
     match signals.commit(|| {
         r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
-            .and_then(|()| crate::session_extensions::written(&log, &extensions))
-            .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
+            .and_then(|()| crate::session_extensions::written(&log, &current.get()))
+            .and_then(|()| r#loop::mcp_servers_started(&log, server_failures, mcp.notices))
     }) {
         Err(code) => {
-            session_servers.servers.stop();
+            servers.stop();
             close(session, log, &home, dir, &workspace, &*clock);
             return Ok(code);
         }
         Ok(Err(e)) => {
-            session_servers.servers.stop();
+            servers.stop();
             close(session, log, &home, dir, &workspace, &*clock);
             return Err(failed(e.code(), e));
         }
@@ -604,7 +618,7 @@ fn resumed_session(
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
-    let fetch_prompts = session_servers.prompts.clone();
+    let fetch_prompts = prompts.clone();
     let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
         fetch_prompts.get(server, prompt, text, cancel)
     });
@@ -616,7 +630,7 @@ fn resumed_session(
         one_turn,
         cancel,
         &diag,
-        &extensions,
+        &current,
         |inbox, cancel| {
             crate::finish(
                 Loop::resume(
@@ -632,7 +646,7 @@ fn resumed_session(
                     folded,
                 )
                 .map(|looped| {
-                    let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
+                    let looped = crate::session_extensions::hooked(looped.jobs(jobs), &current);
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)
@@ -640,7 +654,8 @@ fn resumed_session(
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(switching.closure(door), switchable)
+                        .switcher(switcher, switchable)
+                        .reloader(reloader)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
@@ -665,7 +680,7 @@ fn resumed_session(
             .map(|()| None)
         },
     );
-    session_servers.servers.stop();
+    servers.stop();
     close(session, log, &home, dir, &workspace, &*clock);
     Ok(code)
 }

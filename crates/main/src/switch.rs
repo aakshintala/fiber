@@ -165,18 +165,28 @@ impl StartLock {
     }
 }
 
+/// Non-route inputs replaced together when a reload installs.
+#[derive(Clone)]
+pub(crate) struct Reloadable {
+    pub(crate) config: Arc<Config>,
+    /// Re-cap rebuilt tools from their uncapped originals on reload or switch.
+    pub(crate) caps: r#loop::ResultCaps,
+    pub(crate) backend: Option<Arc<dyn contract::search::SearchBackend>>,
+    pub(crate) hosted_stands: bool,
+    pub(crate) loader: Loader,
+}
+
 /// What preparing a switch reads: the whole startup registry, holding no
 /// Lua provider, every model every provider names before placeholders are
 /// filled, the configuration, each key read so far with the label each
 /// provider is on, and the Lua providers loaded now: the session's and its
 /// reviewer's.
 pub(crate) struct Switching {
+    pub(crate) now: Arc<Mutex<Reloadable>>,
     registry: Providers,
     naming: Vec<(String, String)>,
-    config: Config,
-    /// Each configured `tools."<name>".max_result_bytes`, for a hosted
-    /// search the switch declares.
-    caps: r#loop::ResultCaps,
+    /// Route thinking and credentials stay fixed to the startup configuration.
+    startup_config: Config,
     remembered: Mutex<Remembered>,
     /// The label each provider is on in the running session, moved only
     /// when a switch applies: `host.model` reads it at call time, so a
@@ -186,7 +196,6 @@ pub(crate) struct Switching {
     /// the loop applies the switch.
     current: Mutex<BTreeMap<String, String>>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
-    loader: Loader,
     started: Arc<StartLock>,
     reads: Arc<Reads>,
     /// The session's diagnostic writer: a switch prepares observed
@@ -270,13 +279,18 @@ impl Switching {
         Self {
             registry,
             naming,
-            caps: crate::settings::result_caps(&config),
-            config,
+            now: Arc::new(Mutex::new(Reloadable {
+                config: Arc::new(config.clone()),
+                caps: crate::settings::result_caps(&config),
+                backend: loader.extensions.search_backend(),
+                hosted_stands: false,
+                loader,
+            })),
+            startup_config: config,
             remembered: Mutex::new(remembered),
             current: Mutex::new(current),
             started: Arc::new(StartLock::seeded(&loaded)),
             loaded: Mutex::new(loaded.into_iter().collect()),
-            loader,
             reads,
             diag: None,
         }
@@ -297,7 +311,103 @@ impl Switching {
     /// The `Loop::switcher` closure: `prepare` over the shared `Switching`,
     /// publishing to `door` when a switch applies.
     pub(crate) fn closure(self: Arc<Self>, door: Door) -> r#loop::Prepare {
-        Arc::new(move |args, label, chosen| prepare(&self, &door, args, label, chosen))
+        {
+            let mut now = self.now.lock().unwrap_or_else(PoisonError::into_inner);
+            now.backend = door.backend.clone();
+            now.hosted_stands = door.hosted_stands;
+        }
+        let prepare = self;
+        Arc::new(move |args, label, chosen| {
+            let now = prepare.reloadable();
+            let current_door = Door {
+                declare: door.declare.clone(),
+                backend: now.backend,
+                hosted_stands: now.hosted_stands,
+            };
+            crate::switch::prepare(&prepare, &current_door, args, label, chosen)
+        })
+    }
+
+    pub(crate) fn reloaded(&self, now: Reloadable) {
+        *self.now.lock().unwrap_or_else(PoisonError::into_inner) = now;
+    }
+
+    pub(crate) fn loader(&self) -> Loader {
+        self.reloadable().loader
+    }
+
+    pub(crate) fn reloadable(&self) -> Reloadable {
+        self.now
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn resolved(&self, reference: &str) -> Result<extensions::Model<'_>, Failure> {
+        self.registry
+            .resolve(reference)
+            .map_err(|error| crate::failed(error.code(), error))
+    }
+
+    pub(crate) fn reviewer_for(
+        self: &Arc<Self>,
+        route: &r#loop::ReloadRoute,
+        config: &Config,
+        here: &crate::Here,
+    ) -> (
+        Result<r#loop::Reviewer, Failure>,
+        Option<contract::diag::Observe>,
+        Vec<PathBuf>,
+        Applied,
+    ) {
+        let mut staged: Vec<(String, Got)> = Vec::new();
+        let mut files = Vec::new();
+        let result = self.resolved(&route.model).and_then(|resolved| {
+            let mut lookup = |data: &ProviderData| {
+                let own = data.name == resolved.provider.name;
+                let want = self.want(
+                    &data.name,
+                    if own {
+                        route.credential.as_deref()
+                    } else {
+                        None
+                    },
+                );
+                let got = self.read(want)?;
+                let answer = (got.label.clone(), got.access.clone());
+                files.extend(got.file.clone());
+                if !own {
+                    staged.push((data.name.clone(), got));
+                }
+                Ok(answer)
+            };
+            crate::choose_reviewer(
+                &self.registry,
+                config,
+                &resolved,
+                here,
+                &mut lookup,
+                self.diag.as_ref(),
+            )
+        });
+        let shared = self.clone();
+        let publish: Applied = Box::new(move || {
+            let mut remembered = shared
+                .remembered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            for (name, got) in staged {
+                remembered
+                    .keys
+                    .entry((name.clone(), got.label.clone()))
+                    .or_insert_with(|| got.access.key.clone());
+                remembered.selected.insert(name, got.label);
+            }
+        });
+        match result {
+            Ok((reviewer, observe)) => (Ok(reviewer), observe, files, publish),
+            Err(error) => (Err(error), None, files, publish),
+        }
     }
 
     /// Moves `provider` to `label`: the label the last applied switch
@@ -335,11 +445,14 @@ impl Switching {
                 .cloned();
             let want = shared.want(&name, label.as_deref());
             let reader = Arc::clone(&shared);
-            let read: Result<Got, Failure> = shared.reads.run(move || reader.read(want))?;
+            let read: Result<Got, Failure> = shared
+                .reads
+                .run("credential read", move || reader.read(want))?;
             let got = read?;
+            let loader = shared.loader();
             let here = crate::Here {
-                workspace: shared.loader.workspace.clone(),
-                clock: Arc::clone(&shared.loader.clock),
+                workspace: loader.workspace.clone(),
+                clock: Arc::clone(&loader.clock),
             };
             let provider = connect(
                 resolved,
@@ -416,7 +529,7 @@ impl Switching {
             .get(name)
             .cloned()
             .unwrap_or_else(|| match data {
-                Some(data) => self.config.credentials().credential_label(data),
+                Some(data) => self.startup_config.credentials().credential_label(data),
                 None => String::new(),
             })
     }
@@ -434,12 +547,13 @@ impl Switching {
             )
         })?;
         let mut file = None;
+        let loader = self.loader();
         let access = crate::scripted::access(data, || {
-            let lua = match (want.lua, self.loader.owners.get(&want.name)) {
+            let lua = match (want.lua, loader.owners.get(&want.name)) {
                 (Some(lua), _) => Some(lua),
                 (None, Some(extension)) => Some(
                     self.started
-                        .start(&self.loader, &self.config, &want.name, extension)
+                        .start(&loader, &self.startup_config, &want.name, extension)
                         .map_err(|e| crate::failed(e.code(), e))?,
                 ),
                 (None, None) => None,
@@ -465,7 +579,7 @@ impl Switching {
                         &want.name,
                         Some(data),
                     );
-                    let labels = self.config.credentials().labels(data);
+                    let labels = self.startup_config.credentials().labels(data);
                     if want.label != current && !labels.contains(&want.label) {
                         return Err(crate::credential::no_label(
                             &want.name,
@@ -475,10 +589,10 @@ impl Switching {
                     }
                     let run = |command: &mut std::process::Command,
                                timeout: std::time::Duration| {
-                        self.reads.credential(command, timeout, &*self.loader.clock)
+                        self.reads.credential(command, timeout, &*loader.clock)
                     };
                     let read = crate::credential::switch_credential(
-                        &self.config,
+                        &self.startup_config,
                         data,
                         &want.label,
                         &run,
@@ -553,6 +667,7 @@ pub(crate) fn prepare(
         ),
         None => None,
     };
+    let now = switching.reloadable();
     let resolved = resolve(&switching.registry, &switching.naming, &args.model)?;
     crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();
@@ -562,7 +677,7 @@ pub(crate) fn prepare(
     let thinking = crate::settings::thinking(
         resolved.thinking,
         asked.or(chosen),
-        &switching.config,
+        &switching.startup_config,
         resolved.model,
         &reference,
         &mut notices,
@@ -572,7 +687,7 @@ pub(crate) fn prepare(
         .map_err(|failure| invalid(failure.message))?;
     // The reviewer's model, before the read: Fiber never reviews with the
     // session's own model.
-    let judge = crate::reviewer_reference(&switching.config, &resolved).and_then(|typed| {
+    let judge = crate::reviewer_reference(&now.config, &resolved).and_then(|typed| {
         let model = switching
             .registry
             .resolve(&typed)
@@ -597,15 +712,15 @@ pub(crate) fn prepare(
     let shared = Arc::clone(switching);
     let read: Read = switching
         .reads
-        .run(move || {
+        .run("credential read", move || {
             let got = shared.read(session_want)?;
             Ok((got, judge_want.map(|want| shared.read(want))))
         })
         .map_err(rejection)?;
     let (got, judge_got) = read.map_err(rejection)?;
     let here = crate::Here {
-        workspace: switching.loader.workspace.clone(),
-        clock: Arc::clone(&switching.loader.clock),
+        workspace: now.loader.workspace.clone(),
+        clock: Arc::clone(&now.loader.clock),
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.
@@ -647,7 +762,7 @@ pub(crate) fn prepare(
     // "How it runs").
     let (reviewer, reviewer_observe) = match crate::choose_reviewer(
         &switching.registry,
-        &switching.config,
+        &now.config,
         &resolved,
         &here,
         &mut lookup,
@@ -721,10 +836,10 @@ pub(crate) fn prepare(
         // session's choice.
         chosen: resolved.thinking.or(asked).or(chosen),
         credential: crate::scripted::credential(resolved.provider, got.label),
-        cache_lifetime: crate::settings::cache_lifetime(&switching.config, &reference),
+        cache_lifetime: crate::settings::cache_lifetime(&now.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
-        handoff: crate::handoff::handoff_settings(&switching.config, &reference),
+        handoff: crate::handoff::handoff_settings(&now.config, &reference),
         reviewer,
         observe,
         reviewer_observe,
@@ -737,7 +852,7 @@ pub(crate) fn prepare(
 }
 
 /// What `Prepared.applied` runs when the switch applies.
-type Applied = Box<dyn FnOnce() + Send>;
+pub(crate) type Applied = Box<dyn FnOnce() + Send>;
 
 /// The search after the switch, and what applying it publishes to
 /// the door's `tools` answer: the new model's hosted search when it has
@@ -749,6 +864,7 @@ fn hosted(
     door: &Door,
     kind: Option<&str>,
 ) -> Result<(r#loop::Hosted, Option<Applied>), Rejection> {
+    let now = switching.reloadable();
     if door.hosted_stands {
         return Ok((r#loop::Hosted::Keep, None));
     }
@@ -762,12 +878,9 @@ fn hosted(
             Some(applied),
         ));
     };
-    let tool = r#loop::capped(
-        vec![("builtin".to_owned(), Arc::clone(&tool))],
-        &switching.caps,
-    )
-    .pop()
-    .map_or(tool, |(_, capped)| capped);
+    let tool = r#loop::capped(vec![("builtin".to_owned(), Arc::clone(&tool))], &now.caps)
+        .pop()
+        .map_or(tool, |(_, capped)| capped);
     let applied = Box::new(move || {
         let name = info.name.clone();
         declare(&name, Some(info));

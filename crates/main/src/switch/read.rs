@@ -245,6 +245,7 @@ impl Reads {
     /// `closing`: the read's late value is dropped with its channel.
     pub(crate) fn run<T: Send + 'static>(
         &self,
+        purpose: &str,
         read: impl FnOnce() -> T + Send + 'static,
     ) -> Result<T, Failure> {
         let (answer, answered) = mpsc::channel();
@@ -269,7 +270,7 @@ impl Reads {
             Ok(_) => answered.recv().unwrap_or_else(|_| Err(closing())),
             Err(error) => Err(failure(
                 ErrorCode::IoFailed,
-                format!("a thread for the credential read: {error}"),
+                format!("a thread for the {purpose}: {error}"),
             )),
         };
         self.lock().waiting.remove(&id);

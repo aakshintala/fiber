@@ -30,6 +30,7 @@ mod open;
 mod parts;
 mod prompt_files;
 mod read_signals;
+mod reload;
 mod resume;
 mod rewind;
 mod scripted;
@@ -613,7 +614,7 @@ fn run_turn(
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
-    extensions: &extensions::SessionExtensions,
+    current: &session_extensions::Current,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
@@ -650,7 +651,7 @@ fn run_turn(
     }
     // `fiber_exited` is the last line: nothing on the door side follows it.
     session.quiesce();
-    let written = write_state_at_exit(log, dir, extensions);
+    let written = write_state_at_exit(log, dir, &current.get());
     let ran = ran.and(written.map_err(|error| failed(error.code(), error)));
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.

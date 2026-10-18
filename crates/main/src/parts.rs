@@ -24,6 +24,7 @@ use crate::{
 
 /// What a session is built from, read before it exists.
 pub(crate) struct Parts {
+    pub(crate) sources: Sources,
     pub(crate) home: PathBuf,
     pub(crate) sessions: PathBuf,
     pub(crate) workspace: PathBuf,
@@ -199,9 +200,6 @@ pub(crate) fn parts_in(
     // placeholders, then the thinking notice below: each load's notices
     // are emitted once, after `fiber_started` with the MCP notices.
     let mut startup_notices: Vec<contract::events::Notice> = config.notices().to_vec();
-    let budget = config
-        .get("budget.usd", None)
-        .and_then(|(value, _)| value.as_f64());
     // Loading extensions runs under its own timer, from the installed
     // provider packages through the session extensions' load. The budget
     // read above stays outside, and the diagnostics below stay outside:
@@ -349,12 +347,25 @@ pub(crate) fn parts_in(
     };
     extensions.retain_lua_providers(&[]);
     let extensions = Arc::new(extensions);
-    let limits = settings::block_limits(&config);
-    let reviewer_notes = config.reviewer_context();
-    let retry = settings::retry_policy(&config);
-    let handoff = handoff::handoff_settings(&config, &model.reference());
-    let idle = Some(settings::idle_exit(&config));
-    let warm = scripted::warm(model.model, settings::warm(&config));
+    let (
+        patch,
+        r#loop::ReloadSettings {
+            limits,
+            reviewer_notes,
+            retry,
+            handoff,
+            idle_exit: idle,
+            warm_cap: warm,
+            budget,
+        },
+    ) = reload_inputs(
+        &config,
+        &home,
+        &project,
+        &extensions,
+        model.model,
+        &model.reference(),
+    );
     let thinking = settings::thinking(
         model.thinking,
         recorded_thinking,
@@ -391,28 +402,34 @@ pub(crate) fn parts_in(
         clock,
         context_window,
     );
-    prompt.system = config::system_prompt(&home, &project);
-    prompt.append = config::append_prompt(&home, &project);
+    prompt.system = patch.system;
+    prompt.append = patch.append;
     prompt.agents_home = agents_home;
     prompt.addendum = providers.addendum(&model).map(str::to_owned);
-    prompt.extensions = extensions.prompts();
-    prompt.extension_dirs = extensions.dirs();
-    prompt.extension_sections = extensions.sections(&project);
-    prompt.skills_disabled = config.union_list("skills.disabled");
+    prompt.extensions = patch.extensions;
+    prompt.extension_dirs = patch.extension_dirs;
+    prompt.extension_sections = patch.extension_sections;
+    prompt.skills_disabled = patch.skills_disabled;
     prompt.skills_disabled_now = Some(settings::skills_disabled_reader(
         home.clone(),
         workspace.clone(),
         project.clone(),
-        overrides,
+        overrides.clone(),
     ));
     prompt.credential = crate::scripted::credential(model.provider, label);
-    prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
+    prompt.cache_lifetime = patch.cache_lifetime;
     prompt.thinking = thinking;
     // The startup notices are written with the MCP notices, after
     // `fiber_started`.
     let mut mcp = mcp_servers::specs(&config)?;
     mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
+        sources: Sources {
+            home: home.clone(),
+            workspace: workspace.clone(),
+            project: project.clone(),
+            overrides,
+        },
         sessions,
         home,
         workspace,
@@ -450,6 +467,38 @@ pub(crate) fn parts_in(
         resolve: crate::delegates::resolver(&providers, &config),
         web_search: model.model.web_search.clone(),
     })
+}
+
+pub(crate) fn reload_inputs(
+    config: &Config,
+    home: &std::path::Path,
+    project: &config::ProjectKey,
+    extensions: &extensions::SessionExtensions,
+    model: &config::ModelData,
+    reference: &str,
+) -> (r#loop::PromptPatch, r#loop::ReloadSettings) {
+    (
+        r#loop::PromptPatch {
+            system: config::system_prompt(home, project),
+            append: config::append_prompt(home, project),
+            extensions: extensions.prompts(),
+            extension_dirs: extensions.dirs(),
+            extension_sections: extensions.sections(project),
+            skills_disabled: config.union_list("skills.disabled"),
+            cache_lifetime: settings::cache_lifetime(config, reference),
+        },
+        r#loop::ReloadSettings {
+            limits: settings::block_limits(config),
+            reviewer_notes: config.reviewer_context(),
+            retry: settings::retry_policy(config),
+            handoff: handoff::handoff_settings(config, reference),
+            idle_exit: Some(settings::idle_exit(config)),
+            warm_cap: scripted::warm(model, settings::warm(config)),
+            budget: config
+                .get("budget.usd", None)
+                .and_then(|(value, _)| value.as_f64()),
+        },
+    )
 }
 
 /// The reviewer model's reference: `reviewer.model` when set, else the
