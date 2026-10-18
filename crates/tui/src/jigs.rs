@@ -473,24 +473,9 @@ impl Paging<'_> {
                 .and_then(|args| args.get("to_seq"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(u64::MAX);
-            // Without `from_seq` the doors answer the last lines up to
-            // `to_seq`, or up to the latest, at most 256; on an empty
-            // log, with none.
             let held = match from_opt {
                 Some(from) => self.range_lines(from, to)?,
-                None => {
-                    let end = self.log.partition_point(|(seq, _)| seq.0 <= to);
-                    // An empty log holds no window; otherwise the window
-                    // starts at the first of the last 256 lines at or
-                    // below `to`.
-                    if end == 0 {
-                        Vec::new()
-                    } else if let Some((first, _)) = self.log.get(end.saturating_sub(256)) {
-                        self.range_lines(first.0, to)?
-                    } else {
-                        Vec::new()
-                    }
-                }
+                None => self.first_window(to)?,
             };
             let answer = contract::Envelope {
                 kind: "command_accepted".to_owned(),
@@ -523,6 +508,22 @@ impl Paging<'_> {
             self.clock.now().saturating_duration_since(started),
             self.app.find_matches(),
         ))
+    }
+
+    /// The door's answer to a `history` fetch with no `from_seq`: the
+    /// last lines up to `to_seq`, or up to the latest, at most 256; on
+    /// an empty log, with none (`docs/tui.md`, "History and paging").
+    fn first_window(&self, to: u64) -> Result<Vec<Envelope>, String> {
+        let end = self.log.partition_point(|(seq, _)| seq.0 <= to);
+        // An empty log holds no window; otherwise the window starts at
+        // the first of the last 256 lines at or below `to`.
+        if end == 0 {
+            Ok(Vec::new())
+        } else if let Some((first, _)) = self.log.get(end.saturating_sub(256)) {
+            self.range_lines(first.0, to)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// A fresh absent search after the resize: the query matches nothing
