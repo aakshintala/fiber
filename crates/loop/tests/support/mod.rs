@@ -53,6 +53,17 @@ pub(crate) use events::{
 /// How long a turn may take before a test fails instead of hanging.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(5);
 
+/// Runs `run` on its own thread and returns the channel it reports on.
+pub(crate) fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
+    let looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let result = looped.run();
+        done.send(result).unwrap();
+    });
+    finished
+}
+
 /// Reads `watcher` on its own thread with blocking `recv` until `done`
 /// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
 /// watcher and every line read, the accepted one last.
