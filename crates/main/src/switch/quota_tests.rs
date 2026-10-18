@@ -413,7 +413,38 @@ fn a_switch_racing_the_loader_reuses_its_instance() {
 }
 
 #[test]
+fn the_notice_reader_reads_only_existing_caches() {
+    let fixture = fixture(true, false, &[]);
+    let store = fixture.switching.quota_store();
+    let before = std::fs::read(&fixture.counter).ok();
+    assert_eq!(store.cached(), (Vec::new(), 80.0));
+    assert!(!store.state.lock().unwrap().started);
+    assert_eq!(std::fs::read(&fixture.counter).ok(), before);
+    let readers = fixture.switching.quota_readers();
+    assert_eq!((readers.notice)(), (Vec::new(), 80.0));
+    assert_eq!(std::fs::read(&fixture.counter).ok(), before);
+    load(&store);
+    let expected = cached(&store);
+    assert!(!expected.is_empty());
+    assert_eq!(store.cached(), (expected, 80.0));
+    assert_eq!(store.cached(), store.answer());
+}
+
+#[test]
 fn mapping_keeps_values_but_no_age_and_omits_empty_caches() {
+    let reset_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_760_000_000);
+    let reset_window = Quota::Windows(vec![Window {
+        name: "weekly".into(),
+        used: WindowUse::Percent {
+            used: 35.0,
+            resets_at: Some(reset_time),
+        },
+    }]);
+    assert_eq!(
+        serde_json::to_value(info("p", "work", QuotaEntry::Reported(reset_window)).unwrap())
+            .unwrap(),
+        json!({"provider":"p", "credential":"work", "windows":[{"name":"weekly", "percent_used":35.0, "resets_at":1760000000000_u64}]}),
+    );
     let window = Quota::Windows(vec![
         Window {
             name: "weekly".into(),
@@ -964,7 +995,7 @@ fn both_readers_share_one_loader() {
 fn a_model_reader_outliving_switching_starts_nothing() {
     let fixture = fixture(false, false, &[]);
     let before = std::fs::read_to_string(&fixture.counter).unwrap();
-    let (_, model) = fixture.switching.quota_readers();
+    let QuotaReaders { model, .. } = fixture.switching.quota_readers();
     drop(fixture.switching);
     // The loader thread runs, finds no session and ends it: no provider
     // ever starts, so the view stays loading and the counter never moves.

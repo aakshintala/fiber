@@ -740,6 +740,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::RepositoryCodeOffered(_)
         | Event::RepositoryCodeResolved(_)
         | Event::QuotaNoticed(_)
+        | Event::QuotaRearmed(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
         | Event::OpeningMessage(_)

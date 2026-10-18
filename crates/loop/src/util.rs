@@ -2,8 +2,7 @@
 //! and the one path every emitted event takes to the log and the
 //! conversation.
 
-use std::collections::{BTreeMap, hash_map::RandomState};
-use std::hash::BuildHasher;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use contract::events::{
@@ -25,11 +24,7 @@ pub(crate) fn ended(outcome: TurnOutcome, error: Option<Failure>) -> TurnComplet
     }
 }
 
-/// A new id from random bytes (`docs/events.md`, "Identity and ordering").
-/// `RandomState` seeds its keys from the operating system's randomness.
-pub(crate) fn mint(prefix: &str) -> String {
-    format!("{prefix}{:016x}", RandomState::new().hash_one(()))
-}
+pub(crate) use support::mint;
 
 /// Where this process's environment came from; first call wins. Set once, by the session command.
 static SOURCE: OnceLock<VariablesSource> = OnceLock::new();

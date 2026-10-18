@@ -455,7 +455,11 @@ fn resumed_session(
             "the session directory has no parent",
         ));
     };
-    let (quota, model_quota) = switching.quota_readers();
+    let crate::switch::quota::QuotaReaders {
+        door: quota,
+        model: model_quota,
+        notice,
+    } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
@@ -653,7 +657,10 @@ fn resumed_session(
                     folded,
                 )
                 .map(|looped| {
-                    let looped = crate::session_extensions::hooked(looped.jobs(jobs), &current);
+                    let looped = crate::session_extensions::hooked(
+                        looped.jobs(jobs).quota(notice),
+                        &current,
+                    );
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)

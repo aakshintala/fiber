@@ -8,8 +8,6 @@ mod http;
 mod markdown;
 mod target;
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::{self, Read};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -355,7 +353,7 @@ impl WebFetch {
 
     /// A new artifact in `artifacts/` under a fresh name.
     fn artifact(&self, extension: &str) -> Artifact {
-        let stem = format!("w_{:016x}", RandomState::new().hash_one(()));
+        let stem = support::mint("w_");
         Artifact::create(&self.artifacts, &stem, extension, self.wrap.as_ref())
     }
 

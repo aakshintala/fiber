@@ -97,17 +97,24 @@ struct Store {
     fail_reads: Mutex<Option<String>>,
 }
 
+pub(crate) struct QuotaReaders {
+    pub(crate) door: QuotaRead,
+    pub(crate) model: ModelQuotaRead,
+    pub(crate) notice: QuotaRead,
+}
+
 impl Switching {
-    /// Both quota readers over one store: the doors command's rows and the
-    /// model-facing snapshot share one loader, so one session loads once.
-    pub(crate) fn quota_readers(&self) -> (QuotaRead, ModelQuotaRead) {
+    /// Three quota readers over one store: commands and model snapshots
+    /// share the loader; notices read only what is already cached.
+    pub(crate) fn quota_readers(&self) -> QuotaReaders {
         let store = self.quota_store();
         let doors = Arc::clone(&store);
-        let model = store;
-        (
-            Arc::new(move || doors.answer()),
-            Arc::new(move || model.entries()),
-        )
+        let model = Arc::clone(&store);
+        QuotaReaders {
+            door: Arc::new(move || doors.answer()),
+            model: Arc::new(move || model.entries()),
+            notice: Arc::new(move || store.cached()),
+        }
     }
 
     fn quota_store(&self) -> Arc<Store> {
@@ -231,10 +238,21 @@ impl Store {
         (checked, labels, failed, silent)
     }
 
-    #[allow(
-        clippy::expect_used,
-        reason = "Config validates quota.notice_at and supplies its numeric default"
-    )]
+    fn cached(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
+        let (labels, mut quota) = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            (state.labels.clone(), state.failed.clone())
+        };
+        quota.extend(labels.into_iter().filter_map(|label| {
+            info(
+                &label.provider,
+                &label.label,
+                label.lua.quota_cached(&label.pair),
+            )
+        }));
+        self.with_threshold(quota)
+    }
+
     fn answer_with_spawn(
         self: &Arc<Self>,
         spawn: impl FnOnce(Arc<Self>) -> std::io::Result<()>,
@@ -247,6 +265,14 @@ impl Store {
                 label.lua.quota_now(&label.pair, label.key.as_ref()),
             )
         }));
+        self.with_threshold(quota)
+    }
+
+    #[allow(
+        clippy::expect_used,
+        reason = "Config validates quota.notice_at and supplies its numeric default"
+    )]
+    fn with_threshold(&self, mut quota: Vec<QuotaInfo>) -> (Vec<QuotaInfo>, f64) {
         quota.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
         let config = self
             .now
@@ -559,14 +585,17 @@ fn info(provider: &str, label: &str, entry: QuotaEntry) -> Option<QuotaInfo> {
                 windows
                     .into_iter()
                     .map(|window| {
-                        let (percent_used, reset) = match window.used {
-                            WindowUse::Percent { used, .. } => (Some(used), None),
-                            WindowUse::Reset => (None, Some(True)),
+                        let (percent_used, reset, resets_at) = match window.used {
+                            WindowUse::Percent { used, resets_at } => {
+                                (Some(used), None, resets_at.map(contract::clock::wall_ms))
+                            }
+                            WindowUse::Reset => (None, Some(True), None),
                         };
                         QuotaWindow {
                             name: window.name,
                             percent_used,
                             reset,
+                            resets_at,
                         }
                     })
                     .collect(),

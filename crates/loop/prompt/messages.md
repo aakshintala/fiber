@@ -232,3 +232,11 @@ Fiber: skill {name} can now be loaded: {description}
 ## skill-removed
 
 Fiber: skill {name} was removed and can no longer be loaded.
+
+## quota-notice
+
+Fiber: {provider} credential {credential} has used {percent}% of its {window} quota.
+
+## quota-notice-reset
+
+Fiber: {provider} credential {credential} has used {percent}% of its {window} quota, which resets at {resets_at}.

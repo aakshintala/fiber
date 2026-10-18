@@ -25,9 +25,9 @@ pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, ExtensionSectionSent, Git,
     HandoffCompleted, HandoffStarted, HandoffTrigger, InstructionFile, InstructionFileSent,
     InstructionReason, InstructionSent, KeptMessage, ModelChanged, ModelSettings, Note, Notice,
-    OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, RetryScheduled,
-    ReviewerKept, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource, SkillsChanged,
-    SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
+    OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, QuotaRearmed,
+    RetryScheduled, ReviewerKept, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource,
+    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
@@ -153,6 +153,7 @@ kinds! {
     RepositoryCodeResolved(RepositoryCodeResolved) = "repository_code_resolved", Durable;
     UsageRecorded(UsageRecorded) = "usage_recorded", Durable;
     QuotaNoticed(QuotaNoticed) = "quota_noticed", Durable;
+    QuotaRearmed(QuotaRearmed) = "quota_rearmed", Durable;
     RetryScheduled(RetryScheduled) = "retry_scheduled", Ephemeral;
     Notice(Notice) = "notice", Ephemeral;
     PreambleBuilt(PreambleBuilt) = "preamble_built", Durable;
