@@ -840,10 +840,11 @@ fn already_cancelled_edits_nothing() {
 
 #[test]
 fn a_boundary_failure_is_a_tool_error() {
-    let output = super::match_failed(super::matching::MatchError::Boundary);
-    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    let error = super::match_error(super::matching::MatchError::Boundary);
+    assert!(matches!(error, super::EditError::Boundary { .. }));
+    assert_eq!(error.code(), ErrorCode::ToolError);
     assert_eq!(
-        message(&output),
+        error.to_string(),
         "The edit could not be applied: a match offset was not a character boundary."
     );
 }

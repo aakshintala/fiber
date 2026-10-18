@@ -4,8 +4,8 @@
 use contract::ErrorCode;
 
 use super::{
-    ArgumentsError, AskUserError, FileError, ImageReadError, PdfError, ReadError, SkillError,
-    ToolError, WebSearchError, WriteError,
+    ArgumentsError, AskUserError, EditError, FileError, ImageReadError, PdfError, ReadError,
+    SkillError, ToolError, WebSearchError, WriteError,
 };
 use crate::error::{SessionListError, SessionMessageError};
 
@@ -506,6 +506,80 @@ fn a_pdf_over_the_cap_names_the_cap() {
         error.to_string(),
         crate::pdf::over_cap_message(std::path::Path::new("/a.pdf"), 200_000_000)
     );
+}
+
+#[test]
+fn an_empty_edit_list_is_invalid() {
+    let error = EditError::NoBlocks;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`edits` must contain at least one block."
+    );
+}
+
+#[test]
+fn a_missed_match_names_no_match() {
+    let error = EditError::NoMatch {
+        message: "edits[0]: old_text was not found. Read the file again and copy the text exactly."
+            .to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::NoMatch);
+    assert_eq!(
+        error.to_string(),
+        "edits[0]: old_text was not found. Read the file again and copy the text exactly."
+    );
+    let error = EditError::Ambiguous {
+        message: "edits[0]: old_text matched 2 times. Read the file again and include more \
+         surrounding text."
+            .to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::AmbiguousMatch);
+    assert_eq!(
+        error.to_string(),
+        "edits[0]: old_text matched 2 times. Read the file again and include more surrounding \
+         text."
+    );
+}
+
+#[test]
+fn an_invalid_edit_and_a_boundary_keep_their_codes() {
+    let error = EditError::InvalidEdit {
+        message: "edits[0]: old_text is empty.".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "edits[0]: old_text is empty.");
+    let error = EditError::Boundary {
+        message: "The edit could not be applied: a match offset was not a character boundary."
+            .to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The edit could not be applied: a match offset was not a character boundary."
+    );
+    let root = ToolError::from(EditError::from(FileError::NotFound {
+        path: std::path::PathBuf::from("/a.txt"),
+    }));
+    assert_eq!(root.code(), ErrorCode::NotFound);
+}
+
+#[test]
+fn a_missing_file_names_itself() {
+    let error = FileError::NotFound {
+        path: std::path::PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::NotFound);
+    assert_eq!(error.to_string(), "`/a.txt` does not exist.");
+}
+
+#[test]
+fn an_inspection_failure_keeps_its_message() {
+    let error = FileError::Inspect {
+        message: "`/a.txt` is a fifo.".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "`/a.txt` is a fifo.");
 }
 
 #[derive(Debug, serde::Deserialize)]

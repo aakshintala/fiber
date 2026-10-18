@@ -44,6 +44,59 @@ impl WriteError {
     }
 }
 
+/// Every way `edit` fails.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EditError {
+    /// Reaching the file failed.
+    #[error(transparent)]
+    File(#[from] super::FileError),
+    /// The call's arguments do not fit the schema.
+    #[error(transparent)]
+    Arguments(#[from] super::ArgumentsError),
+    /// The call names no edit block.
+    #[error("`edits` must contain at least one block.")]
+    NoBlocks,
+    /// `old_text` does not occur.
+    #[error("{message}")]
+    NoMatch {
+        /// The matcher's sentence.
+        message: String,
+    },
+    /// `old_text` occurs more than once.
+    #[error("{message}")]
+    Ambiguous {
+        /// The matcher's sentence.
+        message: String,
+    },
+    /// An edit block does not parse.
+    #[error("{message}")]
+    InvalidEdit {
+        /// The matcher's sentence.
+        message: String,
+    },
+    /// A match offset is not a character boundary.
+    #[error("{message}")]
+    Boundary {
+        /// The matcher's sentence.
+        message: String,
+    },
+}
+
+impl EditError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> contract::ErrorCode {
+        match self {
+            Self::File(error) => error.code(),
+            Self::Arguments(error) => error.code(),
+            Self::NoBlocks | Self::InvalidEdit { .. } => contract::ErrorCode::InvalidArguments,
+            Self::NoMatch { .. } => contract::ErrorCode::NoMatch,
+            Self::Ambiguous { .. } => contract::ErrorCode::AmbiguousMatch,
+            Self::Boundary { .. } => contract::ErrorCode::ToolError,
+        }
+    }
+}
+
 impl ReadError {
     /// The code from `docs/errors.md`: one fixed code per case, with no
     /// wildcard arm.

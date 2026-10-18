@@ -12,7 +12,7 @@ mod media;
 mod misc;
 mod session;
 
-pub(crate) use file_tools::{ReadError, WriteError};
+pub(crate) use file_tools::{EditError, ReadError, WriteError};
 pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
@@ -52,6 +52,9 @@ pub(crate) enum ToolError {
     /// `write` failed.
     #[error(transparent)]
     Write(#[from] WriteError),
+    /// `edit` failed.
+    #[error(transparent)]
+    Edit(#[from] EditError),
     /// `web_search` has nothing to run or the backend failed.
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
@@ -72,6 +75,7 @@ impl ToolError {
             Self::Image(error) => error.code(),
             Self::Read(error) => error.code(),
             Self::Write(error) => error.code(),
+            Self::Edit(error) => error.code(),
             Self::WebSearch(error) => error.code(),
         }
     }
@@ -134,6 +138,20 @@ pub(crate) enum FileError {
         /// The path as the call named it.
         raw: String,
     },
+    /// The file does not exist.
+    #[error("`{}` does not exist.", path.display())]
+    NotFound {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+    },
+    /// Inspecting the file failed. The text is made in `files.rs`; part 5
+    /// of #923 types it.
+    // debt: part 5 of #923 types `ResolveError`/`InspectError`
+    #[error("{message}")]
+    Inspect {
+        /// `InspectError::Tool`'s text.
+        message: String,
+    },
     /// The file could not be written.
     #[error("`{}` could not be written: {source}.", path.display())]
     CouldNotWrite {
@@ -173,7 +191,8 @@ impl FileError {
             Self::ChangedBeforeRead { .. } | Self::ChangedBeforeWrite { .. } => {
                 ErrorCode::PathChanged
             }
-            Self::CouldNotWrite { .. } => ErrorCode::ToolError,
+            Self::CouldNotWrite { .. } | Self::Inspect { .. } => ErrorCode::ToolError,
+            Self::NotFound { .. } => ErrorCode::NotFound,
             Self::Unsupported { .. } | Self::PdfOverCap { .. } => ErrorCode::UnsupportedFile,
         }
     }

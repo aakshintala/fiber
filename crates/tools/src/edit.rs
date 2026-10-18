@@ -5,7 +5,6 @@ mod matching;
 use std::path::Path;
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::FileChange;
 use contract::provider::ToolDefinition;
@@ -17,11 +16,12 @@ use similar::TextDiff;
 
 use matching::{Applied, Block, MatchError, Report};
 
+use crate::error::{EditError, FileError};
 use crate::files::{
     InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text,
-    resolve, resolved, unsupported_message,
+    resolve, resolved,
 };
-use crate::tool_util::failed;
+use crate::tool_util::errored;
 use crate::write::line_changes;
 
 /// The call's arguments, checked against the schema before the call runs.
@@ -87,7 +87,7 @@ impl Tool for Edit {
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
-        blocks(&args.edits).map_err(EffectsError::Arguments)?;
+        blocks(&args.edits).map_err(|error| EffectsError::Arguments(error.to_string()))?;
         let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
         self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Writes, false, &resolved))
@@ -97,15 +97,15 @@ impl Tool for Edit {
         if cancel.is_cancelled() {
             return crate::tool_util::cancelled_before();
         }
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(EditError::from(error)),
         };
         let raw = args.path;
         let all = args.edits;
         let blocks = match blocks(&all) {
             Ok(blocks) => blocks,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         let key = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
@@ -129,41 +129,48 @@ impl Tool for Edit {
         }
         let text = match inspect(&path) {
             Ok(Inspected::Pdf { size, .. }) | Ok(Inspected::PdfOverCap { size }) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, "a PDF", size, "Edit changes text files only."),
-                );
+                return errored(EditError::from(FileError::Unsupported {
+                    path: path.to_path_buf(),
+                    kind: "a PDF".to_owned(),
+                    size,
+                    hint: "Edit changes text files only.",
+                }));
             }
             Ok(Inspected::Text { text }) => text,
             Ok(Inspected::Image { kind, size, .. }) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, kind, size, "Edit changes text files only."),
-                );
+                return errored(EditError::from(FileError::Unsupported {
+                    path: path.to_path_buf(),
+                    kind: kind.to_owned(),
+                    size,
+                    hint: "Edit changes text files only.",
+                }));
             }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, &kind, size, hint),
-                );
+                return errored(EditError::from(FileError::Unsupported {
+                    path: path.to_path_buf(),
+                    kind,
+                    size,
+                    hint,
+                }));
             }
             Err(InspectError::NotFound) => {
-                return failed(
-                    ErrorCode::NotFound,
-                    format!("`{}` does not exist.", path.display()),
-                );
+                return errored(EditError::from(FileError::NotFound {
+                    path: path.to_path_buf(),
+                }));
             }
-            Err(InspectError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(InspectError::Tool(message)) => {
+                return errored(EditError::from(FileError::Inspect { message }));
+            }
         };
         let applied = match matching::apply(&text, blocks) {
             Ok(applied) => applied,
-            Err(error) => return match_failed(error),
+            Err(error) => return errored(match_error(error)),
         };
         if let Err(err) = crate::files::land::land(&path, &applied.bytes) {
-            return failed(
-                ErrorCode::ToolError,
-                format!("`{}` could not be written: {err}.", path.display()),
-            );
+            return errored(EditError::from(FileError::CouldNotWrite {
+                path: path.to_path_buf(),
+                source: err,
+            }));
         }
         self.shared.set_seen(&path, hash_bytes(&applied.bytes));
         written(&path, &text, &applied)
@@ -174,21 +181,21 @@ impl Tool for Edit {
     }
 }
 
-fn blocks(edits: &[Block]) -> Result<&[Block], String> {
+fn blocks(edits: &[Block]) -> Result<&[Block], EditError> {
     if edits.is_empty() {
-        return Err("`edits` must contain at least one block.".to_owned());
+        return Err(EditError::NoBlocks);
     }
     Ok(edits)
 }
 
-fn match_failed(error: MatchError) -> Output {
-    let code = match &error {
-        MatchError::NoMatch { .. } => ErrorCode::NoMatch,
-        MatchError::Ambiguous { .. } => ErrorCode::AmbiguousMatch,
-        MatchError::Invalid(_) => ErrorCode::InvalidArguments,
-        MatchError::Boundary => ErrorCode::ToolError,
-    };
-    failed(code, error.message())
+fn match_error(error: MatchError) -> EditError {
+    let message = error.message();
+    match error {
+        MatchError::NoMatch { .. } => EditError::NoMatch { message },
+        MatchError::Ambiguous { .. } => EditError::Ambiguous { message },
+        MatchError::Invalid(_) => EditError::InvalidEdit { message },
+        MatchError::Boundary => EditError::Boundary { message },
+    }
 }
 
 fn written(path: &Path, old: &str, applied: &Applied) -> Output {
