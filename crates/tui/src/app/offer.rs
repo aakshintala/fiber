@@ -17,30 +17,71 @@ impl App {
             return None;
         }
         if *key == Key::Esc {
-            if !self.notices.close() {
+            if !self.notices.close() && !self.offer.close_source() {
                 self.offer.put_aside();
             }
             return Some(Effect::None);
         }
         let height = self.conversation_height();
-        match self.offer.on_key(key, self.screen.width(), height)? {
+        match self.offer.on_key(key, self.column_width(), height)? {
             OfferKey::Handled => Some(Effect::None),
             OfferKey::Send => Some(self.send_offer()),
+            OfferKey::Source => Some(self.ask_offered_file(None)),
         }
     }
 
     /// An edit for the open offer; `None` while the approval panel is open,
     /// which takes edits as its feedback, or while the offer is closed.
     pub(super) fn offer_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        (self.panel().is_none() && self.offer.on_edit(edit)).then_some(Effect::None)
+        if self.panel().is_some() || !self.offer.open() {
+            return None;
+        }
+        if self.offer.source_open() {
+            return Some(match edit {
+                Edit::Left => self.ask_offered_file(Some(false)),
+                Edit::Right => self.ask_offered_file(Some(true)),
+                Edit::ShiftEnter
+                | Edit::CtrlJ
+                | Edit::WordLeft
+                | Edit::WordRight
+                | Edit::DeleteWord
+                | Edit::LineStart
+                | Edit::LineEnd
+                | Edit::Delete
+                | Edit::Paste(_) => Effect::None,
+            });
+        }
+        self.offer.on_edit(edit).then_some(Effect::None)
     }
 
     /// A click on one of the offer's targets.
     pub(super) fn offer_click(&mut self, spot: Spot) -> Effect {
         match self.offer.click(spot) {
-            OfferKey::Handled => Effect::None,
+            OfferKey::Handled | OfferKey::Source => Effect::None,
             OfferKey::Send => self.send_offer(),
         }
+    }
+
+    fn ask_offered_file(&mut self, step: Option<bool>) -> Effect {
+        if self.link != Link::Up {
+            return Effect::None;
+        }
+        let Some(session) = self.session().cloned() else {
+            return Effect::None;
+        };
+        let id = mint();
+        let line = match step {
+            Some(right) => self.offer.step_file(right, &id, &session),
+            None => self.offer.ask_file(&id, &session),
+        };
+        if let Some(line) = line {
+            return Effect::Send(vec![line]);
+        }
+        if step.is_none() {
+            self.notices
+                .push("invalid_arguments", "This item lists no files.".to_owned());
+        }
+        Effect::None
     }
 
     /// Sends the offer's answer. With the link down nothing goes out and

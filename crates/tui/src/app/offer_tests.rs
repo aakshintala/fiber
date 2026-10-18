@@ -114,10 +114,225 @@ fn sent(effect: Effect) -> Vec<Value> {
 fn answer_with_keys(app: &mut App) -> Vec<Value> {
     assert_eq!(app.on_edit(Edit::Left), Effect::None);
     assert_eq!(press(app, Key::Down), Effect::None);
-    assert_eq!(press(app, Key::Enter), Effect::None);
+    assert_eq!(press(app, Key::Down), Effect::None);
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(press(app, Key::Down), Effect::None);
     sent(press(app, Key::Enter))
+}
+
+fn with_source() -> App {
+    let mut app = attached();
+    app.set_size(80, 24);
+    app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]}), None));
+    app
+}
+
+fn source_text(app: &App) -> String {
+    app.offer_rows(app.column_width())
+        .unwrap()
+        .0
+        .iter()
+        .map(|row| row.line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn open_source(app: &mut App) -> Value {
+    let lines = sent(press(app, Key::Enter));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "offered_file");
+    assert_eq!(lines[0]["session_id"], S_A);
+    assert_eq!(
+        lines[0]["args"],
+        json!({"request_id": "r_1", "path": "tools/db.sh"})
+    );
+    lines[0].clone()
+}
+
+#[test]
+fn enter_reads_source_and_steps_ignore_late_answers_without_changing_decisions() {
+    let mut app = with_source();
+    app.on_edit(Edit::Left);
+    let first = open_source(&mut app);
+    assert!(source_text(&app).contains("Loading…"));
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": first["id"], "result": {"text": "first source"}}),
+        None,
+    ));
+    assert!(source_text(&app).contains("first source"));
+    let next = sent(app.on_edit(Edit::Right));
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0]["args"]["path"], "tools/b.sh");
+    assert!(sent(app.on_edit(Edit::Right)).is_empty());
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": first["id"], "result": {"text": "late source"}}),
+        None,
+    ));
+    assert!(!source_text(&app).contains("late source"));
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": next[0]["id"], "result": {"text": "second source"}}),
+        None,
+    ));
+    assert!(source_text(&app).contains("second source"));
+    let previous = sent(app.on_edit(Edit::Left));
+    assert_eq!(previous[0]["args"]["path"], "tools/db.sh");
+    assert!(sent(app.on_edit(Edit::Left)).is_empty());
+    press(&mut app, Key::Esc);
+    assert!(app.offer_open());
+    press(&mut app, Key::Down);
+    let reply = sent(press(&mut app, Key::Enter));
+    assert_eq!(reply[0]["args"]["decisions"], json!(["approve"]));
+}
+
+#[test]
+fn source_refusals_are_inline_from_the_session_or_hub_and_duplicates_are_ignored() {
+    for hub in [false, true] {
+        for (code, shown) in [
+            ("invalid_arguments", "Read refused."),
+            ("duplicate_command", "Loading…"),
+        ] {
+            let mut app = with_source();
+            let command = open_source(&mut app);
+            let payload =
+                json!({"command_id": command["id"], "code": code, "message": "Read refused."});
+            let line = if hub {
+                Line::Hub(contract::HubLine {
+                    kind: "command_rejected".into(),
+                    ts: 0,
+                    schema_version: 1,
+                    payload: payload.as_object().unwrap().clone(),
+                })
+            } else {
+                session_line(S_A, "command_rejected", payload, None)
+            };
+            app.on_line(line);
+            assert!(source_text(&app).contains(shown));
+            assert!(app.notice().is_none());
+        }
+    }
+}
+
+#[test]
+fn source_escape_resolution_home_and_link_down_follow_the_offer() {
+    let mut app = with_source();
+    open_source(&mut app);
+    press(&mut app, Key::Esc);
+    assert!(app.offer_open());
+    assert!(!source_text(&app).contains("Loading…"));
+    press(&mut app, Key::Esc);
+    assert!(!app.offer_open());
+    let mut app = with_source();
+    open_source(&mut app);
+    app.on_line(session_line(
+        S_A,
+        "repository_code_resolved",
+        json!({"request_id": "r_1", "decisions": ["skip"]}),
+        None,
+    ));
+    assert!(!app.offer_open());
+    let mut app = with_source();
+    open_source(&mut app);
+    app.go_home();
+    assert!(!app.offer_open());
+    let mut app = with_source();
+    app.disconnected();
+    assert!(sent(press(&mut app, Key::Enter)).is_empty());
+    assert!(!source_text(&app).contains("Loading…"));
+}
+
+#[test]
+fn source_escape_closes_notices_first_and_ctrl_c_still_clears_then_quits() {
+    let mut app = with_source();
+    open_source(&mut app);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        json!({"code": "io_failed", "message": "notice"}),
+        None,
+    ));
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    press(&mut app, Key::Esc);
+    assert!(app.notice_overlay().is_none());
+    assert!(source_text(&app).contains("Loading…"));
+    app.draft.set("clear me");
+    assert_eq!(press(&mut app, Key::CtrlC), Effect::None);
+    assert_eq!(app.draft(), "");
+    assert_eq!(press(&mut app, Key::CtrlC), Effect::None);
+    assert_eq!(press(&mut app, Key::CtrlC), Effect::Quit);
+}
+
+#[test]
+fn pagedown_reaches_a_long_files_end_with_the_rail_and_panel_shown() {
+    let mut app = with_source();
+    app.set_size(120, 30);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".into(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        ..Default::default()
+    });
+    app.attach(contract::SessionId(S_A.into()));
+    app.chrome.show_rail();
+    app.set_size(120, 30);
+    let command = open_source(&mut app);
+    let text = (0..300)
+        .map(|n| format!("line {n:03} {}\n", "long text ".repeat(20)))
+        .collect::<String>();
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": command["id"], "result": {"text": text}}),
+        None,
+    ));
+    let width = app.column_width();
+    assert!(width < 120);
+    let height = app.conversation_height();
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(30));
+    let mut reached = false;
+    for _ in 0..2000 {
+        assert!(
+            !deadline.left().is_zero(),
+            "PageDown reaches the last source page"
+        );
+        let (rows, top) = app.offer_rows(width).unwrap();
+        let total: usize = rows.iter().map(|row| row.height(width)).sum();
+        if top == total.saturating_sub(height) {
+            assert!(
+                rows.iter()
+                    .skip(top)
+                    .any(|row| row.line.to_string().contains("line 299"))
+            );
+            let area = ratatui::layout::Rect::new(0, 0, 120, 30);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            crate::view::render(&app, area, &mut buffer, None);
+            assert!(crate::view::text(&buffer).contains("line 299"));
+            reached = true;
+            break;
+        }
+        press(&mut app, Key::PageDown);
+    }
+    assert!(
+        reached,
+        "PageDown reaches the last wrapped row with a narrow conversation"
+    );
+}
+
+#[test]
+fn enter_on_an_item_with_no_files_shows_a_notice_and_sends_nothing() {
+    let mut app = offered();
+    assert!(sent(press(&mut app, Key::Enter)).is_empty());
+    assert_eq!(app.notice(), Some("This item lists no files."));
 }
 
 #[test]

@@ -3,11 +3,14 @@
 //! that choose each item's decision, the one `reply` that answers it, and
 //! the rows the view draws.
 
+mod source;
+
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
-    OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
+    CommandAccepted, CommandResult, OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered,
+    RepositoryCodeResolved,
 };
-use contract::{Envelope, RequestId, SessionId};
+use contract::{Envelope, ErrorCode, RequestId, SessionId};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -52,6 +55,8 @@ pub(crate) enum OfferKey {
     Handled,
     /// Send the answer.
     Send,
+    /// Open the cursor item's source.
+    Source,
 }
 
 /// One drawn row before wrapping, with its click targets as column
@@ -109,6 +114,7 @@ struct Held {
     /// The top wrapped row shown.
     top: usize,
     status: Status,
+    source: Option<source::Source>,
 }
 
 /// The attached session's pending offer, if any.
@@ -138,6 +144,7 @@ impl Offer {
                     cursor: 0,
                     top: 0,
                     status: Status::Open,
+                    source: None,
                 });
             }
             "repository_code_resolved" => {
@@ -170,7 +177,7 @@ impl Offer {
     }
 
     /// A key while open, the view `width` wide and `height` tall: ↑ ↓ move
-    /// the cursor, Enter moves down or sends on Send, PageUp and PageDown
+    /// the cursor, Enter opens source or sends on Send, PageUp and PageDown
     /// scroll. `None` while not open, and for Esc, F1, ⌥A and Ctrl+C,
     /// which are the caller's; every other key is swallowed.
     pub(crate) fn on_key(&mut self, key: &Key, width: u16, height: usize) -> Option<OfferKey> {
@@ -179,6 +186,13 @@ impl Offer {
         }
         let total = self.total(width);
         let held = self.held.as_mut()?;
+        if let Some(source) = held.source.as_mut() {
+            if matches!(key, Key::Esc | Key::F1 | Key::AltA | Key::CtrlC) {
+                return None;
+            }
+            source.on_key(key, total, height);
+            return Some(OfferKey::Handled);
+        }
         let send = held.items.len();
         let page = height.saturating_sub(1).max(1);
         match key {
@@ -186,7 +200,7 @@ impl Offer {
             Key::Up => held.cursor = held.cursor.saturating_sub(1),
             Key::Down => held.cursor = held.cursor.saturating_add(1).min(send),
             Key::Enter if held.cursor == send => return Some(OfferKey::Send),
-            Key::Enter => held.cursor = held.cursor.saturating_add(1),
+            Key::Enter => return Some(OfferKey::Source),
             Key::PageUp => {
                 held.top = held.top.saturating_sub(page);
                 return Some(OfferKey::Handled);
@@ -228,6 +242,9 @@ impl Offer {
         let Some(held) = self.held.as_mut() else {
             return false;
         };
+        if held.source.is_some() {
+            return true;
+        }
         let step = |decision: OfferDecision, right: bool| {
             let at = DECISIONS
                 .iter()
@@ -277,6 +294,9 @@ impl Offer {
             }
             Spot::Send => OfferKey::Send,
             Spot::Close => {
+                if self.close_source() {
+                    return OfferKey::Handled;
+                }
                 self.put_aside();
                 OfferKey::Handled
             }
@@ -288,6 +308,7 @@ impl Offer {
         if let Some(held) = self.held.as_mut()
             && held.status == Status::Open
         {
+            held.source = None;
             held.status = Status::Aside;
         }
     }
@@ -319,6 +340,7 @@ impl Offer {
             },
         };
         let args = serde_json::to_value(reply).ok();
+        held.source = None;
         held.status = Status::Answered { by: id.to_owned() };
         Some(session_command(id, "reply", session, args).to_string())
     }
@@ -339,18 +361,72 @@ impl Offer {
             return None;
         }
         let held = self.held.as_ref()?;
+        if let Some(source) = &held.source {
+            let item = held.items.get(source.item)?;
+            let mut rows = vec![title_row(width)];
+            rows.extend(source.rows(item, width));
+            return Some((rows, source.top()));
+        }
         Some((layout(held, width).0, held.top))
     }
 
     /// Every wrapped row at `width`.
     fn total(&self, width: u16) -> usize {
-        self.held.as_ref().map_or(0, |held| {
-            layout(held, width)
-                .0
-                .iter()
-                .map(|row| row.height(width))
-                .sum()
+        self.rows(width).map_or(0, |(rows, _)| {
+            rows.iter().map(|row| row.height(width)).sum()
         })
+    }
+
+    pub(crate) fn source_open(&self) -> bool {
+        self.held.as_ref().is_some_and(|held| held.source.is_some())
+    }
+
+    pub(crate) fn close_source(&mut self) -> bool {
+        self.held
+            .as_mut()
+            .is_some_and(|held| held.source.take().is_some())
+    }
+
+    pub(crate) fn ask_file(&mut self, id: &str, session: &SessionId) -> Option<String> {
+        if !self.open() {
+            return None;
+        }
+        let held = self.held.as_mut()?;
+        let path = held.items.get(held.cursor)?.files.first()?;
+        let mut source = source::Source::new(held.cursor);
+        let line = source.ask(id, session, &held.request_id, path);
+        held.source = Some(source);
+        Some(line)
+    }
+
+    pub(crate) fn step_file(
+        &mut self,
+        right: bool,
+        id: &str,
+        session: &SessionId,
+    ) -> Option<String> {
+        let held = self.held.as_mut()?;
+        let source = held.source.as_mut()?;
+        let item = held.items.get(source.item)?;
+        let next = source.step(right, item.files.len())?;
+        Some(source.ask(id, session, &held.request_id, item.files.get(next)?))
+    }
+
+    pub(crate) fn file_answered(&mut self, accepted: &CommandAccepted) -> bool {
+        let Some(source) = self.held.as_mut().and_then(|held| held.source.as_mut()) else {
+            return false;
+        };
+        if let Some(CommandResult::OfferedFile { text }) = &accepted.result {
+            return source.answered(&accepted.command_id.0, text.clone());
+        }
+        false
+    }
+
+    pub(crate) fn file_refused(&mut self, id: &str, code: &ErrorCode, message: &str) -> bool {
+        self.held
+            .as_mut()
+            .and_then(|held| held.source.as_mut())
+            .is_some_and(|source| source.refused(id, code, message))
     }
 
     /// Scrolls so the cursor's row shows in `height` rows.

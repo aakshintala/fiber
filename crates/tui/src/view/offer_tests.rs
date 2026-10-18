@@ -88,6 +88,117 @@ fn press(app: &mut App, key: Key) -> Effect {
     app.on_key(key, fakes::clock::FakeClock::new().now())
 }
 
+fn source_app(width: u16, height: u16, answer: Option<Result<&str, &str>>) -> App {
+    let mut app = offered(
+        json!([{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]),
+        width,
+        height,
+    );
+    let Effect::Send(lines) = press(&mut app, Key::Enter) else {
+        panic!("Enter asks for source");
+    };
+    let command: Value = serde_json::from_str(&lines[0]).unwrap();
+    if let Some(answer) = answer {
+        let (kind, payload) = match answer {
+            Ok(text) => (
+                "command_accepted",
+                json!({"command_id": command["id"], "result": {"text": text}}),
+            ),
+            Err(message) => (
+                "command_rejected",
+                json!({"command_id": command["id"], "code": "invalid_arguments", "message": message}),
+            ),
+        };
+        app.on_line(session_line(kind, payload));
+    }
+    app
+}
+
+#[test]
+fn source_text() {
+    let app = source_app(80, 24, Some(Ok("#!/bin/sh\n\techo marker\nexit 0\n")));
+    let (screen, targets) = draw(&app, 80, 24);
+    insta::assert_snapshot!("source_text", screen);
+    assert_eq!(cursor(&app, Rect::new(0, 0, 80, 24)), None);
+    let targets = offer_targets(&targets);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].id, TargetId::Offer(Spot::Close));
+}
+
+#[test]
+fn source_loading() {
+    insta::assert_snapshot!("source_loading", draw(&source_app(80, 24, None), 80, 24).0);
+}
+
+#[test]
+fn source_refused() {
+    insta::assert_snapshot!(
+        "source_refused",
+        draw(
+            &source_app(80, 24, Some(Err("That path is not in the pending offer."))),
+            80,
+            24
+        )
+        .0
+    );
+}
+
+#[test]
+fn source_scrolled() {
+    let text = (0..60).map(|n| format!("line {n}\n")).collect::<String>();
+    let mut app = source_app(80, 24, Some(Ok(&text)));
+    press(&mut app, Key::PageDown);
+    insta::assert_snapshot!("source_scrolled", draw(&app, 80, 24).0);
+}
+
+#[test]
+fn source_wrapped_40() {
+    let app = source_app(
+        40,
+        24,
+        Some(Ok(
+            "    echo a long line that keeps its indentation and wraps across the narrow source view without dropping any spaces",
+        )),
+    );
+    insta::assert_snapshot!("source_wrapped_40", draw(&app, 40, 24).0);
+}
+
+#[test]
+fn a_line_past_65535_rows_scrolls_to_its_end() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let text = format!("{}FINALCHUNK", "0123456789".repeat(70_000));
+        assert_eq!(text.len(), 700_010);
+        let mut app = source_app(10, 100, Some(Ok(&text)));
+        // Shrinking page sizes reach the far end without rebuilding 70,000
+        // rows once for each tiny page. The final drawing is still 10 by 5.
+        for _ in 0..128 {
+            let (rows, top) = app.offer_rows(10).unwrap();
+            let total: usize = rows.iter().map(|row| row.height(10)).sum();
+            if top >= total.saturating_sub(5) {
+                let area = Rect::new(0, 0, 10, 5);
+                let mut buf = Buffer::empty(area);
+                let mut targets = Vec::new();
+                super::render(&rows, top, area, &mut buf, &mut targets);
+                tx.send(super::super::text(&buf)).unwrap();
+                return;
+            }
+            let remaining = total - top;
+            let height = if remaining < 50 {
+                1
+            } else {
+                u16::try_from(remaining / 2 + 20).unwrap()
+            };
+            app.set_size(10, height);
+            press(&mut app, Key::PageDown);
+        }
+        panic!("PageDown reaches the end within 128 shrinking pages");
+    });
+    let screen = fakes::Deadline::after(std::time::Duration::from_secs(30))
+        .recv_or_fail(&rx, "scroll beyond 65,535 source rows");
+    assert!(screen.contains("FINALCHUNK"), "{screen}");
+}
+
 #[test]
 fn one_mcp_server() {
     let app = offered(json!([server("db", true)]), 80, 24);
