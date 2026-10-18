@@ -1157,8 +1157,15 @@ mod tests {
             !run.screen().contents.contains("marker"),
             "the grid stays stale behind the sync block"
         );
-        // No pending wake, so the expired deadline below times out on its
-        // first receive instead of consuming the fed chunk's wake.
+        // Stop and join the reader before draining wakes: the publish
+        // releases the shared lock before its wake is sent, so a
+        // nonblocking drain can run before the wake lands and the expired
+        // wait below would consume it and check twice (`docs/testing.md`,
+        // "Races are forced, not waited for"). After the join no more
+        // wakes arrive, so the drain leaves none pending and the wait
+        // times out on its first receive.
+        let reader = run.reader.take().expect("the run has a reader");
+        assert!(reader.stop(), "expected the reader to stop");
         while run.wakes.try_recv().is_ok() {}
         clock.advance(fakes::deadline::WAITS);
         assert!(
