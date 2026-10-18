@@ -20,9 +20,9 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    CallStatus, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted, JobStarted,
-    Notice, OnFork, Outcome, Parent, ShellCommand, ToolCallArgumentsDelta, ToolCallRequested,
-    TurnOutcome,
+    CallStatus, Clients, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted,
+    JobStarted, Notice, OnFork, Outcome, Parent, RepositoryCodeOffered, ShellCommand,
+    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, HookFailure, Hooks, JobDelivery, StateLine,
@@ -811,6 +811,261 @@ fn jobs_check_drains_an_extension_start_after_reading_the_running_list() {
     assert!(input.pieces.is_empty());
     assert!(looped.queued.is_empty());
     assert!(looped.handoff.carry.owned(DELEGATE));
+}
+
+struct EmptyOffer;
+
+impl contract::repository::RepositoryCode for EmptyOffer {
+    fn unapproved(&self) -> Result<Vec<contract::repository::Unapproved>, Failure> {
+        Ok(Vec::new())
+    }
+
+    fn file(&self, _: &str) -> Result<String, Failure> {
+        Err(Failure {
+            code: ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
+
+    fn decide(
+        &self,
+        _: &contract::events::OfferedItem,
+        _: contract::events::OfferDecision,
+    ) -> Result<contract::repository::Decided, Failure> {
+        unreachable!("the pending offer has no items")
+    }
+}
+
+/// Drives a turn to an approval wait, unwinds it past the idle delay, exits
+/// with the approval suspended, resumes, and finishes the turn. When
+/// `send_start` the resume finds an extension start waiting in the inbox;
+/// when `send_end` the finishing turn's first model request sends the
+/// extension job's end, so `admit_running` takes it in the step drain.
+fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
+    let jobs = Arc::new(Listed::default());
+    let mut world = World::new(
+        vec![calls("gated"), calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    )
+    .with_jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+    .idle(Duration::from_secs(60));
+    let (id_tx, id_rx) = mpsc::channel();
+    let watched = on_request(&world.log, move |id| {
+        id_tx.send(id).unwrap();
+    });
+    world.send(prompt("go"));
+    let origin = world.clock.now();
+    let rx = world.spawn();
+    let _suspended_on: RequestId = id_rx.recv().expect("the approval was raised");
+    world.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(DEADLINE),
+    );
+    world.send(Delivery::Cancelled);
+    assert_eq!(
+        world.join(&rx, &Deadline::after(DEADLINE)),
+        None,
+        "the idle delay unwinds the turn"
+    );
+    watched.join().unwrap();
+    // The fake keeps the job in `running()` from the resume on. Phase 1
+    // lists no job: its approval wait needs the idle deadline to unwind.
+    if send_start {
+        jobs.set(&[DELEGATE]);
+    }
+    crate::fiber_exited(&world.log, &world.dir, Ok(()), false, None).unwrap();
+    drop(world.looped.take());
+    let resumed = crate::resumed(&world.dir).expect("the exit suspends a batch");
+    let (tx, inbox_rx) = mpsc::channel();
+    let by_call = if send_end {
+        vec![vec![delegate_held(DELEGATE, "PRIVATE SENTINEL".into())]]
+    } else {
+        Vec::new()
+    };
+    let provider = Arc::new(During {
+        inner: Arc::clone(&world.provider),
+        inbox: tx.clone(),
+        by_call: Mutex::new(by_call.into()),
+    });
+    let home = world.home().to_path_buf();
+    let workspace = home.join("workspace");
+    let credentials = home.join("credentials");
+    let looped = Loop::resume(
+        crate::Session {
+            log: Arc::clone(&world.log),
+            provider,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                world.dir.join("events.jsonl").display().to_string(),
+                Arc::clone(&world.clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: inbox_rx,
+            tools: vec![("builtin".to_owned(), Arc::new(Gated) as Arc<dyn Tool>)],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules: Arc::new(AskGated),
+            },
+        },
+        resumed,
+    )
+    .unwrap()
+    .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+    .idle_exit(Some(Duration::from_secs(60)));
+    world.inbox = tx;
+    world.looped = Some(looped);
+    if send_start {
+        world.send(extension_start(DELEGATE));
+    }
+    let answered = thread::spawn({
+        let log = Arc::clone(&world.log);
+        let inbox = world.inbox.clone();
+        move || {
+            let mut watcher = log.watch();
+            for _ in 0..2 {
+                let (next, lines) = read_until(watcher, "a permission_requested line", |line| {
+                    line.kind == "permission_requested"
+                });
+                watcher = next;
+                let line = lines.last().unwrap();
+                inbox
+                    .send(allow(RequestId(
+                        line.payload["request_id"].as_str().unwrap().into(),
+                    )))
+                    .unwrap();
+            }
+        }
+    });
+    let rx = world.spawn();
+    assert_eq!(
+        world.join(&rx, &Deadline::after(DEADLINE)),
+        Some(TurnOutcome::Completed)
+    );
+    answered.join().unwrap();
+    world
+}
+
+#[test]
+fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
+    let mut world = finish_suspended_turn(true, true);
+    let lines = log::read(&world.dir).unwrap();
+    // The finishing turn recorded the waiting start with no turn and no action.
+    let started: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "job_started")
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert!(started[0].turn_id.is_none() && started[0].action_id.is_none());
+    assert_eq!(started[0].payload["extension"], json!("test/scan"));
+    let delegates: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "delegate_started")
+        .collect();
+    assert_eq!(delegates.len(), 1);
+    assert!(delegates[0].turn_id.is_none() && delegates[0].action_id.is_none());
+    // The finish completes the suspended turn: no new turn started.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.kind == "turn_started")
+            .count(),
+        1
+    );
+    // The step drain wrote the end with no turn and no wake.
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| matches!(line.kind.as_str(), "delegate_finished" | "job_completed"))
+        .collect();
+    assert_eq!(
+        ends.iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["delegate_finished", "job_completed"]
+    );
+    assert_eq!(ends[0].payload["text"], json!("PRIVATE SENTINEL"));
+    assert!(
+        ends.iter()
+            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+    );
+    // The step's next request equals a run without the end: the model
+    // saw nothing of it, only the calls and user texts match (ids and
+    // directories differ per run).
+    let control = finish_suspended_turn(false, false);
+    let requests = world.requests();
+    let control_requests = control.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(control_requests.len(), 3);
+    for (got, want) in requests[1..].iter().zip(control_requests[1..].iter()) {
+        let scrub = |texts: Vec<String>, dir: &str| {
+            texts
+                .iter()
+                .map(|text| text.replace(dir, "<home>"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            scrub(users(got), &world.home().display().to_string()),
+            scrub(users(want), &control.home().display().to_string())
+        );
+        let calls = |request: &ModelRequest| {
+            request
+                .conversation
+                .iter()
+                .filter_map(|input| match input {
+                    Input::ToolCall { call, .. } => Some(call.name.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(calls(got), calls(want));
+    }
+    // With a repository offer pending and the fake keeping the job in
+    // `running()`, the offer wait still ends at the idle delay: the
+    // filtered list is empty.
+    let mut looped = world.looped.take().unwrap();
+    let origin = world.clock.now();
+    let pending = RepositoryCodeOffered {
+        request_id: RequestId("r_offer".into()),
+        items: Vec::new(),
+    };
+    let mut folded = crate::offer::Folded::default();
+    folded.fold(&Event::RepositoryCodeOffered(pending));
+    looped.repository = crate::offer::State::resumed(folded);
+    looped = looped.repository_code(Arc::new(EmptyOffer));
+    looped
+        .log
+        .append(&Event::Clients(Clients { count: 1 }), None, None)
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(looped.offer(None));
+    });
+    world.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(DEADLINE),
+    );
+    world.send(Delivery::Cancelled);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the offer wait ended")
+            .unwrap(),
+        false
+    );
 }
 
 #[test]
