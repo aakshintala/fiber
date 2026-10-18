@@ -119,6 +119,12 @@ fn waiting(router: &Router, deadline: &Deadline) {
         thread::yield_now();
     }
 }
+fn released(login: &Arc<RemoteLogin>, deadline: &Deadline) {
+    while !login.l1_free() {
+        assert!(!deadline.left().is_zero(), "cancel did not release L1");
+        thread::yield_now();
+    }
+}
 fn no_answer<T>(rx: &Receiver<T>) {
     assert!(matches!(
         Deadline::after(Duration::from_millis(100)).recv(rx),
@@ -328,7 +334,7 @@ fn cancel_serializes_with_start_and_result_writes() {
             },
         );
         let command = hub.line(&d, "device_login_cancel");
-        assert!(login.l1_free());
+        released(&login, &d);
         hub.route(
             &first,
             "command_rejected",
