@@ -891,6 +891,107 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
 }
 
 #[test]
+fn reload_server_names_keep_successes_and_omit_failed_starts() {
+    let rig = offer_rig();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    approve_db(&rig, &clock);
+    rig.write_global(&json!({"mcp":{"servers":{"broken":{
+        "command":rig.root.path().join("missing-server"), "required":false
+    }}}}));
+    let config = rig.config(Vec::<String>::new());
+    let specs = super::specs(&config).unwrap();
+    let artifacts = rig.root.path().join("artifacts");
+    let jobs = jobs::Registry::new(
+        artifacts.clone(),
+        clock.clone(),
+        std::sync::Arc::new(fakes::Recorder::default()),
+    );
+    let locks = std::sync::Arc::new(tools::PathLocks::new());
+    let project = config::ProjectKey::new("test").unwrap();
+    let home = rig.home.clone();
+    let workspace = rig.workspace.clone();
+    let fiber = rig.root.path().join("fiber-stub");
+    let delegates = delegates();
+    let (_, _, _, session) = fakes::within(
+        "session with a failed optional server",
+        WIRING_WITHIN,
+        move || {
+            super::session_tools(
+                Ok(fiber),
+                &home,
+                &workspace,
+                &artifacts,
+                &clock,
+                &jobs,
+                &locks,
+                &project,
+                specs.specs,
+                specs.repository,
+                &[],
+                None,
+                &delegates,
+                skills(),
+                Vec::new(),
+                None,
+            )
+            .unwrap()
+        },
+    );
+    assert_eq!(session.server_names, ["db"]);
+    assert_eq!(
+        session
+            .failed
+            .iter()
+            .map(|failure| failure.server.as_str())
+            .collect::<Vec<_>>(),
+        ["broken"]
+    );
+    session.servers.stop();
+}
+
+#[test]
+fn an_extension_replacement_keeps_the_original_mcp_info_for_reload() {
+    let rig = offer_rig();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    approve_db(&rig, &clock);
+    let (tools, session) = wired(&rig, vec![pair("fiber.test/replacement", "mcp__db__echo")]);
+    assert_eq!(session.server_names, ["db"]);
+    let row = session
+        .kept_infos
+        .iter()
+        .find(|info| info.name == "mcp__db__echo")
+        .unwrap();
+    assert!(
+        matches!(&row.source, contract::events::ToolSource::Mcp { server, tool } if server == "db" && tool == "echo")
+    );
+    assert!(session.kept_infos.iter().any(|info| info.name == "read"));
+    assert_eq!(
+        session
+            .base_tools
+            .iter()
+            .filter(|(_, tool)| tool.definition().name == "mcp__db__echo")
+            .map(|(owner, _)| owner.as_str())
+            .collect::<Vec<_>>(),
+        ["db"]
+    );
+    assert!(
+        session
+            .base_tools
+            .iter()
+            .any(|(_, tool)| tool.definition().name == "read")
+    );
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|(_, tool)| tool.definition().name == "mcp__db__echo")
+            .map(|(owner, _)| owner.as_str())
+            .collect::<Vec<_>>(),
+        ["db", "fiber.test/replacement"]
+    );
+    session.servers.stop();
+}
+
+#[test]
 fn an_extensions_mcp_resources_survives_the_post_offer_load() {
     let rig = offer_rig();
     let (tools, session) = wired(&rig, vec![pair("fiber.test/res", "mcp_resources")]);

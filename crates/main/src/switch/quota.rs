@@ -72,11 +72,11 @@ struct Silent {
 
 struct Store {
     providers: Vec<(String, ProviderData)>,
-    config: Config,
-    loader: Loader,
+    /// Credential labels and sources remain fixed across reloads.
+    startup_config: Config,
+    now: Arc<Mutex<super::Reloadable>>,
     started: Weak<StartLock>,
     reads: Arc<Reads>,
-    notice_at: f64,
     state: Mutex<Held>,
     #[cfg(test)]
     labels_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
@@ -110,13 +110,9 @@ impl Switching {
         )
     }
 
-    #[allow(
-        clippy::expect_used,
-        reason = "Config validates quota.notice_at as a number and supplies its built-in default"
-    )]
     fn quota_store(&self) -> Arc<Store> {
-        let providers = self
-            .loader
+        let loader = self.reloadable().loader;
+        let providers = loader
             .owners
             .iter()
             .filter_map(|(name, extension)| {
@@ -129,15 +125,10 @@ impl Switching {
             .collect();
         Arc::new(Store {
             providers,
-            config: self.config.clone(),
-            loader: self.loader.clone(),
+            startup_config: self.startup_config.clone(),
+            now: self.now.clone(),
             started: Arc::downgrade(&self.started),
             reads: self.reads.clone(),
-            notice_at: self
-                .config
-                .get("quota.notice_at", None)
-                .and_then(|(value, _)| value.as_f64())
-                .expect("quota.notice_at has a numeric configured default"),
             state: Mutex::default(),
             #[cfg(test)]
             labels_pause: Mutex::default(),
@@ -240,6 +231,10 @@ impl Store {
         (checked, labels, failed, silent)
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "Config validates quota.notice_at and supplies its numeric default"
+    )]
     fn answer_with_spawn(
         self: &Arc<Self>,
         spawn: impl FnOnce(Arc<Self>) -> std::io::Result<()>,
@@ -253,14 +248,30 @@ impl Store {
             )
         }));
         quota.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
-        (quota, self.notice_at)
+        let config = self
+            .now
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .config
+            .clone();
+        let notice_at = config
+            .get("quota.notice_at", None)
+            .and_then(|(value, _)| value.as_f64())
+            .expect("quota.notice_at has a numeric configured default");
+        (quota, notice_at)
     }
 
     fn load(self: &Arc<Self>) {
         #[cfg(test)]
         let _ended = Loaded(self);
+        let loader = self
+            .now
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .loader
+            .clone();
         for (extension, data) in &self.providers {
-            let labels = self.config.credentials().labels(data);
+            let labels = self.startup_config.credentials().labels(data);
             if labels.is_empty() {
                 continue;
             }
@@ -273,6 +284,7 @@ impl Store {
             // the read closure moves the provider's name away.
             #[cfg(test)]
             let fail = self.fail_reads.lock().unwrap().as_deref() == Some(data.name.as_str());
+            let loader = loader.clone();
             let read = move || {
                 let Some(started) = this.started.upgrade() else {
                     return (Vec::new(), Vec::new(), Vec::new());
@@ -281,7 +293,7 @@ impl Store {
                     .iter()
                     .map(|label| failed(&data.name, label))
                     .collect();
-                let lua = started.start(&this.loader, &this.config, &data.name, &extension);
+                let lua = started.start(&loader, &this.startup_config, &data.name, &extension);
                 drop(started);
                 let lua = match lua {
                     Ok(lua) => lua,
@@ -302,12 +314,17 @@ impl Store {
                 let mut failures = Vec::new();
                 for label in labels {
                     let run = |command: &mut std::process::Command, timeout| {
-                        this.reads.credential(command, timeout, &*this.loader.clock)
+                        this.reads.credential(command, timeout, &*loader.clock)
                     };
                     let key =
                         crate::lua_providers::session_credential(Some(&lua), &data, &label, || {
-                            crate::credential::switch_credential(&this.config, &data, &label, &run)
-                                .map(|read| read.secret)
+                            crate::credential::switch_credential(
+                                &this.startup_config,
+                                &data,
+                                &label,
+                                &run,
+                            )
+                            .map(|read| read.secret)
                         });
                     match key {
                         Ok((key, _)) => held.push(Label {
@@ -329,10 +346,10 @@ impl Store {
             let outcome = if fail {
                 Err(doors::failure(ErrorCode::IoFailed, "the read failed"))
             } else {
-                self.reads.run(read)
+                self.reads.run("credential read", read)
             };
             #[cfg(not(test))]
-            let outcome = self.reads.run(read);
+            let outcome = self.reads.run("credential read", read);
             let (keep_going, held) = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 apply_outcome(&mut state, &provider, &names, outcome)

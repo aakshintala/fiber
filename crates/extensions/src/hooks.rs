@@ -163,8 +163,44 @@ impl SessionExtensions {
         host: Option<Arc<crate::host::script::HostScript>>,
         seed: StateSeed,
     ) -> Self {
+        Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            crate::host::state::StateRegistry::new(seed),
+        )
+    }
+
+    /// Reloads extensions over the session's live state without closing it.
+    pub fn reload(
+        &self,
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+    ) -> Self {
+        Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            self.host_script.clone(),
+            self.state.clone(),
+        )
+    }
+
+    fn load_registry(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        state: Arc<crate::host::state::StateRegistry>,
+    ) -> Self {
         let mut session = Self {
-            state: crate::host::state::StateRegistry::new(seed),
+            state,
             home: home.to_path_buf(),
             host_script: host.clone(),
             ..Self::default()

@@ -509,7 +509,7 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
     fakes::within("the watcher's cancel", DEADLINE, {
         let reads = Arc::clone(&reads);
         move || loop {
-            if reads.run(|| ()).is_err() {
+            if reads.run("credential read", || ()).is_err() {
                 return;
             }
             std::thread::yield_now();
@@ -579,7 +579,12 @@ fn the_guarded_helper_returns_the_registration_error_and_builds_nothing() {
         failure.message
     );
     // No `Reads` method ran: a later run still answers.
-    assert_eq!(reads.run(|| 7).expect("a run past a refused guard"), 7);
+    assert_eq!(
+        reads
+            .run("credential read", || 7)
+            .expect("a run past a refused guard"),
+        7
+    );
 }
 
 #[test]
@@ -890,7 +895,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     fakes::within("the watcher's cancel", DEADLINE, {
         let reads = Arc::clone(&reads);
         move || loop {
-            if reads.run(|| ()).is_err() {
+            if reads.run("credential read", || ()).is_err() {
                 return;
             }
             std::thread::yield_now();
