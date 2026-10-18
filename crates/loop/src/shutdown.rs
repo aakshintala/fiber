@@ -32,7 +32,7 @@ impl Loop {
                 for delivery in std::mem::take(&mut self.deferred) {
                     self.settle_normal_one(delivery)?;
                 }
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                for delivery in self.inbox.try_iter() {
                     self.settle_normal_one(delivery)?;
                 }
                 running.retain(|id| self.handoff.carry.owned(&id.0));
@@ -127,7 +127,7 @@ impl Loop {
             if running.is_empty() {
                 // A job's end is sent before `running` stops listing it, so
                 // what is waiting now holds the last ends.
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                for delivery in self.inbox.try_iter() {
                     self.settle_one(delivery)?;
                 }
                 return Ok(());

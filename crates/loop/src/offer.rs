@@ -324,7 +324,7 @@ impl Loop {
         loop {
             let delivery = match self.take_held_answer(&offer.request_id) {
                 Some(delivery) => delivery,
-                None => match self.recv_until(deadline, false, None) {
+                None => match self.recv_until(deadline, false, None)? {
                     InboxRecv::Delivery(delivery) => delivery,
                     InboxRecv::Idle
                     | InboxRecv::Closed

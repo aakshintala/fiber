@@ -151,7 +151,7 @@ pub struct Loop {
     /// `preamble_built` records. `None` until the first turn builds it
     /// (`docs/prompt-cache.md`, "The preamble").
     preamble: Option<Preamble>,
-    inbox: Receiver<Delivery>,
+    inbox: inbox::queue::Queue,
     /// The signal that cancels the running turn, armed while one runs.
     pub(crate) cancel: Arc<TurnCancel>,
     /// The root session's id, for providers that route by key.
@@ -538,7 +538,7 @@ impl Loop {
             skills,
             preamble_reason: reason,
             preamble: None,
-            inbox,
+            inbox: inbox::queue::Queue::new(inbox),
             cancel: Arc::new(TurnCancel::default()),
             cache_key: root,
             reviewer_key: format!("{session_id}:reviewer"),

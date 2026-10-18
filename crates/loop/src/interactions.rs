@@ -220,7 +220,6 @@ impl Loop {
             }
             // Waiting on a question is idle, and a running job is not
             // (`docs/invocation.md`, "Lifecycle").
-            let running = self.running();
             match self.inbox.try_recv() {
                 Ok(delivery) => {
                     return self.take_while_asked(delivery, calls, turn).map(|()| false);
@@ -230,6 +229,8 @@ impl Loop {
                 }
                 Err(TryRecvError::Empty) => {}
             }
+            let running = self.running();
+            self.record_waiting_extension_jobs()?;
             let model = self.model_running(running);
             let idle = self.idle_until(deadline, &model);
             if idle.is_some_and(|at| clock.now() >= at) {

@@ -335,16 +335,18 @@ impl Registry {
             delegate: true,
         };
         let mut inner = lock(&self.inner);
+        // Send before registering, under this same lock: a running() reader
+        // that sees the job can already take its start in the second drain.
+        if let Some(inbox) = &inner.inbox {
+            let _sent = inbox.send(Delivery::ExtensionJob(started.clone(), delegate.clone()));
+        }
         inner.jobs.push(Job::running(
-            started.clone(),
+            started,
             PathBuf::from(output_path),
             Arc::from(stop.0),
             None,
-            Some(delegate.clone()),
+            Some(delegate),
         ));
-        if let Some(inbox) = &inner.inbox {
-            let _sent = inbox.send(Delivery::ExtensionJob(started, delegate));
-        }
         finish
     }
 

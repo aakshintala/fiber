@@ -14,7 +14,7 @@ use contract::events::{
     ContextAdded, DelegateFinished, Event, InputItem, JobCompleted, JobLine, JobsPendingNotified,
     Outcome, PendingReason,
 };
-use contract::inbox::{JobNotice, Message};
+use contract::inbox::{Delivery, JobNotice, Message};
 use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
@@ -112,6 +112,16 @@ impl Loop {
         Ok(())
     }
 
+    /// Folds starts sent during the running-list read without admitting other input.
+    pub(crate) fn record_waiting_extension_jobs(&mut self) -> Result<(), Error> {
+        for delivery in self.inbox.take_extension_jobs() {
+            if let Delivery::ExtensionJob(started, delegate) = delivery {
+                self.record_extension_job(started, delegate)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Records a claimed extension-owned end, after its delivery hooks,
     /// without waking the model or joining a turn's input.
     pub(crate) fn end_extension_job(&mut self, notice: JobNotice) -> Result<(), Error> {
@@ -197,10 +207,11 @@ impl Loop {
     /// `jobs_pending_notified` with `reason` `unattended` is queued for its
     /// first step. The session does not end.
     pub(crate) fn check_jobs(&mut self, input: &mut crate::inbox::TurnInput) -> Result<(), Error> {
-        for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+        for delivery in self.inbox.try_iter() {
             self.admit_idle(delivery, input)?;
         }
         let running = self.running();
+        self.record_waiting_extension_jobs()?;
         let model = self.model_running(running);
         if !model.is_empty() {
             self.ending.checked = true;
