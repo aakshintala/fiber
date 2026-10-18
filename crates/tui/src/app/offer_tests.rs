@@ -264,6 +264,40 @@ fn source_refusals_are_inline_from_the_session_or_hub_and_duplicates_are_ignored
 }
 
 #[test]
+fn reconnect_closes_source_and_replay_shows_the_offer_list() {
+    let mut app = with_source();
+    let Effect::Send(lines) = press(&mut app, Key::Enter) else {
+        panic!("Enter requests the offered source");
+    };
+    let command: Value = serde_json::from_str(&lines[0]).unwrap();
+    app.wrote(&lines[0]);
+    assert!(app.offer.source_open());
+    app.disconnected();
+    let resent = app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    assert!(resent.contains(&lines[0]));
+    assert!(!app.offer.source_open());
+    assert!(!app.offer_open());
+    app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]}), None));
+    assert!(app.offer_open());
+    assert!(!app.offer.source_open());
+    assert!(source_text(&app).contains("skip for this session"));
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": command["id"], "result": {"text": "late source"}}),
+        None,
+    ));
+    assert!(!app.offer.source_open());
+    assert!(!source_text(&app).contains("late source"));
+    assert!(source_text(&app).contains("skip for this session"));
+}
+
+#[test]
 fn source_escape_resolution_home_and_link_down_follow_the_offer() {
     let mut app = with_source();
     open_source(&mut app);

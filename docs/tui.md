@@ -201,6 +201,7 @@ list with its choices kept. The source view keeps the Offer top row, then
 shows the item's kind, name, path and file number above its full text,
 wrapped without highlighting or line numbers; while waiting it shows
 "Loading…", on refusal the message, and for empty text "(empty file)".
+The source view closes on reconnect; replay shows the offer list.
 
 The view's top row names it "Offer", with "repository code" dim. Each item
 is a row naming its kind and name with what identifies it ("Extension notes ·
