@@ -149,6 +149,7 @@ impl Fixture {
             log,
             diag: parts.diag,
             names: Mutex::new(Vec::new()),
+            shell_read_only: parts.shell_read_only.clone(),
         });
         Self {
             rig,
@@ -405,4 +406,103 @@ fn config_rejection_passes_through_without_installing() {
     assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
     assert_eq!(error.message, "config.json: invalid JSON");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn install_replaces_the_shared_shell_read_only_list() {
+    let fixture = Fixture::new();
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"jq":{"flags":[]}}}}),
+    );
+    let prepared = fixture.prepare();
+    assert!(
+        fixture.state.shell_read_only.lock().unwrap().is_empty(),
+        "a prepared reload changes nothing before it installs"
+    );
+    (prepared.installed)();
+    assert_eq!(
+        *fixture.state.shell_read_only.lock().unwrap(),
+        vec![("jq".to_owned(), Vec::new())]
+    );
+}
+
+#[test]
+fn a_rejected_reload_keeps_the_list_and_a_repaired_config_installs() {
+    let fixture = Fixture::new();
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"yq":{"flags":[]}}}}),
+    );
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    assert_eq!(
+        *fixture.state.shell_read_only.lock().unwrap(),
+        vec![("yq".to_owned(), Vec::new())]
+    );
+    std::fs::write(fixture.rig.home.join("config.json"), "{").unwrap();
+    let state = fixture.state.clone();
+    let rejected = fakes::within("invalid reload", fakes::MUST_SUCCEED_WITHIN, move || {
+        state
+            .prepare(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .err()
+            .unwrap()
+    });
+    assert_eq!(rejected.code, contract::ErrorCode::ConfigInvalid);
+    assert_eq!(
+        *fixture.state.shell_read_only.lock().unwrap(),
+        vec![("yq".to_owned(), Vec::new())]
+    );
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"jq":{"flags":[]}}}}),
+    );
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    assert_eq!(
+        *fixture.state.shell_read_only.lock().unwrap(),
+        vec![("jq".to_owned(), Vec::new())]
+    );
+}
+
+#[test]
+fn a_dropped_shell_read_only_preparation_changes_nothing() {
+    let fixture = Fixture::new();
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"jq":{"flags":[]}}}}),
+    );
+    let prepared = fixture.prepare();
+    drop(prepared);
+    assert!(
+        fixture.state.shell_read_only.lock().unwrap().is_empty(),
+        "a preparation that never installs leaves the list as it was"
+    );
+}
+
+#[test]
+fn a_second_reload_replaces_again_and_an_empty_config_empties() {
+    let fixture = Fixture::new();
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"jq":{"flags":[]}}}}),
+    );
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    fixture.rig.write_global(
+        &json!({"model":"scripted/s.json", "shell":{"read_only":{"zq":{"flags":["-e"]}}}}),
+    );
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    assert_eq!(
+        *fixture.state.shell_read_only.lock().unwrap(),
+        vec![("zq".to_owned(), vec!["-e".to_owned()])]
+    );
+    fixture
+        .rig
+        .write_global(&json!({"model":"scripted/s.json"}));
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    assert!(
+        fixture.state.shell_read_only.lock().unwrap().is_empty(),
+        "a reload from a config with no entry empties the list"
+    );
 }

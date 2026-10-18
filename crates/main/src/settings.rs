@@ -287,6 +287,18 @@ pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
     entries
 }
 
+/// Replaces the shared `shell.read_only` list with the checked
+/// configuration's entries, so a reload applies the fresh list without
+/// rebuilding the shell (`docs/configuration.md`, "When Fiber reads
+/// configuration"). The next list is computed before the lock is taken;
+/// only the assignment runs under it. A poisoned lock is recovered.
+pub(crate) fn refresh_shell_read_only(handle: &ShellReadOnly, config: &Config) {
+    let next = shell_read_only(config);
+    *handle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+}
+
 #[cfg(test)]
 #[path = "shell_read_only_tests.rs"]
 mod shell_read_only_tests;
