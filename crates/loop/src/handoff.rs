@@ -4,13 +4,17 @@
 //! handoff run, and render state that makes the live conversation and a
 //! resume's rebuild agree.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::events::{
-    ContextNudged, Event, HandoffTrigger, Outcome, ToolCallRequested, TurnCompleted, TurnOutcome,
+    ContextNudged, Event, HandoffTrigger, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
+    ToolCallRequested, TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Input, ModelRequest};
-use contract::shapes::{Failure, Tokens};
+use contract::shapes::{DeclaredEffects, Effect, Failure, Tokens};
+use contract::skills::{SkillRead, Skills};
+use contract::tool::Effects;
 use contract::{ActionId, ErrorCode, TurnId};
 
 use crate::{Error, Loop, Step};
@@ -396,7 +400,10 @@ impl Loop {
     /// Writes the opening message and its notices, and rebuilds the tracked
     /// instruction-file state from them. Refreshes the maintained skill
     /// set with what the message sent, so `/name` and the `skill` tool
-    /// answer from the listing the model was given.
+    /// answer from the listing the model was given. Before the opening, a
+    /// completed handoff's loads are sent again as `skills_resent`, read
+    /// fresh from disk (`docs/handoff.md`, "What the model sees after a
+    /// handoff").
     pub(crate) fn write_opening(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
         // The loop's current inputs, with the maintained disabled list
         // applied: a model switch updates the window `collect` sizes its
@@ -415,13 +422,134 @@ impl Loop {
             &message.skills,
             &notices,
         );
+        // The previous context's loads, armed by a completed handoff: the
+        // set is now the new listing, so what is sent and what is listed
+        // follow one rule.
+        let resend = std::mem::take(&mut self.handoff.carry.resend);
+        let reader = self.skills.reader();
+        let (sent, left_out) = resent_skills(&reader, &|target| self.refuse(target), &resend);
         self.changes = crate::changes::State::initial(&message, &self.workspace, &self.prompt);
+        if !sent.is_empty() {
+            self.write(
+                &Event::SkillsResent(SkillsResent { skills: sent }),
+                turn,
+                None,
+            )?;
+        }
         for event in std::iter::once(Event::OpeningMessage(message))
             .chain(notices.into_iter().map(Event::Notice))
         {
             self.write(&event, turn, None)?;
         }
+        for notice in left_out {
+            self.write(&Event::Notice(notice), turn, None)?;
+        }
         Ok(())
+    }
+
+    /// Whether the deny steps refuse a resend read of `target`, with the
+    /// verdict's reason: the credential deny and the fail-closed answer
+    /// for unreadable standing rules apply to a resend exactly as to a
+    /// call. The name is empty: a resend is not a call of any tool.
+    fn refuse(&self, target: &Path) -> Option<String> {
+        let effects = Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: Some(vec![target.display().to_string()]),
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        };
+        match crate::permission::inner_verdict(
+            "",
+            &effects,
+            &self.rules.read(),
+            &self.workspace,
+            &self.credentials,
+            &self.credential_files,
+        ) {
+            crate::permission::Verdict::Deny { why, .. } => Some(why),
+            crate::permission::Verdict::Ask(_)
+            | crate::permission::Verdict::Allow(_)
+            | crate::permission::Verdict::Review => None,
+        }
+    }
+}
+
+/// Reads each loaded skill again through the listing the new opening sent:
+/// the sent entries, in first-load order, and one notice per skill left
+/// out, in load order. A skill is sent only when the listing holds it now,
+/// its target resolves to UTF-8, the deny steps allow the read and its
+/// body reads (`docs/tools.md`, "Skills").
+fn resent_skills(
+    skills: &dyn Skills,
+    refuse: &dyn Fn(&Path) -> Option<String>,
+    loaded: &[SkillLoad],
+) -> (Vec<SkillSent>, Vec<Notice>) {
+    let mut sent = Vec::new();
+    let mut left_out = Vec::new();
+    for load in loaded {
+        let Some(file) = skills.file(&load.name) else {
+            left_out.push(resend_notice(
+                &load.name,
+                ErrorCode::InvalidArguments,
+                "it is not in the skills listing now, or it is switched off.",
+            ));
+            continue;
+        };
+        let target = match std::fs::canonicalize(&file) {
+            Ok(target) => target,
+            Err(error) => {
+                left_out.push(resend_notice(
+                    &load.name,
+                    ErrorCode::IoFailed,
+                    &format!("Could not read skill {}: {error}.", file.display()),
+                ));
+                continue;
+            }
+        };
+        if target.to_str().is_none() {
+            left_out.push(resend_notice(
+                &load.name,
+                ErrorCode::InvalidArguments,
+                "its path is not valid UTF-8.",
+            ));
+            continue;
+        }
+        if let Some(why) = refuse(&target) {
+            left_out.push(resend_notice(&load.name, ErrorCode::InvalidArguments, &why));
+            continue;
+        }
+        match skills.body(&load.name, &target) {
+            Ok(content) => sent.push(SkillSent {
+                name: load.name.clone(),
+                path: file.to_string_lossy().into_owned(),
+                content,
+            }),
+            Err(SkillRead::Io(message)) => {
+                left_out.push(resend_notice(&load.name, ErrorCode::IoFailed, &message));
+            }
+            Err(SkillRead::Invalid) => {
+                left_out.push(resend_notice(
+                    &load.name,
+                    ErrorCode::InvalidArguments,
+                    "its header no longer parses, names another skill, or turns off model invocation.",
+                ));
+            }
+        }
+    }
+    (sent, left_out)
+}
+
+/// One resend notice: the skill left out, and why it was not sent again.
+fn resend_notice(name: &str, code: ErrorCode, why: &str) -> Notice {
+    Notice {
+        code,
+        message: format!("Skill {name} was not sent again after the handoff: {why}"),
+        extension: None,
     }
 }
 

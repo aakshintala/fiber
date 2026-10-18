@@ -811,3 +811,239 @@ fn loaded_keeps_first_load_order_and_the_latest_path() {
         ]
     );
 }
+use std::collections::BTreeMap as SkillMap;
+use std::path::{Path, PathBuf};
+
+use contract::skills::{SkillRead, Skills};
+
+/// A `Skills` seam over a fixed map, with real temp files for the
+/// canonical-target steps: `file` names the file the listing holds, and
+/// `body` answers without touching it.
+struct FakeSkills {
+    files: SkillMap<String, PathBuf>,
+    bodies: SkillMap<String, Result<String, SkillRead>>,
+    _home: fakes::TempDir,
+}
+
+impl FakeSkills {
+    fn new() -> Self {
+        Self {
+            files: SkillMap::new(),
+            bodies: SkillMap::new(),
+            _home: fakes::TempDir::new("loop-handoff-resent"),
+        }
+    }
+
+    fn dir(&self) -> PathBuf {
+        self._home.path().to_path_buf()
+    }
+
+    /// Writes `name`'s file with `text` and lists it, answering `body`.
+    fn list(&mut self, name: &str, text: &str, body: &str) {
+        let dir = self.dir().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("SKILL.md");
+        std::fs::write(&file, text).unwrap();
+        self.files.insert(name.into(), file);
+        self.bodies.insert(name.into(), Ok(body.into()));
+    }
+}
+
+impl Skills for FakeSkills {
+    fn file(&self, name: &str) -> Option<PathBuf> {
+        self.files.get(name).cloned()
+    }
+
+    fn body(&self, asked: &str, _file: &Path) -> Result<String, SkillRead> {
+        self.bodies
+            .get(asked)
+            .cloned()
+            .unwrap_or(Err(SkillRead::Invalid))
+    }
+}
+
+fn allow(_: &Path) -> Option<String> {
+    None
+}
+
+fn sent_of(sent: &[contract::events::SkillSent]) -> Vec<(&str, &str, &str)> {
+    sent.iter()
+        .map(|skill| {
+            (
+                skill.name.as_str(),
+                skill.path.as_str(),
+                skill.content.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn notices_of(notices: &[contract::events::Notice]) -> Vec<(contract::ErrorCode, &str)> {
+    notices
+        .iter()
+        .map(|notice| (notice.code.clone(), notice.message.as_str()))
+        .collect()
+}
+
+#[test]
+fn listed_skills_are_sent_in_load_order_with_the_listed_path() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.list("beta", "header\n", "Beta body.");
+    let alpha_path = skills.files["alpha"].to_string_lossy().into_owned();
+    let beta_path = skills.files["beta"].to_string_lossy().into_owned();
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &allow,
+        &[load("alpha", "/old/alpha"), load("beta", "/old/beta")],
+    );
+    assert_eq!(
+        sent_of(&sent),
+        [
+            ("alpha", alpha_path.as_str(), "Alpha body."),
+            ("beta", beta_path.as_str(), "Beta body."),
+        ]
+    );
+    assert!(left_out.is_empty());
+}
+
+#[test]
+fn a_skill_missing_from_the_listing_is_left_out_with_a_notice() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    let alpha_path = skills.files["alpha"].to_string_lossy().into_owned();
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &allow,
+        &[load("gone", "/old/gone"), load("alpha", "/old/alpha")],
+    );
+    assert_eq!(
+        sent_of(&sent),
+        [("alpha", alpha_path.as_str(), "Alpha body.")]
+    );
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill gone was not sent again after the handoff: it is not in the skills listing now, or it is switched off."
+        )],
+    );
+}
+
+#[test]
+fn a_skill_the_deny_steps_refuse_is_left_out_with_the_verdicts_reason() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.list("beta", "header\n", "Beta body.");
+    let beta_path = skills.files["beta"].to_string_lossy().into_owned();
+    let refuse = |target: &Path| {
+        (target == skills.files["alpha"]).then(|| "A standing rule refuses this call.".to_owned())
+    };
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &refuse,
+        &[load("alpha", "/old/alpha"), load("beta", "/old/beta")],
+    );
+    assert_eq!(sent_of(&sent), [("beta", beta_path.as_str(), "Beta body.")]);
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill alpha was not sent again after the handoff: A standing rule refuses this call."
+        )],
+    );
+}
+
+#[test]
+fn an_unreadable_body_is_left_out_with_its_message() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.bodies.insert(
+        "alpha".into(),
+        Err(SkillRead::Io(
+            "Could not read skill /w/alpha/SKILL.md: gone.".into(),
+        )),
+    );
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("alpha", "/old/alpha")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::IoFailed,
+            "Skill alpha was not sent again after the handoff: Could not read skill /w/alpha/SKILL.md: gone."
+        )],
+    );
+}
+
+#[test]
+fn an_invalid_body_is_left_out_with_the_header_clause() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills
+        .bodies
+        .insert("alpha".into(), Err(SkillRead::Invalid));
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("alpha", "/old/alpha")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill alpha was not sent again after the handoff: its header no longer parses, names another skill, or turns off model invocation."
+        )],
+    );
+}
+
+#[test]
+fn a_file_that_does_not_resolve_is_left_out_as_unreadable() {
+    let skills = FakeSkills::new();
+    let missing = skills.dir().join("gone").join("SKILL.md");
+    let mut listing = FakeSkills::new();
+    listing.files.insert("gone".into(), missing.clone());
+    let (sent, left_out) = super::resent_skills(&listing, &allow, &[load("gone", "/old/gone")]);
+    assert!(sent.is_empty());
+    assert_eq!(left_out.len(), 1);
+    assert_eq!(left_out[0].code, contract::ErrorCode::IoFailed);
+    assert!(
+        left_out[0].message.starts_with(&format!(
+            "Skill gone was not sent again after the handoff: Could not read skill {}:",
+            missing.display()
+        )),
+        "{}",
+        left_out[0].message
+    );
+}
+
+#[test]
+fn a_target_outside_utf8_is_left_out_as_invalid() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let home = fakes::TempDir::new("loop-handoff-non-utf8");
+    let raw = home.path().join("bytes");
+    std::fs::create_dir_all(&raw).unwrap();
+    let mut bytes = raw.into_os_string().into_vec();
+    bytes.push(0xff);
+    let odd_dir = PathBuf::from(OsString::from_vec(bytes));
+    std::fs::create_dir_all(&odd_dir).unwrap();
+    let file = odd_dir.join("SKILL.md");
+    std::fs::write(&file, "body\n").unwrap();
+    let mut skills = FakeSkills::new();
+    skills.files.insert("odd".into(), file);
+    skills.bodies.insert("odd".into(), Ok("Odd body.".into()));
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("odd", "/old/odd")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill odd was not sent again after the handoff: its path is not valid UTF-8."
+        )],
+    );
+}
+
+#[test]
+fn no_loads_send_nothing() {
+    let skills = FakeSkills::new();
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[]);
+    assert!(sent.is_empty());
+    assert!(left_out.is_empty());
+}
