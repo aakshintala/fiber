@@ -170,8 +170,6 @@ pub(crate) struct Fake {
     pub(crate) reviewer_saved: Mutex<Result<(), ConfigureError>>,
     /// What `reviewer_notes` answers.
     pub(crate) notes: Mutex<Result<ReviewerNotes, ConfigureError>>,
-    /// Every workspace `reviewer_notes` was asked about, in order.
-    pub(crate) notes_reads: Mutex<Vec<PathBuf>>,
     /// Every notes save asked for, in order.
     pub(crate) notes_saves: Mutex<Vec<NotesSave>>,
     /// What notes saves answer.
@@ -229,7 +227,6 @@ impl Fake {
             reviewer_saves: Mutex::new(Vec::new()),
             reviewer_saved: Mutex::new(Ok(())),
             notes: Mutex::new(Ok(empty_notes())),
-            notes_reads: Mutex::new(Vec::new()),
             notes_saves: Mutex::new(Vec::new()),
             notes_saved: Mutex::new(Ok(NotesSaved::Written(Vec::new()))),
         }
@@ -555,9 +552,7 @@ impl Configure for Fake {
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError> {
-        if let Ok(mut reads) = self.notes_reads.lock() {
-            reads.push(workspace.to_path_buf());
-        }
+        let _ = workspace;
         self.notes.lock().map_or_else(
             |_| {
                 Err(ConfigureError {

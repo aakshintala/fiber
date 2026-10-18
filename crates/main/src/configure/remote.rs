@@ -95,13 +95,15 @@ impl<'a> Args<'a> {
 }
 
 /// One sent notes layer from the request: absent reads as not sent, and
-/// a present layer names its `version` with its `text`. A layer of the
-/// wrong shape, or missing its version, is not a save at all.
+/// a present layer names exactly its `version` with its `text`. A layer of
+/// the wrong shape, with an extra key, or missing its version is not a
+/// save at all.
 fn layer_write(args: &Map<String, Value>, name: &str) -> Result<Option<tui::NotesWrite>, Failure> {
     match args.get(name) {
         None => Ok(None),
         Some(value) => {
             let layer = value.as_object().ok_or_else(invalid)?;
+            Args(layer).shape(&["version", "text"], &[])?;
             let string = |key: &str| layer.get(key).and_then(Value::as_str).ok_or_else(invalid);
             Ok(Some(tui::NotesWrite {
                 version: string("version")?.to_owned(),

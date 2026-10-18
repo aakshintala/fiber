@@ -63,12 +63,10 @@ pub struct ReviewerNotes {
 /// version. The repository layer is never read.
 pub fn reviewer_notes(
     home: &Path,
-    workspace: &Path,
     project: &ProjectKey,
 ) -> Result<ReviewerNotes, crate::ConfigError> {
     // The repository layer is someone else's text: only the person's
     // own files are read.
-    let _ = workspace;
     Ok(ReviewerNotes {
         global: notes_file(&crate::layout::global_config_file(home))?,
         project: notes_file(&crate::layout::project_config_file(home, project))?,

@@ -143,7 +143,6 @@ fn remote_operations_round_trip_their_wire_shapes() {
     assert_eq!(notes["global"]["file"], json!(home.join("config.json")));
     assert_eq!(notes["global"]["text"], "");
     assert_eq!(notes["project"]["text"], "");
-    assert_eq!(notes["project"]["text"], "");
     write(
         &home.join("config.json"),
         r#"{"reviewer":{"context":"Our org is acme."}}"#,
@@ -376,6 +375,24 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
             "{args}"
         );
     }
+    // A notes layer names exactly its version with its text: an extra
+    // key is no save at all, and writes neither file.
+    let project = dirs.project_file(&workspace);
+    let global = dirs.home().join("config.json");
+    write(&global, r#"{"reviewer": {"context": "old global"}}"#);
+    write(&project, r#"{"reviewer": {"context": "old project"}}"#);
+    let before = (fs::read(&global).unwrap(), fs::read(&project).unwrap());
+    for layer in ["global", "project"] {
+        let mut args = json!({"workspace": workspace});
+        args[layer] = json!({"version": "v", "text": "t", "extra": true});
+        assert_eq!(
+            call(&seam, "save_reviewer_notes", args).unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{layer}"
+        );
+        assert_eq!(fs::read(&global).unwrap(), before.0, "{layer}");
+        assert_eq!(fs::read(&project).unwrap(), before.1, "{layer}");
+    }
     for operation in ["unknown", "themes", "theme", "save_keys", "LoginShow"] {
         assert_eq!(
             call(&seam, operation, json!({})).unwrap_err().code,
@@ -398,26 +415,6 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         (
             "revoke",
             json!({"workspace":workspace,"scope":"everywhere","line":0,"text":"x"}),
-        ),
-        (
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":{"text":"t"}}),
-        ),
-        (
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":{"version":"v"}}),
-        ),
-        (
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":{"version":null,"text":"t"}}),
-        ),
-        (
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":null}),
-        ),
-        (
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"project":"t"}),
         ),
     ] {
         assert_eq!(

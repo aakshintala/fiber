@@ -81,13 +81,11 @@ pub fn version(bytes: Option<&[u8]>) -> String {
 /// layer not sent is not read or written and has no entry.
 pub fn save_reviewer_notes(
     home: &Path,
-    workspace: &Path,
     project: &ProjectKey,
     global: Option<NotesWrite>,
     project_layer: Option<NotesWrite>,
 ) -> Result<NotesSaved, ConfigError> {
     // The repository layer is never read or written.
-    let _ = workspace;
     if global.is_none() && project_layer.is_none() {
         return Ok(NotesSaved::Written(Vec::new()));
     }

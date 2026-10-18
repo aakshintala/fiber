@@ -283,7 +283,7 @@ impl tui::Configure for Seam {
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {
         let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
-        let notes = config::reviewer_notes(&self.home, workspace, &project).map_err(from_config)?;
+        let notes = config::reviewer_notes(&self.home, &project).map_err(from_config)?;
         Ok(tui::ReviewerNotes {
             global: notes_file(notes.global),
             project: notes_file(notes.project),
@@ -299,7 +299,6 @@ impl tui::Configure for Seam {
         let (_, key) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
         let saved = config::save_reviewer_notes(
             &self.home,
-            workspace,
             &key,
             global.map(|write| config::NotesWrite {
                 version: write.version,
