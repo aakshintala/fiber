@@ -123,14 +123,14 @@ impl Tool for Read {
             Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
         let judged = self.shared.judged(&raw);
-        if let Err(output) = crate::tool_util::recheck(
+        if let Err(error) = crate::tool_util::recheck(
             &raw,
             &path,
             None,
             judged.as_deref(),
             crate::tool_util::Act::Read,
         ) {
-            return output;
+            return crate::tool_util::errored(error);
         }
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {

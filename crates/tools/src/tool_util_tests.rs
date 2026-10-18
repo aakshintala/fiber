@@ -7,7 +7,10 @@ use contract::shapes::{ContentPart, Effect};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Act, arguments, cancelled_before, effects, failed, no_effects, recheck};
+use super::{
+    Act, arguments, cancelled_before, effects, errored, failed, no_effects, parsed, recheck,
+};
+use crate::error::FileError;
 
 #[test]
 fn the_failed_output_carries_the_code_and_the_message_with_a_newline() {
@@ -66,8 +69,31 @@ fn effects_carries_each_field() {
 }
 
 #[test]
+fn errored_carries_the_case_with_a_newline() {
+    let output = errored(FileError::ChangedBeforeWrite {
+        raw: "a.txt".to_owned(),
+    });
+    assert_eq!(
+        output.content,
+        vec![ContentPart::Text {
+            text:
+                "`a.txt` changed between the permission check and the write. Nothing was written.\n"
+                    .to_owned()
+        }]
+    );
+    let error = output.error.expect("errored carries an error");
+    assert_eq!(error.code, ErrorCode::PathChanged);
+    assert_eq!(
+        error.message,
+        "`a.txt` changed between the permission check and the write. Nothing was written."
+    );
+    assert_eq!(error.retry_after_ms, None);
+    assert_eq!(error.provider, None);
+}
+
+#[test]
 fn recheck_fails_when_the_held_path_differs() {
-    let output = recheck(
+    let error = recheck(
         "a.txt",
         Path::new("/work/b.txt"),
         Some(Path::new("/work/a.txt")),
@@ -75,6 +101,12 @@ fn recheck_fails_when_the_held_path_differs() {
         Act::Write,
     )
     .expect_err("a moved path fails");
+    assert_eq!(error.code(), ErrorCode::PathChanged);
+    assert_eq!(
+        error.to_string(),
+        "`a.txt` changed between the permission check and the write. Nothing was written."
+    );
+    let output = errored(error);
     assert_eq!(
         output.content,
         vec![ContentPart::Text {
@@ -91,7 +123,7 @@ fn recheck_fails_when_the_held_path_differs() {
 
 #[test]
 fn recheck_fails_when_the_judged_path_differs() {
-    let output = recheck(
+    let error = recheck(
         "a.txt",
         Path::new("/work/a.txt"),
         Some(Path::new("/work/a.txt")),
@@ -99,10 +131,7 @@ fn recheck_fails_when_the_judged_path_differs() {
         Act::Write,
     )
     .expect_err("a retargeted path fails");
-    assert!(matches!(
-        output.error.map(|error| error.code),
-        Some(ErrorCode::PathChanged)
-    ));
+    assert_eq!(error.code(), ErrorCode::PathChanged);
 }
 
 #[test]
@@ -131,7 +160,7 @@ fn recheck_passes_without_a_held_or_judged_path() {
 
 #[test]
 fn recheck_names_the_read() {
-    let output = recheck(
+    let error = recheck(
         "a.txt",
         Path::new("/work/b.txt"),
         Some(Path::new("/work/a.txt")),
@@ -140,11 +169,8 @@ fn recheck_names_the_read() {
     )
     .expect_err("a moved read fails");
     assert_eq!(
-        output.content,
-        vec![ContentPart::Text {
-            text: "`a.txt` changed between the permission check and the read. Nothing was read.\n"
-                .to_owned()
-        }]
+        error.to_string(),
+        "`a.txt` changed between the permission check and the read. Nothing was read."
     );
 }
 
@@ -168,4 +194,14 @@ fn arguments_names_a_missing_field() {
     let map = json!({"path": "a.txt"}).as_object().unwrap().clone();
     let args = arguments::<Args>(&map).expect("a well-formed map parses");
     assert_eq!(args.path, "a.txt");
+}
+
+#[test]
+fn parsed_reports_the_same_text_as_arguments() {
+    let empty = serde_json::Map::new();
+    let cased = parsed::<Args>(&empty)
+        .expect_err("a missing path fails")
+        .to_string();
+    let plain = arguments::<Args>(&empty).expect_err("a missing path fails");
+    assert_eq!(cased, plain);
 }

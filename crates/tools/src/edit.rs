@@ -118,14 +118,14 @@ impl Tool for Edit {
             Err(output) => return output,
         };
         let judged = self.shared.judged(&raw);
-        if let Err(output) = crate::tool_util::recheck(
+        if let Err(error) = crate::tool_util::recheck(
             &raw,
             &path,
             Some(&key),
             judged.as_deref(),
             crate::tool_util::Act::Write,
         ) {
-            return output;
+            return crate::tool_util::errored(error);
         }
         let text = match inspect(&path) {
             Ok(Inspected::Pdf { size, .. }) | Ok(Inspected::PdfOverCap { size }) => {
