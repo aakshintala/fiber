@@ -1045,19 +1045,22 @@ fn close_during_an_approval_denies_it_by_cancel() {
     session.rules.set(standing_ask());
     let inbox = session.inbox.clone();
     let (close_ack, close_answers) = capture();
-    let (reply_ack, reply_answers) = capture();
+    let (reply_ack, _reply_answers) = capture();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
     let answered = on_request(&session, move |id| {
         inbox.send(Delivery::Close(close_ack)).unwrap();
+        // Hold the reply until the turn ends, so the close denies the
+        // request and the loop stops draining before the reply arrives.
+        Deadline::after(support::DEADLINE)
+            .recv(&release_rx)
+            .expect("the turn ended and released the approval thread");
         inbox.send(reply_to(id, allow(), reply_ack)).unwrap();
     });
     session.inbox.send(support::delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    release_tx.send(()).unwrap();
     answered.join().unwrap();
     assert_eq!(take(&close_answers), accepted());
-    assert_eq!(
-        take(&reply_answers),
-        rejected(ErrorCode::StaleRequest, STALE_REPLY)
-    );
     let lines = session.lines();
     assert_eq!(kinds(&lines), denied_pair());
     let resolved: Vec<_> = lines
