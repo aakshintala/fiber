@@ -1525,10 +1525,12 @@ fn down_moves_in_drawn_order_across_two_project_groups() {
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
-    // Down moves over the next group's "+" to its first card.
+    // Down stops at every stop, the next group's "+" included.
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
-    // Up stops at every stop, the "+" above included.
+    // Down holds on the last stop.
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
@@ -1550,6 +1552,9 @@ fn up_from_the_first_card_reaches_plus_and_down_on_the_last_holds() {
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
@@ -1753,11 +1758,15 @@ fn shift_tab_past_a_held_end_moves_on() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     // Down holds on the last stop, marking it twice: one Shift+Tab
     // still walks past the hold.
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     stroke_press(&mut app, shift_tab());
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
 }
@@ -1812,6 +1821,34 @@ fn enter_on_plus_goes_home_like_a_click() {
 }
 
 #[test]
+fn down_to_plus_enter_goes_home_like_a_click() {
+    fn hubbed() -> App {
+        let mut app = opened(&[A, B], A);
+        app.on_line(live(
+            B,
+            json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+        ));
+        app
+    }
+    let mut clicked = hubbed();
+    let click_out = sent(clicked.on_click(TargetId::Rail(Spot::Start(key(&clicked, B)))));
+    let mut app = hubbed();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    // Down stops at the next group's "+", the same stop Tab walks.
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, B))));
+    let out = sent(press(&mut app, Key::Enter));
+    assert_eq!(out.len(), click_out.len());
+    for (left, right) in out.iter().zip(click_out.iter()) {
+        assert_eq!(left["command"], right["command"]);
+        assert_eq!(left["args"], right["args"]);
+    }
+    assert_eq!(on_screen(&app), None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
 fn enter_on_cross_sends_dismiss_like_a_click_and_keeps_focus() {
     let mut app = crashed();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
@@ -1842,6 +1879,8 @@ fn losing_a_plus_card_clears_its_plus_focus() {
     let mut app = two_projects();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
@@ -1891,7 +1930,7 @@ fn focusing_plus_above_a_deep_scroll_shows_its_header() {
     let sessions = ten();
     let last = sessions.last().expect("ten sessions").clone();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    for _ in 0..9 {
+    for _ in 0..10 {
         assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     }
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &last))));

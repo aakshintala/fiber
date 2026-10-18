@@ -255,10 +255,9 @@ impl App {
         stops
     }
 
-    /// Moves rail focus one stop down the drawn order, or up it. Down
-    /// moves between cards and their "×" buttons, over the project
-    /// headers above them; up stops at every stop, headers included.
-    /// Either holds at its end. Only the drawn order moves, never feed
+    /// Moves rail focus one stop down the drawn order, or up it. Either
+    /// stops at every stop, the project "+" headers included. Either
+    /// holds at its end. Only the drawn order moves, never feed
     /// order (`docs/tui.md`, "The rail").
     fn move_rail_focus(&mut self, down: bool) {
         if self
@@ -277,13 +276,7 @@ impl App {
             return;
         };
         let next = if down {
-            stops
-                .iter()
-                .enumerate()
-                .skip(at.saturating_add(1))
-                .find(|(_, stop)| !matches!(stop, Spot::Start(_)))
-                .map(|(at, _)| at)
-                .unwrap_or(at)
+            at.saturating_add(1).min(stops.len().saturating_sub(1))
         } else {
             at.saturating_sub(1)
         };
