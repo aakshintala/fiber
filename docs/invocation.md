@@ -355,6 +355,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `tools` | none |
 | `commands` | none |
 | `skills` | none |
+| `credentials` | none |
 | `quota` | `fetch` (boolean, optional, default false) |
 | `history` | `from_seq` (integer, optional), `to_seq` (integer, optional) |
 | `artifact_page` | `path` (string, as a result's `artifact` names it), `offset` (integer, bytes, default 0) |
