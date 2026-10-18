@@ -544,19 +544,44 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.reply: expected an object"))?;
     only(
         reply,
-        &["code", "signal", "stdout", "stderr"],
+        &["code", "signal", "stdout", "stderr", "hang"],
         &format!("{prefix}.reply"),
     )?;
-    let end = if reply.contains_key("signal") {
-        let signal = signed(reply, "signal", &format!("{prefix}.reply"))?;
-        let signal = i32::try_from(signal)
-            .map_err(|_| format!("{prefix}.reply.signal: outside the process signal range"))?;
-        extensions::ExecEnd::Signal(signal)
-    } else {
-        let code = signed(reply, "code", &format!("{prefix}.reply"))?;
-        let code = i32::try_from(code)
-            .map_err(|_| format!("{prefix}.reply.code: outside the process exit-code range"))?;
-        extensions::ExecEnd::Code(code)
+    if let Some(hang) = reply.get("hang") {
+        if hang != &Value::Bool(true) {
+            return Err(format!("{prefix}.reply.hang: expected true"));
+        }
+        if let Some(key) = ["code", "signal", "stdout", "stderr"]
+            .into_iter()
+            .find(|key| reply.contains_key(*key))
+        {
+            return Err(format!(
+                "{prefix}.reply.hang: takes no other key (found {key})"
+            ));
+        }
+        return Ok(extensions::ExecEntry {
+            request: Value::Object(request.clone()),
+            reply: Ok(extensions::ExecReply::Hang),
+        });
+    }
+    let end = match (reply.contains_key("code"), reply.contains_key("signal")) {
+        (true, false) => {
+            let code = signed(reply, "code", &format!("{prefix}.reply"))?;
+            let code = i32::try_from(code)
+                .map_err(|_| format!("{prefix}.reply.code: outside the process exit-code range"))?;
+            extensions::ExecEnd::Code(code)
+        }
+        (false, true) => {
+            let signal = signed(reply, "signal", &format!("{prefix}.reply"))?;
+            let signal = i32::try_from(signal)
+                .map_err(|_| format!("{prefix}.reply.signal: outside the process signal range"))?;
+            extensions::ExecEnd::Signal(signal)
+        }
+        _ => {
+            return Err(format!(
+                "{prefix}.reply: expected exactly one of code or signal"
+            ));
+        }
     };
     let stdout = string(reply, "stdout", &format!("{prefix}.reply"))?;
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;

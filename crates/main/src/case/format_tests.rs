@@ -569,3 +569,105 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
         parsed.host.exec[0].reply
     );
 }
+
+#[test]
+fn an_exec_reply_with_both_code_and_signal_names_both_fields() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"code": 0, "signal": 9, "stdout": "", "stderr": ""}}]});
+    let error = case_error(&value);
+    assert!(error.contains("host.exec[1].reply"), "{error}");
+    assert!(
+        error.contains("expected exactly one of code or signal"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_exec_reply_with_neither_code_nor_signal_names_both_fields() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"stdout": "", "stderr": ""}}]});
+    let error = case_error(&value);
+    assert!(error.contains("host.exec[1].reply"), "{error}");
+    assert!(
+        error.contains("expected exactly one of code or signal"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_exec_reply_with_a_false_hang_names_hang() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"hang": false, "stdout": "", "stderr": ""}}]});
+    let error = case_error(&value);
+    assert!(error.contains("host.exec[1].reply.hang"), "{error}");
+    assert!(error.contains("expected true"), "{error}");
+}
+
+#[test]
+fn a_hung_exec_reply_with_another_key_names_hang_and_that_key() {
+    for key in ["code", "signal", "stdout"] {
+        let mut reply = json!({"hang": true});
+        reply[key] = json!(0);
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"}, "reply": reply}]});
+        let error = case_error(&value);
+        assert!(error.contains("host.exec[1].reply.hang"), "{key}: {error}");
+        assert!(error.contains("takes no other key"), "{key}: {error}");
+        assert!(error.contains(key), "{key}: {error}");
+    }
+}
+
+#[test]
+fn a_hung_exec_reply_parses_alone() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"hang": true}}]});
+    let Case::Session(parsed) = parse(&value).expect("hang reply parses") else {
+        panic!("hang reply parsed as a call case");
+    };
+    assert!(
+        matches!(parsed.host.exec[0].reply, Ok(extensions::ExecReply::Hang)),
+        "{:?}",
+        parsed.host.exec[0].reply
+    );
+}
+
+#[test]
+fn an_exec_signal_outside_the_i32_range_is_rejected() {
+    for signal in [
+        json!(i64::from(i32::MAX) + 1),
+        json!(i64::from(i32::MIN) - 1),
+    ] {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"},
+            "reply": {"signal": signal, "stdout": "", "stderr": ""}}]});
+        let error = case_error(&value);
+        assert!(
+            error.contains("host.exec[1].reply.signal"),
+            "{signal}: {error}"
+        );
+        assert!(
+            error.contains("outside the process signal range"),
+            "{signal}: {error}"
+        );
+    }
+    for signal in [json!(i32::MAX), json!(i32::MIN)] {
+        let mut value = session_case();
+        value["host"] = json!({"exec": [{"request": {"program": "sh"},
+            "reply": {"signal": signal, "stdout": "", "stderr": ""}}]});
+        parse(&value).expect("an i32 signal parses");
+    }
+}
+
+#[test]
+fn an_exec_signal_of_the_wrong_type_is_rejected() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"signal": "9", "stdout": "", "stderr": ""}}]});
+    let error = case_error(&value);
+    assert!(error.contains("host.exec[1].reply.signal"), "{error}");
+    assert!(error.contains("expected a whole number"), "{error}");
+}
