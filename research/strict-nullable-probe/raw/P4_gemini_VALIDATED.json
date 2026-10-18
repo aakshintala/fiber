@@ -1,0 +1,66 @@
+{
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+     }
+    ]
+   }
+  ],
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file.",
+      "parametersJsonSchema": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        },
+        "offset": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "note": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "all": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "path",
+        "offset",
+        "note",
+        "all"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "VALIDATED"
+   }
+  }
+ },
+ "status": 200,
+ "elapsed_s": 1.66,
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"read\",\n              \"args\": {\n                \"all\": null,\n                \"offset\": null,\n                \"note\": null,\n                \"path\": \"a.txt\"\n              },\n              \"id\": \"call_1525219\"\n            },\n            \"thoughtSignature\": \"Et4FCtsFAWkUfRPJq/cd94ubXRupIGDG2YIIUmH7faeo4FOAftCbG2NDTJtQ0G6nfjnSiPOr8fNwmnfo+aaST79xLFABIIYLuCveRkczkl0iXkAYaHUGK+JjEcdkDxhZJt5H2pYCxXB3Ar/Hlglof+DwMulbWm6qG5SNq+XHR+4Cdo8cCmjS1m3jU6ZFek+7ka70SPN/3x6kP44biikxtURa9yNzZhCML8xjrwWkL88uYAbXSWrf01EjPkqmUaErEBBcv0R4iyO0Qip/Y8LYgECu2BMMgFqu7Df17G+E0nlzTEkAmoyCO546oKIUylhJshPrV0WYIw6wZ3wzsvJv7Gg07fUiL4qX6tQ4aTRzx4gPYztZBnuLA6pgX4iGTkBqPJNnIQWMeY7tlRle/gDlunFC7N+0FOyxL0jsPYIO4aZkq780MlrCcXlg/kjrfdP95u1kREkncEOh8vUMBfpR55R4MHicW/m+BYJUcpR7jibN4mbTSTW7rGvEhY1Tqe1v49c1yal40bjfNOeawK+lwT/oNZznY/uqp7qPEAYJzP61amM+uHoMxJ7/USIDGK2J3TJG2AuVO+KDy0fcBJFyel8URV58Ysh441+c+fw4HCkrtY8OHmjx9+QLstUrImGYiy+F6ultBGGIUd6Pug/S7+Ki58lw8ZiaDbmoHOUDsTvgxstVYMyJRSmnZdyll1nGtEo7fHZgFPuxjG6aa9+Mu2hRaZ/L9fb5qqZB0DGr0qgewqdYHRKTevWK6d/nmN6s+72JauJTiKV01shEpL9uBGAXIinGs2vnv7U5t18zVbJnTfNTIE2urS8BZ45WsDhXQu9pvGixLd/p2QWCBEn9zcDSAWmI2oYWqLk023HdOxe19ZkbQgLvlKbpt5sJIBvnvJP6jCVXZptUMHCaw2u2SFWWhT5SU38fwLGCdZiQaTkBjZcog0Foshw145CxQWR8cq68Uy9fzYbvuS0+Fvk8fis=\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 107,\n    \"candidatesTokenCount\": 28,\n    \"totalTokenCount\": 317,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 107\n      }\n    ],\n    \"thoughtsTokenCount\": 182,\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3-flash-preview\",\n  \"responseId\": \"hAPVavugA5yf_uMPlqbU0AQ\"\n}\n"
+}
