@@ -305,6 +305,87 @@ impl Registry {
         (started, finish)
     }
 
+    /// Whether a session has wired its inbox for delegate starts and ends.
+    pub(crate) fn has_inbox(&self) -> bool {
+        lock(&self.inner).inbox.is_some()
+    }
+
+    /// Records an extension-owned delegate and sends its start under the
+    /// same lock, before a reader can see it in the running list.
+    pub(crate) fn open_extension_started(
+        self: &Arc<Self>,
+        job_id: JobId,
+        extension: String,
+        description: String,
+        output_path: String,
+        stop: Stop,
+        delegate: DelegateStarted,
+    ) -> Unreported {
+        let started = JobStarted {
+            job_id: job_id.clone(),
+            tool: None,
+            extension: Some(extension),
+            description,
+            output_path: output_path.clone(),
+        };
+        let finish = Unreported {
+            job_id,
+            run: 1,
+            registry: Some(Arc::clone(self)),
+            delegate: true,
+        };
+        let mut inner = lock(&self.inner);
+        inner.jobs.push(Job::running(
+            started.clone(),
+            PathBuf::from(output_path),
+            Arc::from(stop.0),
+            None,
+            Some(delegate.clone()),
+        ));
+        if let Some(inbox) = &inner.inbox {
+            let _sent = inbox.send(Delivery::ExtensionJob(started, delegate));
+        }
+        finish
+    }
+
+    /// Stops running jobs of extensions no longer loaded, once per run.
+    /// Stops run outside the registry lock; returns how many were sent.
+    pub fn retain_extensions(&self, loaded: &[String]) -> usize {
+        self.cancel_matching(|job| {
+            job.started
+                .extension
+                .as_ref()
+                .is_some_and(|name| !loaded.contains(name))
+        })
+    }
+
+    /// Stops the listed running jobs, once per run, outside the registry
+    /// lock. Returns how many stops were sent.
+    pub fn cancel_jobs(&self, jobs: &[JobId]) -> usize {
+        self.cancel_matching(|job| jobs.contains(&job.started.job_id))
+    }
+
+    fn cancel_matching(&self, matches: impl Fn(&Job) -> bool) -> usize {
+        let stops: Vec<_> = {
+            let mut inner = lock(&self.inner);
+            inner
+                .jobs
+                .iter_mut()
+                .filter(|job| matches(job))
+                .filter(|job| !job.stop_sent)
+                .filter(|job| matches!(job.phase, Phase::Running))
+                .map(|job| {
+                    job.stop_sent = true;
+                    Arc::clone(&job.stop)
+                })
+                .collect()
+        };
+        for stop in &stops {
+            stop();
+        }
+        stops.len()
+    }
+
     /// Sends a monitor's batch to the inbox, under the lock an end sends
     /// under, so the job's lines and its end arrive in the order its drive
     /// thread made them. Dropped when no inbox is set.

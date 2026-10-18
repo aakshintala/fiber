@@ -53,6 +53,160 @@ fn failure() -> JobCompleted {
 }
 
 #[test]
+fn extension_retention_and_explicit_cancel_stop_only_selected_running_jobs_once() {
+    let (_dir, registry) = world();
+    let stopped = Arc::new(Mutex::new(Vec::new()));
+    let mut held = Vec::new();
+    for (id, owner) in [
+        ("j_a", Some("a")),
+        ("j_b", Some("b")),
+        ("j_ended", Some("b")),
+        ("j_model", None),
+    ] {
+        let stops = stopped.clone();
+        let stop = Stop(Box::new(move || stops.lock().unwrap().push(id)));
+        let finish = if let Some(owner) = owner {
+            registry.open_extension_started(
+                JobId(id.into()),
+                owner.into(),
+                id.into(),
+                "/child/events.jsonl".into(),
+                stop,
+                delegate_started(id),
+            )
+        } else {
+            registry
+                .open_started(
+                    JobId(id.into()),
+                    "delegate_spawn".into(),
+                    id.into(),
+                    "/child/events.jsonl".into(),
+                    stop,
+                    delegate_started(id),
+                )
+                .1
+        };
+        if id == "j_ended" {
+            finish.report(ended_ok(id), None);
+        } else {
+            held.push(finish);
+        }
+    }
+    assert_eq!(registry.retain_extensions(&["a".into()]), 1);
+    assert_eq!(*stopped.lock().unwrap(), ["j_b"]);
+    assert_eq!(registry.retain_extensions(&["a".into()]), 0);
+    assert_eq!(
+        registry.cancel_jobs(&[
+            JobId("j_a".into()),
+            JobId("missing".into()),
+            JobId("j_ended".into())
+        ]),
+        1
+    );
+    assert_eq!(registry.cancel_jobs(&[JobId("j_a".into())]), 0);
+    assert_eq!(*stopped.lock().unwrap(), ["j_b", "j_a"]);
+    assert_eq!(registry.retain_extensions(&[]), 0);
+    assert_eq!(registry.cancel_jobs(&[JobId("j_model".into())]), 1);
+    assert_eq!(*stopped.lock().unwrap(), ["j_b", "j_a", "j_model"]);
+}
+
+#[test]
+fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_answers() {
+    for extension in [false, true] {
+        let (_dir, registry) = world();
+        let finish = if extension {
+            registry.open_extension_started(
+                JobId("j_one".into()),
+                "a".into(),
+                "scan".into(),
+                "/child/events.jsonl".into(),
+                Stop(Box::new(|| {})),
+                delegate_started("j_one"),
+            )
+        } else {
+            registry
+                .open_started(
+                    JobId("j_one".into()),
+                    "delegate_spawn".into(),
+                    "scan".into(),
+                    "/child/events.jsonl".into(),
+                    Stop(Box::new(|| {})),
+                    delegate_started("j_one"),
+                )
+                .1
+        };
+        assert_eq!(
+            matches!(registry.target("j_one"), super::runs::Target::Unknown),
+            extension
+        );
+        finish.report(
+            ended_ok("j_one"),
+            Some(delegate_finished("j_one", "private final")),
+        );
+        assert_eq!(
+            matches!(registry.target("j_one"), super::runs::Target::Unknown),
+            extension
+        );
+        let answer = registry.wait("j_one", 0, &CancelToken::new()).unwrap();
+        assert_eq!(answer.text.contains("Final message:"), !extension);
+        assert_eq!(answer.text.contains("private final"), !extension);
+        assert!(answer.text.contains("Output: /child/events.jsonl"));
+        let mut called = false;
+        let resumed = registry.resume("j_one", None, |_| {
+            called = true;
+            Err::<(Stop, ()), _>(())
+        });
+        assert_eq!(
+            matches!(resumed, Err(super::runs::Resume::Unknown)),
+            extension
+        );
+        assert_eq!(called, !extension);
+    }
+}
+
+#[test]
+fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacting_it() {
+    use contract::tool::Tool as _;
+    let (_dir, registry) = world();
+    let finish = registry.open_extension_started(
+        JobId("j_ext".into()),
+        "a".into(),
+        "scan".into(),
+        "/child/events.jsonl".into(),
+        Stop(Box::new(|| {})),
+        delegate_started("j_ext"),
+    );
+    let tool = crate::delegate::DelegateMessage {
+        depth: 0,
+        registry,
+        parent: contract::SessionId("s_parent".into()),
+        clock: FakeClock::new(),
+        bound: DEADLINE,
+        cap: 1024,
+        launch: Arc::new(|_| panic!("an extension delegate must not resume")),
+        watch: Arc::new(|_, _, _| panic!("an extension delegate must not be watched")),
+        steer: Arc::new(|_, _, _, _, _| panic!("an extension delegate must not be steered")),
+        last_seq: Arc::new(|_| panic!("an extension delegate must not be read")),
+    };
+    let args = serde_json::json!({"id":"j_ext", "message":"hi"});
+    let assert_refused = || {
+        let error = tool
+            .run(
+                args.as_object().unwrap(),
+                &CancelToken::new(),
+                &Recorder::default(),
+            )
+            .error
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidArguments);
+        assert_eq!(error.message, crate::tool::unknown_message("j_ext"));
+    };
+    assert_refused();
+    finish.report(ended_ok("j_ext"), None);
+    assert_refused();
+}
+
+#[test]
 fn open_through_the_jobs_trait_mints_an_id_and_a_file() {
     let (_dir, registry) = world();
     let jobs: &dyn contract::jobs::Jobs = registry.as_ref();

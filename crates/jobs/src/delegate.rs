@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use contract::diag::Op;
 use contract::emit::Emit;
-use contract::events::DelegateStarted;
+use contract::events::{DelegateStarted, JobStarted};
 use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ErrorCode, SessionId};
+use contract::{ErrorCode, JobId, SessionId};
 use serde_json::{Map, Value, json};
 
 pub(crate) mod group;
@@ -152,6 +152,15 @@ fn string(arguments: &Map<String, Value>, name: &str) -> String {
     arguments[name].as_str().unwrap_or_default().to_owned()
 }
 
+type ExtensionStart<'a> = (&'a str, &'a mut dyn FnMut(&JobId));
+
+struct Started {
+    job_id: JobId,
+    output_path: String,
+    started: JobStarted,
+    delegate: DelegateStarted,
+}
+
 impl Tool for DelegateSpawn {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -218,17 +227,83 @@ impl Tool for DelegateSpawn {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
+        match self.start(arguments, None) {
+            Ok(start) => Output {
+                content: vec![ContentPart::Text {
+                    text: format!(
+                        "Started delegate {}. Its log is {}.",
+                        start.job_id.0, start.output_path
+                    ),
+                }],
+                jobs: vec![
+                    JobRecord::Started(start.started),
+                    JobRecord::DelegateStarted(start.delegate),
+                ],
+                ..Output::default()
+            },
+            Err(output) => *output,
+        }
+    }
+}
+
+impl DelegateSpawn {
+    /// Starts an extension-owned delegate with the model tool's admission
+    /// and limits. Binds its id before spawning; the caller must unbind on
+    /// a later failure. `bind` must not start or resume another delegate.
+    pub fn start_extension(
+        &self,
+        extension: &str,
+        arguments: &Map<String, Value>,
+        bind: &mut dyn FnMut(&JobId),
+    ) -> Result<JobId, contract::shapes::Failure> {
+        self.start(arguments, Some((extension, bind)))
+            .map(|start| start.job_id)
+            .map_err(|output| {
+                output.error.unwrap_or_else(|| contract::shapes::Failure {
+                    code: ErrorCode::ToolError,
+                    message: "Starting the delegate failed.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                })
+            })
+    }
+
+    fn start(
+        &self,
+        arguments: &Map<String, Value>,
+        mut extension: Option<ExtensionStart<'_>>,
+    ) -> Result<Started, Box<Output>> {
         if let Some(output) = depth_refusal(self.depth, "delegate_spawn") {
-            return output;
+            return Err(Box::new(output));
+        }
+        if extension.is_some() {
+            let unknown: Vec<_> = arguments
+                .keys()
+                .filter(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "description" | "prompt" | "model" | "timeout_ms"
+                    )
+                })
+                .map(|key| format!("`/{key}`: not allowed"))
+                .collect();
+            if !unknown.is_empty() {
+                let message = unknown.join("\n");
+                return Err(Box::new(crate::registry::failed(
+                    ErrorCode::InvalidArguments,
+                    message.clone(),
+                    message,
+                )));
+            }
         }
         let (description, prompt, timeout) = match check_effects_arguments(arguments) {
             Ok(call) => call,
             Err(message) => {
-                return crate::registry::failed(
+                return Err(Box::new(crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),
                     message,
-                );
+                )));
             }
         };
         // The schema leaves `model` optional and untyped, so a missing or
@@ -241,19 +316,19 @@ impl Tool for DelegateSpawn {
                     "Give model: a role or a full reference.\n{}",
                     self.resolve.catalogue
                 );
-                return crate::registry::failed(
+                return Err(Box::new(crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),
                     message,
-                );
+                )));
             }
             Some(_) => {
                 let message = format!("model must be a string.\n{}", self.resolve.catalogue);
-                return crate::registry::failed(
+                return Err(Box::new(crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),
                     message,
-                );
+                )));
             }
         };
         // Checked when the call is made, before any process starts: an
@@ -262,11 +337,11 @@ impl Tool for DelegateSpawn {
             Ok(resolved) => resolved,
             Err(reason) => {
                 let message = format!("{reason}\n{}", self.resolve.catalogue);
-                return crate::registry::failed(
+                return Err(Box::new(crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),
                     message,
-                );
+                )));
             }
         };
         // Checked after the model resolved and before anything starts:
@@ -276,15 +351,28 @@ impl Tool for DelegateSpawn {
         let credential = match (self.resolve.credential)(&model) {
             Ok(credential) => credential,
             Err(message) => {
-                return crate::registry::failed(
+                return Err(Box::new(crate::registry::failed(
                     ErrorCode::CredentialMissing,
                     message.clone(),
                     message,
-                );
+                )));
             }
         };
         let admitted = self.registry.admit(|| {
+            if extension.is_some() && !self.registry.has_inbox() {
+                let message =
+                    "No session is listening for this delegate's end, so nothing was started."
+                        .to_owned();
+                return Err(Box::new(crate::registry::failed(
+                    ErrorCode::ToolError,
+                    message.clone(),
+                    message,
+                )));
+            }
             let job_id = mint_job_id();
+            if let Some((_, bind)) = extension.as_mut() {
+                bind(&job_id);
+            }
             let session_id = run::mint_session_id();
             let output_path = self
                 .sessions
@@ -321,7 +409,10 @@ impl Tool for DelegateSpawn {
                 None,
                 timeout,
             );
-            let (child, listing) = runner.spawn(&self.launch, &launched)?;
+            let (child, listing) = runner.spawn(&self.launch, &launched).map_err(|source| {
+                let message = format!("Starting the delegate failed: {source}.");
+                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
+            })?;
             let delegate = DelegateStarted {
                 job_id: job_id.clone(),
                 delegate_session_id: session_id.clone(),
@@ -334,25 +425,40 @@ impl Tool for DelegateSpawn {
                 worktree: None,
                 forked_from: None,
             };
-            let (started, finish) = self.registry.open_started(
-                job_id.clone(),
-                "delegate_spawn".to_owned(),
-                description,
-                output_path.clone(),
-                stop,
-                delegate.clone(),
-            );
+            let (started, finish) = if let Some((extension, _)) = extension {
+                let started = JobStarted {
+                    job_id: job_id.clone(),
+                    tool: None,
+                    extension: Some(extension.to_owned()),
+                    description: description.clone(),
+                    output_path: output_path.clone(),
+                };
+                let finish = self.registry.open_extension_started(
+                    job_id.clone(),
+                    extension.to_owned(),
+                    description,
+                    output_path.clone(),
+                    stop,
+                    delegate.clone(),
+                );
+                (started, finish)
+            } else {
+                self.registry.open_started(
+                    job_id.clone(),
+                    "delegate_spawn".to_owned(),
+                    description,
+                    output_path.clone(),
+                    stop,
+                    delegate.clone(),
+                )
+            };
             std::thread::spawn(move || runner.drive(child, Some(listing), finish));
-            Ok::<_, std::io::Error>((
-                Output {
-                    content: vec![ContentPart::Text {
-                        text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),
-                    }],
-                    jobs: vec![
-                        JobRecord::Started(started),
-                        JobRecord::DelegateStarted(delegate),
-                    ],
-                    ..Output::default()
+            Ok((
+                Started {
+                    job_id,
+                    output_path,
+                    started,
+                    delegate,
                 },
                 start,
             ))
@@ -363,16 +469,17 @@ impl Tool for DelegateSpawn {
                 if let Some((timing, started)) = start {
                     drop(timing(Op::JobsStart, None, Some(started)));
                 }
-                output
+                Ok(output)
             }
             Err(crate::registry::runs::Admit::Full) => {
                 let message = crate::registry::runs::cap_message();
-                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
+                Err(Box::new(crate::registry::failed(
+                    ErrorCode::ToolError,
+                    message.clone(),
+                    message,
+                )))
             }
-            Err(crate::registry::runs::Admit::Start(source)) => {
-                let message = format!("Starting the delegate failed: {source}.");
-                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
-            }
+            Err(crate::registry::runs::Admit::Start(output)) => Err(output),
         }
     }
 }
