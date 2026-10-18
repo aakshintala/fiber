@@ -7,35 +7,17 @@ use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Tool};
 use fakes::{CancelToken, Recorder, TempDir};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::Files;
 use crate::files::{hash_bytes, path_text};
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn run(dir: &Path, value: Value) -> contract::tool::Output {
     Files::new(dir.to_path_buf()).read().run(
-        &args(value),
+        &fakes::tool_args(value),
         &CancelToken::new(),
         &Recorder::default(),
     )
-}
-
-fn text(output: &contract::tool::Output) -> String {
-    match output.content.first() {
-        Some(ContentPart::Text { text }) => text.clone(),
-        Some(ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown) | None => {
-            String::new()
-        }
-    }
 }
 
 fn code(output: &contract::tool::Output) -> Option<ErrorCode> {
@@ -95,7 +77,7 @@ printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
         let files =
             Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
         let output = files.read().run(
-            &args(json!({"path": "a.png"})),
+            &fakes::tool_args(json!({"path": "a.png"})),
             &CancelToken::new(),
             &Recorder::default(),
         );
@@ -117,7 +99,7 @@ fn a_small_file_comes_back_as_it_is() {
     fs::write(dir.path().join("a.txt"), "a\r\nb\r\n").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
     assert!(output.error.is_none());
-    assert_eq!(text(&output), "a\r\nb\r\n");
+    assert_eq!(fakes::text_of(&output), "a\r\nb\r\n");
 }
 
 #[test]
@@ -127,7 +109,7 @@ fn a_byte_order_mark_is_dropped() {
     bytes.extend_from_slice(b"hi\n");
     fs::write(dir.path().join("a.txt"), &bytes).unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    assert_eq!(text(&output), "hi\n");
+    assert_eq!(fakes::text_of(&output), "hi\n");
 }
 
 #[test]
@@ -135,7 +117,7 @@ fn a_lone_carriage_return_stays_in_the_line() {
     let dir = TempDir::new("fiber-read-cr");
     fs::write(dir.path().join("a.txt"), "a\rb").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    assert_eq!(text(&output), "a\rb");
+    assert_eq!(fakes::text_of(&output), "a\rb");
 }
 
 #[test]
@@ -143,7 +125,7 @@ fn a_file_with_no_trailing_newline_keeps_its_last_line() {
     let dir = TempDir::new("fiber-read-nonewline");
     fs::write(dir.path().join("a.txt"), "a\nb").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    assert_eq!(text(&output), "a\nb");
+    assert_eq!(fakes::text_of(&output), "a\nb");
 }
 
 #[test]
@@ -155,7 +137,7 @@ fn offset_and_limit_name_the_next_line() {
         json!({"path": "a.txt", "offset": 2, "limit": 1}),
     );
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         "y\n[Showing lines 2-2 of 3. Continue with offset=3.]"
     );
 }
@@ -166,7 +148,7 @@ fn a_limit_that_stops_early_gives_the_notice() {
     fs::write(dir.path().join("a.txt"), "a\nb\nc\n").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt", "limit": 2}));
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         "a\nb\n[Showing lines 1-2 of 3. Continue with offset=3.]"
     );
 }
@@ -180,7 +162,7 @@ fn a_file_just_over_the_cap_is_cut_at_a_line_boundary() {
     let body = line.repeat(lines);
     fs::write(dir.path().join("a.txt"), &body).unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    let shown = text(&output);
+    let shown = fakes::text_of(&output);
     let notice = "[Showing lines 1-256 of 257. Continue with offset=257.]";
     assert!(shown.ends_with(notice), "{shown}");
     assert_eq!(shown.len(), 16_384 + notice.len());
@@ -194,7 +176,7 @@ fn a_first_line_over_the_cap_is_cut_inside_the_line() {
     body.push_str("tail\n");
     fs::write(dir.path().join("a.txt"), &body).unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    let shown = text(&output);
+    let shown = fakes::text_of(&output);
     let notice = "[Line 1 is longer than 16384 bytes; showing its first 16384 bytes. \
          Read the rest by byte range through the shell, such as cut -c or dd. \
          The file has 2 lines.]";
@@ -210,7 +192,7 @@ fn a_cut_inside_a_line_stops_on_a_character_boundary() {
     body.push_str("more\n");
     fs::write(dir.path().join("a.txt"), &body).unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    let shown = text(&output);
+    let shown = fakes::text_of(&output);
     assert!(shown.contains("showing its first 16383 bytes"), "{shown}");
     assert!(shown.starts_with(&"c".repeat(16_383)));
     assert!(!shown.contains('\u{00e9}'));
@@ -237,7 +219,11 @@ fn an_offset_past_the_end_names_the_line_count() {
     fs::write(dir.path().join("a.txt"), "a\nb\nc\n").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt", "offset": 4}));
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-    assert!(text(&output).contains("3"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("3"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -246,7 +232,7 @@ fn an_empty_file_at_offset_1_succeeds() {
     fs::write(dir.path().join("a.txt"), "").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt", "offset": 1}));
     assert!(output.error.is_none());
-    assert_eq!(text(&output), "");
+    assert_eq!(fakes::text_of(&output), "");
 }
 
 #[test]
@@ -255,7 +241,11 @@ fn an_offset_past_an_empty_file_names_zero_lines() {
     fs::write(dir.path().join("a.txt"), "").unwrap();
     let output = run(dir.path(), json!({"path": "a.txt", "offset": 2}));
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-    assert!(text(&output).contains('0'), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains('0'),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -264,7 +254,7 @@ fn a_line_exactly_at_the_cap_is_not_cut_inside() {
     let body = "a".repeat(16_384);
     fs::write(dir.path().join("a.txt"), &body).unwrap();
     let output = run(dir.path(), json!({"path": "a.txt"}));
-    assert_eq!(text(&output), body);
+    assert_eq!(fakes::text_of(&output), body);
 }
 
 #[test]
@@ -273,9 +263,9 @@ fn a_missing_file_is_not_found() {
     let output = run(dir.path(), json!({"path": "nope.txt"}));
     assert_eq!(code(&output), Some(ErrorCode::NotFound));
     assert!(
-        text(&output).contains("does not exist"),
+        fakes::text_of(&output).contains("does not exist"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -286,7 +276,7 @@ fn a_directory_points_at_the_shell() {
     fs::create_dir(&sub).unwrap();
     let output = run(dir.path(), json!({"path": "sub"}));
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     assert!(message.contains("directory"), "{message}");
     assert!(message.contains("shell"), "{message}");
     assert!(
@@ -308,7 +298,11 @@ fn a_fifo_does_not_block() {
     );
     let output = run(dir.path(), json!({"path": "pipe"}));
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
-    assert!(text(&output).contains("fifo"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("fifo"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -322,7 +316,7 @@ fn binary_and_non_utf8_are_unsupported() {
         fs::write(dir.path().join(name), bytes).unwrap();
         let output = run(dir.path(), json!({"path": name}));
         assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile), "{name}");
-        let message = text(&output);
+        let message = fakes::text_of(&output);
         assert!(message.contains(expect), "{name}: {message}");
         assert!(
             message.contains(&bytes.len().to_string()),
@@ -338,9 +332,9 @@ fn a_pdf_without_a_configured_child_is_tool_error() {
     let output = run(dir.path(), json!({"path": "a.pdf"}));
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(
-        text(&output).contains("PDF reading is not configured"),
+        fakes::text_of(&output).contains("PDF reading is not configured"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -351,7 +345,7 @@ fn a_retargeted_symlink_reads_nothing() {
     fs::write(dir.path().join("b.txt"), "secret\n").unwrap();
     symlink("a.txt", dir.path().join("link")).unwrap();
     let files = Files::new(dir.path().to_path_buf());
-    let arguments = args(json!({"path": "link"}));
+    let arguments = fakes::tool_args(json!({"path": "link"}));
     files.read().effects(&arguments).unwrap();
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
@@ -359,8 +353,16 @@ fn a_retargeted_symlink_reads_nothing() {
         .read()
         .run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::PathChanged));
-    assert!(!text(&output).contains("secret"), "{}", text(&output));
-    assert!(!text(&output).contains("harmless"), "{}", text(&output));
+    assert!(
+        !fakes::text_of(&output).contains("secret"),
+        "{}",
+        fakes::text_of(&output)
+    );
+    assert!(
+        !fakes::text_of(&output).contains("harmless"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -369,7 +371,7 @@ fn a_symlink_reads_its_target() {
     fs::write(dir.path().join("real.txt"), "target\n").unwrap();
     symlink("real.txt", dir.path().join("link")).unwrap();
     let output = run(dir.path(), json!({"path": "link"}));
-    assert_eq!(text(&output), "target\n");
+    assert_eq!(fakes::text_of(&output), "target\n");
 }
 
 #[test]
@@ -379,7 +381,7 @@ fn effects_declare_a_reversible_read_of_the_resolved_path() {
     let files = Files::new(dir.path().to_path_buf());
     let effects = files
         .read()
-        .effects(&args(json!({"path": "a.txt"})))
+        .effects(&fakes::tool_args(json!({"path": "a.txt"})))
         .unwrap();
     let resolved = path_text(&canonical(dir.path()).join("a.txt"));
     assert_eq!(effects.declared.effects, vec![Effect::Reads]);
@@ -398,7 +400,7 @@ fn effects_of_a_missing_file_still_name_the_resolved_path() {
     let files = Files::new(dir.path().to_path_buf());
     let effects = files
         .read()
-        .effects(&args(json!({"path": "newdir/a.txt"})))
+        .effects(&fakes::tool_args(json!({"path": "newdir/a.txt"})))
         .unwrap();
     let resolved = path_text(&canonical(dir.path()).join("newdir").join("a.txt"));
     assert_eq!(effects.subject, Some(resolved));
@@ -408,11 +410,14 @@ fn effects_of_a_missing_file_still_name_the_resolved_path() {
 fn a_non_string_path_and_an_unresolvable_path_are_arguments() {
     let dir = TempDir::new("fiber-read-effects-bad");
     let files = Files::new(dir.path().to_path_buf());
-    let bad = files.read().effects(&args(json!({"path": 1}))).unwrap_err();
+    let bad = files
+        .read()
+        .effects(&fakes::tool_args(json!({"path": 1})))
+        .unwrap_err();
     assert!(matches!(bad, contract::tool::EffectsError::Arguments(_)));
     let dotdot = files
         .read()
-        .effects(&args(json!({"path": "nope/../a.txt"})))
+        .effects(&fakes::tool_args(json!({"path": "nope/../a.txt"})))
         .unwrap_err();
     assert!(matches!(dotdot, contract::tool::EffectsError::Arguments(_)));
     let output = run(dir.path(), json!({"path": "nope/../a.txt"}));
@@ -426,7 +431,7 @@ fn a_ranged_read_records_the_whole_file() {
     fs::write(dir.path().join("a.txt"), &bytes).unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.read().run(
-        &args(json!({"path": "a.txt", "offset": 2, "limit": 1})),
+        &fakes::tool_args(json!({"path": "a.txt", "offset": 2, "limit": 1})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -441,7 +446,7 @@ fn a_failed_read_records_nothing() {
     fs::write(dir.path().join("a.txt"), "a\nb\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.read().run(
-        &args(json!({"path": "a.txt", "offset": 9})),
+        &fakes::tool_args(json!({"path": "a.txt", "offset": 9})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -458,13 +463,13 @@ fn a_configured_cap_cuts_at_a_line_boundary_with_the_offset_notice() {
     let files = Files::new(dir.path().to_path_buf());
     let capped = files.read().with_cap(100).unwrap();
     let output = capped.run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(output.error.is_none());
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("{line}[Showing lines 1-1 of 3. Continue with offset=2.]")
     );
 }
@@ -476,12 +481,12 @@ fn a_configured_cap_cuts_a_long_first_line_inside_it() {
     let files = Files::new(dir.path().to_path_buf());
     let capped = files.read().with_cap(100).unwrap();
     let output = capped.run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(output.error.is_none());
-    let shown = text(&output);
+    let shown = fakes::text_of(&output);
     assert!(shown.starts_with(&"b".repeat(100)), "{shown}");
     assert!(
         shown.ends_with(
@@ -503,12 +508,12 @@ fn a_configured_cap_above_the_default_shows_more() {
     let files = Files::new(dir.path().to_path_buf());
     let capped = files.read().with_cap(32_768).unwrap();
     let output = capped.run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(output.error.is_none());
-    assert_eq!(text(&output), body);
+    assert_eq!(fakes::text_of(&output), body);
 }
 
 #[test]
@@ -518,13 +523,13 @@ fn a_zero_cap_shows_only_the_notice() {
     let files = Files::new(dir.path().to_path_buf());
     let capped = files.read().with_cap(0).unwrap();
     let output = capped.run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(output.error.is_none());
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         "[Line 1 is longer than 0 bytes; showing its first 0 bytes. \
          Read the rest by byte range through the shell, such as cut -c or dd. \
          The file has 2 lines.]"
@@ -572,16 +577,16 @@ fn a_capped_read_shares_the_session_file_state() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.read().with_cap(100).unwrap().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(output.error.is_none());
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"new\n");
 }

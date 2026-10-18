@@ -6,15 +6,6 @@ use serde_json::{Map, Value, json};
 
 use super::Handoff;
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
     Handoff.run(arguments, &CancelToken::new(), &Recorder::default())
 }
@@ -34,7 +25,9 @@ fn the_description_names_the_cache_miss() {
 
 #[test]
 fn it_declares_no_effects() {
-    let effects = Handoff.effects(&args(json!({"note": "n"}))).unwrap();
+    let effects = Handoff
+        .effects(&fakes::tool_args(json!({"note": "n"})))
+        .unwrap();
 
     assert!(effects.declared.effects.is_empty());
     assert!(effects.declared.reversible);
@@ -43,7 +36,9 @@ fn it_declares_no_effects() {
 
 #[test]
 fn the_result_has_no_content_and_carries_the_note() {
-    let output = run(&args(json!({"note": "Continue with the tests."})));
+    let output = run(&fakes::tool_args(
+        json!({"note": "Continue with the tests."}),
+    ));
 
     assert!(output.content.is_empty());
     assert!(output.error.is_none());
@@ -54,7 +49,7 @@ fn the_result_has_no_content_and_carries_the_note() {
 
 #[test]
 fn a_missing_or_mistyped_note_is_an_invalid_argument() {
-    let arguments = args(json!({"note": 3}));
+    let arguments = fakes::tool_args(json!({"note": 3}));
 
     assert!(matches!(
         Handoff.effects(&arguments),

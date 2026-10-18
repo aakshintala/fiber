@@ -363,13 +363,6 @@ fn started(output: &contract::tool::Output) -> contract::events::JobStarted {
     }
 }
 
-fn text(output: &contract::tool::Output) -> String {
-    match output.content.first() {
-        Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
-        _ => String::new(),
-    }
-}
-
 /// Holds `open` for one background start, advances the fake clock by
 /// `TICK` inside adoption setup, and releases it.
 fn through_open(fixture: &Fixture, reached: &mpsc::Receiver<()>, release: &mpsc::Sender<()>) {
@@ -405,11 +398,11 @@ fn run_in_background_times_adoption_setup_only() {
     let deadline = Deadline::after(STEP);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
 
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert!(
-        text(&output).starts_with("Started in the background.\n"),
+        fakes::text_of(&output).starts_with("Started in the background.\n"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     let job = started(&output);
     assert_eq!(
@@ -484,7 +477,7 @@ fn tty_times_the_start_before_the_first_output_wait() {
     );
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let job = started(&output);
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fixture.probe.calls(), 1);
     assert_none(&fixture.records, "the start");
     let child = ready.wait(STEP);
@@ -514,7 +507,7 @@ fn monitor_times_its_start() {
     let deadline = Deadline::after(STEP);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let job = started(&output);
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
@@ -559,10 +552,10 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let job = started(&output);
     assert!(
-        text(&output)
+        fakes::text_of(&output)
             .starts_with("Still running after 30 seconds, so it moved to the background.\n"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
@@ -606,9 +599,10 @@ fn the_background_command_moves_a_call_with_one_start() {
     through_open(&fixture, &reached, &release);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     assert!(
-        text(&output).starts_with("Moved to the background by the `background` command.\n"),
+        fakes::text_of(&output)
+            .starts_with("Moved to the background by the `background` command.\n"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
@@ -638,9 +632,9 @@ fn a_shell_exit_leaving_a_member_times_the_move() {
     let deadline = Deadline::after(STEP);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     assert!(
-        text(&output).contains("so it moved to the background."),
+        fakes::text_of(&output).contains("so it moved to the background."),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(fixture.probe.calls(), 1);
     let record = closed(&fixture.records, deadline);
@@ -684,7 +678,7 @@ fn failures_and_foreground_ends_write_nothing() {
             &CancelToken::new(),
             &Recorder::default(),
         );
-        assert!(text(&output).contains("Background jobs are not available"));
+        assert!(fakes::text_of(&output).contains("Background jobs are not available"));
         assert_eq!(fixture.probe.calls(), 0);
         assert_none(&fixture.records, "no jobs");
     }
@@ -714,9 +708,9 @@ fn failures_and_foreground_ends_write_nothing() {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&jail, permissions).unwrap();
         assert!(
-            text(&output).contains("could not be started"),
+            fakes::text_of(&output).contains("could not be started"),
             "{}",
-            text(&output)
+            fakes::text_of(&output)
         );
         assert_eq!(fixture.probe.calls(), 0);
         assert_none(&fixture.records, "a spawn failure");
@@ -758,9 +752,9 @@ fn failures_and_foreground_ends_write_nothing() {
         }
         let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the foreground result");
         assert!(
-            text(&output).contains("It could not move to the background"),
+            fakes::text_of(&output).contains("It could not move to the background"),
             "{}",
-            text(&output)
+            fakes::text_of(&output)
         );
         assert_eq!(probe.calls(), 0);
         assert!(rx.try_recv().is_err(), "a refused open: no scope closed");
@@ -780,7 +774,7 @@ fn failures_and_foreground_ends_write_nothing() {
         let mut arguments = Map::new();
         arguments.insert("command".into(), json!("echo hi"));
         let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
-        assert!(output.error.is_none(), "{}", text(&output));
+        assert!(output.error.is_none(), "{}", fakes::text_of(&output));
         assert!(output.jobs.is_empty());
         assert_eq!(fixture.probe.calls(), 0);
         assert_none(&fixture.records, "a finished foreground call");
@@ -826,7 +820,11 @@ fn a_pre_cancelled_call_writes_nothing() {
         &cancel,
         &Recorder::default(),
     );
-    assert!(text(&output).contains("Cancelled"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("Cancelled"),
+        "{}",
+        fakes::text_of(&output)
+    );
     assert_eq!(fixture.probe.calls(), 0);
     assert_none(&fixture.records, "a pre-cancelled call");
 }
@@ -925,7 +923,7 @@ fn untimed_and_timed_background_receipts_agree() {
         assert!(jobs.stop(&job.job_id));
         let ended = jobs.ended(STEP).expect("the stopped job to end");
         // The receipt names the run's own directory: washed before compare.
-        let washed_text = text(&output).replace(&washed, "DIR");
+        let washed_text = fakes::text_of(&output).replace(&washed, "DIR");
         (washed_text, job, ended.status, probe.calls())
     };
     let (untimed_text, untimed_job, untimed_status, untimed_calls) =

@@ -7,15 +7,6 @@ use serde_json::{Map, Value, json};
 
 use super::NameSession;
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
     NameSession.run(arguments, &CancelToken::new(), &Recorder::default())
 }
@@ -65,7 +56,9 @@ fn the_description_carries_the_naming_guidance() {
 
 #[test]
 fn it_declares_no_effects() {
-    let effects = NameSession.effects(&args(json!({"name": "n"}))).unwrap();
+    let effects = NameSession
+        .effects(&fakes::tool_args(json!({"name": "n"})))
+        .unwrap();
 
     assert!(effects.declared.effects.is_empty());
     assert!(effects.declared.reversible);
@@ -76,7 +69,7 @@ fn it_declares_no_effects() {
 
 #[test]
 fn the_result_has_no_content_and_carries_the_name_unchanged() {
-    let output = run(&args(json!({"name": "  Fix the parser "})));
+    let output = run(&fakes::tool_args(json!({"name": "  Fix the parser "})));
 
     assert!(output.content.is_empty());
     assert!(output.error.is_none());
@@ -94,7 +87,7 @@ fn the_result_has_no_content_and_carries_the_name_unchanged() {
 #[test]
 fn length_or_characters_never_change_the_result() {
     for name in ["a".repeat(61), String::new(), "a\tb\u{1b}[31m".into()] {
-        let output = run(&args(json!({"name": name.clone()})));
+        let output = run(&fakes::tool_args(json!({"name": name.clone()})));
 
         assert!(output.content.is_empty(), "{name:?}");
         assert!(output.error.is_none(), "{name:?}");
@@ -114,7 +107,7 @@ fn length_or_characters_never_change_the_result() {
 #[test]
 fn a_missing_or_mistyped_name_is_an_invalid_argument() {
     for value in [json!({}), json!({"name": 3})] {
-        let arguments = args(value);
+        let arguments = fakes::tool_args(value);
 
         assert!(matches!(
             NameSession.effects(&arguments),
