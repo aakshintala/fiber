@@ -28,8 +28,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, ignore_closed_peer, installed,
-    is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
+    Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, installed, probe, probe_with,
+    render_json, render_text,
 };
 use crate::hub_unit::{Manager, name};
 
@@ -623,21 +623,6 @@ fn the_json_is_one_line_in_field_order() {
 }
 
 #[test]
-fn only_a_missing_devices_dir_is_no_devices() {
-    assert!(is_missing(std::io::ErrorKind::NotFound));
-    for kind in [
-        std::io::ErrorKind::PermissionDenied,
-        std::io::ErrorKind::NotADirectory,
-        std::io::ErrorKind::TimedOut,
-        std::io::ErrorKind::WouldBlock,
-        std::io::ErrorKind::InvalidInput,
-        std::io::ErrorKind::ConnectionReset,
-    ] {
-        assert!(!is_missing(kind), "{kind:?}");
-    }
-}
-
-#[test]
 fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     let (_dir, home) = home();
     let probed = home.clone();
@@ -650,34 +635,6 @@ fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     fs::write(home.join("hub/devices"), b"x").unwrap();
     let error = super::devices(&home).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
-}
-
-#[test]
-fn only_the_closed_peer_refusal_is_ignored() {
-    use std::io::ErrorKind;
-    fn error(kind: ErrorKind) -> std::io::Error {
-        std::io::Error::new(kind, "injected for the test")
-    }
-    assert!(is_closed_peer(ErrorKind::InvalidInput));
-    for kind in [
-        ErrorKind::NotFound,
-        ErrorKind::TimedOut,
-        ErrorKind::WouldBlock,
-        ErrorKind::ConnectionReset,
-    ] {
-        assert!(!is_closed_peer(kind), "{kind:?}");
-    }
-    assert!(ignore_closed_peer(Ok(())).is_ok());
-    assert!(ignore_closed_peer(Err(error(ErrorKind::InvalidInput))).is_ok());
-    for kind in [
-        ErrorKind::TimedOut,
-        ErrorKind::WouldBlock,
-        ErrorKind::NotFound,
-        ErrorKind::ConnectionReset,
-    ] {
-        let folded = ignore_closed_peer(Err(error(kind)));
-        assert_eq!(folded.unwrap_err().kind(), kind, "{kind:?}");
-    }
 }
 
 /// The child's marker: set, the test runs `hub_status` and exits with its
