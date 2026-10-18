@@ -22,7 +22,8 @@ impl Switching {
         let switched = Arc::clone(&model);
         let prepare: r#loop::Prepare = Arc::new(move |args, label, chosen| {
             let prepared = prepare(args, label, chosen)?;
-            *switched.lock().unwrap_or_else(PoisonError::into_inner) = prepared.model.reference.clone();
+            *switched.lock().unwrap_or_else(PoisonError::into_inner) =
+                prepared.model.reference.clone();
             Ok(prepared)
         });
         let admitted: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
@@ -34,18 +35,34 @@ impl Switching {
         let labels = Arc::new(move || {
             let switching = switching.upgrade()?;
             let provider = provider();
-            let data = switching.registry.get(&provider).filter(|data| !crate::scripted::is_scripted(data));
+            let data = switching
+                .registry
+                .get(&provider)
+                .filter(|data| !crate::scripted::is_scripted(data));
             let (credentials, credential) = data.map_or_else(
                 || (Vec::new(), None),
                 |data| {
                     let credentials = switching.startup_config.credentials().labels(data);
-                    let credential = switching.current.lock().unwrap_or_else(PoisonError::into_inner).get(&provider).cloned();
+                    let credential = switching
+                        .current
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get(&provider)
+                        .cloned();
                     (credentials, credential)
                 },
             );
-            Some(CredentialLabels { provider, credentials, credential })
+            Some(CredentialLabels {
+                provider,
+                credentials,
+                credential,
+            })
         });
-        CredentialReaders { prepare, labels, admitted }
+        CredentialReaders {
+            prepare,
+            labels,
+            admitted,
+        }
     }
 }
 

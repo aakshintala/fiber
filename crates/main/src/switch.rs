@@ -7,9 +7,9 @@
 //! started on a thread of their own while the loop waits; shutdown ends
 //! that wait (`docs/configuration.md`, "Secrets").
 
+mod labels;
 pub(crate) mod quota;
 mod read;
-mod labels;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
