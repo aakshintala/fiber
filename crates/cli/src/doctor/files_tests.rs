@@ -5,7 +5,7 @@
 
 use std::fs::{self, File};
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime};
 
@@ -46,14 +46,6 @@ impl Setup {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, content).unwrap();
     }
-}
-
-fn mkfifo(path: &Path) {
-    let made = std::process::Command::new("mkfifo")
-        .arg(path)
-        .output()
-        .unwrap();
-    assert!(made.status.success(), "mkfifo {}", path.display());
 }
 
 /// An error line with this `ts`, code and message.
@@ -427,7 +419,7 @@ fn newest_error_skips_a_fifo_swapped_in_after_the_listing() {
     });
     deadline.recv(&arrived).unwrap();
     fs::remove_file(logs.join("victim-fifo.log")).unwrap();
-    mkfifo(&logs.join("victim-fifo.log"));
+    fakes::fifo(logs.join("victim-fifo.log"));
     drop(release);
     let found = deadline.recv(&done_rx).unwrap().unwrap();
     worker.join().unwrap();
@@ -512,7 +504,7 @@ fn newest_error_skips_a_directory_swapped_in_after_the_listing() {
 #[test]
 fn newest_error_never_opens_a_fifo_at_listing_time() {
     let setup = Setup::new();
-    mkfifo(&setup.logs().join("pipe.log"));
+    fakes::fifo(setup.logs().join("pipe.log"));
     setup.write(
         "logs/real.log",
         error(1_699_000_000_001, "e", "m").as_bytes(),

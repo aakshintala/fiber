@@ -33,7 +33,7 @@ use fakes::Scripted;
 use log::Watcher;
 use serde_json::Value;
 
-use support::{DEADLINE, History, Session, delivery, deny, ignore, read_until, steer};
+use support::{DEADLINE, History, Session, delivery, deny, ignore, read_until, spawn_run, steer};
 
 /// A fake repository: a fixed list of unapproved items, every call recorded.
 #[derive(Default)]
@@ -153,17 +153,6 @@ fn session(code: &Arc<Fake>, clients: Option<u32>, script: Vec<Scripted>) -> Ses
             .unwrap();
     }
     session
-}
-
-/// Runs `run` on its own thread.
-fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let result = looped.run();
-        done.send(result).unwrap();
-    });
-    finished
 }
 
 #[track_caller]

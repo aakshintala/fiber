@@ -464,13 +464,7 @@ fn wake_until_draining(clock: &Arc<FakeClock>, _bound: Duration) {
 /// stdio-null, so it holds no harness pipe even briefly.
 fn fifo(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     let path = dir.join(name);
-    Command::new("mkfifo")
-        .arg(&path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .expect("mkfifo ran");
+    fakes::fifo(&path);
     path
 }
 

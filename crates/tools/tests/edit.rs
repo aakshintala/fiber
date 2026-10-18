@@ -11,29 +11,11 @@
 use std::fs;
 
 use contract::ErrorCode;
-use contract::shapes::{ContentPart, Effect};
+use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::{CancelToken, Recorder, TempDir};
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use tools::Files;
-
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
-fn text(output: &contract::tool::Output) -> String {
-    match output.content.first() {
-        Some(ContentPart::Text { text }) => text.clone(),
-        Some(ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown) | None => {
-            String::new()
-        }
-    }
-}
 
 #[test]
 fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
@@ -41,7 +23,7 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
     fs::write(dir.path().join("a.txt"), "aaa\nbbb\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.edit().run(
-        &args(json!({
+        &fakes::tool_args(json!({
             "path": "a.txt",
             "edits": [
                 {"old_text": "bbb", "new_text": "BBB"},
@@ -51,14 +33,14 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"AAA\nBBB\n");
-    assert!(text(&output).contains("edits[0]: replaced lines 2-2 with lines 2-2."));
-    assert!(text(&output).contains("edits[1]: replaced lines 1-1 with lines 1-1."));
-    assert!(text(&output).contains("Wrote "));
+    assert!(fakes::text_of(&output).contains("edits[0]: replaced lines 2-2 with lines 2-2."));
+    assert!(fakes::text_of(&output).contains("edits[1]: replaced lines 1-1 with lines 1-1."));
+    assert!(fakes::text_of(&output).contains("Wrote "));
     let diff = output.details.as_ref().unwrap()["diff"].as_str().unwrap();
     assert!(diff.contains("--- "), "{diff}");
-    assert!(!text(&output).contains(diff));
+    assert!(!fakes::text_of(&output).contains(diff));
     assert_eq!(
         output
             .changes
@@ -68,7 +50,7 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
     );
 
     let missed = files.edit().run(
-        &args(json!({
+        &fakes::tool_args(json!({
             "path": "a.txt",
             "edits": [
                 {"old_text": "AAA", "new_text": "nope"},
@@ -89,11 +71,11 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"AAA\nBBB\n");
 
     let replaced = files.write().run(
-        &args(json!({"path": "a.txt", "content": "done\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "done\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(replaced.error.is_none(), "{}", text(&replaced));
+    assert!(replaced.error.is_none(), "{}", fakes::text_of(&replaced));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"done\n");
 }
 
@@ -102,7 +84,7 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
     let dir = TempDir::new("fiber-edit-api-miss");
     let files = Files::new(dir.path().to_path_buf());
     let missing = files.edit().run(
-        &args(json!({
+        &fakes::tool_args(json!({
             "path": "nope.txt",
             "edits": [{"old_text": "a", "new_text": "b"}]
         })),
@@ -116,7 +98,7 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
     assert!(!dir.path().join("nope.txt").exists());
     fs::create_dir(dir.path().join("sub")).unwrap();
     let directory = files.edit().run(
-        &args(json!({
+        &fakes::tool_args(json!({
             "path": "sub",
             "edits": [{"old_text": "a", "new_text": "b"}]
         })),
@@ -129,7 +111,7 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
     );
     let effects = files
         .edit()
-        .effects(&args(json!({
+        .effects(&fakes::tool_args(json!({
             "path": "nope.txt",
             "edits": [{"old_text": "a", "new_text": "b"}]
         })))

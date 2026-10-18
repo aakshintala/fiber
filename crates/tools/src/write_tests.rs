@@ -7,35 +7,17 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::FileChange;
-use contract::shapes::{ContentPart, Effect};
+use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::Deadline;
 use fakes::{CancelToken, Recorder, TempDir};
-use serde_json::{Map, Value, json};
+use serde_json::json;
 
 use super::{existing, line_changes, line_count, read_present, reversible};
 use crate::Files;
 use crate::files::path_text;
 
 const DEADLINE: Duration = Duration::from_secs(10);
-
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
-fn text(output: &contract::tool::Output) -> String {
-    match output.content.first() {
-        Some(ContentPart::Text { text }) => text.clone(),
-        Some(ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown) | None => {
-            String::new()
-        }
-    }
-}
 
 fn code(output: &contract::tool::Output) -> Option<ErrorCode> {
     output.error.as_ref().map(|error| error.code.clone())
@@ -75,15 +57,15 @@ fn creating_a_file_reports_its_size_and_adds_every_line() {
     let dir = TempDir::new("fiber-write-create");
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "sub/a.txt", "content": "x\ny\n"})),
+        &fakes::tool_args(json!({"path": "sub/a.txt", "content": "x\ny\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     let path = resolved(dir.path(), "sub").join("a.txt");
     assert_eq!(fs::read(&path).unwrap(), b"x\ny\n");
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("Created {}: 4 bytes, 2 lines.", path_text(&path))
     );
     assert_eq!(
@@ -101,15 +83,15 @@ fn a_call_without_content_fails_invalid_arguments() {
     let dir = TempDir::new("fiber-write-args");
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(
-        text(&output).starts_with("The arguments do not fit the schema:"),
+        fakes::text_of(&output).starts_with("The arguments do not fit the schema:"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert!(!dir.path().join("a.txt").exists());
 }
@@ -119,16 +101,16 @@ fn a_new_file_is_stored_as_given() {
     let dir = TempDir::new("fiber-write-as-given");
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "a\r\nb"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "a\r\nb"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"a\r\nb");
     assert!(
-        text(&output).contains("4 bytes, 2 lines."),
+        fakes::text_of(&output).contains("4 bytes, 2 lines."),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -141,18 +123,22 @@ fn replacing_after_a_read_keeps_crlf_and_the_byte_order_mark() {
     fs::write(&path, &bytes).unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "a\nc\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "a\nc\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFa\r\nc\r\n");
-    assert!(text(&output).starts_with("Replaced "), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).starts_with("Replaced "),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -161,15 +147,15 @@ fn replacing_an_unread_file_was_not_read() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::StaleFile));
     assert!(
-        text(&output).contains("was not read in this context"),
+        fakes::text_of(&output).contains("was not read in this context"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"old\n");
 }
@@ -180,21 +166,21 @@ fn replacing_after_an_external_change_says_it_changed() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     fs::write(dir.path().join("a.txt"), "edited\n").unwrap();
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::StaleFile));
     assert!(
-        text(&output).contains("changed since it was read"),
+        fakes::text_of(&output).contains("changed since it was read"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"edited\n");
 }
@@ -204,16 +190,16 @@ fn replacing_after_the_sessions_own_write_needs_no_read() {
     let dir = TempDir::new("fiber-write-own");
     let files = Files::new(dir.path().to_path_buf());
     files.write().run(
-        &args(json!({"path": "a.txt", "content": "a\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "a\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "b\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "b\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"b\n");
 }
 
@@ -223,22 +209,22 @@ fn a_reread_after_an_external_edit_lets_the_replace_land() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     fs::write(dir.path().join("a.txt"), "formatted\n").unwrap();
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "done\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "done\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"done\n");
 }
 
@@ -248,7 +234,7 @@ fn two_replacing_writes_after_one_read_do_not_mix() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -262,7 +248,7 @@ fn two_replacing_writes_after_one_read_do_not_mix() {
     thread::spawn(move || {
         left_tx
             .send(first.run(
-                &args(json!({"path": "a.txt", "content": "AAA\n"})),
+                &fakes::tool_args(json!({"path": "a.txt", "content": "AAA\n"})),
                 &CancelToken::new(),
                 &Recorder::default(),
             ))
@@ -271,7 +257,7 @@ fn two_replacing_writes_after_one_read_do_not_mix() {
     thread::spawn(move || {
         right_tx
             .send(second.run(
-                &args(json!({"path": "a.txt", "content": "BBB\n"})),
+                &fakes::tool_args(json!({"path": "a.txt", "content": "BBB\n"})),
                 &CancelToken::new(),
                 &Recorder::default(),
             ))
@@ -319,7 +305,7 @@ fn a_held_lock_blocks_write_until_it_is_released() {
     thread::spawn(move || {
         done_tx
             .send(write.run(
-                &args(json!({"path": "a.txt", "content": "hi\n"})),
+                &fakes::tool_args(json!({"path": "a.txt", "content": "hi\n"})),
                 &CancelToken::new(),
                 &Recorder::default(),
             ))
@@ -334,7 +320,7 @@ fn a_held_lock_blocks_write_until_it_is_released() {
     let output = Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("waited 10s for write to finish");
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(&path).unwrap(), b"hi\n");
 }
 
@@ -345,7 +331,7 @@ fn a_retargeted_symlink_writes_nothing() {
     fs::write(dir.path().join("b.txt"), "B\n").unwrap();
     symlink("a.txt", dir.path().join("link")).unwrap();
     let files = Files::new(dir.path().to_path_buf());
-    let arguments = args(json!({"path": "link", "content": "new\n"}));
+    let arguments = fakes::tool_args(json!({"path": "link", "content": "new\n"}));
     files.write().effects(&arguments).unwrap();
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
@@ -372,7 +358,7 @@ fn a_symlink_retargeted_while_the_lock_is_held_writes_nothing() {
     thread::spawn(move || {
         done_tx
             .send(write.run(
-                &args(json!({"path": "link", "content": "new\n"})),
+                &fakes::tool_args(json!({"path": "link", "content": "new\n"})),
                 &CancelToken::new(),
                 &Recorder::default(),
             ))
@@ -399,12 +385,16 @@ fn writing_a_directory_is_unsupported() {
     fs::create_dir(dir.path().join("sub")).unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "sub", "content": "x"})),
+        &fakes::tool_args(json!({"path": "sub", "content": "x"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
-    assert!(text(&output).contains("directory"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("directory"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -413,18 +403,22 @@ fn forget_makes_the_next_replace_stale() {
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     files.forget();
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::StaleFile));
-    assert!(text(&output).contains("was not read"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("was not read"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -433,7 +427,9 @@ fn creating_is_reversible_and_replacing_is_not() {
     let files = Files::new(dir.path().to_path_buf());
     let create = files
         .write()
-        .effects(&args(json!({"path": "a.txt", "content": "x\n"})))
+        .effects(&fakes::tool_args(
+            json!({"path": "a.txt", "content": "x\n"}),
+        ))
         .unwrap();
     assert_eq!(create.declared.effects, vec![Effect::Writes]);
     assert!(create.declared.reversible);
@@ -444,13 +440,15 @@ fn creating_is_reversible_and_replacing_is_not() {
         Some(format!("{}/", path_text(&canonical(dir.path()))))
     );
     files.write().run(
-        &args(json!({"path": "a.txt", "content": "x\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "x\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let replace = files
         .write()
-        .effects(&args(json!({"path": "a.txt", "content": "y\n"})))
+        .effects(&fakes::tool_args(
+            json!({"path": "a.txt", "content": "y\n"}),
+        ))
         .unwrap();
     assert!(!replace.declared.reversible);
     assert_eq!(replace.declared.effects, vec![Effect::Writes]);
@@ -462,16 +460,16 @@ fn a_replaced_files_changes_are_the_line_diff() {
     fs::write(dir.path().join("a.txt"), "a\nb\nc\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "a\nx\nc\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "a\nx\nc\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     let path = path_text(&resolved(dir.path(), "a.txt"));
     assert_eq!(
         output.changes,
@@ -498,11 +496,11 @@ fn a_symlink_to_a_missing_target_creates_the_target() {
     symlink("missing.txt", dir.path().join("link")).unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "link", "content": "hi\n"})),
+        &fakes::tool_args(json!({"path": "link", "content": "hi\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(dir.path().join("missing.txt")).unwrap(), b"hi\n");
 }
 
@@ -512,7 +510,7 @@ fn a_parent_that_is_a_file_writes_nothing() {
     fs::write(dir.path().join("f"), "x").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "f/child", "content": "nope"})),
+        &fakes::tool_args(json!({"path": "f/child", "content": "nope"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -527,16 +525,16 @@ fn a_diff_that_is_not_one_line_each_way_is_counted() {
     fs::write(dir.path().join("a.txt"), "a\nb\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "z\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "z\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     let path = path_text(&resolved(dir.path(), "a.txt"));
     assert_eq!(
         output.changes,
@@ -577,7 +575,7 @@ fn an_unreadable_file_is_not_replaced() {
     set_mode(&path, 0o000);
     let files = Files::new(dir.path().to_path_buf());
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -593,7 +591,7 @@ fn a_read_only_file_keeps_its_mode() {
     fs::write(&path, "old\n").unwrap();
     let files = Files::new(dir.path().to_path_buf());
     files.read().run(
-        &args(json!({"path": "a.txt"})),
+        &fakes::tool_args(json!({"path": "a.txt"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -601,11 +599,11 @@ fn a_read_only_file_keeps_its_mode() {
     perms.set_mode(0o444);
     fs::set_permissions(&path, perms).unwrap();
     let output = files.write().run(
-        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &fakes::tool_args(json!({"path": "a.txt", "content": "new\n"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
-    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fs::read(&path).unwrap(), b"new\n");
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,

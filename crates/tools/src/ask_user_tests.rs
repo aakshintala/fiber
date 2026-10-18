@@ -9,15 +9,6 @@ use serde_json::{Map, Value, json};
 
 use super::{AskUser, DECLINED, SENT};
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
     AskUser.run(arguments, &CancelToken::new(), &Recorder::default())
 }
@@ -57,7 +48,7 @@ fn the_description_asks_for_a_recommended_option_first() {
 #[test]
 fn it_declares_no_effects() {
     let effects = AskUser
-        .effects(&args(
+        .effects(&fakes::tool_args(
             json!({"questions": [{"header": "h", "question": "q"}]}),
         ))
         .unwrap();
@@ -71,7 +62,7 @@ fn it_declares_no_effects() {
 
 #[test]
 fn the_questions_go_to_the_driver() {
-    let output = run(&args(json!({"questions": [
+    let output = run(&fakes::tool_args(json!({"questions": [
         {"header": "Base", "question": "Which branch?", "multiSelect": true,
          "options": [{"label": "main (Recommended)"}, {"label": "dev", "description": "d"}]},
         {"header": "Name", "question": "What name?"}
@@ -130,7 +121,7 @@ fn arguments_that_are_not_questions_fail() {
         json!({}),
         json!({"questions": [{}]}),
     ] {
-        let output = run(&args(arguments.clone()));
+        let output = run(&fakes::tool_args(arguments.clone()));
         assert_eq!(
             output.error.as_ref().map(|error| &error.code),
             Some(&ErrorCode::InvalidArguments),
@@ -204,7 +195,7 @@ impl Ask for FakeAsk {
 }
 
 fn two_questions() -> Map<String, Value> {
-    args(json!({"questions": [
+    fakes::tool_args(json!({"questions": [
         {"header": "Base", "question": "Which branch?", "multiSelect": true,
          "options": [{"label": "main (Recommended)"}, {"label": "dev"}]},
         {"header": "Name", "question": "What name?"}
@@ -253,7 +244,7 @@ fn one(header: &str, labels: &[&str], multi: bool) -> Map<String, Value> {
     } else {
         json!({"header": header, "question": "?", "options": options, "multiSelect": multi})
     };
-    args(json!({ "questions": [question] }))
+    fakes::tool_args(json!({ "questions": [question] }))
 }
 
 #[test]
@@ -332,7 +323,7 @@ fn each_answer_is_one_line_in_field_order() {
 
 #[test]
 fn four_answers_come_in_field_order() {
-    let arguments = args(json!({"questions": [
+    let arguments = fakes::tool_args(json!({"questions": [
         {"header": "One", "question": "?"},
         {"header": "Two", "question": "?", "options": [{"label": "x"}, {"label": "y"}]},
         {"header": "Three", "question": "?"},
@@ -431,7 +422,7 @@ fn arguments_that_are_not_questions_fail_without_an_ask() {
         json!({"questions": [{}]}),
     ] {
         let ask = FakeAsk::answering(Answered::NoAnswer);
-        let output = run_asking(&args(arguments.clone()), &ask);
+        let output = run_asking(&fakes::tool_args(arguments.clone()), &ask);
         assert_eq!(
             output.error.as_ref().map(|error| &error.code),
             Some(&ErrorCode::InvalidArguments),

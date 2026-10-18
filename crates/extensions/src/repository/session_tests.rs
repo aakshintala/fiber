@@ -98,13 +98,7 @@ fn a_fifo_is_invalid_arguments_and_does_not_block() {
     use std::sync::mpsc;
     use std::time::Duration;
     let repo = Repo::bare();
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(repo.root().join("fifo"))
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(repo.root().join("fifo"));
     let code = session(&repo);
     let (tx, rx) = mpsc::channel();
     let _reader = std::thread::spawn(move || {

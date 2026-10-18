@@ -192,13 +192,7 @@ fn provider_load_race(completion_first: bool) {
     )
     .unwrap();
     let fifo = dir.path().join("hold.lua");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(&fifo);
     let (held_tx, held_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     thread::spawn(move || {

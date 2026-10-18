@@ -16,9 +16,8 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
@@ -2138,15 +2137,7 @@ fn job_session(
     after_prompt: impl FnOnce(),
 ) -> (Running, Socket, u32) {
     let fifo = setup.root.path().join("ready.fifo");
-    let mut mkfifo = Command::new("mkfifo");
-    mkfifo
-        .arg(&fifo)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = support::run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "mkfifo: {made:?}");
+    fakes::fifo(&fifo);
     let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
     fs::write(
         setup.workspace().join("job.sh"),

@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -174,21 +173,11 @@ fn in_group(pid: u32, group: u32) -> bool {
         == Some(group)
 }
 
-#[track_caller]
-fn mkfifo(path: &Path) {
-    let path = path.to_path_buf();
-    let shown = path.display().to_string();
-    let status = within("mkfifo to exit", DEADLINE, move || {
-        Command::new("mkfifo").arg(&path).status().unwrap()
-    });
-    assert!(status.success(), "mkfifo {shown} exited {status}");
-}
-
 #[test]
 fn ready_at_reads_an_existing_fifo() {
     let dir = TempDir::new("fiber-ready-at");
     let fifo = dir.path().join("made.fifo");
-    mkfifo(&fifo);
+    crate::fifo(&fifo);
     let clock = FakeClock::new();
     let end = clock.origin() + DEADLINE;
     let ready = Ready::at(&fifo, &|| end.saturating_duration_since(clock.now()));
@@ -210,7 +199,7 @@ fn ready_at_reads_an_existing_fifo() {
 fn ready_at_zero_fails_naming_the_fifo_without_opening_it() {
     let dir = TempDir::new("fiber-ready-at-zero");
     let fifo = dir.path().join("zero.fifo");
-    mkfifo(&fifo);
+    crate::fifo(&fifo);
     let at = fifo.clone();
     let failed = std::panic::catch_unwind(|| {
         within("Ready::at with no time left", DEADLINE, move || {

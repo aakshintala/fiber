@@ -19,9 +19,6 @@ pub use grep::grep_main;
 
 use std::io::{self, Write};
 
-#[cfg(test)]
-use fakes::Deadline;
-
 /// What running a search decided.
 pub(crate) enum Outcome {
     /// Finished. The value is the exit code: 0, 1 or 2.
@@ -109,34 +106,6 @@ pub(crate) fn flush_exit(
         Err(error) => {
             writeln!(stderr, "{program}: writing output: {error}").unwrap_or(());
             2
-        }
-    }
-}
-
-/// How long one system tool a test starts may take (`docs/testing.md`,
-/// "Waits and timeouts").
-#[cfg(test)]
-const TOOL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Waits for a spawned system tool under [`TOOL_DEADLINE`]: on expiry the
-/// child's process group is killed and the test fails naming `what` it
-/// waited for. The child belongs in its own process group, as the binary
-/// tests spawn theirs.
-#[cfg(test)]
-#[track_caller]
-pub(crate) fn wait_output(child: std::process::Child, what: &str) -> std::process::Output {
-    let group = child.id();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        done.send(child.wait_with_output()).unwrap_or(());
-    });
-    match Deadline::after(TOOL_DEADLINE).recv(&finished) {
-        Ok(Ok(output)) => output,
-        Ok(Err(_)) => panic!("the waiter for {what} died"),
-        Err(_) => {
-            fakes::kill_group(group, "KILL").unwrap_or(false);
-            let reaped = Deadline::after(TOOL_DEADLINE).recv(&finished).is_ok();
-            panic!("waited {TOOL_DEADLINE:?} for {what} (reaped after the kill: {reaped})");
         }
     }
 }

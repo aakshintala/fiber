@@ -152,11 +152,7 @@ fn three_fields() -> &'static str {
 }
 
 fn mkfifo(dir: &Path, name: &str) {
-    let status = std::process::Command::new("mkfifo")
-        .arg(dir.join(name))
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success(), "mkfifo creates {name}");
+    fakes::fifo(dir.join(name));
 }
 
 /// Reads one FIFO's line, with the test's deadline naming the wait. After

@@ -15,7 +15,6 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -28,21 +27,10 @@ use contract::{CommandId, RequestId};
 use fakes::Deadline;
 use fakes::Scripted;
 
-use support::{DEADLINE, Session, calls_reply, delivery, ignore, kinds, shell};
+use support::{DEADLINE, Session, calls_reply, delivery, ignore, kinds, shell, spawn_run};
 
 fn arm(session: &mut Session, after: Option<Duration>) {
     session.looped = Some(session.looped.take().unwrap().idle_exit(after));
-}
-
-/// Runs `run` on its own thread and returns the channel it reports on.
-fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let result = looped.run();
-        done.send(result).unwrap();
-    });
-    finished
 }
 
 fn parked(clock: &fakes::clock::FakeClock, until: Instant, what: &str) {

@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 use contract::search::{Domains, SearchBackend, SearchResult};
 use contract::shapes::Failure;
 use contract::tool::{Bound, Cancel};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::BackendSearch;
 
@@ -123,10 +123,6 @@ fn backend(stub: Stub) -> (Arc<Stub>, BackendSearch) {
     (stub, tool)
 }
 
-fn args(value: Value) -> Map<String, Value> {
-    value.as_object().unwrap().clone()
-}
-
 fn text(output: &contract::tool::Output) -> String {
     assert_eq!(output.error, None);
     assert_eq!(output.content.len(), 1);
@@ -202,14 +198,14 @@ fn the_query_reaches_the_backend_with_its_domain_filter() {
     let (stub, tool) = backend(Stub::results(Vec::new()));
     let cancel = CancelToken::new();
     let emit = Recorder::default();
-    tool.run(&args(json!({"query": "rust"})), &cancel, &emit);
+    tool.run(&fakes::tool_args(json!({"query": "rust"})), &cancel, &emit);
     tool.run(
-        &args(json!({"query": "rust", "allowed_domains": ["rust-lang.org"]})),
+        &fakes::tool_args(json!({"query": "rust", "allowed_domains": ["rust-lang.org"]})),
         &cancel,
         &emit,
     );
     tool.run(
-        &args(json!({"query": "rust", "blocked_domains": ["example.com"]})),
+        &fakes::tool_args(json!({"query": "rust", "blocked_domains": ["example.com"]})),
         &cancel,
         &emit,
     );
@@ -233,7 +229,7 @@ fn the_query_reaches_the_backend_with_its_domain_filter() {
 fn both_domain_filters_fail_before_the_backend_is_called() {
     let (stub, tool) = backend(Stub::results(Vec::new()));
     let output = tool.run(
-        &args(json!({"query": "rust", "allowed_domains": [], "blocked_domains": []})),
+        &fakes::tool_args(json!({"query": "rust", "allowed_domains": [], "blocked_domains": []})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -246,7 +242,7 @@ fn a_missing_or_mistyped_query_fails_invalid_arguments() {
     let (stub, tool) = backend(Stub::results(Vec::new()));
     for arguments in [json!({}), json!({"query": 5})] {
         let output = tool.run(
-            &args(arguments.clone()),
+            &fakes::tool_args(arguments.clone()),
             &CancelToken::new(),
             &Recorder::default(),
         );
@@ -275,7 +271,7 @@ fn three_results_render_each_on_three_lines() {
         result("Docs", "https://docs.rs/", "API documentation."),
     ]));
     let output = tool.run(
-        &args(json!({"query": "rust"})),
+        &fakes::tool_args(json!({"query": "rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -299,7 +295,7 @@ fn three_results_render_each_on_three_lines() {
 fn an_empty_list_renders_no_results() {
     let (_, tool) = backend(Stub::results(Vec::new()));
     let output = tool.run(
-        &args(json!({"query": "rust"})),
+        &fakes::tool_args(json!({"query": "rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -314,7 +310,7 @@ fn a_single_result_has_no_trailing_blank_line() {
         "A language.",
     )]));
     let output = tool.run(
-        &args(json!({"query": "rust"})),
+        &fakes::tool_args(json!({"query": "rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -331,7 +327,7 @@ fn a_backend_timeout_passes_through_with_its_code_and_message() {
         "the search passed its 50 ms timeout",
     ));
     let output = tool.run(
-        &args(json!({"query": "rust"})),
+        &fakes::tool_args(json!({"query": "rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -344,7 +340,7 @@ fn a_backend_timeout_passes_through_with_its_code_and_message() {
 fn a_cancelled_search_returns_no_content_and_no_error() {
     let (_, tool) = backend(Stub::cancelled());
     let output = tool.run(
-        &args(json!({"query": "rust"})),
+        &fakes::tool_args(json!({"query": "rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );
@@ -364,7 +360,7 @@ fn backend_search_surfaces_only_its_result_urls_in_order() {
         let (_, tool) = backend(Stub::results(results));
         assert_eq!(tool.effects(&Map::new()).unwrap().hosts, Some(vec![]));
         let output = tool.run(
-            &args(json!({"query":"rust"})),
+            &fakes::tool_args(json!({"query":"rust"})),
             &CancelToken::new(),
             &Recorder::default(),
         );
@@ -373,7 +369,7 @@ fn backend_search_surfaces_only_its_result_urls_in_order() {
     }
     let (_, tool) = backend(Stub::failure(ErrorCode::ToolError, "failed"));
     let output = tool.run(
-        &args(json!({"query":"rust"})),
+        &fakes::tool_args(json!({"query":"rust"})),
         &CancelToken::new(),
         &Recorder::default(),
     );

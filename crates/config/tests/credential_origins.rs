@@ -63,11 +63,7 @@ fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 
 fn mkfifo(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .unwrap();
-    assert!(made.success(), "mkfifo {}", path.display());
+    fakes::fifo(path);
 }
 
 /// Runs `work` on its own thread, failing the test when it has not
