@@ -539,3 +539,69 @@ fn a_frame_names_the_range_the_log_does_not_hold() {
         "the missing range errors: {error}"
     );
 }
+
+/// The paging fake answers a `history` with no `from_seq` as the doors
+/// do: the last lines up to `to_seq`, or up to the latest, at most 256;
+/// on an empty log, none. Same seq lists as the doors test, so the fake
+/// cannot drift from the contract.
+#[test]
+fn the_paging_fake_answers_history_without_from_seq() {
+    let lines: Vec<(contract::Seq, String)> = (0u64..300)
+        .map(|seq| (contract::Seq(seq), numbered(seq, "turn_started")))
+        .collect();
+    let clock = fakes::clock::FakeClock::new();
+    let paging = over(&lines, clock);
+    // The fake's window for absent `from_seq`: the last 256 lines up to
+    // `to_seq`, or up to the latest when absent; past the end reads as
+    // the end. `range_lines` itself is unchanged: the window feeds it.
+    let window = |args: serde_json::Value| -> Vec<u64> {
+        let from_opt = args.get("from_seq").and_then(serde_json::Value::as_u64);
+        let to = args
+            .get("to_seq")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(u64::MAX);
+        assert!(
+            from_opt.is_none(),
+            "this pins the absent-`from_seq` window only"
+        );
+        let end = paging.log.partition_point(|(seq, _)| seq.0 <= to);
+        if end == 0 {
+            return Vec::new();
+        }
+        let start = end.saturating_sub(256);
+        let from = paging.log.get(start).map_or(0, |(seq, _)| seq.0);
+        paging
+            .range_lines(from, to)
+            .unwrap_or_else(|error| panic!("{error}"))
+            .into_iter()
+            .filter_map(|line| line.seq.map(|seq| seq.0))
+            .collect()
+    };
+    assert_eq!(
+        window(serde_json::json!({})),
+        (44u64..=299).collect::<Vec<u64>>()
+    );
+    assert_eq!(
+        window(serde_json::json!({"to_seq": 255})),
+        (0u64..=255).collect::<Vec<u64>>()
+    );
+    assert_eq!(
+        window(serde_json::json!({"to_seq": 254})),
+        (0u64..=254).collect::<Vec<u64>>()
+    );
+    assert_eq!(
+        window(serde_json::json!({"to_seq": 256})),
+        (1u64..=256).collect::<Vec<u64>>()
+    );
+    // An empty log answers none.
+    let empty: Vec<(contract::Seq, String)> = Vec::new();
+    let clock = fakes::clock::FakeClock::new();
+    let vacant = over(&empty, clock);
+    assert!(vacant.log.is_empty(), "an empty log holds no window");
+    assert!(
+        vacant
+            .range_lines(0, u64::MAX)
+            .unwrap_or_default()
+            .is_empty()
+    );
+}

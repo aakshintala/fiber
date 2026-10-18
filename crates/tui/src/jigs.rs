@@ -466,15 +466,33 @@ impl Paging<'_> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             let args = command.get("args");
-            let from = args
+            let from_opt = args
                 .and_then(|args| args.get("from_seq"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
+                .and_then(serde_json::Value::as_u64);
             let to = args
                 .and_then(|args| args.get("to_seq"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(u64::MAX);
-            let held = self.range_lines(from, to)?;
+            // Without `from_seq` the doors answer the last lines up to
+            // `to_seq`, or up to the latest, at most 256; on an empty
+            // log, with none. A present `from_seq` answers exactly as
+            // before.
+            let held = match from_opt {
+                Some(from) => self.range_lines(from, to)?,
+                None => {
+                    let end = self.log.partition_point(|(seq, _)| seq.0 <= to);
+                    // An empty log holds no window; otherwise the window
+                    // starts at the first of the last 256 lines at or
+                    // below `to`.
+                    if end == 0 {
+                        Vec::new()
+                    } else if let Some((first, _)) = self.log.get(end.saturating_sub(256)) {
+                        self.range_lines(first.0, to)?
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
             let answer = contract::Envelope {
                 kind: "command_accepted".to_owned(),
                 session_id: self
