@@ -1244,3 +1244,49 @@ fn no_color_the_dim_branch_and_usage_text_stays_dim() {
     }
     assert!(dim > 0, "dim text in the focused card");
 }
+
+#[test]
+fn no_color_a_scrolled_focused_card_lifts_on_its_own_rows() {
+    use ratatui::style::Modifier;
+    let mut app = many(10);
+    let down = crate::keys::Mouse {
+        kind: crate::keys::MouseKind::WheelDown,
+        col: 5,
+        row: 10,
+    };
+    app.on_wheel(&down);
+    app.on_wheel(&down);
+    assert_eq!(app.rail_state().scroll(), 7);
+    press_left(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..2 {
+        app.on_press(
+            Stroke {
+                code: Code::Down,
+                mods: Mods::NONE,
+            },
+            now,
+        );
+    }
+    assert!(app.rail_state().scroll() > 0, "the rail is scrolled");
+    let focus = app.rail_state().focused().expect("focus");
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = focused_rect(&targets, focus);
+    assert!(rect.y >= 1, "the card's box top is drawn: {rect:?}");
+    let right = rect.x.saturating_add(rect.width).saturating_sub(1);
+    for y in rect.y.saturating_sub(1)..rect.y.saturating_add(5) {
+        for x in rect.x..rect.x.saturating_add(rect.width) {
+            assert!(
+                buf[(x, y)].modifier.contains(Modifier::BOLD),
+                "bold at ({x}, {y})"
+            );
+            let edge = y == rect.y.saturating_sub(1) || y == rect.y.saturating_add(4);
+            if edge || x == rect.x || x == right {
+                assert!(
+                    !buf[(x, y)].modifier.contains(Modifier::DIM),
+                    "no dim at ({x}, {y})"
+                );
+            }
+        }
+    }
+}

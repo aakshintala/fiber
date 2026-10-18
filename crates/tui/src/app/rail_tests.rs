@@ -5,6 +5,7 @@ use super::super::{App, Effect};
 use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
+use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::stroke::{Code, Mods, Stroke};
@@ -2276,4 +2277,82 @@ fn a_shed_rail_frame_shows_no_lift_and_no_hint() {
         !frame_rows(&app, 60, 24).contains(&RAIL_HINT.to_owned()),
         "no hint without the rail"
     );
+}
+
+/// A `notice` the overlay can show, for `session`.
+fn notice(session: &str, message: &str) -> Line {
+    turn(
+        session,
+        "notice",
+        json!({"code": "extension_failed", "message": message}),
+    )
+}
+
+#[test]
+fn a_plain_left_with_the_find_bar_open_leaves_rail_focus_unset() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("ctrl+f").unwrap()),
+        Effect::None
+    );
+    assert!(app.find_open());
+    assert_eq!(app.key_context(), Context::Search);
+    type_text(&mut app, "ab");
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert!(app.find_open());
+}
+
+#[test]
+fn a_plain_left_with_an_item_open_leaves_rail_focus_unset() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(turn(
+        A,
+        "job_started",
+        json!({"job_id": "j_1", "description": "build", "output_path": "/tmp/out"}),
+    ));
+    let _ = app.open_item(&contract::JobId("j_1".to_owned()));
+    assert!(app.item_open());
+    assert_eq!(app.key_context(), Context::Input);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn a_plain_left_with_the_notice_overlay_open_leaves_rail_focus_unset() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(notice(A, "The fiber is quiet."));
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert!(app.notice_overlay().is_some());
+}
+
+#[test]
+fn with_the_notice_overlay_open_up_leaves_a_focused_card_alone() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    app.on_line(notice(A, "The fiber is quiet."));
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    let _ = stroke_press(&mut app, plain(Code::Up));
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert!(app.notice_overlay().is_some());
+}
+
+#[test]
+fn a_rebound_plain_focus_rail_key_in_a_non_empty_box_leaves_the_text_alone() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(keyed_setup(&[("focus_rail", json!("f5"))]));
+    type_text(&mut app, "ab");
+    assert_eq!(app.input().cursor(app.draft_width()).1, 4);
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("f5").unwrap()),
+        Effect::None
+    );
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 4);
 }
