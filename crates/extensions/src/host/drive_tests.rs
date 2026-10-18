@@ -25,19 +25,6 @@ use crate::{Error, LuaExtension};
 /// Wall-clock bound on a wait for the extension's thread.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Runs the blocking call `f` on a thread and receives its result with a
-/// deadline: calling code that blocks is a wait too (`docs/testing.md`,
-/// "Waits and timeouts").
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || done_tx.send(f()));
-    match Deadline::after(WAIT).recv(&done_rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -149,7 +136,12 @@ fn drive_returns_true_with_no_result() {
         vec![Ok(None)],
     );
     let held = Arc::clone(&ext);
-    assert_eq!(within(move || held.command("go", "")).unwrap(), "true");
+    assert_eq!(
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
+        "true"
+    );
     // The door saw the extension's name, the command and no arguments.
     assert_eq!(
         drive.calls(),
@@ -174,7 +166,12 @@ fn drive_returns_the_result_table() {
         }))],
     );
     let held = Arc::clone(&ext);
-    assert_eq!(within(move || held.command("go", "")).unwrap(), "sync");
+    assert_eq!(
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
+        "sync"
+    );
 }
 
 #[test]
@@ -191,7 +188,9 @@ fn drive_rejection_raises_code_and_message_for_pcall() {
     // `pcall` catches the table with exactly `code` and `message`.
     let held = Arc::clone(&ext);
     assert_eq!(
-        within(move || held.command("go", "")).unwrap(),
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
         "false busy a turn is running"
     );
 }
@@ -206,7 +205,9 @@ fn drive_rejection_uncaught_fails_with_the_message() {
     );
     // Uncaught, the callback fails with the message text, never a table dump.
     let held = Arc::clone(&ext);
-    match within(move || held.command("go", "")) {
+    match fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
+        held.command("go", "")
+    }) {
         Err(Error::Lua { message, .. }) => assert_eq!(message, "a turn is running"),
         other => panic!("the drive fails its callback: {other:?}"),
     }
@@ -232,7 +233,12 @@ fn drive_before_drive_to_raises_closing() {
         clocked(&clock),
     ));
     let held = Arc::clone(&ext);
-    assert_eq!(within(move || held.command("go", "")).unwrap(), "closing");
+    assert_eq!(
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
+        "closing"
+    );
 }
 
 #[test]
@@ -250,7 +256,9 @@ fn drive_argument_errors_raise_strings() {
     // A wrong argument is an error in the calling code: a string, not a table.
     let held = Arc::clone(&ext);
     assert_eq!(
-        within(move || held.command("go", "")).unwrap(),
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
         "string/string/true/true"
     );
 }
@@ -274,7 +282,9 @@ fn drive_in_the_entry_script_raises_closing() {
     // `drive_to` is set only after the entry script runs.
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    match within(move || held.commands()) {
+    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
+        held.commands()
+    }) {
         Err(Error::Lua { message, .. }) => {
             assert_eq!(message, "host.drive: not available while init.lua runs");
         }
@@ -321,7 +331,12 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     // The late answer is dropped: the VM still runs the next command.
     drive.answer_parked(Ok(None));
     let held = Arc::clone(&ext);
-    assert_eq!(within(move || held.command("fast", "")).unwrap(), "fast");
+    assert_eq!(
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("fast", ""))
+        .unwrap(),
+        "fast"
+    );
     assert_eq!(
         drive.calls(),
         vec![("ext".to_owned(), "steer".to_owned(), Map::new())]
@@ -392,7 +407,7 @@ fn a_provider_runs_while_a_driven_command_is_held() {
         .expect("the drive reached the door");
     // A provider callback runs while the driven command is still held.
     let caller = Arc::clone(&ext);
-    within(move || {
+    fakes::within("release_tx.send", fakes::MUST_SUCCEED_WITHIN, move || {
         caller
             .provider_call("p", "sign", Value::Null)
             .expect("the provider ran while the drive was held")

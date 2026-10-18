@@ -706,12 +706,16 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
     );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
-    within("releasing the program", move || {
-        use std::io::Write as _;
-        std::fs::File::create(&release)
-            .and_then(|mut released| released.write_all(b"x\n"))
-            .is_ok()
-    });
+    fakes::within(
+        "releasing the program",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            use std::io::Write as _;
+            std::fs::File::create(&release)
+                .and_then(|mut released| released.write_all(b"x\n"))
+                .is_ok()
+        },
+    );
     match Deadline::after(WAIT).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),
@@ -737,7 +741,7 @@ const SENTINEL: Duration = Duration::from_secs(60);
 fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     let made = path.clone();
-    let made = within("mkfifo", move || {
+    let made = fakes::within("mkfifo", fakes::MUST_SUCCEED_WITHIN, move || {
         std::process::Command::new("mkfifo")
             .arg(&made)
             .status()
@@ -747,21 +751,6 @@ fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
         panic!("mkfifo {} failed", path.display());
     }
     path
-}
-
-/// Runs `work` on a worker and returns its answer within `WAIT`: a call
-/// that blocks, such as a `Command::status` or a fifo, is a wait too.
-#[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _sent = tx.send(work());
-    });
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("waited {WAIT:?} for {what}"),
-    }
 }
 
 /// Reads one fifo write on a worker under `WAIT`: opening for read blocks
@@ -1433,9 +1422,13 @@ fn in_child(name: &str) {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
     let Ok(output) = Deadline::after(WAIT).recv(&rx) else {
-        within("kill -KILL on the child", move || {
-            drop(fakes::kill_pid(pid, "KILL"));
-        });
+        fakes::within(
+            "kill -KILL on the child",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || {
+                drop(fakes::kill_pid(pid, "KILL"));
+            },
+        );
         panic!("waited {WAIT:?} for the child running {name}");
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1491,8 +1484,11 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
         Err(_) => panic!("the hook did not return within {WAIT:?}"),
     }
     assert!(
-        !within("kill -0 on the group", move || fakes::kill_group(pid, "0")
-            .unwrap_or(true)),
+        !fakes::within(
+            "kill -0 on the group",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || fakes::kill_group(pid, "0").unwrap_or(true)
+        ),
         "the exec group is gone after the kill"
     );
     watchdog.stand_down(WAIT);

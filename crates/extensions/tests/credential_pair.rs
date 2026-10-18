@@ -71,18 +71,6 @@ fiber.provider("timed", {
 })
 "#;
 
-/// Runs `f` on its own thread under `WAIT`, so a call that never returns
-/// fails the test instead of hanging it.
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 /// The fixture extension, registering `echo`, `oauth` and `timed`, in a
 /// fresh Fiber home on a fresh fake clock.
 fn fixture() -> (Setup, Arc<FakeClock>, Arc<LuaExtension>) {
@@ -108,10 +96,12 @@ fn provider(extension: &Arc<LuaExtension>, name: &str) -> Arc<LuaProvider> {
 fn token(provider: &Arc<LuaProvider>, credential: &str, label: &str) -> String {
     let provider = Arc::clone(provider);
     let owned = pair(credential, label);
-    within(move || provider.token(&owned))
-        .unwrap()
-        .expose()
-        .to_owned()
+    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&owned)
+    })
+    .unwrap()
+    .expose()
+    .to_owned()
 }
 
 fn data(name: &str, credential_name: Option<&str>) -> config::ProviderData {
@@ -163,9 +153,13 @@ fn a_signer_sends_its_own_pairs_token() {
     let echo = provider(&extension, "echo");
     let signed = |pair: CredentialPair| {
         let echo = Arc::clone(&echo);
-        let signer = within(move || echo.signer(pair)).unwrap().unwrap();
+        let signer = fakes::within("echo.signer", fakes::MUST_SUCCEED_WITHIN, move || {
+            echo.signer(pair)
+        })
+        .unwrap()
+        .unwrap();
         let signing = Arc::clone(&signer);
-        let headers = within(move || {
+        let headers = fakes::within("signing.sign", fakes::MUST_SUCCEED_WITHIN, move || {
             signing.sign(&SignRequest {
                 method: "POST",
                 url: "http://127.0.0.1:1/v1/responses",
@@ -249,7 +243,10 @@ fn a_pair_the_credential_file_refuses_fails_and_creates_nothing() {
     ] {
         let provider = Arc::clone(&oauth);
         let owned = pair(credential, label);
-        let err = within(move || provider.token(&owned)).unwrap_err();
+        let err = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.token(&owned)
+        })
+        .unwrap_err();
         assert_eq!(
             err.code(),
             ErrorCode::CredentialFailed,
@@ -290,9 +287,10 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
     server.hold();
     let soon = Arc::clone(&timed);
     assert_eq!(
-        within(move || soon.token(&pair("timed", "soon")))
-            .unwrap()
-            .expose(),
+        fakes::within("soon.token", fakes::MUST_SUCCEED_WITHIN, move || soon
+            .token(&pair("timed", "soon")))
+        .unwrap()
+        .expose(),
         "s1",
         "the request still gets the token it has while the refresh runs"
     );
@@ -304,9 +302,10 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
     // no new `credential()` call, and the held pair's token is untouched.
     let late = Arc::clone(&timed);
     assert_eq!(
-        within(move || late.token(&pair("timed", "late")))
-            .unwrap()
-            .expose(),
+        fakes::within("late.token", fakes::MUST_SUCCEED_WITHIN, move || late
+            .token(&pair("timed", "late")))
+        .unwrap()
+        .expose(),
         "late/1"
     );
     assert_eq!(
@@ -340,7 +339,7 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
 fn refresh_outside_credential_is_refused() {
     let (setup, _clock, extension) = fixture();
     let oauth = provider(&extension, "oauth");
-    let err = within({
+    let err = fakes::within("oauth.models", fakes::MUST_SUCCEED_WITHIN, {
         let oauth = Arc::clone(&oauth);
         move || oauth.models(&ModelsArg::default())
     })

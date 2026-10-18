@@ -19,7 +19,6 @@ use config::{
     store_credential,
 };
 use contract::ErrorCode;
-use fakes::Deadline;
 
 fn fake(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
@@ -66,30 +65,14 @@ fn mkfifo(path: &Path) {
     fakes::fifo(path);
 }
 
-/// Runs `work` on its own thread, failing the test when it has not
-/// returned within 10 s, so a blocking open fails at the wall guard
-/// instead of hanging the test.
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("origins-within".to_owned())
-        .spawn(move || {
-            done.send(work()).unwrap_or(());
-        })
-        .unwrap();
-    match Deadline::after(Duration::from_secs(10)).recv(&finished) {
-        Ok(value) => value,
-        Err(_) => panic!("{what} did not return in time"),
-    }
-}
-
 fn origins(config: &Config, provider: &ProviderData) -> Vec<(String, Result<Origin, ConfigError>)> {
     let credentials = config.credentials().clone();
     let provider = provider.clone();
-    within("credential_origins", move || {
-        credentials.credential_origins(&provider)
-    })
+    fakes::within(
+        "credential_origins",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || credentials.credential_origins(&provider),
+    )
 }
 
 /// The origins that all resolved, failing the test naming any refusal.
@@ -113,7 +96,7 @@ fn presence(
     let provider = provider.clone();
     let label = label.to_owned();
     let values = values.clone();
-    within("key_presence", move || {
+    fakes::within("key_presence", fakes::MUST_SUCCEED_WITHIN, move || {
         credentials.key_presence(&provider, &label, &|name| values.get(name).cloned())
     })
 }
@@ -238,16 +221,20 @@ fn a_fifo_or_link_in_the_stored_directory_is_no_label() {
     mkfifo(&dir.join("pipe"));
     symlink(dir.join("work"), dir.join("alias")).unwrap();
     let (home, workspace) = (setup.home(), setup.workspace());
-    let found = within("credential_origins with a FIFO and a link", move || {
-        let config = Config::load(Sources {
-            home,
-            workspace,
-            project: common::key(),
-            overrides: Vec::new(),
-        })
-        .unwrap();
-        config.credentials().credential_origins(&fake(None))
-    });
+    let found = fakes::within(
+        "credential_origins with a FIFO and a link",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let config = Config::load(Sources {
+                home,
+                workspace,
+                project: common::key(),
+                overrides: Vec::new(),
+            })
+            .unwrap();
+            config.credentials().credential_origins(&fake(None))
+        },
+    );
     assert_eq!(ok(found), [("work".to_owned(), Origin::Stored)]);
 }
 
@@ -284,19 +271,23 @@ fn credential_with_never_reads_another_labels_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = within("credential_with with another label's FIFO", move || {
-        let config = Config::load(Sources {
-            home,
-            workspace,
-            project: common::key(),
-            overrides: Vec::new(),
-        })
-        .unwrap();
-        config
-            .credentials()
-            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-            .unwrap_err()
-    });
+    let missing = fakes::within(
+        "credential_with with another label's FIFO",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let config = Config::load(Sources {
+                home,
+                workspace,
+                project: common::key(),
+                overrides: Vec::new(),
+            })
+            .unwrap();
+            config
+                .credentials()
+                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+                .unwrap_err()
+        },
+    );
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(
@@ -317,19 +308,23 @@ fn credential_with_lists_labels_by_name_even_past_a_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = within("credential_with listing past a FIFO", move || {
-        let config = Config::load(Sources {
-            home,
-            workspace,
-            project: common::key(),
-            overrides: Vec::new(),
-        })
-        .unwrap();
-        config
-            .credentials()
-            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-            .unwrap_err()
-    });
+    let missing = fakes::within(
+        "credential_with listing past a FIFO",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let config = Config::load(Sources {
+                home,
+                workspace,
+                project: common::key(),
+                overrides: Vec::new(),
+            })
+            .unwrap();
+            config
+                .credentials()
+                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+                .unwrap_err()
+        },
+    );
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(

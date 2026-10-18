@@ -38,18 +38,6 @@ const CALL_DEADLINE: Duration = Duration::from_secs(5);
 /// The fake clock's wall at construction: 2023-11-14T22:13:20Z.
 const WALL: u64 = 1_700_000_000;
 
-/// Runs `f` on its own thread under `WAIT`, so a call that never returns
-/// fails the test instead of hanging it.
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaProvider> {
     script_provider(
         setup,
@@ -61,7 +49,7 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
 
 #[track_caller]
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
-    within({
+    fakes::within("provider.name", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(provider);
         move || {
             provider
@@ -443,7 +431,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
     // A token fetched and replaced before any sign leaves no trace.
-    let unused = within({
+    let unused = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.token(&pair(provider.name(), "default"))
     })
@@ -1042,12 +1030,12 @@ fn a_held_fetch_never_holds_the_token_lock() {
         "the first fetch reaches the server"
     );
     // The fetch is held, yet the cache reads return at once.
-    within({
+    fakes::within("provider.cached_token", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.cached_token(&pair)
     });
     let signer = signer_of(&provider);
-    within({
+    fakes::within("signer.credentials", fakes::MUST_SUCCEED_WITHIN, {
         let signer = Arc::clone(&signer);
         move || signer.credentials()
     });

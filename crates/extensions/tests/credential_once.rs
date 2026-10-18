@@ -7,26 +7,12 @@
 
 mod common;
 
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::Arc;
 
 use common::{Setup, install, manifest, provider, write};
 use config::{Config, ProjectKey, Sources};
 use extensions::{LuaExtension, LuaProvider, Providers};
-use fakes::Deadline;
 use serde_json::json;
-
-const WAIT: Duration = Duration::from_secs(10);
-
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
 
 #[test]
 fn discovery_and_the_session_share_one_run_of_the_command() {
@@ -68,19 +54,20 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
     .unwrap();
 
     // Discovery: no model cache, so `add_lua` asks for the credential.
-    let (discovered, config) = within(move || {
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &|_| None,
-        );
-        assert!(notices.is_empty(), "{notices:?}");
-        (providers, config)
-    });
+    let (discovered, config) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &|_| None,
+            );
+            assert!(notices.is_empty(), "{notices:?}");
+            (providers, config)
+        });
     // The session's own read.
-    let key = within(move || {
+    let key = fakes::within("discovered.data", fakes::MUST_SUCCEED_WITHIN, move || {
         let data = discovered.data("acme");
         config
             .credentials()

@@ -96,16 +96,6 @@ fn credential_header_parser_distinguishes_empty_and_non_empty_arrays() {
     }
 }
 
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 #[test]
 fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_token() {
     let root = fakes::TempDir::new("fiber-lua-provider");
@@ -136,7 +126,7 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
         .unwrap()
         .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let headers = within({
+    let headers = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, {
         let signer = Arc::clone(&with_credential);
         move || {
             signer.sign(&SignRequest {
@@ -253,7 +243,7 @@ fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
     let root = fakes::TempDir::new("fiber-list-models");
     let run = format!("{{ {}, {} }}", model_entry("b"), model_entry("a"));
     let (home, provider) = models_provider(&root, &run);
-    let (models, returned) = within({
+    let (models, returned) = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.list_models(&ModelsArg::default())
     })
@@ -274,7 +264,7 @@ fn list_models_returns_the_parsed_list_in_order_and_writes_no_cache() {
 fn list_models_with_a_non_list_return_is_bad_return() {
     let root = fakes::TempDir::new("fiber-list-models-bad");
     let (_home, provider) = models_provider(&root, "\"x\"");
-    let err = within({
+    let err = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.list_models(&ModelsArg::default())
     })
@@ -364,11 +354,15 @@ fn credential_value_returns_the_cached_token_expiry_and_headers() {
     let root = fakes::TempDir::new("fiber-credential-value");
     let tokens = fakes::ProviderServer::start([fakes::Response::status(200, json!({"token": "json-token", "expires_at": 4102444800_u64, "headers": {"x-account": "json-account"}}).to_string())]).unwrap();
     let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
-    let result = within(move || {
-        let first = provider.credential_value(&token_pair()).unwrap();
-        let second = provider.credential_value(&token_pair()).unwrap();
-        (first, second)
-    });
+    let result = fakes::within(
+        "provider.credential_value",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let first = provider.credential_value(&token_pair()).unwrap();
+            let second = provider.credential_value(&token_pair()).unwrap();
+            (first, second)
+        },
+    );
     assert_eq!(
         result.0,
         json!({"token": "json-token", "expires_at": 4102444800_u64, "headers": {"x-account": "json-account"}})
@@ -613,7 +607,7 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let data = credentialless_data();
     // No `credential` function and no key source: nothing to refresh with.
     assert!(
-        !within({
+        !fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&bare);
             let config = config.clone();
             let data = data.clone();
@@ -633,7 +627,7 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     let credentialed = LuaProvider::new(extension, "p");
     assert!(
-        within({
+        fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
             let config = config.clone();
             let data = data.clone();
             move || credentialed.has_credential(&config, &data, &fakes::children::grouped_output)

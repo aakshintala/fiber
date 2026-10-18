@@ -216,11 +216,6 @@ struct SessionLogin {
     notices: Arc<Notices>,
     events: mpsc::Receiver<Event>,
 }
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()).unwrap_or(()));
-    Deadline::after(WAIT).recv_or_fail(&rx, "credential operation returned")
-}
 impl SessionLogin {
     fn new(body: &str, attended: bool) -> Self {
         let setup = Setup::new();
@@ -258,8 +253,9 @@ end}}}})
         let cfg = config.clone();
         let home = setup.home();
         let time = clock.clone();
-        let session =
-            within(move || SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None));
+        let session = fakes::within("session.notices", fakes::MUST_SUCCEED_WITHIN, move || {
+            SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None)
+        });
         assert!(session.notices().is_empty(), "{:?}", session.notices());
         let browser = Arc::new(Recording::default());
         let yes = Arc::new(AtomicBool::new(attended));
@@ -338,12 +334,19 @@ fn unset_session_refuses_before_any_interactive_side_effect() {
     let server = OauthServer::start(vec![OauthReply::pending()]);
     let env = SessionLogin::new(&device(&server), false);
     let provider = env.provider();
-    let error = within(move || provider.token(&pair("acme", "default"))).unwrap_err();
+    let error = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair("acme", "default"))
+    })
+    .unwrap_err();
     assert!(matches!(error, Error::Unattended { .. }));
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
     let provider = env.provider();
     assert!(matches!(
-        within(move || provider.credential_token(&pair("acme", "other"))),
+        fakes::within(
+            "provider.credential_token",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || provider.credential_token(&pair("acme", "other"))
+        ),
         Err(signing::Error::Unattended { .. })
     ));
     assert!(
@@ -380,17 +383,21 @@ fn attended_callback_login_exchanges_a_code_for_a_token() {
         "Open https://login.example/verify to log in."
     );
     Deadline::after(WAIT).recv_or_fail(&ready, "callback recorded");
-    let response = within(move || {
-        let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
-        socket.set_read_timeout(Some(WAIT)).unwrap();
-        socket.set_write_timeout(Some(WAIT)).unwrap();
-        socket
-            .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
-            .unwrap();
-        let mut response = String::new();
-        socket.read_to_string(&mut response).unwrap();
-        response
-    });
+    let response = fakes::within(
+        "socket.set_read_timeout",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
+            socket.set_read_timeout(Some(WAIT)).unwrap();
+            socket.set_write_timeout(Some(WAIT)).unwrap();
+            socket
+                .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).unwrap();
+            response
+        },
+    );
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert_eq!(
         Deadline::after(WAIT)
@@ -458,9 +465,11 @@ fn show_delivers_one_notice_with_the_url_and_device_code() {
     );
     let provider = env.provider();
     assert_eq!(
-        within(move || provider.token(&pair("acme", "default")))
-            .unwrap()
-            .expose(),
+        fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.token(&pair("acme", "default"))
+        })
+        .unwrap()
+        .expose(),
         "ok"
     );
     let notice = env.notice();
@@ -494,12 +503,18 @@ fn provider_only_status_is_emitted_until_the_session_is_sealed() {
         true,
     );
     let provider = env.provider();
-    within(move || provider.token(&pair("acme", "default"))).unwrap();
+    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair("acme", "default"))
+    })
+    .unwrap();
     let before = env.notices.events.lock().unwrap().len();
     assert!(before > 0);
     env.session.seal();
     let provider = env.provider();
-    within(move || provider.token(&pair("acme", "other"))).unwrap();
+    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair("acme", "other"))
+    })
+    .unwrap();
     assert_eq!(env.notices.events.lock().unwrap().len(), before);
 }
 
@@ -577,6 +592,9 @@ fn a_provider_started_after_a_model_switch_gets_the_browser_and_emitter() {
     env.session.retain_lua_providers(&[]);
     let before = env.notices.events.lock().unwrap().len();
     let provider = env.fresh();
-    within(move || provider.token(&pair("acme", "other"))).unwrap();
+    fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair("acme", "other"))
+    })
+    .unwrap();
     assert_eq!(env.notices.events.lock().unwrap().len(), before);
 }

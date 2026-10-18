@@ -187,11 +187,16 @@ impl Home {
         .unwrap();
         let cfg = config.clone();
         let time = clock.clone();
-        let session = within(move || {
-            let mut session = SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None);
-            session.retain_lua_providers(&[]);
-            Arc::new(session)
-        });
+        let session = fakes::within(
+            "session.retain_lua_providers",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || {
+                let mut session =
+                    SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None);
+                session.retain_lua_providers(&[]);
+                Arc::new(session)
+            },
+        );
         Self {
             _temp: temp,
             config,
@@ -203,14 +208,13 @@ impl Home {
         let session = self.session.clone();
         let cfg = self.config.clone();
         let clock = self.clock.clone();
-        within(move || session.start_provider(&cfg, clock, Arc::new(NoLock), "acme", "acme"))
-            .unwrap()
+        fakes::within(
+            "session.start_provider",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || session.start_provider(&cfg, clock, Arc::new(NoLock), "acme", "acme"),
+        )
+        .unwrap()
     }
-}
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()).unwrap_or(()));
-    Deadline::after(WAIT).recv_or_fail(&rx, "late-provider operation returned")
 }
 fn credential(provider: Arc<LuaProvider>) {
     credential_for(provider, "default");
@@ -218,10 +222,12 @@ fn credential(provider: Arc<LuaProvider>) {
 fn credential_for(provider: Arc<LuaProvider>, label: &str) {
     let label = label.to_owned();
     assert_eq!(
-        within(move || provider.token(&CredentialPair {
-            credential: "acme".into(),
-            label
-        }))
+        fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.token(&CredentialPair {
+                credential: "acme".into(),
+                label,
+            })
+        })
         .unwrap()
         .expose(),
         "ok"
