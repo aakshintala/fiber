@@ -1908,3 +1908,33 @@ fn a_required_nullable_property_uses_strict_mode() {
         true
     );
 }
+
+fn hosted_search_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("openrouter:web_search".into()),
+    }
+}
+
+#[test]
+fn hosted_search_tool_is_sent_in_its_own_shape() {
+    let tools = vec![hosted_search_tool()];
+    let wired: Vec<Value> = Completions::new(Endpoint::default())
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let want = vec![json!({"type": "openrouter:web_search",
+        "parameters": {"max_results": 5, "max_uses": 5}})];
+    assert_eq!(wired, want);
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = tools;
+    run(Box::new(Completions::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(want));
+}
