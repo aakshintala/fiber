@@ -231,7 +231,7 @@ fn a_one_of_is_never_repaired() {
 }
 
 #[test]
-fn a_string_or_null_property_drops_its_null_only_when_optional() {
+fn a_string_or_null_property_drops_its_null_required_or_optional() {
     let optional = object(json!({"note": {"type": ["string", "null"]}}));
     let made = repair(&optional, &json!({"note": null})).unwrap();
     assert_eq!(Value::Object(made.repaired), json!({}));
@@ -240,7 +240,10 @@ fn a_string_or_null_property_drops_its_null_only_when_optional() {
         "properties": {"note": {"type": ["string", "null"]}},
         "required": ["note"]
     });
-    assert_eq!(repair(&required, &json!({"note": null})), None);
+    assert_eq!(
+        Value::Object(repair(&required, &json!({"note": null})).unwrap().repaired),
+        json!({})
+    );
     assert!(check(&required, &json!({"note": null})).is_empty());
 }
 
@@ -260,8 +263,15 @@ fn a_null_for_a_nullable_union_is_dropped() {
         "properties": {"n": {"type": ["integer", "null"]}},
         "required": ["n"]
     });
-    // A required property keeps a null its type allows.
-    assert_eq!(repair(&required_schema, &json!({"n": null})), None);
+    // A nullable union makes null absent, even for a required property.
+    assert_eq!(
+        Value::Object(
+            repair(&required_schema, &json!({"n": null}))
+                .unwrap()
+                .repaired
+        ),
+        json!({})
+    );
     assert_eq!(repair(&schema, &json!({"n": "5"})), None);
     let one = object(json!({"n": {"type": ["integer"]}}));
     assert_eq!(repair(&one, &json!({"n": "5"})).unwrap().repaired["n"], 5);
@@ -275,6 +285,87 @@ fn a_null_for_a_nullable_union_is_dropped() {
         "required": ["n"]
     });
     assert_eq!(repair(&required_single, &json!({"n": null})), None);
+}
+
+#[test]
+fn required_nullable_keys_use_every_typed_schema_after_refs() {
+    let schema = |property: Value, definition: Value| {
+        json!({
+            "type": "object", "properties": {"n": property}, "required": ["n"],
+            "$defs": {"n": definition}
+        })
+    };
+    for (property, definition) in [
+        (json!({"type": ["integer", "null"]}), json!({})),
+        (
+            json!({"$ref": "#/$defs/n"}),
+            json!({"type": ["integer", "null"]}),
+        ),
+        (
+            json!({"$ref": "#/$defs/n", "type": ["integer", "null"]}),
+            json!({}),
+        ),
+    ] {
+        let schema = schema(property, definition);
+        let made = repair(&schema, &json!({"n": null})).unwrap();
+        assert_eq!(Value::Object(made.repaired), json!({}));
+        assert_eq!(made.repairs.len(), 1);
+        assert_eq!(made.repairs[0].path, "/n");
+        assert_eq!(made.repairs[0].fix, RepairFix::NullDropped);
+        assert_eq!(check(&schema, &json!({})), Vec::<String>::new());
+        assert!(check(&schema, &json!({"n": 1})).is_empty());
+    }
+    for (property, definition) in [
+        (json!({"type": "integer"}), json!({})),
+        (
+            json!({"$ref": "#/$defs/n", "type": ["integer", "null"]}),
+            json!({"type": "integer"}),
+        ),
+    ] {
+        let schema = schema(property, definition);
+        assert_eq!(repair(&schema, &json!({"n": null})), None);
+        assert_eq!(
+            check(&schema, &json!({"n": null})),
+            ["`/n`: expected integer, got null"]
+        );
+        assert_eq!(check(&schema, &json!({})), ["`/n`: missing"]);
+    }
+    for property in [
+        json!({"type": "null"}),
+        json!({"type": ["null"]}),
+        json!({}),
+    ] {
+        let schema = schema(property, json!({}));
+        assert_eq!(repair(&schema, &json!({"n": null})), None);
+        assert!(check(&schema, &json!({"n": null})).is_empty());
+        assert_eq!(check(&schema, &json!({})), ["`/n`: missing"]);
+    }
+    for property in [
+        json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+        json!({"type": ["integer", "null"], "anyOf": [{}]}),
+        json!({"type": ["integer", "null"], "oneOf": [{}]}),
+    ] {
+        let schema = schema(property, json!({}));
+        assert_eq!(repair(&schema, &json!({"n": null})), None);
+        assert_eq!(check(&schema, &json!({})), ["`/n`: missing"]);
+    }
+}
+
+#[test]
+fn required_nullable_keys_consider_all_object_schemas() {
+    let schema = json!({
+        "type": "object", "$ref": "#/$defs/object", "required": ["n"],
+        "$defs": {"object": {"properties": {"n": {"type": ["integer", "null"]}}}}
+    });
+    assert!(check(&schema, &json!({})).is_empty());
+    assert_eq!(
+        Value::Object(repair(&schema, &json!({"n": null})).unwrap().repaired),
+        json!({})
+    );
+    let mut conflicting = schema;
+    conflicting["properties"] = json!({"n": {"type": "integer"}});
+    assert_eq!(check(&conflicting, &json!({})), ["`/n`: missing"]);
+    assert_eq!(repair(&conflicting, &json!({"n": null})), None);
 }
 
 #[test]

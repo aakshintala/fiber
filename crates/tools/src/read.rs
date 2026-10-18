@@ -67,19 +67,19 @@ impl Tool for Read {
                         "description": "The file. A relative path is resolved against the workspace."
                     },
                     "offset": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "description": "The first line to return, counted from 1. The default is 1."
                     },
                     "limit": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "description": "How many lines to return. The default is the rest of the file."
                     },
                     "pages": {
-                        "type": "string",
+                        "type": ["string", "null"],
                         "description": "For a PDF only: a page or a range such as `3` or `1-5`, counted from 1."
                     }
                 },
-                "required": ["path"],
+                "required": ["path", "offset", "limit", "pages"],
                 "additionalProperties": false
             }),
             deferred: false,

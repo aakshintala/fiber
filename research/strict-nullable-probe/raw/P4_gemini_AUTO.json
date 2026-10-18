@@ -1,0 +1,66 @@
+{
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+     }
+    ]
+   }
+  ],
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file.",
+      "parametersJsonSchema": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        },
+        "offset": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "note": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "all": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "path",
+        "offset",
+        "note",
+        "all"
+       ],
+       "additionalProperties": false
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "AUTO"
+   }
+  }
+ },
+ "status": 200,
+ "elapsed_s": 1.77,
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"read\",\n              \"args\": {\n                \"offset\": null,\n                \"path\": \"a.txt\",\n                \"all\": null,\n                \"note\": null\n              },\n              \"id\": \"call_1432802\"\n            },\n            \"thoughtSignature\": \"EtcHCtQHAWkUfRNqwPR26HMrieyquv2yFNZjJK2KJeb73bVHZKoWW7RaVTT/cD9F+UnivEPDs43JZTEVDjUpMQygVxkr+YT0/gPhw5slZzA0qAY/6VszlKuWeNqNb7RJUWRcEmQebQj3c+CDYUWtie/hKykeaxrXVR49YuAtOnhGChzExpQADvC063vXtf1fMShjKqYOrgLrsSfRmDyOOPbrr19LoqvZ6IR3XD0DH0NMcFgCWk+GRmAlIMqVVZofeIkqaknb3f3SndUcLOEve1DAQA+jMvKpb3uz9pxWDdpWlNCSHV/WngEUKNCNDw3J9xXjwM872Ln3UV/JLO28i/jDdvuji9R9rPua8ATIEMyLnJuqe06LJrGy8vOF2QBlA9xVUAjb9m+FnrJxf9OjDv0CpXs46pgJcvH4qteu4jYz9uhkwQ8mKVY5lWyuekeXVl6zDUiSFP9KYnaEb62QbPxxKwNk8QGNGi6DrlELvp8x2v1NapypcCvHmy3hvUQoZHt6uzv8S9HfN4RC2f7n82nVyuaFtQzXHquAOYa3wseHnxjGoBV8sqm7UwpbgiwDTYO4EEdZTL5drJcO4yrwQWitg5GLXxFSJoBw3kaqr1Y2takf4xI8PZhJh/sMEVmNd/qK5qThLXnANexvB4uyScoUHV0CbkVRhie+RkdX8KYeaAKI2Ewwy/NMKHQJevDK3AoVCGcR02MsqoVMHzM3y0heRDU9jTASU5WzWRlABcNAHAJyq/aCKl7+4CgnISNMe0dgXFW4J+PtWSTiOnEr16tYLtiJWS+Kg0unLy31fAhHxBnZy12FE4lpdaQlgUrAQYc3Herm6p716NpkWrWNy8w2ubP1znBcgcNHVZMsipi4HgpoqECqaXcLUSFLJVK3moWmHTWW65X9i411C6qBfWCVQiAfXRpiKZyyRcGmaldSuane9Hv+fW0VTvOMu4XVXNixUS+T1m+v4GxrB3GhbhY0+h2JENJLe17HvDNKpdCaRHWa2FXvdImnEPphr2/MTOmWa7dYj9BppO8eOJPJkJY6RfIlHlr0YUZvfKXqiJQ0+ShmOcsWVBrMZQd1Wu66edy6wsCp2ijlKPYzglFqoTrAmdtiPvnz3F98ru/gf/1GQ6u2Cp2nYWR/9A6nvRte7oQP+iSdcLHHBnuOfN7FlyqW+hfteQEO+x8EVw2UGMuOHeZ04C3rzVWqmkpcP5su3nJRl9AvhVFCJ3ojjc9h+w0pbBnlFChFlRq1SK5GECSq+TkgRbjKWJIrqeA+0jZKVbmvYP+pXrg2NibPB5Sx419EqFN33PcN0oQ=\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 107,\n    \"candidatesTokenCount\": 28,\n    \"totalTokenCount\": 384,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 107\n      }\n    ],\n    \"thoughtsTokenCount\": 249,\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3-flash-preview\",\n  \"responseId\": \"hQPVaqjAJsOd1MkP1_2A8QY\"\n}\n"
+}

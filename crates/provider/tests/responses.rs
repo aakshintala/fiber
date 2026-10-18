@@ -1967,3 +1967,28 @@ fn the_recorded_searches_run_through_the_seam_and_replay_their_items() {
         );
     }
 }
+
+#[test]
+fn a_required_nullable_property_uses_strict_mode() {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let mut request = request();
+    request.tools = vec![ToolDefinition {
+        input_schema: json!({
+            "type": "object",
+            "properties": {"offset": {"type": ["integer", "null"]}},
+            "required": ["offset"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    }];
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"][0]["strict"], true);
+}

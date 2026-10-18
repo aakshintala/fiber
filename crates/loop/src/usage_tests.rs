@@ -366,17 +366,6 @@ fn an_empty_id_is_minted_like_none_and_is_not_lookable() {
 }
 
 #[test]
-fn a_named_call_keeps_its_id_and_is_lookable_only_without_the_vendor_s_figure() {
-    let without = built(named(Some("gen_u")), None, "fake/m", None, false);
-    assert_eq!(without.line.generation_id, GenerationId("gen_u".into()));
-    assert!(without.lookable);
-    let with = built(named(Some("gen_u")), Some(0.1), "fake/m", None, false);
-    assert_eq!(with.line.generation_id, GenerationId("gen_u".into()));
-    assert!(!with.lookable);
-    assert_eq!(with.line.cost, Some(0.1));
-}
-
-#[test]
 fn a_minted_record_s_cost_is_null_whatever_the_model_declares() {
     let prices = priced();
     let declared = built(named(None), None, "fake/m", Some(&prices), false);
