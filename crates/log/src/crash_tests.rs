@@ -369,6 +369,9 @@ fn a_panic_with_a_failing_resolver_writes_no_file_and_aborts() {
         err.contains("FIBER_HOME must be an absolute path."),
         "{err}"
     );
+    // The resolver refused, so the hook created nothing: no `crashes/`
+    // under the controlled temporary home.
+    assert!(!root.path().join("crashes").exists());
 }
 
 #[test]
