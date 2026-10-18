@@ -1,4 +1,5 @@
 use super::*;
+use contract::ErrorCode;
 use contract::provider::ToolDefinition;
 use contract::sessions::Running;
 use contract::shapes::{ContentPart, Effect};

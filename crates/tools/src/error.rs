@@ -7,14 +7,35 @@
 use contract::ErrorCode;
 use contract::shapes::Failure;
 
+mod misc;
+mod session;
+
+pub(crate) use misc::{AskUserError, WebSearchError};
+pub(crate) use session::{SessionListError, SessionMessageError};
+
 /// Every way a built-in tool call fails. The root is the one type that
 /// reaches `Output`. Cases arrive with their callers, so no case names a
 /// failure nothing builds yet.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolError {
+    /// The call's arguments do not fit the schema.
+    #[error(transparent)]
+    Arguments(#[from] ArgumentsError),
     /// A file tool's path moved between the permission check and the run.
     #[error(transparent)]
     File(#[from] FileError),
+    /// `session_list` could not list the running sessions.
+    #[error(transparent)]
+    SessionList(#[from] SessionListError),
+    /// `session_message` was not delivered.
+    #[error(transparent)]
+    SessionMessage(#[from] SessionMessageError),
+    /// The `ask_user` call or answer does not parse.
+    #[error(transparent)]
+    AskUser(#[from] AskUserError),
+    /// `web_search` has nothing to run or the backend failed.
+    #[error(transparent)]
+    WebSearch(#[from] WebSearchError),
 }
 
 impl ToolError {
@@ -22,7 +43,12 @@ impl ToolError {
     /// wildcard arm.
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
+            Self::Arguments(error) => error.code(),
             Self::File(error) => error.code(),
+            Self::SessionList(error) => error.code(),
+            Self::SessionMessage(error) => error.code(),
+            Self::AskUser(error) => error.code(),
+            Self::WebSearch(error) => error.code(),
         }
     }
 }
@@ -57,6 +83,16 @@ pub(crate) enum ArgumentsError {
         #[source]
         source: serde_json::Error,
     },
+}
+
+impl ArgumentsError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::DoNotFit { .. } => ErrorCode::InvalidArguments,
+        }
+    }
 }
 
 /// A file tool's shared failures (`read`, `edit`, `write`).
