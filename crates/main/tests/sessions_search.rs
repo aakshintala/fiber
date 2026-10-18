@@ -73,8 +73,9 @@ fn session(sessions: &Path, id: &str, workspace: &Path, events: &[Event]) -> Pat
     sessions.join(id)
 }
 
-/// Runs `git` with `args` in `dir`, waiting under the test's deadline.
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
+/// Runs `git` with `args` in `dir` as given, with no baked-in flags,
+/// waiting under the test's deadline and asserting the exit code is zero.
+fn git_without_flags(deadline: Deadline, dir: &Path, args: &[&str]) {
     let mut command = Command::new("git");
     command
         .args(args)
@@ -108,8 +109,8 @@ impl Layout {
         let root = setup.root.path();
         let r = root.join("r");
         fs::create_dir_all(&r).unwrap();
-        git(setup.deadline, &r, &["init", "-q"]);
-        git(
+        git_without_flags(setup.deadline, &r, &["init", "-q"]);
+        git_without_flags(
             setup.deadline,
             &r,
             &[
@@ -124,7 +125,7 @@ impl Layout {
                 "x",
             ],
         );
-        git(
+        git_without_flags(
             setup.deadline,
             root,
             &["-C", "r", "worktree", "add", "-q", "../rw"],

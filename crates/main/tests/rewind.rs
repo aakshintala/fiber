@@ -1235,9 +1235,9 @@ fn a_rewind_of_an_unnamed_session_writes_no_session_named() {
     hubbed.finish();
 }
 
-/// Runs the system `git` in `dir`, in its own process group, to its exit
-/// under the test's [`Deadline`].
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+/// Runs the system `git` in `dir` with a clean environment, in its own
+/// process group, to its exit under the test's [`Deadline`].
+fn git_clean_env(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
     use std::os::unix::process::CommandExt as _;
     let mut command = std::process::Command::new("git");
     command
@@ -1260,10 +1260,10 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
 
 /// A repository with one commit on `main` at `dir`.
 fn init_repo(deadline: Deadline, dir: &Path) {
-    git(deadline, dir, &["init", "--quiet"]);
+    git_clean_env(deadline, dir, &["init", "--quiet"]);
     fs::write(dir.join("file.txt"), "x").unwrap();
-    git(deadline, dir, &["add", "."]);
-    git(deadline, dir, &["commit", "--quiet", "-m", "first"]);
+    git_clean_env(deadline, dir, &["add", "."]);
+    git_clean_env(deadline, dir, &["commit", "--quiet", "-m", "first"]);
 }
 
 #[test]
@@ -1331,7 +1331,7 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     });
     assert!(Path::new(&worktree).is_dir(), "the worktree is kept");
     assert!(
-        !git(
+        !git_clean_env(
             setup.deadline,
             &setup.workspace(),
             &["branch", "--list", &branch]
@@ -1381,7 +1381,7 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     hubbed.close("c7_close", &next);
     assert!(Path::new(&worktree).is_dir(), "the worktree is still there");
     assert!(
-        !git(
+        !git_clean_env(
             setup.deadline,
             &setup.workspace(),
             &["branch", "--list", &branch]
