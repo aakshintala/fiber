@@ -99,6 +99,10 @@ pub struct Shell {
     /// replacing the contents changes the next [`Tool::effects`] answer
     /// of this shell and of each clone, including a capped one. The lock
     /// is taken in `effects` only; a poisoned lock keeps its contents.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the shared handle spells its contents; main's settings::ShellReadOnly names the same type"
+    )]
     read_only: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     /// The held ends of a result: the first `start` and the last `end` bytes.
     bound: Bound,
@@ -180,6 +184,10 @@ impl Shell {
     /// command-line tools"). The handle is shared: a reload that replaces
     /// its contents reaches this shell and every clone of it. An entry
     /// whose basename is built in is never consulted.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the shared handle spells its contents; main's settings::ShellReadOnly names the same type"
+    )]
     #[must_use]
     pub fn with_read_only(self, entries: Arc<Mutex<Vec<(String, Vec<String>)>>>) -> Self {
         Self {
