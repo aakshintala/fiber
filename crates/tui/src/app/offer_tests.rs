@@ -191,6 +191,51 @@ fn enter_reads_source_and_steps_ignore_late_answers_without_changing_decisions()
 }
 
 #[test]
+fn an_answered_source_marks_new_output_only_for_its_request_while_scrolled_up() {
+    for scrolled in [false, true] {
+        for matching in [false, true] {
+            let mut app = attached();
+            app.set_size(80, 24);
+            let history = "earlier output\n".repeat(60);
+            app.on_line(session_line(
+                S_A,
+                "text_completed",
+                json!({"text": history}),
+                Some("a_history"),
+            ));
+            if scrolled {
+                press(&mut app, Key::PageUp);
+            }
+            assert_eq!(app.top().is_some(), scrolled);
+            assert!(!app.has_new());
+            app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh"]}]}), None));
+            let command = open_source(&mut app);
+            let id = if matching {
+                command["id"].clone()
+            } else {
+                json!("c_unrelated")
+            };
+            app.on_line(session_line(
+                S_A,
+                "command_accepted",
+                json!({"command_id": id, "result": {"text": "new source"}}),
+                None,
+            ));
+            assert_eq!(source_text(&app).contains("new source"), matching);
+            press(&mut app, Key::Esc);
+            press(&mut app, Key::Esc);
+            let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            crate::view::render(&app, area, &mut buffer, None);
+            assert_eq!(
+                crate::view::text(&buffer).contains("New messages below"),
+                scrolled && matching
+            );
+        }
+    }
+}
+
+#[test]
 fn source_refusals_are_inline_from_the_session_or_hub_and_duplicates_are_ignored() {
     for hub in [false, true] {
         for (code, shown) in [
