@@ -56,8 +56,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // The badge is on the row above the input line.
-    let row = height - 2;
+    let (base, row) = match median(|| tui::hover_frames(&events, width, height, &[])) {
+        Ok((time, (row, _))) => (time, row),
+        Err(error) => {
+            eprintln!("hover: {path}: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let cases: [(&str, Vec<(u16, u16)>); 4] = [
         ("still pointer", (0..REPORTS).map(|_| (3, row)).collect()),
         (
@@ -85,23 +90,17 @@ fn main() -> ExitCode {
                 .collect(),
         ),
     ];
-    let base = match median(|| tui::hover_frames(&events, width, height, &[])) {
-        Ok((time, _)) => time,
-        Err(error) => {
-            eprintln!("hover: {path}: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
     println!("{width}x{height}, {RUNS} runs per case, median");
     println!("case            reports  frames    bytes  time/report");
     for (name, pointer) in cases {
-        let (time, bytes) = match median(|| tui::hover_frames(&events, width, height, &pointer)) {
-            Ok(measured) => measured,
-            Err(error) => {
-                eprintln!("hover: {path}: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let (time, (_, bytes)) =
+            match median(|| tui::hover_frames(&events, width, height, &pointer)) {
+                Ok(measured) => measured,
+                Err(error) => {
+                    eprintln!("hover: {path}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
         let frames = bytes.iter().filter(|written| **written > 0).count();
         let total: usize = bytes.iter().sum();
         let per = time.saturating_sub(base) / u32::from(REPORTS);
@@ -115,19 +114,19 @@ fn main() -> ExitCode {
 }
 
 /// Runs `measure` [`RUNS`] times, returning the median time and the last
-/// run's bytes per report.
+/// run's badge row and bytes per report.
 fn median(
-    measure: impl Fn() -> Result<Vec<usize>, String>,
-) -> Result<(Duration, Vec<usize>), String> {
+    measure: impl Fn() -> Result<(u16, Vec<usize>), String>,
+) -> Result<(Duration, (u16, Vec<usize>)), String> {
     let mut times = Vec::with_capacity(RUNS);
-    let mut bytes = Vec::new();
+    let mut rowed: (u16, Vec<usize>) = (0, Vec::new());
     for _ in 0..RUNS {
         let (time, written) = timed(&measure);
-        bytes = written?;
+        rowed = written?;
         times.push(time);
     }
     times.sort();
-    Ok((times.get(RUNS / 2).copied().unwrap_or_default(), bytes))
+    Ok((times.get(RUNS / 2).copied().unwrap_or_default(), rowed))
 }
 
 /// The wall time of one call of `measure`, and its result.
