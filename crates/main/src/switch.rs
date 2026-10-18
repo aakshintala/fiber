@@ -9,6 +9,7 @@
 
 pub(crate) mod quota;
 mod read;
+mod labels;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

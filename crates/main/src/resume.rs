@@ -568,7 +568,9 @@ fn resumed_session(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    let switcher = switching.clone().closure(door);
+    let readers = switching.credential_readers(switching.clone().closure(door), model.reference.clone());
+    session.credentials(readers.labels, readers.admitted);
+    let switcher = readers.prepare;
     let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
         sources,
         prompt_inputs.clone(),
