@@ -1,7 +1,7 @@
 //! The opt-in live test for the opencode package's `quota()`
 //! (`docs/testing.md`, "Live calls and evals"): one quota fetch against the
-//! real endpoint. It returns at once unless `FIBER_LIVE_OPENCODE_KEY` holds
-//! a key; it never runs in CI. The package's `init.lua` is compiled in, so
+//! real endpoint. It is `#[ignore]`d and panics without
+//! `FIBER_LIVE_OPENCODE_KEY`; it never runs in CI. The package's `init.lua` is compiled in, so
 //! the test reads no repository file at run time, and the fetch runs on a
 //! thread bounded by a channel deadline instead of hanging the test.
 
