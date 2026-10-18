@@ -228,9 +228,20 @@ impl Store {
     /// made. The lock is still held across the record, as in `approve`, so
     /// a prune revalidation running under `pinned/.lock` sees the decision.
     pub fn never(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
+        Self::never_in(&self.home, &self.project, item, hash)
+    }
+
+    /// Records `never` for this content without a store: the CLI's
+    /// remove, which holds only `&dyn Clock`, never blocks on a copy.
+    pub fn never_in(
+        home: &Path,
+        project: &ProjectKey,
+        item: &RepoItem,
+        hash: &str,
+    ) -> Result<(), Error> {
         check(item, hash)?;
-        let (_lock, _pinned) = self.global_lock(item, Wait::Block)?;
-        self.record(item, hash, "never")
+        let (_lock, _pinned) = global_lock_in(home, item, Wait::Block)?;
+        Self::record_in(home, project, item, hash, "never")
     }
 
     /// Under `pinned/.lock`: checks the copy `pinned/<hash>`, runs `check`
@@ -419,12 +430,7 @@ impl Store {
     /// approval waits rather than racing a rebuild; bounded for a session
     /// start or reload, so it never waits on another process.
     fn global_lock(&self, item: &RepoItem, wait: Wait<'_>) -> Result<(File, PathBuf), Error> {
-        // `pinned_lock` with `create` makes the root, so `None` would mean
-        // a concurrent removal of `pinned/` itself, which no code does.
-        pinned_lock(&self.home, &item.name, true, wait)?.ok_or(Error::Pin {
-            item: item.name.clone(),
-            why: "pinned/ is missing after it was created".to_owned(),
-        })
+        global_lock_in(&self.home, item, wait)
     }
 
     /// The copy itself, with `pinned/.lock` already held: keeping a
@@ -642,7 +648,17 @@ impl Store {
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
-        let dir = self.approvals(item.kind);
+        Self::record_in(&self.home, &self.project, item, hash, decision)
+    }
+
+    fn record_in(
+        home: &Path,
+        project: &ProjectKey,
+        item: &RepoItem,
+        hash: &str,
+        decision: &str,
+    ) -> Result<(), Error> {
+        let dir = Self::approvals_in(home, project, item.kind);
         fs::create_dir_all(&dir).map_err(io_error(&dir))?;
         let files: Vec<&str> = item.files.iter().map(|f| f.rel.as_str()).collect();
         let files = Value::from(files);
@@ -792,6 +808,16 @@ fn check_marker(item: &str, home: &Path, path: &Path) -> Result<bool, Error> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(io_error(path)(e)),
     }
+}
+
+/// Under `pinned/.lock`, for callers without a store.
+fn global_lock_in(home: &Path, item: &RepoItem, wait: Wait<'_>) -> Result<(File, PathBuf), Error> {
+    // `pinned_lock` with `create` makes the root, so `None` would mean
+    // a concurrent removal of `pinned/` itself, which no code does.
+    pinned_lock(home, &item.name, true, wait)?.ok_or(Error::Pin {
+        item: item.name.clone(),
+        why: "pinned/ is missing after it was created".to_owned(),
+    })
 }
 
 /// How `pinned_lock` waits for `pinned/.lock`: an approval or removal
