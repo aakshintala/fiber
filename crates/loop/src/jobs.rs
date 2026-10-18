@@ -101,6 +101,17 @@ pub(crate) fn claimed(
 }
 
 impl Loop {
+    /// Records an extension's delegate at intake, without starting a turn.
+    pub(crate) fn record_extension_job(
+        &mut self,
+        started: contract::events::JobStarted,
+        delegate: contract::events::DelegateStarted,
+    ) -> Result<(), Error> {
+        self.write(&Event::JobStarted(started), None, None)?;
+        self.write(&Event::DelegateStarted(delegate), None, None)?;
+        Ok(())
+    }
+
     /// The session's jobs: their ends wake the model, and the session does
     /// not end while one runs (`docs/tools.md`, "Background jobs"). Without
     /// them no job ever runs.

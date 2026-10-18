@@ -364,6 +364,7 @@ impl Loop {
                 | Delivery::Shell(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionJob(..)
                 | Delivery::ExtensionUsage(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)) => {

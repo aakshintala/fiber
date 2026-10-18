@@ -493,6 +493,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
@@ -598,6 +599,9 @@ impl Loop {
                 }
             }
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
@@ -754,6 +758,9 @@ impl Loop {
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,

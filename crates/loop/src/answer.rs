@@ -184,6 +184,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled

@@ -125,6 +125,9 @@ impl Loop {
             // Written like any line still written; unlike a monitor batch,
             // it is not dropped.
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
