@@ -1,6 +1,6 @@
-//! Binary-level tests that the worked `executes` cases in
-//! `docs/extensions.md`, "Testing a tool that executes", pass under
-//! `fiber extension test`: the doc cannot drift from what the runner does.
+//! Binary-level test that the worked `executes` case in `docs/extensions.md`,
+//! "Testing a tool that executes", passes under `fiber extension test`: the
+//! doc cannot drift from what the runner does.
 
 #![allow(
     clippy::unwrap_used,
@@ -24,7 +24,7 @@ const DOC: &str = include_str!("../../../docs/extensions.md");
 
 /// The subsection's text and its fenced blocks in order, each as
 /// `(tag, body)`. A doc edit that adds, drops or reorders a fence changes
-/// this list, which Test A pins.
+/// this list, which the tests pin.
 fn documented_section() -> (String, Vec<(String, String)>) {
     let heading = "### Testing a tool that executes";
     let start = DOC
@@ -55,6 +55,24 @@ fn documented_section() -> (String, Vec<(String, String)>) {
         blocks.push((tag.trim().to_owned(), body));
     }
     (section.to_owned(), blocks)
+}
+
+/// The subsection's blocks: the tool as `lua`, then the allowed case as
+/// `json`.
+fn documented_blocks() -> (String, Vec<(String, String)>) {
+    let (section, blocks) = documented_section();
+    assert!(
+        section.contains("tests/launch-allowed.json"),
+        "the section must name its case file"
+    );
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|(tag, _)| tag.as_str())
+            .collect::<Vec<_>>(),
+        ["lua", "json"]
+    );
+    (section, blocks)
 }
 
 /// An extension package holding `lua` as `init.lua` and each
@@ -88,28 +106,13 @@ fn temp_root() -> fakes::TempDir {
 }
 
 #[test]
-fn the_documented_executes_cases_pass_under_fiber_extension_test() {
-    let (section, blocks) = documented_section();
-    assert!(
-        section.contains("tests/launch-allowed.json")
-            && section.contains("tests/launch-denied.json"),
-        "the section must name both case files"
-    );
-    assert_eq!(
-        blocks
-            .iter()
-            .map(|(tag, _)| tag.as_str())
-            .collect::<Vec<_>>(),
-        ["lua", "json", "json"]
-    );
+fn the_documented_executes_case_passes_under_fiber_extension_test() {
+    let (_section, blocks) = documented_blocks();
     let setup = support::Setup::new();
     let package = package(
         &setup,
         &blocks[0].1,
-        &[
-            ("launch-allowed", blocks[1].1.as_str()),
-            ("launch-denied", blocks[2].1.as_str()),
-        ],
+        &[("launch-allowed", blocks[1].1.as_str())],
     );
     let temp_root = temp_root();
     let package_arg = package.to_str().unwrap();
@@ -122,33 +125,29 @@ fn the_documented_executes_cases_pass_under_fiber_extension_test() {
     assert_eq!(output.status.code(), Some(0), "stderr: {:?}", output.stderr);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "ok launch-allowed\nok launch-denied\n2 passed, 0 failed\n"
+        "ok launch-allowed\n1 passed, 0 failed\n"
     );
     assert!(output.stderr.is_empty());
 }
 
 #[test]
-fn the_documented_allow_case_needs_its_reviewer_config_and_the_denial_case_needs_none() {
-    let (_, blocks) = documented_section();
-    assert_eq!(
-        blocks
-            .iter()
-            .map(|(tag, _)| tag.as_str())
-            .collect::<Vec<_>>(),
-        ["lua", "json", "json"]
-    );
+fn the_documented_allow_case_needs_its_reviewer_config() {
+    let (_section, blocks) = documented_blocks();
     let mut allowed: Value = serde_json::from_str(&blocks[1].1).unwrap();
-    let config = allowed
+    allowed
         .as_object_mut()
         .unwrap()
         .remove("config")
         .expect("the allow case must set config reviewer.model");
-    let denied: Value = serde_json::from_str(&blocks[2].1).unwrap();
-    assert!(
-        denied.get("config").is_none(),
-        "the denial case must set no reviewer"
-    );
-
+    // Without the reviewer the failure escalates to a person and the case
+    // would wait out the runner's until bound, so close at the escalation
+    // for a fast verdict. The failure still comes from the deleted config:
+    // the stream carries permission_requested where the allowed stream
+    // expects the reviewer's verdict.
+    allowed
+        .as_object_mut()
+        .unwrap()
+        .insert("until".to_owned(), json!({"kind": "permission_requested"}));
     let setup = support::Setup::new();
     let temp_root = temp_root();
     let without_reviewer = package(
@@ -156,18 +155,18 @@ fn the_documented_allow_case_needs_its_reviewer_config_and_the_denial_case_needs
         &blocks[0].1,
         &[("launch-allowed", allowed.to_string().as_str())],
     );
-    let denied_without_reviewer = run(
+    let denied = run(
         &setup,
         &without_reviewer,
         temp_root.path(),
         &["extension", "test", without_reviewer.to_str().unwrap()],
     );
     assert_eq!(
-        denied_without_reviewer.status.code(),
+        denied.status.code(),
         Some(1),
         "the allow case denied without its reviewer must fail"
     );
-    let stdout = String::from_utf8_lossy(&denied_without_reviewer.stdout).into_owned();
+    let stdout = String::from_utf8_lossy(&denied.stdout).into_owned();
     assert!(
         stdout.starts_with("FAIL launch-allowed\n"),
         "unexpected verdict: {stdout}"
@@ -176,41 +175,5 @@ fn the_documented_allow_case_needs_its_reviewer_config_and_the_denial_case_needs
         stdout.ends_with("0 passed, 1 failed\n"),
         "unexpected summary: {stdout}"
     );
-    assert!(denied_without_reviewer.stderr.is_empty());
-
-    let mut denied_with_config = denied;
-    denied_with_config
-        .as_object_mut()
-        .unwrap()
-        .insert("config".to_owned(), config);
-    let allowed_despite_denial = package(
-        &setup,
-        &blocks[0].1,
-        &[("launch-denied", denied_with_config.to_string().as_str())],
-    );
-    let allowed_despite_denial = run(
-        &setup,
-        &allowed_despite_denial,
-        temp_root.path(),
-        &[
-            "extension",
-            "test",
-            allowed_despite_denial.to_str().unwrap(),
-        ],
-    );
-    assert_eq!(
-        allowed_despite_denial.status.code(),
-        Some(1),
-        "the denial case allowed by a reviewer must fail"
-    );
-    let stdout = String::from_utf8_lossy(&allowed_despite_denial.stdout).into_owned();
-    assert!(
-        stdout.starts_with("FAIL launch-denied\n"),
-        "unexpected verdict: {stdout}"
-    );
-    assert!(
-        stdout.ends_with("0 passed, 1 failed\n"),
-        "unexpected summary: {stdout}"
-    );
-    assert!(allowed_despite_denial.stderr.is_empty());
+    assert!(denied.stderr.is_empty());
 }

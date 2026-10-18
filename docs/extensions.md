@@ -757,14 +757,18 @@ carries no tools. The expected stream records the reviewer's verdict as
 `permission_resolved` with `decided_by: reviewer` and `decision: allow`, and
 the call runs to `tool_call_completed` with `status: completed`.
 
-With no `reviewer.model` the call is denied with `decided_by: no_reviewer`:
-the reviewer cannot be set up, a `notice` with code `no_model` is written,
-the call never runs, and `tool_call_completed` has `status: denied`. That is
-how a case tests the denial: the same tool with no `config`.
+With no `reviewer.model` the call cannot be allowed: a `notice` with code
+`no_model` is written and the failure escalates (`docs/permissions.md`,
+"How it runs"). The escalation goes to a person as `permission_requested`,
+so a session case with no reviewer waits for an answer instead of finishing.
+Where no person can answer, such as a headless run (`docs/permissions.md`,
+"Headless"), the same failure denies the call with `decided_by:
+no_reviewer` and it never runs, and `tool_call_completed` has `status:
+denied`.
 
 The reviewer's first stage answers `allow` or `check`; a `check` goes to a
 second stage whose reply is `allow` or `block` plus a reason
-(`docs/permissions.md`, "Its verdict"). The cases below answer the first
+(`docs/permissions.md`, "Its verdict"). The case below answers the first
 stage with `allow`.
 
 The `launch` tool declares `executes` and returns without a host call:
@@ -807,40 +811,6 @@ the allowed stream:
     {"kind": "step_started"},
     {"kind": "assistant_message_started"},
     {"kind": "text_completed", "payload": {"text": "Launched."}},
-    {"kind": "usage_recorded"},
-    {"kind": "assistant_message_completed"},
-    {"kind": "turn_completed"},
-    {"kind": "fiber_exited"}
-  ]
-}
-```
-
-`tests/launch-denied.json` sets no reviewer and expects the denial stream:
-the call never runs, so there is no `tool_call_started` and no reviewer
-`usage_recorded`:
-
-```json
-{
-  "script": {"steps": [{"tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Denied."}]},
-  "prompt": "launch it",
-  "expect": [
-    {"kind": "session_started"},
-    {"kind": "fiber_started"},
-    {"kind": "extensions_loaded"},
-    {"kind": "preamble_built"},
-    {"kind": "opening_message"},
-    {"kind": "turn_started"},
-    {"kind": "step_started"},
-    {"kind": "assistant_message_started"},
-    {"kind": "tool_call_requested"},
-    {"kind": "usage_recorded"},
-    {"kind": "assistant_message_completed"},
-    {"kind": "notice", "payload": {"code": "no_model"}},
-    {"kind": "permission_resolved", "payload": {"decided_by": "no_reviewer", "decision": "deny"}},
-    {"kind": "tool_call_completed", "payload": {"status": "denied"}},
-    {"kind": "step_started"},
-    {"kind": "assistant_message_started"},
-    {"kind": "text_completed", "payload": {"text": "Denied."}},
     {"kind": "usage_recorded"},
     {"kind": "assistant_message_completed"},
     {"kind": "turn_completed"},
