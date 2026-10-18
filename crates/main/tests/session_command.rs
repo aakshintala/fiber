@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git, group_alive, hello,
-    kinds, stream, text_reply, write_json,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git,
+    group_alive, hello, kinds, stream, text_reply, write_json,
 };
 
 impl Setup {
@@ -252,16 +252,6 @@ impl Setup {
             parsed,
             String::from_utf8(output.stderr).unwrap(),
         )
-    }
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
     }
 }
 

@@ -15,15 +15,13 @@ mod support;
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, Setup};
+use support::{Deadline, Setup, spawn_watched};
 
 /// The damaged extension's full name and directory.
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
@@ -248,18 +246,6 @@ impl Setup {
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
-}
-
-// debt: `spawn_watched` copies `approve.rs`'s, as the other binary test
-// files in this crate each do; move every copy into `fakes` together when a
-// change to one has to be made in all.
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let watchdog = Watchdog::group(child.id());
-    (child, watchdog)
 }
 
 struct Run {

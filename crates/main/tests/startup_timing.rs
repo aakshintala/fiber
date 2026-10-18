@@ -189,8 +189,8 @@ use std::thread;
 
 use fakes::Watchdog;
 use support::{
-    Deadline, Socket, complete_lines, expired, group_alive, kill_group_detached, kinds,
-    session_dir, spawn_watched, until, until_close,
+    Deadline, KillGroup, Socket, complete_lines, expired, group_alive, kinds, session_dir,
+    spawn_watched, until, until_close,
 };
 
 /// Installs a provider `fake` with `m` and `n` on `openai-responses` at
@@ -277,17 +277,6 @@ fn start_session(setup: &Setup, id: &str) -> Running {
         lines,
         stderr: stderr_rx,
         deadline: setup.deadline,
-    }
-}
-
-/// Kills process group `group` on drop, without waiting on the kill. After
-/// the child is reaped and the group is empty, [`std::mem::forget`] skips
-/// that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        kill_group_detached(self.0, "KILL");
     }
 }
 
