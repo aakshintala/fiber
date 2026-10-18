@@ -912,12 +912,9 @@ fn an_id_not_in_flight_is_not_ours() {
 
 #[test]
 fn opening_from_each_level() {
-    assert_eq!(opening(None).to_vec(), vec![Level::Full]);
-    assert_eq!(opening(Some(Level::Summary)).to_vec(), vec![Level::Full]);
-    assert_eq!(
-        opening(Some(Level::Full)).to_vec(),
-        vec![Level::Summary, Level::Full]
-    );
+    assert_eq!(opening(None).to_vec(), vec![Level::Summary]);
+    assert_eq!(opening(Some(Level::Summary)).to_vec(), vec![]);
+    assert_eq!(opening(Some(Level::Full)).to_vec(), vec![Level::Summary]);
 }
 
 #[test]

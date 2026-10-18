@@ -206,7 +206,7 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     let (reader, subscribe) = command(reader, "the subscribe after reconnecting");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(subscribe["args"]["level"], "full");
+    assert_eq!(subscribe["args"]["level"], "summary");
     let (reader, commands) = command(reader, "the commands after reconnecting");
     assert_eq!(commands["command"], "commands");
     let (_, resent) = command(reader, "the resent prompt");

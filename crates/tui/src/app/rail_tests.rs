@@ -314,12 +314,27 @@ fn accepted(session: &str, id: &str) -> Line {
     })
 }
 
-/// Accepts every subscribe in `out`.
+/// Accepts every subscribe in `out`, then the staged open's raise:
+/// the first ack leaves the `full` raise due, and the raise's ack
+/// ends the gate. With no open due nothing further goes out.
 fn ack(app: &mut App, out: &[Value]) {
     for line in out.iter().filter(|line| line["command"] == "subscribe") {
         let session = line["session_id"].as_str().unwrap_or_default();
         let id = line["id"].as_str().unwrap_or_default();
         app.on_line(accepted(session, id));
+    }
+    if let Some(line) = app.take_raise() {
+        let raise: Value =
+            serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+        let session = raise["session_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a raise session"))
+            .to_owned();
+        let id = raise["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a raise id"))
+            .to_owned();
+        app.on_line(accepted(&session, &id));
     }
 }
 
@@ -376,7 +391,7 @@ fn a_click_switches_lowering_the_old_and_opening_the_new() {
         out,
         vec![
             subscribe(&out[0]["id"], A, "summary"),
-            subscribe(&out[1]["id"], B, "full"),
+            subscribe(&out[1]["id"], B, "summary"),
             asks_commands(&out[2]["id"], B),
         ]
     );
@@ -397,10 +412,20 @@ fn a_switch_to_a_session_held_at_full_sends_summary_then_full() {
         vec![
             subscribe(&out[0]["id"], A, "summary"),
             subscribe(&out[1]["id"], B, "summary"),
-            subscribe(&out[2]["id"], B, "full"),
-            asks_commands(&out[3]["id"], B),
+            asks_commands(&out[2]["id"], B),
         ]
     );
+    // The first stage answered, the `full` raise follows.
+    for line in out.iter().filter(|line| line["command"] == "subscribe") {
+        let target = line["session_id"].as_str().unwrap_or_default();
+        let id = line["id"].as_str().unwrap_or_default();
+        app.on_line(accepted(target, id));
+    }
+    let raise: Value =
+        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["session_id"], B);
+    assert_eq!(raise["args"]["level"], "full");
 }
 
 #[test]
@@ -410,14 +435,14 @@ fn alt_n_switches() {
     let mut app = opened(&sessions, sessions[4]);
     let out = sent(press(&mut app, Key::AltDigit(1)));
     assert!(
-        out.contains(&subscribe(&out[1]["id"], sessions[0], "full")),
+        out.contains(&subscribe(&out[1]["id"], sessions[0], "summary")),
         "{out:?}"
     );
     assert_eq!(on_screen(&app), Some(sessions[0]));
     ack(&mut app, &out);
     let out = sent(press(&mut app, Key::AltDigit(9)));
     assert!(
-        out.contains(&subscribe(&out[1]["id"], sessions[8], "full")),
+        out.contains(&subscribe(&out[1]["id"], sessions[8], "summary")),
         "{out:?}"
     );
     assert_eq!(on_screen(&app), Some(sessions[8]));
@@ -437,7 +462,7 @@ fn alt_n_on_home_opens_the_card() {
     assert_eq!(
         out,
         vec![
-            subscribe(&out[0]["id"], B, "full"),
+            subscribe(&out[0]["id"], B, "summary"),
             asks_commands(&out[1]["id"], B),
         ]
     );
@@ -488,7 +513,7 @@ fn a_switch_with_the_approval_panel_open_still_opens() {
     assert!(app.panel().is_some());
     let out = sent(press(&mut app, Key::AltDigit(2)));
     assert!(
-        out.contains(&subscribe(&out[1]["id"], B, "full")),
+        out.contains(&subscribe(&out[1]["id"], B, "summary")),
         "{out:?}"
     );
     assert_eq!(on_screen(&app), Some(B));
@@ -501,7 +526,7 @@ fn a_switch_with_the_key_map_open_still_opens() {
     assert!(app.keymap_top().is_some());
     let out = sent(press(&mut app, Key::AltDigit(2)));
     assert!(
-        out.contains(&subscribe(&out[1]["id"], B, "full")),
+        out.contains(&subscribe(&out[1]["id"], B, "summary")),
         "{out:?}"
     );
     assert_eq!(on_screen(&app), Some(B));
@@ -579,16 +604,34 @@ fn after_a_switch_only_the_new_session_is_held_at_full() {
     let mut levels: Vec<(String, String)> = Vec::new();
     for session in [B, A] {
         let out = sent(click(&mut app, session));
-        ack(&mut app, &out);
         for line in out.iter().filter(|line| line["command"] == "subscribe") {
-            let id = line["session_id"].as_str().unwrap_or_default().to_owned();
+            let target = line["session_id"].as_str().unwrap_or_default();
+            let id = line["id"].as_str().unwrap_or_default();
+            app.on_line(accepted(target, id));
             let level = line["args"]["level"]
                 .as_str()
                 .unwrap_or_default()
                 .to_owned();
-            levels.retain(|(held, _)| *held != id);
-            levels.push((id, level));
+            levels.retain(|(held, _)| held != target);
+            levels.push((target.to_owned(), level));
         }
+        // The first frame releases the raise; the switch ends holding
+        // its level.
+        let raise: Value =
+            serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+                .unwrap_or_else(|err| panic!("{err}"));
+        let target = raise["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let level = raise["args"]["level"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let id = raise["id"].as_str().unwrap_or_default().to_owned();
+        levels.retain(|(held, _)| *held != target);
+        levels.push((target.clone(), level));
+        app.on_line(accepted(&target, &id));
     }
     levels.sort();
     assert_eq!(
@@ -792,7 +835,7 @@ fn alt_a_switches_to_the_oldest_waiting_row_and_opens_its_request_on_arrival() {
     let mut app = two_waiting();
     let out = sent(press(&mut app, Key::AltA));
     assert!(
-        out.contains(&subscribe(&out[1]["id"], C, "full")),
+        out.contains(&subscribe(&out[1]["id"], C, "summary")),
         "{out:?}"
     );
     assert_eq!(on_screen(&app), Some(C));

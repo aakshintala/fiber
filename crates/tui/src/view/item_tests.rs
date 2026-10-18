@@ -171,18 +171,33 @@ fn opened(app: &mut App) {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a subscribe"))
         .to_owned();
-    let mut payload = serde_json::Map::new();
-    payload.insert("command_id".to_owned(), Value::String(id));
-    app.on_line(Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
-        session_id: SessionId(SESSION.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload,
-    }));
+    // The staged open holds the gate past the first ack: the first
+    // frame releases the `full` raise, whose ack ends the gate. One
+    // ack would drop the session's later lines.
+    for ack in [id, raise_id(app)] {
+        let mut payload = serde_json::Map::new();
+        payload.insert("command_id".to_owned(), Value::String(ack));
+        app.on_line(Line::Session(contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload,
+        }));
+    }
+}
+
+/// The `full` raise the first frame releases, parsed to its id.
+fn raise_id(app: &mut App) -> String {
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    serde_json::from_str::<Value>(&line)
+        .unwrap_or_else(|err| panic!("{line}: {err}"))["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
+        .to_owned()
 }
 
 /// Folds a Fiber delegate as `j_1` with its `delegate_started` at `ts`.

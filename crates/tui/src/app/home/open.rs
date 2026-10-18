@@ -387,9 +387,7 @@ impl App {
             .as_ref()
             .and_then(|home| home.subs.opening.as_ref())
             .map(|opening| opening.session().clone());
-        let Some(session) = opening else {
-            return None;
-        };
+        let session = opening?;
         if self.session() != Some(&session) {
             if let Some(home) = self.home.as_mut() {
                 home.subs.opening = None;

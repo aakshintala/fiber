@@ -175,7 +175,7 @@ fn a_session_launch_opens_with_the_first_feed_and_recent() {
     assert_eq!(lines[1]["command"], "recent");
     assert_eq!(lines[2]["command"], "subscribe");
     assert_eq!(lines[2]["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(lines[2]["args"]["level"], "full");
+    assert_eq!(lines[2]["args"]["level"], "summary");
     assert_eq!(lines[3]["command"], "commands");
     assert_eq!(lines[3]["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_ne!(lines[2]["id"], lines[3]["id"]);
@@ -363,7 +363,7 @@ fn a_session_launch_with_a_label_puts_it_on_the_first_subscribe() {
     assert_eq!(lines[2]["command"], "subscribe");
     assert_eq!(
         lines[2]["args"],
-        json!({"level": "full", "credential": "work"}),
+        json!({"level": "summary", "credential": "work"}),
         "the complete args ride on the first subscribe"
     );
     assert_eq!(lines[3]["command"], "commands");
@@ -377,7 +377,7 @@ fn a_session_launch_without_a_label_sends_no_credential_key() {
     let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
     let lines = commands(app.on_line(hello()));
     assert_eq!(lines[2]["command"], "subscribe");
-    assert_eq!(lines[2]["args"], json!({"level": "full"}));
+    assert_eq!(lines[2]["args"], json!({"level": "summary"}));
     assert!(
         lines[2]["args"].get("credential").is_none(),
         "an absent label leaves the key out, never null"
@@ -385,7 +385,7 @@ fn a_session_launch_without_a_label_sends_no_credential_key() {
 }
 
 #[test]
-fn an_expected_full_open_puts_the_label_on_the_first_subscribe_only() {
+fn an_expected_full_open_puts_the_label_on_its_summary_subscribe() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
         id("s_aaaaaaaaaaaaaaaa"),
@@ -396,12 +396,13 @@ fn an_expected_full_open_puts_the_label_on_the_first_subscribe_only() {
         .iter()
         .filter(|line| line["command"] == "subscribe")
         .collect();
-    assert_eq!(subscribes.len(), 2);
+    // The held-`full` open sends `summary` first; the `full` raise
+    // follows the first frame.
+    assert_eq!(subscribes.len(), 1);
     assert_eq!(
         subscribes[0]["args"],
         json!({"level": "summary", "credential": "work"})
     );
-    assert_eq!(subscribes[1]["args"], json!({"level": "full"}));
 }
 
 #[test]
@@ -413,7 +414,7 @@ fn a_row_open_and_a_reconnect_carry_no_label() {
         .filter(|line| line["command"] == "subscribe")
         .collect();
     assert_eq!(subscribes.len(), 1);
-    assert_eq!(subscribes[0]["args"], json!({"level": "full"}));
+    assert_eq!(subscribes[0]["args"], json!({"level": "summary"}));
     // An ordinary subscription carries none either.
     let line: Value = serde_json::from_str(
         &app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), crate::home::Level::Summary),
@@ -451,7 +452,6 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
-    let last = lines[1]["id"].as_str().unwrap_or_else(|| panic!("last id"));
     // The first acceptance lands, then the switch refusal as a notice.
     assert!(
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
@@ -463,10 +463,16 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     );
     assert_eq!(app.notice(), Some("no credential named `nope`"));
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
-    // Historical lines are still gated behind the final acceptance.
+    // Historical lines are still gated behind the raise's acceptance.
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
-    // The final acceptance ends the gate.
+    // The first frame releases the raise; its acceptance ends the gate.
+    let raise: Value =
+        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+            .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"]["level"], "full");
+    let last = raise["id"].as_str().unwrap_or_else(|| panic!("last id"));
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", last));
     assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
