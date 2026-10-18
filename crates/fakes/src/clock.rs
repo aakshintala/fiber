@@ -213,7 +213,6 @@ impl FakeClock {
     /// made after the code under test reports its result is legitimate and
     /// may advance. Tests assert on that result, not on no advance after end.
     #[track_caller]
-    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked(
         &self,
         expected: Option<Instant>,
@@ -283,14 +282,13 @@ impl FakeClock {
     /// mismatch, an other-driver move, a second active wait or an expiry.
     /// It must not call any [`FakeClock`] method, nor take a lock another
     /// thread holds while calling the clock: the mutex is not reentrant, and
-    /// either deadlocks. Wakers run after the lock drops, as now. Returns
+    /// either deadlocks. Wakers run after the lock drops. Returns
     /// the same [`Mark`] the other waits return, taken under the move's
     /// lock.
     ///
     /// A hook panic unwinds to the caller with its payload and leaves time
     /// unmoved; no subscribed waker is called.
     #[track_caller]
-    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked_then(
         &self,
         expected: Option<Instant>,
@@ -374,15 +372,7 @@ impl FakeClock {
                 panic!("{report}");
             }
             if several_threads_parked(&state, select) {
-                let kind = match select {
-                    Select::Count(n) if n != 1 => {
-                        format!("more than {n} threads hold a park at the named instant")
-                    }
-                    Select::Thread(_) | Select::Count(_) => {
-                        "several threads hold a park and no thread was named: name the thread"
-                            .to_string()
-                    }
-                };
+                let kind = select_message(select, SelectOutcome::TooMany);
                 let report = report(&state, expected, select, advance, &kind, None);
                 leave_wait(&mut state);
                 drop(state);
@@ -416,14 +406,7 @@ impl FakeClock {
             }
             let wait_for = deadline.left();
             if wait_for.is_zero() {
-                let kind = match select {
-                    Select::Count(n) if n != 1 => format!(
-                        "the deadline passed before {n} threads parked at the named instant"
-                    ),
-                    Select::Thread(_) | Select::Count(_) => {
-                        "the deadline passed before the named park arrived".to_string()
-                    }
-                };
+                let kind = select_message(select, SelectOutcome::Expired);
                 let report = report(&state, expected, select, advance, &kind, None);
                 leave_wait(&mut state);
                 drop(state);
@@ -904,20 +887,25 @@ fn matched(state: &State, expected: Option<Instant>, select: Select) -> bool {
         Select::Thread(selected) => {
             held.any(|parked| parked.thread == selected && parked.until == expected)
         }
-        Select::Count(n) => {
-            let mut seen: Vec<ThreadId> = Vec::new();
-            for parked in state
-                .parked
-                .iter()
-                .filter(|parked| fresh(state, parked) && parked.until == expected)
-            {
-                if !seen.contains(&parked.thread) {
-                    seen.push(parked.thread);
-                }
-            }
-            seen.len() == n
+        Select::Count(n) => distinct_fresh_threads(state, Some(expected)).len() == n,
+    }
+}
+
+/// Distinct threads holding a fresh park: at `until` when one filters,
+/// at any instant otherwise. Nested parks on one thread count once;
+/// diagnostics still list every held park.
+fn distinct_fresh_threads(state: &State, until: Option<Option<Instant>>) -> Vec<ThreadId> {
+    let mut seen: Vec<ThreadId> = Vec::new();
+    for parked in state
+        .parked
+        .iter()
+        .filter(|parked| fresh(state, parked) && until.is_none_or(|until| parked.until == until))
+    {
+        if !seen.contains(&parked.thread) {
+            seen.push(parked.thread);
         }
     }
+    seen
 }
 
 /// Whether fresh parks belong to more distinct threads than the wait allows:
@@ -929,16 +917,40 @@ fn several_threads_parked(state: &State, select: Select) -> bool {
         Select::Thread(_) => return false,
         Select::Count(n) => n,
     };
-    let mut seen: Vec<ThreadId> = Vec::new();
-    for parked in state.parked.iter().filter(|parked| fresh(state, parked)) {
-        if !seen.contains(&parked.thread) {
-            seen.push(parked.thread);
-            if seen.len() > n {
-                return true;
+    distinct_fresh_threads(state, None).len() > n
+}
+
+/// Which message a `Select` contributes to an `advance_when_parked` failure.
+enum SelectOutcome {
+    /// More parked threads than the wait allows.
+    TooMany,
+    /// The deadline passed before the awaited parks arrived.
+    Expired,
+    /// The report's thread-count suffix (empty for a single awaited park).
+    CountSuffix,
+}
+
+/// The message for a `Select` that failed with `outcome`: a counted wait
+/// names its count, any other wait names the single awaited park.
+fn select_message(select: Select, outcome: SelectOutcome) -> String {
+    match select {
+        Select::Count(n) if n != 1 => match outcome {
+            SelectOutcome::TooMany => format!("more than {n} threads hold a park"),
+            SelectOutcome::Expired => {
+                format!("the deadline passed before {n} threads parked at the named instant")
             }
-        }
+            SelectOutcome::CountSuffix => format!(", threads {n}"),
+        },
+        Select::Thread(_) | Select::Count(_) => match outcome {
+            SelectOutcome::TooMany => {
+                "several threads hold a park and no thread was named: name the thread".to_string()
+            }
+            SelectOutcome::Expired => {
+                "the deadline passed before the named park arrived".to_string()
+            }
+            SelectOutcome::CountSuffix => String::new(),
+        },
     }
-    false
 }
 
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
@@ -961,16 +973,14 @@ fn report(
     kind: &str,
     found: Option<(ThreadId, Option<Instant>)>,
 ) -> String {
-    let (thread, count) = match select {
-        Select::Thread(id) => (Some(id), 1),
-        Select::Count(n) => (None, n),
+    let thread = match select {
+        Select::Thread(id) => Some(id),
+        Select::Count(_) => None,
     };
     let mut message = format!(
         "advance_when_parked failed: {kind}; expected park {expected:?}, thread {thread:?}"
     );
-    if count != 1 {
-        message.push_str(&format!(", threads {count}"));
-    }
+    message.push_str(&select_message(select, SelectOutcome::CountSuffix));
     message.push_str(&format!(", advance {advance:?}"));
     if let Some((id, until)) = found {
         message.push_str(&format!("; watched park {id:?} at {until:?}"));

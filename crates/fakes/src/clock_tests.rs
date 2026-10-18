@@ -1256,19 +1256,16 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
 /// test receives the outcome through its deadline instead of joining a thread
 /// that a bug would hang.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn run_advance_when_parked(
-    clock: &Arc<FakeClock>,
-    expected: Option<std::time::Instant>,
-    thread: Option<std::thread::ThreadId>,
-    advance: Duration,
-    deadline: Deadline,
+/// Runs `work` on a worker thread, catching its intentional panic: the
+/// worker sends `Ok(mark)` on success and `Err(message)` on failure, so the
+/// test receives the outcome through its deadline instead of joining a
+/// thread that a bug would hang.
+fn run_advance_worker(
+    work: impl FnOnce() -> super::Mark + Send + 'static,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
     let (tx, rx) = mpsc::channel();
-    let clock = Arc::clone(clock);
     thread::spawn(move || {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            clock.advance_when_parked(expected, thread, advance, &deadline)
-        }));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
         let outcome = outcome.map_err(|payload| {
             if let Some(message) = payload.downcast_ref::<String>() {
                 message.clone()
@@ -1283,6 +1280,17 @@ fn run_advance_when_parked(
         }
     });
     rx
+}
+
+fn run_advance_when_parked(
+    clock: &Arc<FakeClock>,
+    expected: Option<std::time::Instant>,
+    thread: Option<std::thread::ThreadId>,
+    advance: Duration,
+    deadline: Deadline,
+) -> mpsc::Receiver<Result<super::Mark, String>> {
+    let clock = Arc::clone(clock);
+    run_advance_worker(move || clock.advance_when_parked(expected, thread, advance, &deadline))
 }
 
 /// Channel-held parks in sequence; dropping the release sender ends the
@@ -3082,10 +3090,6 @@ fn subscribe_drops_dead_wakers() {
     drop(second);
 }
 
-/// Runs `advance_when_parked_threads` on a worker thread, catching its
-/// intentional panic: the worker sends `Ok(mark)` on success and
-/// `Err(message)` on failure, so the test receives the outcome through its
-/// deadline instead of joining a thread that a bug would hang.
 fn run_advance_when_parked_threads(
     clock: &Arc<FakeClock>,
     expected: Option<std::time::Instant>,
@@ -3093,26 +3097,10 @@ fn run_advance_when_parked_threads(
     advance: Duration,
     deadline: Deadline,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
-    let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
-    thread::spawn(move || {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            clock.advance_when_parked_threads(expected, count, advance, &deadline)
-        }));
-        let outcome = outcome.map_err(|payload| {
-            if let Some(message) = payload.downcast_ref::<String>() {
-                message.clone()
-            } else if let Some(message) = payload.downcast_ref::<&str>() {
-                (*message).to_string()
-            } else {
-                "a panic without a message".to_string()
-            }
-        });
-        match tx.send(outcome) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
-    rx
+    run_advance_worker(move || {
+        clock.advance_when_parked_threads(expected, count, advance, &deadline)
+    })
 }
 
 #[test]
@@ -3762,26 +3750,10 @@ fn run_advance_when_parked_then(
     deadline: Deadline,
     hook: impl FnOnce() + Send + 'static,
 ) -> mpsc::Receiver<Result<super::Mark, String>> {
-    let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
-    thread::spawn(move || {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            clock.advance_when_parked_then(expected, thread, advance, &deadline, hook)
-        }));
-        let outcome = outcome.map_err(|payload| {
-            if let Some(message) = payload.downcast_ref::<String>() {
-                message.clone()
-            } else if let Some(message) = payload.downcast_ref::<&str>() {
-                (*message).to_string()
-            } else {
-                "a panic without a message".to_string()
-            }
-        });
-        match tx.send(outcome) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
-    rx
+    run_advance_worker(move || {
+        clock.advance_when_parked_then(expected, thread, advance, &deadline, hook)
+    })
 }
 
 /// A subscriber that reports the fake clock's `now()` at each wake.
@@ -3959,7 +3931,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_an_expired_deadline() {
         Some(until),
         None,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_millis(200)),
+        Deadline::after(Duration::ZERO),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
