@@ -656,3 +656,61 @@ fn the_paging_fake_answers_history_without_from_seq() {
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(found, 1, "the marker before the first window");
 }
+
+/// A search over a small log answers its first window from the whole
+/// log: with no `from_seq` the doors hold the last lines up to `to`,
+/// so every match in a settled scan is found.
+#[test]
+fn a_search_answers_its_first_window_from_the_whole_log() {
+    let lines: Vec<(contract::Seq, String)> = vec![
+        (
+            contract::Seq(0),
+            lined(0, "turn_started", None, json!({"input": []})),
+        ),
+        (
+            contract::Seq(1),
+            lined(1, "assistant_message_started", Some("a_m"), json!({})),
+        ),
+        (
+            contract::Seq(2),
+            lined(
+                2,
+                "text_completed",
+                Some("a_m"),
+                json!({"text": "this turn uses the shell"}),
+            ),
+        ),
+        (
+            contract::Seq(3),
+            lined(
+                3,
+                "assistant_message_completed",
+                Some("a_m"),
+                json!({"outcome": "completed"}),
+            ),
+        ),
+        (
+            contract::Seq(4),
+            lined(4, "turn_completed", None, json!({"outcome": "completed"})),
+        ),
+    ];
+    let app = silent_app(&lines);
+    let clock = fakes::clock::FakeClock::new();
+    let log: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    let mut paging = super::Paging {
+        app,
+        log,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    let (_, matches) = paging.search("shell").expect("a small log settles");
+    assert_eq!(matches, 1, "the first window holds the whole log");
+    let (_, absent) = paging
+        .search("qqq-no-such-match")
+        .expect("a small log settles");
+    assert_eq!(absent, 0, "an absent query matches nothing");
+}
