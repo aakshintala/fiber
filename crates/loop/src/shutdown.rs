@@ -65,7 +65,28 @@ impl Loop {
                 }
                 Ok(())
             }
-            delivery => self.settle_one(delivery),
+            delivery @ (Delivery::Steer(..)
+            | Delivery::SteerDrop(..)
+            | Delivery::Message(_)
+            | Delivery::Model(..)
+            | Delivery::Credential(..)
+            | Delivery::Reload(_)
+            | Delivery::Name(..)
+            | Delivery::Rewind(..)
+            | Delivery::Handoff(..)
+            | Delivery::Close(_)
+            | Delivery::Cancelled
+            | Delivery::JobLine(_)
+            | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionJob(..)
+            | Delivery::Interaction(_)
+            | Delivery::Resolved(..)
+            | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
+            | Delivery::Shell(..)
+            | Delivery::Reply(..)
+            | Delivery::Prompt(..)
+            | Delivery::InnerCall(_)) => self.settle_one(delivery),
         }
     }
 
