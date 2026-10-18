@@ -148,7 +148,12 @@ impl Peer {
             if let Ok(()) = sub_tx.send(command.to_owned()) {}
             script(command, &mut stream);
             let timeout = deadline.left().max(Duration::from_millis(1));
-            stream.set_read_timeout(Some(timeout)).unwrap();
+            // macOS rejects setsockopt with EINVAL once the client has closed;
+            // the read below then returns EOF at once, so the bound is moot.
+            match stream.set_read_timeout(Some(timeout)) {
+                Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+                other => other.unwrap(),
+            }
             let mut rest = Vec::new();
             match stream.read_to_end(&mut rest) {
                 Ok(_) => assert!(rest.is_empty()),

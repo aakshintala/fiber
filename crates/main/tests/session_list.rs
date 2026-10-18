@@ -55,6 +55,8 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
     let w2 = setup.root.path().join("w2");
     let w3 = setup.root.path().join("w3");
     fs::create_dir(&w2).unwrap();
+    // The session reports its canonical cwd (/var is /private/var on macOS).
+    let w2 = fs::canonicalize(w2).unwrap();
     fs::create_dir(&w3).unwrap();
     let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
     let server = ProviderServer::start([
@@ -123,6 +125,8 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
             let timeout = rustix::event::Timespec::try_from(deadline.left()).unwrap();
             rustix::event::poll(&mut fds, Some(&timeout)).unwrap();
             let (mut stream, _) = delegate.accept().unwrap();
+            // macOS inherits the listener's nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(deadline.left())).unwrap();
             stream.set_write_timeout(Some(deadline.left())).unwrap();
             let mut raw = String::new();
@@ -143,7 +147,43 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         done.send(()).unwrap();
     });
 
-    let lines = ask(&setup, &["ask", "list the sessions"], &w1);
+    // The status observer folds a session's lines on its own thread, so A's
+    // name reaches its summary after the prompt, later where git is slow
+    // (macOS). Hold A's first model call until its summary names the prompt.
+    server.hold_from(2, fakes::deadline::BUDGET);
+    let mut command = setup.fiber(&["ask", "list the sessions"]);
+    command.current_dir(&w1);
+    let (mut a, a_watchdog) = support::spawn_watched(&mut command);
+    let a_stdout = a.stdout.take().unwrap();
+    let (a_tx, a_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(a_stdout).lines() {
+            if a_tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let first_a = deadline.recv_or_fail(&a_rx, "A session started");
+    let a_socket = serde_json::from_str::<Value>(&first_a).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let socket = Socket::connect(deadline, &setup.session_socket(&a_socket));
+    socket.send(
+        &json!({"id":doors::mint("c_"),"command":"subscribe","args":{"level":"summary"}})
+            .to_string(),
+    );
+    support::until(&socket, "A summary names its prompt", |line| {
+        line["kind"] == "session_status" && line["payload"]["name"] == "list the sessions"
+    });
+    drop(socket);
+    server.release();
+    let mut lines = vec![serde_json::from_str::<Value>(&first_a).unwrap()];
+    while let Ok(line) = deadline.recv(&a_rx) {
+        lines.push(serde_json::from_str(&line).unwrap());
+    }
+    assert!(a.wait().unwrap().success(), "A exits cleanly");
+    a_watchdog.stand_down(deadline.cleanup());
     assert_eq!(support::kinds(&lines), support::read_kinds());
     let a_id = line(&lines, "session_started")["session_id"]
         .as_str()
