@@ -267,6 +267,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "name_session",
             "read",
             "session_list",
+            "session_message",
             "session_search",
             "shell",
             "skill",
@@ -288,6 +289,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "name_session",
             "read",
             "session_list",
+            "session_message",
             "session_search",
             "shell",
             "skill",
@@ -847,6 +849,47 @@ fn session_list_declares_reads_on_run_in_fiber_home() {
         effects.declared.paths,
         Some(vec![format!("{}/run/", home.display())])
     );
+}
+
+#[test]
+fn session_message_declares_writes_with_no_paths() {
+    let root = fakes::TempDir::new("fiber-session-message");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _, _, _, _) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let (_, tool) = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "session_message")
+        .expect("session_message is registered");
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "id".to_owned(),
+        serde_json::Value::from("s_0000000000000001"),
+    );
+    arguments.insert("text".to_owned(), serde_json::Value::from("hi"));
+    let effects = tool.effects(&arguments).unwrap();
+    // With no paths, `fast_path` in `crates/loop/src/permission.rs` cannot
+    // pass a `writes` call: it reads only what is declared here.
+    assert_eq!(effects.declared.effects, [contract::shapes::Effect::Writes]);
+    assert!(!effects.declared.reversible);
+    assert_eq!(effects.declared.paths, None);
+    assert!(!effects.always_reviewed);
 }
 
 #[test]

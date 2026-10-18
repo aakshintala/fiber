@@ -3020,6 +3020,7 @@ fn two_runs_send_byte_identical_preambles() {
             "name_session",
             "read",
             "session_list",
+            "session_message",
             "session_search",
             "shell",
             "skill",

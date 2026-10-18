@@ -27,7 +27,7 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `name_session`, `read`, `session_list`, `session_search`, `shell`,
+/// `ask_user`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `web_search` as `web_search` chose it: the hosted search of the session's
 /// model when it has one, else Fiber's own over the installed backend, else
@@ -138,6 +138,9 @@ pub(crate) fn builtin_timed(
             .with_search(fiber)
             .with_artifacts(artifacts.to_path_buf()),
     );
+    // One socket client for both session tools: each call connects afresh.
+    let sessions: Arc<dyn contract::sessions::Sessions> =
+        Arc::new(doors::SessionSockets::new(home, Arc::clone(clock)));
     let mut built = vec![
         registered(tools::AskUser)?,
         registered(delegates.message())?,
@@ -148,7 +151,11 @@ pub(crate) fn builtin_timed(
         registered(tools::NameSession)?,
         registered(files.read())?,
         registered(tools::SessionList::new(
-            Arc::new(doors::SessionSockets::new(home, Arc::clone(clock))),
+            Arc::clone(&sessions),
+            delegates.session().clone(),
+        ))?,
+        registered(tools::SessionMessage::new(
+            sessions,
             delegates.session().clone(),
         ))?,
         registered(tools::SessionSearch::new(Arc::new(match scan_timing {
