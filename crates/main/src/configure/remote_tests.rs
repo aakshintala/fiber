@@ -152,12 +152,22 @@ fn remote_operations_round_trip_their_wire_shapes() {
     let global = notes["global"]["version"].as_str().unwrap().to_owned();
     let project = notes["project"]["version"].as_str().unwrap().to_owned();
     assert_ne!(global, "absent");
+    let workspace_save = workspace.clone();
+    let global_save = global.clone();
+    let (seam, saved) = fakes::within(
+        "round-trip global notes save",
+        std::time::Duration::from_secs(10),
+        move || {
+            let saved = result(
+                &seam,
+                "save_reviewer_notes",
+                json!({"workspace":workspace_save,"global":{"version":global_save,"text":"new global"}}),
+            );
+            (seam, saved)
+        },
+    );
     assert_eq!(
-        result(
-            &seam,
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":{"version":global,"text":"new global"}})
-        ),
+        saved,
         json!({"saved":"written","files":[{"file":home.join("config.json"),"saved":true}]})
     );
     assert!(
@@ -166,14 +176,21 @@ fn remote_operations_round_trip_their_wire_shapes() {
             .contains("new global")
     );
     let before = fs::read(home.join("config.json")).unwrap();
-    assert_eq!(
-        result(
-            &seam,
-            "save_reviewer_notes",
-            json!({"workspace":workspace,"global":{"version":global,"text":"lost"},"project":{"version":project,"text":"new project"}})
-        ),
-        json!({"saved":"stale"})
+    let workspace_stale = workspace.clone();
+    let global_stale = global.clone();
+    let project_stale = project.clone();
+    let stale = fakes::within(
+        "round-trip stale notes save",
+        std::time::Duration::from_secs(10),
+        move || {
+            result(
+                &seam,
+                "save_reviewer_notes",
+                json!({"workspace":workspace_stale,"global":{"version":global_stale,"text":"lost"},"project":{"version":project_stale,"text":"new project"}}),
+            )
+        },
     );
+    assert_eq!(stale, json!({"saved":"stale"}));
     assert_eq!(fs::read(home.join("config.json")).unwrap(), before);
 }
 
@@ -299,6 +316,7 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
             );
         }
     }
+    let mut seam = seam;
     for (operation, args) in [
         (
             "save_reviewer_notes",
@@ -321,7 +339,16 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
             ErrorCode::InvalidArguments,
             "{operation}: extra"
         );
-        assert!(call(&seam, operation, args).unwrap().is_some());
+        let (back, outcome) = fakes::within(
+            "valid notes layers save",
+            std::time::Duration::from_secs(10),
+            move || {
+                let outcome = call(&seam, operation, args);
+                (seam, outcome)
+            },
+        );
+        seam = back;
+        assert!(outcome.unwrap().is_some());
     }
     for (operation, args) in [
         (
