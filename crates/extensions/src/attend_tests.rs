@@ -188,7 +188,7 @@ impl Home {
         let cfg = config.clone();
         let time = clock.clone();
         let session = fakes::within(
-            "session.retain_lua_providers",
+            "SessionExtensions::load",
             fakes::MUST_SUCCEED_WITHIN,
             move || {
                 let mut session =
