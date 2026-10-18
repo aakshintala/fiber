@@ -3144,6 +3144,11 @@ fn a_lost_connection_during_the_read_ends_everything() {
     let mut open = tail_open(log, Full::Hung, History::Drop, Vec::new());
     assert!(!open.lp.app.connected());
     assert!(!open.lp.hub.has_stream());
+    assert_eq!(
+        open.lp.app.notice(),
+        Some("Connection lost."),
+        "a lost read ends through disconnected, never as a failed tail"
+    );
     assert_eq!(open.lp.app.take_raise(), None);
     assert!(
         !seen_commands(&open)
