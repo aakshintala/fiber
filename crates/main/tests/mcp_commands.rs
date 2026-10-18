@@ -25,12 +25,31 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{KillGroup, Setup, group_alive, hello, is_status, spawn_watched};
 
-#[derive(Debug)]
-struct Run {
-    code: Option<i32>,
+/// One finished run that keeps stdout's text: the command tests pin the
+/// text output, while the ask test reads parsed lines. Shared behaviour
+/// comes from the inner run; the [`Debug`] impl keeps failure output.
+struct StdoutRun {
+    run: support::Run,
     stdout: String,
-    stderr: String,
-    lines: Vec<Value>,
+}
+
+impl std::ops::Deref for StdoutRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl std::fmt::Debug for StdoutRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StdoutRun")
+            .field("code", &self.code)
+            .field("stdout", &self.stdout)
+            .field("stderr", &self.stderr)
+            .field("lines", &self.lines)
+            .finish()
+    }
 }
 
 impl Setup {
@@ -38,7 +57,13 @@ impl Setup {
     /// the test's [`Deadline`], and asserts nothing it started is left
     /// behind. `stdin_text` is written to its standard input, if any.
     #[track_caller]
-    fn run_as(&self, home: &Path, dir: &Path, args: &[&str], stdin_text: Option<&str>) -> Run {
+    fn run_as(
+        &self,
+        home: &Path,
+        dir: &Path,
+        args: &[&str],
+        stdin_text: Option<&str>,
+    ) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -84,21 +109,23 @@ impl Setup {
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
         let stdout = String::from_utf8(output.stdout).unwrap();
-        Run {
-            code: output.status.code(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-            lines: stdout
-                .lines()
-                .filter(|l| !is_status(l))
-                .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-                .collect(),
+        StdoutRun {
+            run: support::Run {
+                code: output.status.code(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+                lines: stdout
+                    .lines()
+                    .filter(|l| !is_status(l))
+                    .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+                    .collect(),
+            },
             stdout,
         }
     }
 
     /// Runs `fiber` with `args` in the workspace under this home.
     #[track_caller]
-    fn run(&self, args: &[&str], stdin_text: Option<&str>) -> Run {
+    fn run(&self, args: &[&str], stdin_text: Option<&str>) -> StdoutRun {
         let (home, workspace) = (self.home(), self.workspace());
         self.run_as(&home, &workspace, args, stdin_text)
     }
@@ -270,7 +297,7 @@ fn a_repo_add_is_approved_here_and_skipped_in_a_fresh_home() {
 }
 
 /// Whether the ask run skipped the repository server `name` with a notice.
-fn skipped(run: &Run, name: &str) -> bool {
+fn skipped(run: &StdoutRun, name: &str) -> bool {
     run.lines.iter().any(|line| {
         line["kind"] == "notice"
             && line["payload"]["code"] == "repository_code_skipped"
@@ -282,7 +309,7 @@ fn skipped(run: &Run, name: &str) -> bool {
 }
 
 /// Whether the ask run declares the tool `name`.
-fn declares(run: &Run, name: &str) -> bool {
+fn declares(run: &StdoutRun, name: &str) -> bool {
     run.lines
         .iter()
         .filter(|line| line["kind"] == "preamble_built")

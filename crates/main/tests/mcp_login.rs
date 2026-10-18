@@ -131,7 +131,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` to its exit under the deadline.
     #[track_caller]
-    fn run(&self, args: &[&str], empty_path: &Path) -> Run {
+    fn run(&self, args: &[&str], empty_path: &Path) -> StdoutRun {
         let mut command = self.fiber(args, empty_path);
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
@@ -153,44 +153,51 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::new(output)
+        StdoutRun::new(output)
     }
 }
 
-#[derive(Debug)]
-struct Run {
-    code: Option<i32>,
-    #[allow(dead_code, reason = "kept for failure output")]
+/// One finished run that keeps stdout's text: the login tests pin the text
+/// output, while the ask tests read parsed lines. Shared behaviour
+/// (`kinds`, `first`) comes from the inner run; the [`Debug`] impl keeps
+/// failure output.
+struct StdoutRun {
+    run: support::Run,
     stdout: String,
-    stderr: String,
-    lines: Vec<Value>,
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
+impl std::ops::Deref for StdoutRun {
+    type Target = support::Run;
 
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
+    fn deref(&self) -> &Self::Target {
+        &self.run
     }
+}
 
+impl std::fmt::Debug for StdoutRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StdoutRun")
+            .field("code", &self.code)
+            .field("stdout", &self.stdout)
+            .field("stderr", &self.stderr)
+            .field("lines", &self.lines)
+            .finish()
+    }
+}
+
+impl StdoutRun {
     fn new(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         Self {
-            code: output.status.code(),
-            lines: stdout
-                .lines()
-                .filter(|l| !is_status(l))
-                .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-                .collect(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
+            run: support::Run {
+                code: output.status.code(),
+                lines: stdout
+                    .lines()
+                    .filter(|l| !is_status(l))
+                    .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+                    .collect(),
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             stdout,
         }
     }

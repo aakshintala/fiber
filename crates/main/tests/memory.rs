@@ -92,7 +92,7 @@ impl Setup {
     /// group. A watchdog beside it kills that group if this process dies
     /// first.
     #[track_caller]
-    fn run(&self, args: &[&str]) -> Run {
+    fn run(&self, args: &[&str]) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -126,13 +126,13 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        StdoutRun::from(output)
     }
 
     /// Starts a server answering `responses`, installs the provider, and
     /// runs `fiber ask`.
     #[track_caller]
-    fn ask(&self, responses: Vec<Response>) -> (Run, ProviderServer) {
+    fn ask(&self, responses: Vec<Response>) -> (StdoutRun, ProviderServer) {
         let server = ProviderServer::start(responses).unwrap();
         self.provider(&server);
         let run = self.run(&["ask", "hi"]);
@@ -146,16 +146,23 @@ fn write_text(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
-/// One finished run: its exit code, stdout as text and parsed lines, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
+/// One finished run that keeps stdout's text: the extension-list test pins
+/// `list`'s text, while the ask tests read parsed lines. Shared behaviour
+/// (`kinds`, `first`) comes from the inner run.
+struct StdoutRun {
+    run: support::Run,
     stdout: String,
-    lines: Vec<Value>,
-    stderr: String,
 }
 
-impl From<Output> for Run {
+impl std::ops::Deref for StdoutRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<Output> for StdoutRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let lines = stdout
@@ -164,32 +171,18 @@ impl From<Output> for Run {
             .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             stdout,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
-    }
-}
-
 /// Whether `extensions_loaded` lists the memory extension.
-fn loads_memory(run: &Run) -> bool {
+fn loads_memory(run: &StdoutRun) -> bool {
     run.first("extensions_loaded")["payload"]["extensions"]
         .as_array()
         .unwrap()

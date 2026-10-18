@@ -29,14 +29,23 @@ use support::{Setup, function_call, hello_single_delta as hello, on_disk, output
 /// One finished `fiber ask`: its exit code, its stdout lines parsed (less
 /// `session_status`, which an observer thread writes), its raw stdout and
 /// its stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
+/// One finished run that keeps stdout's text: the redaction tests scan it
+/// for leaked secrets, while the ask tests read parsed lines. Shared
+/// behaviour (`kinds`, `all`) comes from the inner run.
+struct StdoutRun {
+    run: support::Run,
     stdout: String,
-    stderr: String,
 }
 
-impl From<Output> for Run {
+impl std::ops::Deref for StdoutRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<Output> for StdoutRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let lines = stdout
@@ -45,29 +54,17 @@ impl From<Output> for Run {
             .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
-            lines,
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             stdout,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn all(&self, kind: &str) -> Vec<&Value> {
-        self.lines
-            .iter()
-            .filter(|line| line["kind"] == kind)
-            .collect()
-    }
-
+impl StdoutRun {
     fn payload(&self, kind: &str) -> &Value {
         &self
             .lines
@@ -129,7 +126,7 @@ impl Run {
 /// started is left in the group. A watchdog kills the group if this
 /// process dies first.
 #[track_caller]
-fn ask(setup: &Setup, prompt: &str) -> Run {
+fn ask(setup: &Setup, prompt: &str) -> StdoutRun {
     let mut command = setup.fiber(&["ask", prompt]);
     command.current_dir(setup.workspace());
     let child = command.spawn().unwrap();
@@ -146,7 +143,7 @@ fn ask(setup: &Setup, prompt: &str) -> Run {
         "`fiber` left a process in its group behind"
     );
     watchdog.stand_down(setup.deadline.cleanup());
-    let run = Run::from(output);
+    let run = StdoutRun::from(output);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     run
 }
@@ -340,7 +337,7 @@ fn each_call_is_judged_on_the_effects_its_arguments_declare() {
 }
 
 /// The `action_id` of the run's one `permission_resolved`.
-fn resolved_action(run: &Run) -> Value {
+fn resolved_action(run: &StdoutRun) -> Value {
     run.all("permission_resolved")[0]["action_id"].clone()
 }
 
