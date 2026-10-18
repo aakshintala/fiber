@@ -23,6 +23,15 @@ impl Sessions for FakeSessions {
             .push(cancel.is_cancelled());
         self.result.clone()
     }
+    fn message(
+        &self,
+        _to: &SessionId,
+        _from: &SessionId,
+        _text: &str,
+        _cancel: &dyn Cancel,
+    ) -> Result<(), contract::sessions::MessageError> {
+        panic!("session_list tests never message");
+    }
 }
 fn fake(result: Result<Vec<Running>, ListError>) -> Arc<FakeSessions> {
     Arc::new(FakeSessions {

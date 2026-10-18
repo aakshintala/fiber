@@ -31,6 +31,7 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
     "name_session",
     "read",
     "session_list",
+    "session_message",
     "session_search",
     "shell",
     "skill",
