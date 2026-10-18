@@ -3001,6 +3001,13 @@ fn tail_open(
     // Its commands reply can be stashed while the read awaits history.
     let summary = wait.recv_or_fail(&rx, "the summary subscribe answer");
     assert_eq!(lp.step(summary, &rx), None);
+    let commands = lp
+        .hub
+        .pop_stashed()
+        .unwrap_or_else(|| panic!("the stashed commands reply"));
+    assert!(matches!(&commands, Input::Hub(Line::Session(envelope))
+        if envelope.payload.get("result").is_some_and(|result| result.get("commands").is_some())));
+    assert_eq!(lp.step(commands, &rx), None);
     if want_full && !want_drop {
         wait.recv_or_fail(&full_seen, "the hub to read the raise");
     }
