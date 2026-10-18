@@ -2,9 +2,7 @@
 //! file as it arrives, holding only the first and the last end in memory
 //! (`docs/tools.md`, "Result and output").
 
-use std::collections::hash_map::RandomState;
 use std::fs::{self, File, OpenOptions};
-use std::hash::BuildHasher;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -322,7 +320,7 @@ fn still_there(path: &Path) -> String {
 /// A random `s_<16 hex digits>.txt` name, as `web_fetch` names its
 /// artifacts.
 fn random_name() -> String {
-    format!("s_{:016x}.txt", RandomState::new().hash_one(()))
+    format!("{}.txt", support::mint("s_"))
 }
 
 /// The longest raw prefix whose lossy decoding is at most `limit` bytes,

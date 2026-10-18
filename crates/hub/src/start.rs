@@ -7,8 +7,6 @@
 //! a connection of its own before answering, and sends the prompt on that
 //! connection after answering (`crate::first`).
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -369,11 +367,7 @@ fn write_line(stream: &UnixStream, line: &Value) -> std::io::Result<()> {
     stream.flush()
 }
 
-/// A new id from random bytes, as `doors::mint` makes one. `hub` keeps its
-/// own copy because it may not depend on `doors`.
-pub(crate) fn mint(prefix: &str) -> String {
-    format!("{prefix}{:016x}", RandomState::new().hash_one(()))
-}
+pub(crate) use support::mint;
 
 pub(crate) fn code_name(code: &ErrorCode) -> String {
     serde_json::to_value(code)

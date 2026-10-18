@@ -3,8 +3,6 @@
 //! `artifacts/` (`docs/model-routing.md`, "Image limits"). The session runs no
 //! image code (`docs/invocation.md`, "Processes").
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::Read;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -316,7 +314,7 @@ pub(crate) fn read(
 /// A fresh stem per call: an older log line's path never points at new
 /// bytes. `prefix` is `i` for an image and `p` for a PDF.
 pub(crate) fn fresh_stem(prefix: &str) -> String {
-    format!("{prefix}_{:016x}", RandomState::new().hash_one(()))
+    support::mint(&format!("{prefix}_"))
 }
 
 /// Whether `file` is the name asked for: `<stem>.<ext>`, where `<ext>` is
