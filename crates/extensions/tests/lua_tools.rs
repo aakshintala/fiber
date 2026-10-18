@@ -433,7 +433,7 @@ fn each_return_maps_to_its_result() {
         ("number", "number` of `fiber.test/a` returned a number"),
         (
             "colour",
-            "colour` of `fiber.test/a` returned `colour`, which is not `content`, `details`, `error` or `control`",
+            "colour` of `fiber.test/a` returned `colour`, which is not `content`, `details`, `error`, `control` or `hosts_surfaced`",
         ),
         (
             "image",
