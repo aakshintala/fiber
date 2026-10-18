@@ -1117,14 +1117,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     let fifo = setup.workspace().join("sync-hold.fifo");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success(),
-        "make the hold fifo"
-    );
+    fakes::fifo(&fifo);
     setup.lua(
         "worker",
         &SYNC_HELD.replace("{fifo}", fifo.to_str().unwrap()),
