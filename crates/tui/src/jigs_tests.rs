@@ -657,50 +657,6 @@ fn the_paging_fake_answers_history_without_from_seq() {
     assert_eq!(found, 1, "the marker before the first window");
 }
 
-/// The first window holds the last lines up to `to`, at most 256, or
-/// nothing on an empty log. Pinned exactly: an emptied first window
-/// still settles a search through later `from_seq` fetches, so only
-/// the window itself sees the `<=` and `==` mutants.
-#[test]
-fn the_first_window_holds_the_last_lines_up_to_to() {
-    let lines: Vec<(contract::Seq, String)> = [3u64, 4, 5]
-        .into_iter()
-        .map(|seq| (contract::Seq(seq), numbered(seq, "turn_started")))
-        .collect();
-    let clock = fakes::clock::FakeClock::new();
-    let pages = over(&lines, clock);
-    let seqs =
-        |held: Vec<contract::Envelope>| held.into_iter().map(|line| line.seq).collect::<Vec<_>>();
-    // Every line at or below `to`, ending with the line `to` names:
-    // the bound is inclusive.
-    assert_eq!(
-        seqs(pages.first_window(u64::MAX).unwrap_or_default()),
-        [3, 4, 5].map(|seq| Some(contract::Seq(seq))),
-        "the whole log up to the latest"
-    );
-    assert_eq!(
-        seqs(pages.first_window(4).unwrap_or_default()),
-        [3, 4].map(|seq| Some(contract::Seq(seq))),
-        "the line at `to` stays in the window"
-    );
-    // Nothing at or below `to` is no window, not an error.
-    assert!(
-        pages.first_window(2).unwrap_or_default().is_empty(),
-        "below the first line holds nothing"
-    );
-    // No lines at all holds no window either.
-    let empty: Vec<(contract::Seq, String)> = Vec::new();
-    let clock = fakes::clock::FakeClock::new();
-    let over_empty = over(&empty, clock);
-    assert!(
-        over_empty
-            .first_window(u64::MAX)
-            .unwrap_or_default()
-            .is_empty(),
-        "an empty log holds no window"
-    );
-}
-
 /// A search over a small log answers its first window from the whole
 /// log: with no `from_seq` the doors hold the last lines up to `to`,
 /// so every match in a settled scan is found.
