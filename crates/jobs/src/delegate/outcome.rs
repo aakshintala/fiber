@@ -6,9 +6,11 @@
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
+use contract::JobId;
 use contract::events::{DelegateFinished, FiberExited, JobCompleted, Outcome};
 use contract::shapes::{Failure, Process, Usage};
-use contract::{ErrorCode, JobId};
+
+use crate::error::JobsError;
 
 /// Why the runner itself ended the delegate. Set once, under the runner's
 /// lock, before the runner's first signal: a delegate the runner ended
@@ -67,18 +69,8 @@ pub(crate) fn outcome(
             notice: None,
             changed_by: None,
         },
-        Some(Termination::Timeout) => failed(
-            job_id,
-            ErrorCode::Timeout,
-            "The delegate passed its `timeout_ms` and was stopped.",
-            process,
-        ),
-        Some(Termination::OutputCap) => failed(
-            job_id,
-            ErrorCode::OutputCap,
-            "The delegate's log passed the output cap and the job was stopped.",
-            process,
-        ),
+        Some(Termination::Timeout) => ended(job_id, &JobsError::DelegateTimedOut, process),
+        Some(Termination::OutputCap) => ended(job_id, &JobsError::DelegateOutputCap, process),
         None => match exited.and_then(|exited| exited.error.clone()) {
             Some(error) => JobCompleted {
                 job_id: job_id.clone(),
@@ -109,22 +101,18 @@ fn without_error(
     // for example by an outside SIGTERM.
     if let Some(number) = status.signal() {
         let name = support::group::signal_name(number);
-        return failed(
+        return ended(
             job_id,
-            ErrorCode::Signal,
-            &format!("Killed by {name}."),
+            &JobsError::DelegateKilled {
+                signal: name.clone(),
+            },
             process,
         );
     }
     // No `fiber_exited` was seen otherwise, exit 0 included: there is no
     // run to blame the status on.
     if exited.is_none() {
-        return failed(
-            job_id,
-            ErrorCode::Indeterminate,
-            "The delegate ended without a result.",
-            process,
-        );
+        return ended(job_id, &JobsError::DelegateNoResult, process);
     }
     match status.code() {
         Some(0) => JobCompleted {
@@ -137,25 +125,21 @@ fn without_error(
             notice: None,
             changed_by: None,
         },
-        _ => failed(
+        _ => ended(
             job_id,
-            ErrorCode::NonzeroExit,
-            &format!("Exit code {}.", status.code().unwrap_or(0)),
+            &JobsError::DelegateExitCode {
+                code: status.code().unwrap_or(0),
+            },
             process,
         ),
     }
 }
 
-fn failed(job_id: &JobId, code: ErrorCode, message: &str, process: Process) -> JobCompleted {
+fn ended(job_id: &JobId, error: &JobsError, process: Process) -> JobCompleted {
     JobCompleted {
         job_id: job_id.clone(),
         status: Outcome::Failed,
-        error: Some(Failure {
-            code,
-            message: message.to_owned(),
-            retry_after_ms: None,
-            provider: None,
-        }),
+        error: Some(Failure::from(error)),
         process: Some(process),
         output_tail: None,
 

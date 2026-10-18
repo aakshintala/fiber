@@ -3,6 +3,7 @@
 //! (`docs/architecture.md`).
 
 mod delegate;
+mod error;
 mod registry;
 #[cfg(test)]
 mod support;
@@ -14,5 +15,6 @@ pub use delegate::{
     DelegateMessage, DelegateModels, DelegateSpawn, LastSeq, Launch, Launched, Resolve, Steer,
     Steered, Watch, Watched,
 };
+pub use error::JobsError;
 pub use registry::Registry;
 pub use tool::JobsTool;
