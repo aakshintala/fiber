@@ -93,6 +93,9 @@ fn failed(id: &str) -> JobCompleted {
             timed_out: false,
         }),
         output_tail: Some("1 failing\n".into()),
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -141,6 +144,8 @@ fn delegate_finished(id: &str, text: String) -> DelegateFinished {
             subscription_cost: 0.0,
         },
         worktree: None,
+
+        changed_by: None,
     }
 }
 
@@ -1014,6 +1019,9 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
             timed_out: false,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     };
     assert_eq!(
         notice_text(&done),
@@ -2589,6 +2597,8 @@ fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::Job
         job_id: JobId(id.into()),
         lines: lines.into(),
         suppressed,
+
+        changed_by: None,
     }
 }
 

@@ -437,6 +437,9 @@ fn orphaned(id: &str) -> Event {
         }),
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     })
 }
 
@@ -546,6 +549,9 @@ fn completed(id: &str) -> Event {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     })
 }
 
@@ -566,6 +572,8 @@ fn finished(id: &str, text: &str, questions: Option<Vec<contract::shapes::Questi
             subscription_cost: 0.0,
         },
         worktree: None,
+
+        changed_by: None,
     })
 }
 
@@ -1223,6 +1231,9 @@ mod window {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         })
     }
 

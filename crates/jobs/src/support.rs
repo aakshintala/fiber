@@ -57,6 +57,9 @@ pub(crate) fn ended_ok(id: &str) -> contract::events::JobCompleted {
             timed_out: false,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -69,6 +72,8 @@ pub(crate) fn delegate_finished(id: &str, text: &str) -> contract::events::Deleg
         questions: None,
         usage: usage(),
         worktree: None,
+
+        changed_by: None,
     }
 }
 

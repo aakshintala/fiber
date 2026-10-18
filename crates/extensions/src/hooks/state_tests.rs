@@ -524,6 +524,8 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
                 details: None,
                 process: None,
                 spilled: None,
+
+                delivery: None,
             });
         }
         "before_tool" => {

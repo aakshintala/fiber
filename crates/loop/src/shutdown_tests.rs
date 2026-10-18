@@ -81,6 +81,8 @@ impl Listed {
                     subscription_cost: 0.0,
                 },
                 worktree: None,
+
+                changed_by: None,
             }),
         );
     }
@@ -96,6 +98,9 @@ impl Listed {
                     error: None,
                     process: None,
                     output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate,
@@ -154,6 +159,9 @@ fn notice(id: &str) -> Delivery {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
@@ -377,6 +385,9 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         Some(DelegateFinished {
             job_id: JobId("j_1".into()),
@@ -394,6 +405,8 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     ));
     world.cancel.shutdown(143);
@@ -518,6 +531,8 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
             job_id: JobId("j_1".into()),
             lines: "tick\n".into(),
             suppressed: None,
+
+            changed_by: None,
         }))
         .unwrap();
     jobs.end("j_1", &inbox);
@@ -963,6 +978,9 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -987,6 +1005,8 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     };
     crate::jobs::Queued::Notice(notice)
@@ -1070,6 +1090,9 @@ fn queued_ahead_notice(
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -1094,6 +1117,8 @@ fn queued_ahead_notice(
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     };
     crate::jobs::Queued::Notice(notice)
@@ -1169,6 +1194,9 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: Claim(Box::new({
                 let asked = Arc::clone(&asked);
@@ -1193,6 +1221,8 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                     subscription_cost: 0.0,
                 },
                 worktree: None,
+
+                changed_by: None,
             }),
         },
     );

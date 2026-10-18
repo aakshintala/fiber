@@ -292,6 +292,9 @@ impl FakeJobs {
                     error,
                     process: None,
                     output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate: None,
@@ -590,6 +593,9 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: Claim(Box::new(|| None)),
             delegate: None,
@@ -642,6 +648,8 @@ fn a_monitor_batch_during_the_stop_wait_is_dropped() {
             job_id: JobId("j_1".into()),
             lines: "still running\n".into(),
             suppressed: None,
+
+            changed_by: None,
         }))
         .unwrap();
     jobs.end(&inbox, "j_1", Outcome::Cancelled, None);

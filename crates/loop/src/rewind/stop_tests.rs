@@ -54,6 +54,9 @@ fn completed(id: &str, status: Outcome, error: Option<Failure>) -> Event {
         error,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     })
 }
 
@@ -108,6 +111,8 @@ fn delegate_done(id: &str) -> Event {
             subscription_cost: 0.0,
         },
         worktree: None,
+
+        changed_by: None,
     })
 }
 

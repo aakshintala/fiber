@@ -82,6 +82,8 @@ fn content(session: &Arc<SessionExtensions>) -> Option<String> {
             details: None,
             process: None,
             spilled: None,
+
+            delivery: None,
         });
         let _sent = tx.send(answer);
     });

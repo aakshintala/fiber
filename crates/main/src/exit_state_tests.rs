@@ -135,6 +135,8 @@ fn exit_state_never_writes_a_dropped_changes_lines() {
                 details: None,
                 process: None,
                 spilled: None,
+
+                delivery: None,
             })
         },
     );

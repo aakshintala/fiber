@@ -482,6 +482,9 @@ impl Orphans {
                 }),
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             })
             .collect()
     }

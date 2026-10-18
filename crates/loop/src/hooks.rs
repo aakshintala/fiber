@@ -145,6 +145,8 @@ impl Loop {
                 details: ran.details.as_ref(),
                 process: ran.process,
                 spilled: None,
+
+                delivery: None,
             })
         };
         let state = hooks.take_change_state();
@@ -336,6 +338,8 @@ impl Loop {
                             path: path.clone(),
                             size,
                         }),
+
+                        delivery: None,
                     })
                 };
                 state = hooks.take_change_state();
@@ -490,6 +494,8 @@ impl Loop {
                         details: details.as_ref(),
                         process,
                         spilled: None,
+
+                        delivery: None,
                     })
                 };
                 state = hooks.take_change_state();

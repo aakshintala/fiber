@@ -171,6 +171,8 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
             details: None,
             process: None,
             spilled: None,
+
+            delivery: None,
         })
     })
 }
@@ -621,6 +623,8 @@ fn the_hook_is_shown_the_call_and_its_output() {
             details: Some(&details),
             process: Some(&process),
             spilled: None,
+
+            delivery: None,
         })
     });
     assert_eq!(
@@ -1756,6 +1760,8 @@ fn a_hook_given_a_spilled_call_sees_its_path_and_size() {
             details: None,
             process: None,
             spilled: Some(&file),
+
+            delivery: None,
         })
     });
     assert_eq!(

@@ -5,7 +5,7 @@ use crate::hook::{Hooks, StateLine};
 
 use crate::SessionId;
 use crate::clock::Wake;
-use crate::hook::{BeforeModelCall, SessionStart, StartReason, TurnEnd, TurnStart};
+use crate::hook::{BeforeModelCall, JobDelivery, SessionStart, StartReason, TurnEnd, TurnStart};
 use crate::shapes::{Tokens, Usage};
 use crate::tool::Cancel;
 
@@ -203,4 +203,17 @@ fn turn_end_debug_names_the_type() {
     let shown = format!("{end:?}");
     assert!(shown.contains("TurnEnd"), "{shown}");
     assert!(shown.contains("Done."), "{shown}");
+}
+
+#[test]
+fn job_delivery_names_each_wire_word() {
+    let cases = [
+        (JobDelivery::Completion, "completion"),
+        (JobDelivery::Monitor, "monitor"),
+        (JobDelivery::Delegate, "delegate"),
+        (JobDelivery::OutputFile, "output_file"),
+    ];
+    for (delivery, word) in cases {
+        assert_eq!(delivery.as_str(), word);
+    }
 }

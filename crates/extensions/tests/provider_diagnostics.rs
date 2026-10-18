@@ -566,6 +566,8 @@ fn tool_hooks_execute_without_timing() {
                 details: None,
                 process: None,
                 spilled: None,
+
+                delivery: None,
             })
         }
     });

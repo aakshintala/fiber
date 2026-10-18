@@ -22,7 +22,8 @@ use crate::tool::{Cancel, SpillFile};
 /// written as an artifact or logged.
 #[derive(Debug, Clone, Copy)]
 pub struct AfterToolCall<'a> {
-    /// The tool's name, as the model called it.
+    /// The tool's name, as the model called it; for a delivery, the tool
+    /// that started the job, `""` when none did.
     pub tool: &'a str,
     /// The arguments it ran with.
     pub arguments: &'a Map<String, Value>,
@@ -39,6 +40,37 @@ pub struct AfterToolCall<'a> {
     /// (`docs/tools.md`, "Result and output"): the hook rewrites it
     /// through `host.fs` or returns artifact text that replaces it.
     pub spilled: Option<&'a SpillFile>,
+    /// Which job delivery the hook is seeing, when this is one:
+    /// `completion`, `monitor` or `delegate` for a delivery to the model,
+    /// `output_file` for a finished job's whole output file. `None` for an
+    /// ordinary call.
+    pub delivery: Option<JobDelivery>,
+}
+
+/// Which job delivery an `after_tool` hook is seeing
+/// (`docs/extensions.md`, "The hook points").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobDelivery {
+    /// A job's completion notice, before it joins the conversation.
+    Completion,
+    /// One batch of a monitor's lines.
+    Monitor,
+    /// A delegate's final message.
+    Delegate,
+    /// A finished job's whole output file.
+    OutputFile,
+}
+
+impl JobDelivery {
+    /// The `delivery` wire word the hook is shown.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobDelivery::Completion => "completion",
+            JobDelivery::Monitor => "monitor",
+            JobDelivery::Delegate => "delegate",
+            JobDelivery::OutputFile => "output_file",
+        }
+    }
 }
 
 /// What the chain of `after_tool` hooks decided.
