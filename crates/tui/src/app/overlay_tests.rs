@@ -539,6 +539,96 @@ fn a_held_landing_keeps_the_second_copy_by_seq() {
     assert!(first.contains("same reply"), "{shown}");
 }
 
+/// A held landing with a resize deferred while frozen keeps the top on
+/// the row with the same `seq`: the two long replies above the top on
+/// its page wrap to more rows at the new width, so the top's old offset
+/// in the page points into them. Anchoring by the page's first `seq`
+/// plus that offset lands on a long reply; anchoring by the top row's
+/// own `seq` lands on the same reply again.
+#[test]
+fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
+    // Twenty-three turns, six lines each: three pages, the second from
+    // turn 11. Turns 11 and 12 reply at length; the top sits on turn
+    // 13's reply, with turns below so the jump never clamps.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    assert_eq!(app.attached_screen().top(), Some(top));
+    let (page, _) = app
+        .attached_screen()
+        .pages()
+        .index()
+        .locate(top)
+        .unwrap_or_else(|| panic!("a page holds the top"));
+    assert_eq!(
+        app.attached_screen()
+            .pages()
+            .index()
+            .page_of(contract::Seq(66)),
+        Some(page),
+        "the top shares its page with the long replies"
+    );
+    // The open holds the preview: the resize waits for the unfreeze.
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    assert_eq!(
+        app.attached_screen().pages().wrap_width(),
+        79,
+        "the resize is deferred"
+    );
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    app.land(fold, true);
+    assert!(!app.attached_screen().frozen());
+    assert!(
+        app.attached_screen().pages().wrap_width() < 79,
+        "the unfreeze applies the resize"
+    );
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let conversation = app.conversation_area();
+    let first: String = (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect();
+    assert!(first.contains("reply 13"), "{shown}");
+}
+
 #[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);

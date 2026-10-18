@@ -741,10 +741,11 @@ impl App {
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
     /// opens carry, focus remaps to the same call or clears, the
     /// selection clears, the kept busy applies, and the overlay ends. A
-    /// held landing keeps the preview's place: the page holding the top
-    /// row is read by its first `seq` before the swap, and after the
-    /// unfreeze the top is that page's start plus the held offset, or
-    /// the end when the fold lacks that `seq`.
+    /// held landing keeps the preview's place: the top row's own `seq`
+    /// and its offset among that line's rows are read before the swap,
+    /// and after the unfreeze applies any deferred width the top is the
+    /// fold's row with that `seq`, at that offset kept within its rows,
+    /// or the end when the fold lacks the `seq`.
     fn land(&mut self, mut fold: Pages, held: bool) {
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
@@ -760,7 +761,7 @@ impl App {
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
         if let Some((seq, offset)) = anchor {
-            match self.find_anchor(seq, offset) {
+            match self.attached_screen().pages().seq_row(seq, offset) {
                 Some(row) => self.jump(row),
                 None => self.attached_screen_mut().follow(),
             }
@@ -770,28 +771,12 @@ impl App {
         }
     }
 
-    /// The page holding the preview's top row, by its first `seq` and
-    /// the row's offset in the page: the anchor a held landing keeps.
-    /// None while following or when the page holds no line.
+    /// The `seq` of the preview's top row and the row's offset among
+    /// that line's rows: the anchor a held landing keeps. None while
+    /// following or when the page holds no line.
     fn top_anchor(&self) -> Option<(Seq, usize)> {
         let top = self.attached_screen().top()?;
-        let pages = self.attached_screen().pages();
-        let (at, offset) = pages.index().locate(top)?;
-        let page = pages.index().pages().get(at)?;
-        if page.lines == 0 {
-            return None;
-        }
-        Some((page.first_seq, offset))
-    }
-
-    /// The held landing's top: the page holding `seq`, at the held
-    /// offset within it, keeping the piece within the line when
-    /// wrapping allows. None when the fold lacks `seq`.
-    fn find_anchor(&self, seq: Seq, offset: usize) -> Option<usize> {
-        let pages = self.attached_screen().pages();
-        let at = pages.index().page_of(seq)?;
-        let rows = pages.index().pages().get(at)?.rows.max(1);
-        Some(pages.index().start(at) + offset.min(rows.saturating_sub(1)))
+        self.attached_screen().pages().row_seq(top)
     }
 
     /// Remaps focus across the swap: a line target follows its call by

@@ -281,6 +281,12 @@ pub(crate) struct Pages {
     table: Vec<Option<bool>>,
     /// Focus stops by page, with row offsets within each page.
     focus: Vec<FocusItems>,
+    /// Where each page's pieces start, by page: each row offset at
+    /// which a piece drawn from another line's `seq` begins, with that
+    /// `seq`. A row with no source, an edge or a gap, belongs to the
+    /// piece above, and the first piece starts at the page's first row.
+    /// Counting sets it with the rows, so it keeps their width.
+    row_seqs: Vec<Vec<(usize, Seq)>>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
@@ -327,6 +333,7 @@ impl Pages {
             shell_index: HashMap::new(),
             table: vec![None],
             focus: vec![Vec::new()],
+            row_seqs: Vec::new(),
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
@@ -1390,6 +1397,49 @@ impl Pages {
         out.into_parts().0
     }
 
+    /// The `seq` of the line whose piece draws conversation row `row`,
+    /// and the row's offset in that piece: the piece starting at or
+    /// above it on its page, else the page's first `seq` at offset 0.
+    /// `None` past the last row or on a page with no line.
+    pub(crate) fn row_seq(&self, row: usize) -> Option<(Seq, usize)> {
+        let (at, offset) = self.index.locate(row)?;
+        let page = self.index.pages().get(at).filter(|page| page.lines > 0)?;
+        let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
+        let before = runs.partition_point(|(start, _)| *start <= offset);
+        Some(
+            before
+                .checked_sub(1)
+                .and_then(|run| runs.get(run))
+                .map_or((page.first_seq, 0), |(start, seq)| {
+                    (*seq, offset.saturating_sub(*start))
+                }),
+        )
+    }
+
+    /// The conversation row `offset` rows into the piece drawn from
+    /// `seq`'s line, kept within the piece; else the first row of the
+    /// first piece after it on its page, else the page's first row.
+    /// `None` when no page holds `seq`.
+    pub(crate) fn seq_row(&self, seq: Seq, offset: usize) -> Option<usize> {
+        let at = self.index.page_of(seq)?;
+        let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
+        let rows = self.index.pages().get(at).map_or(0, |page| page.rows);
+        let exact = runs.iter().position(|(_, from)| *from == seq);
+        let within = match exact {
+            Some(run) => runs.get(run).map_or(0, |(start, _)| {
+                let end = runs
+                    .get(run.saturating_add(1))
+                    .map_or(rows, |(end, _)| *end);
+                start.saturating_add(offset.min(end.saturating_sub(start.saturating_add(1))))
+            }),
+            None => runs
+                .iter()
+                .find(|(_, from)| *from > seq)
+                .map_or(0, |(start, _)| *start),
+        };
+        Some(self.index.start(at).saturating_add(within))
+    }
+
     /// The page index.
     pub(crate) fn index(&self) -> &Index {
         &self.index
@@ -1454,6 +1504,11 @@ impl Pages {
 
     /// A page's lines, their turn ranges, and stable focus stops.
     fn draw_data(&self, page: usize, part: &Part, mode: Draw) -> DrawData {
+        self.draw_sourced(page, part, mode).0
+    }
+
+    /// [`Pages::draw_data`], and each line's source `seq`.
+    fn draw_sourced(&self, page: usize, part: &Part, mode: Draw) -> (DrawData, Vec<Option<Seq>>) {
         let mut out = match mode {
             Draw::Shown => Rows::default(),
             Draw::AllOpen => Rows::all_open(),
@@ -1539,8 +1594,8 @@ impl Pages {
                 TargetId::Line(target),
             ))
         }));
-        let (rows, texts) = out.into_parts();
-        (rows, texts, focus, turns)
+        let (rows, texts, sources) = out.into_sourced_parts();
+        ((rows, texts, focus, turns), sources)
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
@@ -1556,12 +1611,20 @@ impl Pages {
         // so no session-size-dependent walk hides here.
         let (page_table, sources) = classify(part);
         crate::work::add(|work| work.search_order_pages += sources);
-        let (lines, _, focus, _) = self.draw_data(at, part, Draw::Shown);
+        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Shown);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();
         let mut rows = 0usize;
-        for (line, _) in &lines {
+        let mut runs: Vec<(usize, Seq)> = Vec::new();
+        for ((line, _), source) in lines.iter().zip(sources) {
+            if let Some(seq) = source
+                && runs.last().is_none_or(|(_, last)| *last != seq)
+            {
+                // Rows above the page's first piece, edges and gaps,
+                // belong to it.
+                runs.push((if runs.is_empty() { 0 } else { rows }, seq));
+            }
             let count = if !open || line.width() <= usize::from(width) {
                 crate::view::rows(line.clone(), width)
             } else {
@@ -1590,6 +1653,12 @@ impl Pages {
             .resize(self.table.len().max(at.saturating_add(1)), None);
         if let Some(slot) = self.table.get_mut(at) {
             *slot = Some(page_table);
+        }
+        if at >= self.row_seqs.len() {
+            self.row_seqs.resize_with(at.saturating_add(1), Vec::new);
+        }
+        if let Some(slot) = self.row_seqs.get_mut(at) {
+            *slot = runs;
         }
         if at >= self.focus.len() {
             self.focus.resize_with(at, Vec::new);
@@ -1663,6 +1732,9 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
     let kind = envelope.kind.as_str();
     let was_open = part.turns.last().is_some_and(Turn::is_open);
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
+    if let Some(turn) = part.turns.last_mut() {
+        turn.note_seq(envelope.seq);
+    }
     match kind {
         "turn_started" if changed => Folded::Started,
         // Only a resume that cuts an open turn changes the card.

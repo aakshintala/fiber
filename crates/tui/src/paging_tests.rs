@@ -3462,3 +3462,49 @@ fn a_ctrl_o_in_the_preview_carries_to_the_fold() {
     assert!(!ledgers.is_empty());
     assert!(ledgers.iter().all(|open| *open));
 }
+
+/// A row's `seq` and its offset among that line's rows find the row
+/// again, on the live fold and on every page folded again from its
+/// lines; an offset past the piece stays on the piece's last row, and
+/// a `seq` no page holds, or a row past the end, finds none.
+#[test]
+fn a_rows_seq_and_offset_find_the_row_again() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(60);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(pages.index().pages().len() > 2, "too few pages");
+    let total = pages.index().total();
+    let check = |pages: &Pages| {
+        for row in 0..total {
+            let (seq, offset) = pages
+                .row_seq(row)
+                .unwrap_or_else(|| panic!("row {row} has a seq"));
+            assert_eq!(pages.seq_row(seq, offset), Some(row), "row {row}");
+            let last = pages
+                .seq_row(seq, usize::MAX)
+                .unwrap_or_else(|| panic!("row {row}'s piece has a last row"));
+            assert!(last >= row, "row {row}");
+            assert_eq!(
+                pages.row_seq(last).map(|(seq, _)| seq),
+                Some(seq),
+                "row {row}"
+            );
+            assert_ne!(
+                pages.row_seq(last.saturating_add(1)).map(|(at, _)| at),
+                Some(seq),
+                "row {row}'s piece ends at {last}"
+            );
+        }
+    };
+    check(&pages);
+    drop_all(&mut pages);
+    joined(&mut pages, &lines);
+    assert_eq!(pages.index().total(), total);
+    check(&pages);
+    let end = lines.iter().filter_map(|line| line.seq).max();
+    let past = end.map(|seq| Seq(seq.0.saturating_add(1)));
+    assert_eq!(past.and_then(|seq| pages.seq_row(seq, 0)), None);
+    assert_eq!(pages.row_seq(total), None);
+}

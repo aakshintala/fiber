@@ -5,6 +5,7 @@
 
 use std::ops::{Deref, Range};
 
+use contract::Seq;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
@@ -70,6 +71,13 @@ impl RowText {
 pub(crate) struct Rows {
     rows: Vec<Row>,
     texts: Vec<RowText>,
+    /// One per row: the `seq` of the durable line whose piece drew it,
+    /// `None` for decoration and rows with no source. A wrapped row's
+    /// pieces keep its source; edges and gaps take none, so they belong
+    /// to the piece above.
+    sources: Vec<Option<Seq>>,
+    /// The source rows pushed from now on take.
+    source: Option<Seq>,
     /// The collapsible sections the next row lands inside, outermost
     /// first.
     scopes: Vec<Target>,
@@ -112,6 +120,19 @@ impl Rows {
         text.scopes = self.scopes.clone();
         self.rows.push(row);
         self.texts.push(text);
+        self.sources.push(self.source);
+    }
+
+    /// Sets the source the rows pushed from now on take: the `seq` of
+    /// the line that began the piece they draw, or none.
+    pub(crate) fn set_source(&mut self, source: Option<Seq>) {
+        self.source = source;
+    }
+
+    /// The rows, their texts and their sources, one each.
+    pub(crate) fn into_sourced_parts(mut self) -> (Vec<Row>, Vec<RowText>, Vec<Option<Seq>>) {
+        self.sources.resize(self.rows.len(), None);
+        (self.rows, self.texts, self.sources)
     }
 
     /// The rows and their texts, one each.
@@ -225,6 +246,10 @@ impl Rows {
             let grown = grown_rows.len();
             self.rows.splice(at..end, grown_rows);
             self.texts.splice(at..end, grown_texts);
+            if let Some(source) = self.sources.get(at).copied() {
+                self.sources
+                    .splice(at..end, std::iter::repeat_n(source, grown));
+            }
             at = at.saturating_add(grown);
         }
     }
@@ -234,6 +259,9 @@ impl Rows {
     /// separated by a blank row).
     pub(crate) fn gap(&mut self, at: usize) {
         let at = at.min(self.rows.len());
+        if at <= self.sources.len() {
+            self.sources.insert(at, None);
+        }
         self.rows.insert(at, (Line::default(), None));
         self.texts.insert(
             at,
@@ -261,6 +289,7 @@ impl Rows {
         let width = usize::from(width);
         if edges.bottom {
             self.rows.push((edge_row(width, tint, false), None));
+            self.sources.push(None);
             self.texts.push(RowText {
                 decoration: true,
                 scopes: self.scopes.clone(),
@@ -268,6 +297,9 @@ impl Rows {
             });
         }
         if edges.top {
+            if from <= self.sources.len() {
+                self.sources.insert(from, None);
+            }
             self.rows.insert(from, (edge_row(width, tint, true), None));
             self.texts.insert(
                 from,
