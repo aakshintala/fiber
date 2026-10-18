@@ -158,13 +158,18 @@ impl Store {
     /// An extension's and a hook's approvals are per project; a server's are
     /// per machine.
     fn approvals(&self, kind: OfferedKind) -> PathBuf {
+        Self::approvals_in(&self.home, &self.project, kind)
+    }
+
+    /// The approvals directory for `home` and `project`: what listing
+    /// reads without building a store.
+    fn approvals_in(home: &Path, project: &ProjectKey, kind: OfferedKind) -> PathBuf {
         match kind {
-            OfferedKind::Extension | OfferedKind::Hook => self
-                .home
+            OfferedKind::Extension | OfferedKind::Hook => home
                 .join("projects")
-                .join(self.project.as_str())
+                .join(project.as_str())
                 .join("approvals"),
-            OfferedKind::McpServer => self.home.join("approvals"),
+            OfferedKind::McpServer => home.join("approvals"),
         }
     }
 
@@ -175,10 +180,21 @@ impl Store {
 
     /// The decision recorded for this content, if any.
     pub fn decision(&self, kind: OfferedKind, hash: &str) -> Option<Decision> {
+        Self::decision_in(&self.home, &self.project, kind, hash)
+    }
+
+    /// The decision recorded for `home` and `project` about this content,
+    /// if any: what listing reads without building a store.
+    pub(crate) fn decision_in(
+        home: &Path,
+        project: &ProjectKey,
+        kind: OfferedKind,
+        hash: &str,
+    ) -> Option<Decision> {
         if !is_hash(hash) {
             return None;
         }
-        let text = fs::read_to_string(self.approvals(kind).join(hash)).ok()?;
+        let text = fs::read_to_string(Self::approvals_in(home, project, kind).join(hash)).ok()?;
         match serde_json::from_str::<Value>(&text)
             .ok()?
             .get("decision")?

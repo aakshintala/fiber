@@ -106,9 +106,10 @@ pub use prepare::platform;
 pub use providers::{Model, Providers, StartedRefresh, leave_out_invalid, refresh_lists};
 pub use release::{Release, install_release};
 pub use repository::{
-    ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy, Pending, RepoItem,
-    ServerApproval, SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name,
-    mcp_server_item, pending, repository_servers,
+    ApprovedExtension, ApprovedServer, CopyHold, CopyRemoval, Decision, Fetch, Index, KeptCopy,
+    Pending, RepoItem, RepositorySet, ServerApproval, SessionOffer, SpawnGuard, Store,
+    approved_extension, approved_extensions, declared_items, hash, kind_name, mcp_server_item,
+    pending, repository_servers,
 };
 pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
 

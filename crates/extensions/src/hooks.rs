@@ -69,6 +69,13 @@ pub struct SessionExtensions {
     /// file's text, in load order.
     prompts: Vec<(String, String)>,
     notices: Vec<Notice>,
+    /// The holds that keep the repository copies this session runs for its
+    /// whole life: a reload takes the next set's holds before the old set
+    /// drops its own.
+    holds: Vec<crate::CopyHold>,
+    /// The approved `required` repository extensions the set approved, by
+    /// name: what `missing_required` reports when they did not load.
+    required: Vec<String>,
     /// The started Lua extensions.
     lua: Vec<Arc<LuaExtension>>,
     /// One provider per `fiber.provider` registration, in provider-name
@@ -171,6 +178,30 @@ impl SessionExtensions {
             locks,
             host,
             crate::host::state::StateRegistry::new(seed),
+            crate::RepositorySet::default(),
+        )
+    }
+
+    /// Loads extensions with the repository set the session approved, in
+    /// place of the personal installs of the same names. The set's holds
+    /// move into the session, so its copies live for the session's life.
+    pub fn load_repository(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        host: Option<Arc<crate::host::script::HostScript>>,
+        seed: StateSeed,
+        repository: crate::RepositorySet,
+    ) -> Self {
+        Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            host,
+            crate::host::state::StateRegistry::new(seed),
+            repository,
         )
     }
 
@@ -189,7 +220,40 @@ impl SessionExtensions {
             locks,
             self.host_script.clone(),
             self.state.clone(),
+            crate::RepositorySet::default(),
         )
+    }
+
+    /// Reloads extensions with the repository set over the session's live
+    /// state without closing it. The set's holds move into the reloaded
+    /// session, so its copies live until the next reload replaces them.
+    pub fn reload_repository(
+        &self,
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+        repository: crate::RepositorySet,
+    ) -> Self {
+        Self::load_registry(
+            home,
+            config,
+            clock,
+            locks,
+            self.host_script.clone(),
+            self.state.clone(),
+            repository,
+        )
+    }
+
+    /// The `required` repository extensions the set approved that are not
+    /// loaded, by name.
+    pub fn missing_required(&self) -> Vec<String> {
+        self.required
+            .iter()
+            .filter(|name| !self.loaded.iter().any(|loaded| &loaded.name == *name))
+            .cloned()
+            .collect()
     }
 
     fn load_registry(
@@ -199,6 +263,7 @@ impl SessionExtensions {
         locks: Arc<dyn PathLock>,
         host: Option<Arc<crate::host::script::HostScript>>,
         state: Arc<crate::host::state::StateRegistry>,
+        repository: crate::RepositorySet,
     ) -> Self {
         let mut session = Self {
             state,
@@ -216,6 +281,17 @@ impl SessionExtensions {
         // A damaged directory is skipped: `Providers::load` already
         // reported it, so no notice here.
         let found = entries.found;
+        // An approved repository copy loads in place of the personal
+        // install of the same name: the merged list carries both in slug
+        // order, with one notice per shadowed install.
+        let (merged, mut candidate_notices): (Vec<crate::repository::Candidate>, Vec<Notice>) =
+            crate::repository::candidates(found, &repository, &|name: &str| {
+                crate::is_enabled(config, name)
+            });
+        session.notices.extend(repository.notices);
+        session.notices.append(&mut candidate_notices);
+        session.holds = repository.holds;
+        session.required = repository.required;
         let mut chain = chain::Builder::default();
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
@@ -224,22 +300,22 @@ impl SessionExtensions {
         // names settle across every extension before any is kept or
         // unloaded.
         let mut started: Vec<Started> = Vec::new();
-        for entry in found {
-            let item = entry.installed;
-            if !crate::is_enabled(config, &item.name) {
-                continue;
-            }
-            let slug = match crate::install::slug(&item.name) {
+        for candidate in merged {
+            let slug = match crate::install::slug(&candidate.name) {
                 Ok(slug) => slug,
                 Err(e) => {
-                    session.failed(&item.name, &e);
+                    session.failed(&candidate.name, &e);
                     continue;
                 }
             };
             // The locked read already checked the record and read the
-            // manifest, so the directory and manifest are reused.
-            let dir = entry.dir;
-            let manifest = entry.manifest;
+            // manifest, so the directory and manifest are reused. A
+            // repository entry's directory is its pinned copy, never the
+            // repository's files.
+            let name = candidate.name;
+            let version = candidate.version;
+            let dir = candidate.dir;
+            let manifest = candidate.manifest;
             // Written for another API: it does not load (`docs/extensions.md`,
             // "The extension API version").
             if manifest.api != API || manifest.process.is_some() {
@@ -253,15 +329,15 @@ impl SessionExtensions {
                 Some(relative) => match config::read_package_text(&dir, relative, "prompt") {
                     Ok(text) => Some(text),
                     Err(e) => {
-                        session.failed(&item.name, &Error::Config(e));
+                        session.failed(&name, &Error::Config(e));
                         continue;
                     }
                 },
                 None => None,
             };
             let mut entry = Started {
-                name: item.name,
-                version: item.version,
+                name,
+                version,
                 slug,
                 dir,
                 manifest,
