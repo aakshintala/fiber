@@ -58,8 +58,8 @@ pub use home::{
     fiber_home_path_from_env,
 };
 pub use layout::{
-    crashes_dir, extension_data_dir, extensions_dir, images_cache_dir, mcp_cache_dir,
-    project_data_dir,
+    crashes_dir, extension_data_dir, extensions_dir, global_config_file, images_cache_dir,
+    mcp_cache_dir, project_config_file, project_data_dir, repository_config_file,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};

@@ -40,3 +40,20 @@ pub fn images_cache_dir(home: &Path) -> PathBuf {
 pub fn crashes_dir(home: &Path) -> PathBuf {
     home.join("crashes")
 }
+
+/// `<home>/config.json`: the global configuration file.
+pub fn global_config_file(home: &Path) -> PathBuf {
+    home.join("config.json")
+}
+
+/// `<home>/projects/<key>/config.json`: one project's configuration file.
+pub fn project_config_file(home: &Path, project: &ProjectKey) -> PathBuf {
+    home.join("projects")
+        .join(project.as_str())
+        .join("config.json")
+}
+
+/// `<workspace>/.fiber/config.json`: the repository configuration file.
+pub fn repository_config_file(workspace: &Path) -> PathBuf {
+    workspace.join(".fiber").join("config.json")
+}
