@@ -18,7 +18,10 @@ fn package(name: &str) -> PathBuf {
 fn a_shipped_reviewer_model_is_in_its_providers_list_and_is_not_a_contributor_model() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
     let mut packages: Vec<PathBuf> = Vec::new();
-    for entry in std::fs::read_dir(&root).unwrap() {
+    // `root.join(".")` is `root`: the directory read takes a join on the
+    // joined base, the shape a shipped-package read takes (`docs/ci.md`,
+    // "Selection"), rather than the bare manifest-rooted name.
+    for entry in std::fs::read_dir(root.join(".")).unwrap() {
         let dir = entry.unwrap().path();
         if dir.is_dir() {
             packages.push(dir);
