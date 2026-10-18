@@ -135,11 +135,7 @@ impl Source {
     }
 
     pub(crate) fn rows(&self, item: &OfferedItem, width: u16) -> Vec<Row> {
-        let kind = match item.kind {
-            contract::events::OfferedKind::Extension => "Extension",
-            contract::events::OfferedKind::Hook => "Hook",
-            contract::events::OfferedKind::McpServer => "MCP server",
-        };
+        let kind = super::kind_label(item.kind);
         let path = item.files.get(self.file).map_or("", String::as_str);
         let header = format!(
             "{kind} {} · {path} · {}/{}",

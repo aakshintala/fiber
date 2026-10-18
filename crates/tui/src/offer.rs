@@ -631,16 +631,20 @@ fn header_line(item: &OfferedItem, cursor: bool) -> Line<'static> {
 /// An item's header: its kind, name and what identifies it: an
 /// extension's version, otherwise the path its declaration comes from.
 fn header(item: &OfferedItem) -> String {
-    let kind = match item.kind {
-        OfferedKind::Extension => "Extension",
-        OfferedKind::Hook => "Hook",
-        OfferedKind::McpServer => "MCP server",
-    };
-    let mut text = format!("{kind} {}", item.name);
+    let mut text = format!("{} {}", kind_label(item.kind), item.name);
     if let Some(detail) = detail(item) {
         text.push_str(&format!(" · {detail}"));
     }
     text
+}
+
+/// The name of a repository item's kind in both offer views.
+fn kind_label(kind: OfferedKind) -> &'static str {
+    match kind {
+        OfferedKind::Extension => "Extension",
+        OfferedKind::Hook => "Hook",
+        OfferedKind::McpServer => "MCP server",
+    }
 }
 
 /// What identifies an item after its kind and name: an extension's
