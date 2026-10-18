@@ -10,7 +10,7 @@ use contract::emit::Emit;
 use contract::events::Control;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Ask, Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value};
 
 use crate::lua::{DeclaredTool, effects_from};
@@ -57,6 +57,14 @@ impl Tool for LuaTool {
             deferred: false,
             hosted: None,
         }
+    }
+
+    /// How a long result is cut: the tool's declared keep
+    /// (`docs/tools.md`, "Bounded results"). A configured
+    /// `tools."<name>".max_result_bytes` divides it in the tool's own
+    /// start-to-end proportion.
+    fn bound(&self) -> Bound {
+        self.declared.keep
     }
 
     /// The static effects, or what the effects function returns for these

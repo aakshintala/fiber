@@ -22,7 +22,7 @@ use contract::clock::Clock;
 use contract::hook::Hooks;
 use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
-use contract::tool::{Effects, EffectsError, Output, Tool};
+use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use extensions::{LuaExtension, LuaTool, SessionExtensions};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -110,6 +110,38 @@ fn two_loads_of_one_entry_script_give_byte_identical_definitions() {
         )),
         "{first:?}"
     );
+}
+
+#[test]
+fn each_tool_reports_its_declared_keep_as_its_bound() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(
+        dir.path(),
+        "keep",
+        r#"
+fiber.tool("both", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 1000,
+  keep = { start = 2048, ["end"] = 512 },
+  run = function() return "" end,
+})
+fiber.tool("plain", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = {}, reversible = true }, timeout = 1000,
+  run = function() return "" end,
+})
+"#,
+        FakeClock::new(),
+    );
+    let tools = by_name(&ext);
+    assert_eq!(
+        tools["both"].bound(),
+        Bound {
+            start: 2048,
+            end: 512
+        }
+    );
+    assert_eq!(tools["plain"].bound(), Bound::DEFAULT);
 }
 
 // Calls (`docs/extensions.md`, "How an extension runs"): a tool call runs in
