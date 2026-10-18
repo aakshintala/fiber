@@ -13,23 +13,12 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::process::Child;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::json;
 use support::*;
-
-/// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
-struct Running {
-    child: Child,
-    watchdog: Watchdog,
-    group: u32,
-    stdout: mpsc::Receiver<String>,
-    stderr: Arc<Mutex<String>>,
-    deadline: Deadline,
-}
 
 #[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
