@@ -12,6 +12,10 @@ struct FakeSessions {
     result: Result<Vec<Running>, ListError>,
     cancellations: Mutex<Vec<bool>>,
 }
+#[allow(
+    clippy::panic,
+    reason = "session_list tests never message; a message is the test's failure"
+)]
 impl Sessions for FakeSessions {
     fn scope(&self) -> PathBuf {
         "/h/run/".into()
@@ -22,6 +26,15 @@ impl Sessions for FakeSessions {
             .unwrap()
             .push(cancel.is_cancelled());
         self.result.clone()
+    }
+    fn message(
+        &self,
+        _to: &SessionId,
+        _from: &SessionId,
+        _text: &str,
+        _cancel: &dyn Cancel,
+    ) -> Result<(), contract::sessions::MessageError> {
+        panic!("session_list tests never message");
     }
 }
 fn fake(result: Result<Vec<Running>, ListError>) -> Arc<FakeSessions> {
