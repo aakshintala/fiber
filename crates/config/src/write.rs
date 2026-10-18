@@ -13,6 +13,7 @@ use contract::events::Notice;
 use self::atomic::locked;
 use crate::error::ConfigError;
 use crate::home::{ProjectKey, plain, read};
+use crate::layout::{global_config_file, project_config_file, repository_config_file};
 use crate::{Source, keys, path};
 
 /// Which extension settings file `host.config.set` writes: the same words
@@ -282,13 +283,9 @@ impl Layer {
     /// The source reading this layer's file.
     pub(crate) fn source(self, home: &Path, workspace: &Path, project: &ProjectKey) -> Source {
         match self {
-            Self::Global => Source::Global(home.join("config.json")),
-            Self::Project => Source::Project(
-                home.join("projects")
-                    .join(project.as_str())
-                    .join("config.json"),
-            ),
-            Self::Repository => Source::Repository(workspace.join(".fiber/config.json")),
+            Self::Global => Source::Global(global_config_file(home)),
+            Self::Project => Source::Project(project_config_file(home, project)),
+            Self::Repository => Source::Repository(repository_config_file(workspace)),
         }
     }
 }
@@ -365,7 +362,7 @@ fn checked(
 /// when it wrote. A project layer's value does not count: only the global
 /// file is looked at.
 pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool, ConfigError> {
-    let file = home.join("config.json");
+    let file = global_config_file(home);
     let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
     update(&file, &segments, value, true)
 }
@@ -382,7 +379,7 @@ pub fn replace_global(
     key: &str,
     value: Option<Value>,
 ) -> Result<Option<Value>, ConfigError> {
-    let file = home.join("config.json");
+    let file = global_config_file(home);
     let segments = match &value {
         Some(value) => checked(key, value.clone(), &Source::Global(file.clone()))?.0,
         None => path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?,
@@ -420,7 +417,7 @@ pub fn clear_global_if_equals(
     key: &str,
     expected: &Value,
 ) -> Result<bool, ConfigError> {
-    let file = home.join("config.json");
+    let file = global_config_file(home);
     let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
     let _lock = locked(&file)?;
     let Some(mut root) = read(&file)? else {
@@ -518,7 +515,7 @@ pub fn remove_entry(
 /// and no default is consulted. `None` when the file or the key is absent.
 pub fn get_global(home: &Path, key: &str) -> Result<Option<Value>, ConfigError> {
     let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-    Ok(read(&home.join("config.json"))?.and_then(|root| path::get(&root, &segments).cloned()))
+    Ok(read(&global_config_file(home))?.and_then(|root| path::get(&root, &segments).cloned()))
 }
 
 /// Deletes an extension's settings in the global and every per-project layer

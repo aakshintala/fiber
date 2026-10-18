@@ -17,7 +17,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
-use crate::host::exec::{GRACE, GROUP_POLL};
+use support::group::{GRACE, GROUP_POLL};
 
 /// How long a test waits on the run before it fails.
 const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;

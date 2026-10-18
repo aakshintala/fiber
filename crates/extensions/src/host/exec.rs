@@ -11,17 +11,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use rustix::process::{Pid, Signal};
-
-/// SIGKILL follows SIGTERM by this long (`docs/tools.md`, "Stopping a command").
-pub(crate) const GRACE: Duration = Duration::from_millis(800);
-
-/// How long output is read after the group is empty or the stop
-/// (`docs/tools.md`, "Stopping a command").
-pub(crate) const DRAIN: Duration = Duration::from_secs(2);
-
-/// How often the group is re-checked while it may still be occupied.
-pub(crate) const GROUP_POLL: Duration = Duration::from_millis(10);
+use rustix::process::Signal;
+use support::group::Listing;
 
 /// What `host.exec` runs.
 pub(crate) struct ExecRequest {
@@ -101,9 +92,10 @@ struct Shared {
 }
 
 impl contract::clock::Wake for Shared {
-    // Latency only: `park` never blocks past `GROUP_POLL`, so a clock move
-    // this misses is seen on the next poll with the same outcome, and no
-    // test can tell the difference without reading the real clock.
+    // Latency only: `park` never blocks past `support::group::GROUP_POLL`,
+    // so a clock move this misses is seen on the next poll with the same
+    // outcome, and no test can tell the difference without reading the
+    // real clock.
     #[cfg_attr(false, mutants::skip)]
     fn wake(&self) {
         self.cv.notify_all();
@@ -114,9 +106,10 @@ fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-// Latency only: `park` never blocks past `GROUP_POLL`, so a change this
-// does not announce is seen on the next poll with the same outcome, and no
-// test can tell the difference without reading the real clock.
+// Latency only: `park` never blocks past `support::group::GROUP_POLL`,
+// so a change this does not announce is seen on the next poll with the
+// same outcome, and no test can tell the difference without reading the
+// real clock.
 #[cfg_attr(false, mutants::skip)]
 fn bump(inner: &mut Inner, shared: &Shared) {
     inner.seq = inner.seq.wrapping_add(1);
@@ -152,27 +145,17 @@ pub(crate) fn run(
         // in this process's group, so terminal prompts and Ctrl-C reach it.
         cmd.process_group(0);
     }
-    let spawn = if req.own_group {
-        spawn(&mut cmd)
+    let (mut child, mut listing): (Child, Option<Listing>) = if req.own_group {
+        // Its own listed group, stopped as a tool's is and killed at
+        // shutdown with every other listed group.
+        match support::group::spawn(&mut cmd) {
+            Ok((child, listing)) => (child, Some(listing)),
+            Err(error) => return Err(spawn_error(req, error)),
+        }
     } else {
-        cmd.spawn()
-    };
-    let mut child = match spawn {
-        Ok(child) => child,
-        Err(source) => {
-            // `NotFound` names a missing program or working directory;
-            // anything else kept the program from starting.
-            let code = if source.kind() == std::io::ErrorKind::NotFound {
-                contract::ErrorCode::NotFound
-            } else {
-                contract::ErrorCode::IoFailed
-            };
-            return Err(Box::new(ExecError {
-                code,
-                message: format!("host.exec: {}: {source}", req.program),
-                ran: None,
-                source: Some(source),
-            }));
+        match cmd.spawn() {
+            Ok(child) => (child, None),
+            Err(source) => return Err(spawn_failed(req, source)),
         }
     };
     let pgid = child.id();
@@ -192,7 +175,7 @@ pub(crate) fn run(
     let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(abort_startup(
             req,
-            pgid,
+            listing.take(),
             child,
             &shared,
             clock,
@@ -214,7 +197,7 @@ pub(crate) fn run(
     {
         return Err(abort_startup(
             req,
-            pgid,
+            listing.take(),
             child,
             &shared,
             clock,
@@ -234,7 +217,7 @@ pub(crate) fn run(
     {
         return Err(abort_startup(
             req,
-            pgid,
+            listing.take(),
             child,
             &shared,
             clock,
@@ -258,7 +241,7 @@ pub(crate) fn run(
         {
             return Err(abort_startup(
                 req,
-                pgid,
+                listing.take(),
                 child,
                 &shared,
                 clock,
@@ -269,7 +252,7 @@ pub(crate) fn run(
         if let Err(send) = wait_tx.send(child) {
             return Err(abort_startup(
                 req,
-                pgid,
+                listing.take(),
                 send.0,
                 &shared,
                 clock,
@@ -286,6 +269,7 @@ pub(crate) fn run(
             &cancel,
             &mut || {},
             StopTarget::Group(pgid),
+            listing.take(),
         );
     }
     // Without its own group no waiter thread starts: the supervising thread
@@ -300,11 +284,53 @@ pub(crate) fn run(
         &cancel,
         &mut || {},
         StopTarget::Pid(&mut child),
+        None,
     );
     // The child is reaped, or dead or dying after the stop: `wait` returns
     // at once then, instead of leaving a zombie.
     let _reaped = child.wait();
     outcome
+}
+
+/// A spawn that never ran names its failure: `NotFound` for a missing
+/// program or working directory, anything else for a program that could
+/// not start.
+fn spawn_failed(req: &ExecRequest, source: std::io::Error) -> Box<ExecError> {
+    let code = if source.kind() == std::io::ErrorKind::NotFound {
+        contract::ErrorCode::NotFound
+    } else {
+        contract::ErrorCode::IoFailed
+    };
+    Box::new(ExecError {
+        code,
+        message: format!("host.exec: {}: {source}", req.program),
+        ran: None,
+        source: Some(source),
+    })
+}
+
+/// A group spawn that never ran names its failure: `NotFound` when the
+/// program or working directory does not exist, `io_failed` for anything
+/// else. A refused id or a signal failure never reaches here: the child
+/// just spawned, so its id is a real pid, and listing a live group sends
+/// no signal.
+fn spawn_error(req: &ExecRequest, error: support::group::Error) -> Box<ExecError> {
+    match error {
+        support::group::Error::Spawn(source) => spawn_failed(req, source),
+        refused @ support::group::Error::Refused(_) => no_spawn(req, &refused),
+        signal @ support::group::Error::Signal { .. } => no_spawn(req, &signal),
+    }
+}
+
+/// A group error no spawn returns, reported as `io_failed` with nothing
+/// logged: the program never ran.
+fn no_spawn(req: &ExecRequest, error: &dyn std::fmt::Display) -> Box<ExecError> {
+    Box::new(ExecError {
+        code: contract::ErrorCode::IoFailed,
+        message: format!("host.exec: {}: {error}", req.program),
+        ran: None,
+        source: None,
+    })
 }
 
 /// What a stop signals: the listed group, or the pid alone when the run
@@ -323,13 +349,27 @@ impl StopTarget<'_> {
     }
 }
 
+/// Unlists the run's registration once its group is seen empty: a pid-mode
+/// run holds no token, so it never unlists another registration of a
+/// reused id.
+fn unlist(listing: &mut Option<Listing>, seen_empty: bool) {
+    if seen_empty && let Some(registration) = listing.take() {
+        support::group::live().unlist(registration);
+    }
+}
+
 /// Watches a started run until its group is empty and its output read,
 /// stopping it at the cap, the `deadline` or the `cancel` sender's drop:
-/// SIGTERM, SIGKILL [`GRACE`] later while a member lives, then output read
-/// for at most [`DRAIN`] more. `reap` runs first on every pass, for a caller
+/// SIGTERM, SIGKILL [`support::group::GRACE`] later while a member lives,
+/// then output read for at most [`support::group::DRAIN`] more. `reap` runs
+/// first on every pass, for a caller
 /// that reaps the child itself instead of a waiter thread. A [`StopTarget::Pid`]
 /// run reaps the child on this thread and signals only its pid, never a
 /// group; a [`StopTarget::Group`] run leaves the reap to its waiter thread.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the run's inputs and its listing token are one call"
+)]
 fn supervise(
     req: &ExecRequest,
     shared: &Shared,
@@ -338,6 +378,7 @@ fn supervise(
     cancel: &mpsc::Receiver<()>,
     reap: &mut dyn FnMut(),
     target: StopTarget<'_>,
+    mut listing: Option<Listing>,
 ) -> Result<Ran, Box<ExecError>> {
     let pgid = target.pgid();
     // Without its own group the child is this process's member, so its reap
@@ -372,7 +413,7 @@ fn supervise(
                 inner.status,
             )
         };
-        if reaped && (pid_mode || !group_alive(pgid)) {
+        if reaped && (pid_mode || !support::group::alive(pgid)) {
             seen_empty = true;
         }
         let eof = out_eof && err_eof;
@@ -386,7 +427,7 @@ fn supervise(
             // The program ended but a helper holding the pipe may never
             // close it, so EOF may never come: the run ends at the drain
             // bound with the child's own status, no timeout.
-            drain_until = Some(add(now, DRAIN));
+            drain_until = Some(add(now, support::group::DRAIN));
         }
         // A stop starts once: the cap, the deadline, or the drop. No signal
         // to a group already seen empty: its id may be reused. Once the
@@ -399,16 +440,18 @@ fn supervise(
                 if let Some(child) = pid_child.as_deref_mut() {
                     stop_pid(child, shared, Signal::TERM);
                 } else {
-                    signal_group(pgid, Signal::TERM);
+                    match support::group::signal(pgid, Signal::TERM) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
             }
-            kill_at = Some(add(now, GRACE));
+            kill_at = Some(add(now, support::group::GRACE));
         }
 
         if let Some(kill_at) = kill_at {
             if seen_empty {
                 if drain_until.is_none() {
-                    drain_until = Some(add(clock.now(), DRAIN));
+                    drain_until = Some(add(clock.now(), support::group::DRAIN));
                 }
             } else if clock.now() >= kill_at {
                 // Unreaped, the child holds the id; reaped, a member was
@@ -416,10 +459,12 @@ fn supervise(
                 if let Some(child) = pid_child.as_deref_mut() {
                     stop_pid(child, shared, Signal::KILL);
                 } else {
-                    signal_group(pgid, Signal::KILL);
+                    match support::group::signal(pgid, Signal::KILL) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
                 if drain_until.is_none() {
-                    drain_until = Some(add(clock.now(), DRAIN));
+                    drain_until = Some(add(clock.now(), support::group::DRAIN));
                 }
                 // One SIGKILL: fall through to the drain below.
             } else {
@@ -431,17 +476,17 @@ fn supervise(
             // an escaped descendant holding the pipe past here is dropped.
             let ran = ran_of(shared, status, false);
             lock(&shared.inner).discard = true;
-            finished(pgid, seen_empty);
+            unlist(&mut listing, seen_empty);
             return Ok(ran);
         } else if pid_mode && reaped {
             // The program ended behind a helper holding the pipe: EOF may
             // never come, so the run ends at the drain bound above with the
             // child's own status and no timeout.
-            let until = drain_until.unwrap_or_else(|| add(clock.now(), DRAIN));
+            let until = drain_until.unwrap_or_else(|| add(clock.now(), support::group::DRAIN));
             if clock.now() >= until {
                 let ran = ran_of(shared, status, false);
                 lock(&shared.inner).discard = true;
-                finished(pgid, seen_empty);
+                unlist(&mut listing, seen_empty);
                 return Ok(ran);
             }
             park(clock, shared, seen_seq, Some(until));
@@ -449,18 +494,18 @@ fn supervise(
         } else {
             // Running: the deadline may stop it, and the group is polled.
             // Always a concrete `until` so a test can wait for the park.
-            let poll = add(clock.now(), GROUP_POLL);
+            let poll = add(clock.now(), support::group::GROUP_POLL);
             let until = Some(deadline.map_or(poll, |d| d.min(poll)));
             park(clock, shared, seen_seq, until);
             continue;
         }
 
         // Draining after a stop: every byte until the bound, then what was read.
-        let until = drain_until.unwrap_or_else(|| add(clock.now(), DRAIN));
+        let until = drain_until.unwrap_or_else(|| add(clock.now(), support::group::DRAIN));
         if (eof && seen_empty) || clock.now() >= until {
             let ran = ran_of(shared, status, timed_out);
             lock(&shared.inner).discard = true;
-            finished(pgid, seen_empty);
+            unlist(&mut listing, seen_empty);
             if capped {
                 return Err(Box::new(ExecError {
                     code: contract::ErrorCode::TooLarge,
@@ -485,7 +530,7 @@ fn supervise(
 /// the startup error.
 fn abort_startup(
     req: &ExecRequest,
-    pgid: u32,
+    listing: Option<Listing>,
     mut child: Child,
     shared: &Shared,
     clock: &dyn Clock,
@@ -503,6 +548,10 @@ fn abort_startup(
     // itself uses.
     let (_, stopped) = mpsc::channel::<()>();
     let ended = if req.own_group {
+        let pgid = listing
+            .as_ref()
+            .map(Listing::pgid)
+            .unwrap_or_else(|| child.id());
         supervise(
             req,
             shared,
@@ -513,6 +562,7 @@ fn abort_startup(
                 reap_now(&mut child, shared);
             },
             StopTarget::Group(pgid),
+            listing,
         )
     } else {
         supervise(
@@ -523,6 +573,7 @@ fn abort_startup(
             &stopped,
             &mut || {},
             StopTarget::Pid(&mut child),
+            None,
         )
     };
     // The drain after a SIGKILL may end before the reap; the child is dead
@@ -564,15 +615,9 @@ fn stop_pid(child: &mut Child, shared: &Shared, signal: Signal) -> bool {
         }
     }
     // Still running, and this thread alone reaps it, so the pid cannot be
-    // reused under the signal. A group id of 1 or less is never one of ours.
-    let id = child.id();
-    let Some(pid) = pid(id) else {
-        return false;
-    };
-    if refused_group(id) {
-        return false;
-    }
-    rustix::process::kill_process(pid, signal).is_ok()
+    // reused under the signal. A refused id, or one already gone, sends
+    // nothing.
+    support::group::signal_process(child.id(), signal).is_ok()
 }
 
 /// Records the child's end once it has one; an error means nothing is left
@@ -601,7 +646,7 @@ fn ended(status: Option<ExitStatus>) -> (Option<i32>, Option<String>) {
     match status {
         Some(status) => match (status.code(), status.signal()) {
             (Some(code), _) => (Some(code), None),
-            (None, Some(number)) => (None, Some(signal_name(number))),
+            (None, Some(number)) => (None, Some(support::group::signal_name(number))),
             (None, None) => (None, None),
         },
         None => (None, None),
@@ -621,11 +666,13 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
 }
 
 /// Parks until the shared state moves or `until` on the injected clock.
-/// The condvar always times out at `GROUP_POLL`: a clock move whose wake
-/// lands between the register and the wait still surfaces within one poll.
+/// The condvar always times out at `support::group::GROUP_POLL`: a clock
+/// move whose wake lands between the register and the wait still surfaces
+/// within one poll.
 // Latency only: every caller re-reads the state and the clock after it
-// returns, and it never blocks past `GROUP_POLL`, so a mutant that waits
-// too long or not at all changes when a pass runs, never what it decides.
+// returns, and it never blocks past `support::group::GROUP_POLL`, so a
+// mutant that waits too long or not at all changes when a pass runs,
+// never what it decides.
 #[cfg_attr(false, mutants::skip)]
 fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     // The guard is held from the check into the condvar wait, so a wake
@@ -633,7 +680,7 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     let _guard = support::clock::park(
         clock,
         until,
-        Some(GROUP_POLL),
+        Some(support::group::GROUP_POLL),
         &shared.cv,
         lock(&shared.inner),
         |guard| guard.seq != seen,
@@ -703,209 +750,6 @@ fn wait_child(mut child: Child, shared: &Shared) {
 fn add(now: Instant, delay: Duration) -> Instant {
     now.checked_add(delay).unwrap_or(now)
 }
-
-/// Whether the group still holds a process. A group id of 1 or less is
-/// never one of ours.
-pub(crate) fn group_alive(pgid: u32) -> bool {
-    if refused_group(pgid) {
-        return false;
-    }
-    pid(pgid).is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
-}
-
-fn signal_group(pgid: u32, signal: Signal) {
-    if refused_group(pgid) {
-        return;
-    }
-    let Some(pid) = pid(pgid) else {
-        return;
-    };
-    match rustix::process::kill_process_group(pid, signal) {
-        Ok(()) | Err(_) => {}
-    }
-}
-
-/// Group 1 or 0 is not a command's group: `kill(-1)` reaches every process
-/// the user owns, and `kill(0)` this process's own group.
-pub(crate) fn refused_group(pgid: u32) -> bool {
-    pgid <= 1
-}
-
-fn pid(raw: u32) -> Option<Pid> {
-    Pid::from_raw(i32::try_from(raw).ok()?)
-}
-
-/// The signal's name, such as `SIGKILL`.
-pub(crate) fn signal_name(number: i32) -> String {
-    for (signal, name) in KNOWN {
-        if signal.as_raw() == number {
-            return (*name).to_owned();
-        }
-    }
-    format!("SIG{number}")
-}
-
-const KNOWN: &[(Signal, &str)] = &[
-    (Signal::HUP, "SIGHUP"),
-    (Signal::INT, "SIGINT"),
-    (Signal::QUIT, "SIGQUIT"),
-    (Signal::ILL, "SIGILL"),
-    (Signal::TRAP, "SIGTRAP"),
-    (Signal::ABORT, "SIGABRT"),
-    (Signal::BUS, "SIGBUS"),
-    (Signal::FPE, "SIGFPE"),
-    (Signal::KILL, "SIGKILL"),
-    (Signal::USR1, "SIGUSR1"),
-    (Signal::SEGV, "SIGSEGV"),
-    (Signal::USR2, "SIGUSR2"),
-    (Signal::PIPE, "SIGPIPE"),
-    (Signal::ALARM, "SIGALRM"),
-    (Signal::TERM, "SIGTERM"),
-    (Signal::CHILD, "SIGCHLD"),
-    (Signal::CONT, "SIGCONT"),
-    (Signal::STOP, "SIGSTOP"),
-    (Signal::TSTP, "SIGTSTP"),
-    (Signal::TTIN, "SIGTTIN"),
-    (Signal::TTOU, "SIGTTOU"),
-    (Signal::URG, "SIGURG"),
-    (Signal::XCPU, "SIGXCPU"),
-    (Signal::XFSZ, "SIGXFSZ"),
-    (Signal::VTALARM, "SIGVTALRM"),
-    (Signal::PROF, "SIGPROF"),
-    (Signal::WINCH, "SIGWINCH"),
-    (Signal::SYS, "SIGSYS"),
-];
-
-mod groups {
-    //! Every `host.exec` group that may still hold a process, listed for the
-    //! whole process (`docs/invocation.md`, "Shutdown").
-
-    use std::io;
-    use std::process::{Child, Command};
-    #[cfg(test)]
-    use std::sync::mpsc;
-    use std::sync::{Mutex, MutexGuard, PoisonError};
-
-    use rustix::process::Signal;
-
-    use super::{group_alive, signal_group};
-
-    static LIVE: Mutex<Groups> = Mutex::new(Groups {
-        killed: false,
-        pgids: Vec::new(),
-    });
-    #[cfg(test)]
-    static SPAWN_PAUSE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
-
-    #[cfg(test)]
-    pub(super) fn pause_at_spawn(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *SPAWN_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((entered, release));
-    }
-
-    #[cfg(test)]
-    fn pause_before_spawn() {
-        let gate = SPAWN_PAUSE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some((entered, release)) = gate {
-            match entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    }
-
-    fn live() -> MutexGuard<'static, Groups> {
-        LIVE.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Every `host.exec` group that may still hold a process, and whether
-    /// the kill pass already ran. The lock is never held across a spawn:
-    /// a spawn checks under the lock, spawns with it released, then lists
-    /// under the lock. A kill pass that landed mid-spawn is seen on the
-    /// relock, and the late child is killed there, so no group escapes
-    /// the pass.
-    #[derive(Default)]
-    struct Groups {
-        /// Set once by the kill pass; no spawn after it lists.
-        killed: bool,
-        /// Every listed group: one stays listed until seen empty.
-        pgids: Vec<u32>,
-    }
-
-    /// Spawns `cmd` with the lock released, then lists its group under the
-    /// lock. A kill pass that landed mid-spawn kills the late group here
-    /// with SIGKILL, reaps the leader, and is `Interrupted` without ever
-    /// listing the group, so no group escapes the pass.
-    pub(super) fn spawn(cmd: &mut Command) -> io::Result<Child> {
-        if live().killed {
-            return Err(interrupted());
-        }
-        #[cfg(test)]
-        pause_before_spawn();
-        let mut child = cmd.spawn()?;
-        let group = child.id();
-        let mut live = live();
-        if live.killed {
-            signal_group(group, Signal::KILL);
-            // Reaped with the lock released: a leader in uninterruptible
-            // sleep (a hung filesystem) must not stall a kill pass behind it.
-            drop(live);
-            let _reaped = child.wait();
-            return Err(interrupted());
-        }
-        live.pgids.push(group);
-        Ok(child)
-    }
-
-    /// The spawn refused after the kill pass ran.
-    fn interrupted() -> io::Error {
-        io::Error::new(io::ErrorKind::Interrupted, "the process is shutting down")
-    }
-
-    /// Lists `pgid`, a group spawned outside [`spawn`].
-    #[cfg(test)]
-    pub(super) fn register(pgid: u32) {
-        live().pgids.push(pgid);
-    }
-
-    /// The groups listed now.
-    #[cfg(test)]
-    pub(super) fn listed() -> Vec<u32> {
-        live().pgids.clone()
-    }
-
-    pub(crate) fn finished(pgid: u32, seen_empty: bool) {
-        if seen_empty {
-            live().pgids.retain(|listed| *listed != pgid);
-        }
-    }
-
-    /// Sets the killed flag, then sends SIGKILL to every listed group still
-    /// holding a process, all at once, and drops the empty ones from the
-    /// list. A spawn after the flag is set never lists: it kills its own
-    /// group and is `Interrupted`.
-    pub(crate) fn kill_every_group() {
-        let mut live = live();
-        live.killed = true;
-        live.pgids.retain(|pgid| group_alive(*pgid));
-        for pgid in live.pgids.iter() {
-            signal_group(*pgid, Signal::KILL);
-        }
-    }
-}
-
-pub(crate) use groups::finished;
-
-/// Sends SIGKILL to every listed `host.exec` group still holding a process.
-pub fn kill_every_group() {
-    groups::kill_every_group()
-}
-
-use groups::spawn;
 
 #[cfg(test)]
 #[path = "exec_tests.rs"]

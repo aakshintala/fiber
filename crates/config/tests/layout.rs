@@ -11,8 +11,9 @@
 use std::path::{Path, PathBuf};
 
 use config::{
-    crashes_dir, docs_dir, extension_data_dir, extensions_dir, images_cache_dir, logs_dir,
-    mcp_cache_dir, project_data_dir, run_dir,
+    crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
+    images_cache_dir, logs_dir, mcp_cache_dir, project_config_file, project_data_dir,
+    repository_config_file, run_dir,
 };
 
 fn root() -> PathBuf {
@@ -62,6 +63,20 @@ fn images_cache_dir_is_cache_images() {
 #[test]
 fn crashes_dir_is_crashes_under_home() {
     assert_eq!(crashes_dir(&root()), Path::new("/h/crashes"));
+}
+
+#[test]
+fn config_files_live_at_their_layout_paths() {
+    let project = config::ProjectKey::new("proj").unwrap();
+    assert_eq!(global_config_file(&root()), Path::new("/h/config.json"));
+    assert_eq!(
+        project_config_file(&root(), &project),
+        PathBuf::from("/h/projects/proj/config.json")
+    );
+    assert_eq!(
+        repository_config_file(Path::new("/w")),
+        PathBuf::from("/w/.fiber/config.json")
+    );
 }
 
 #[test]

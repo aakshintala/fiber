@@ -730,6 +730,63 @@ pub(crate) struct SessionArgs {
     pub(crate) login_shell: bool,
 }
 
+impl SessionArgs {
+    /// The argv of this session command, starting with `session`: each
+    /// `--name=<value>` is one argument so a value starting with `-`
+    /// never reads as another flag, and a `-c` value starting with `-`
+    /// travels attached for the same reason. The order is fixed, so a
+    /// caller and its test read the same list: `session`, `--id`,
+    /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
+    /// `--credential`, `--worktree`, `--rewound-from`, `--parent`,
+    /// `--delegate-id`, `--depth`, `--login-shell`, each only when set.
+    pub(crate) fn to_argv(&self) -> Vec<OsString> {
+        let mut argv = vec![OsString::from("session")];
+        argv.push(OsString::from(format!("--id={}", self.id)));
+        let mut workspace = OsString::from("--workspace=");
+        workspace.push(&self.workspace);
+        argv.push(workspace);
+        if let Some(model) = &self.model {
+            argv.push(OsString::from(format!("--model={model}")));
+        }
+        for override_text in &self.overrides {
+            if override_text.starts_with('-') {
+                argv.push(OsString::from(format!("-c{override_text}")));
+            } else {
+                argv.push(OsString::from("-c"));
+                argv.push(OsString::from(override_text));
+            }
+        }
+        if self.resume {
+            argv.push(OsString::from("--resume"));
+        }
+        if let Some(prompt) = &self.prompt {
+            argv.push(OsString::from(format!("--prompt={prompt}")));
+        }
+        if let Some(credential) = &self.credential {
+            argv.push(OsString::from(format!("--credential={credential}")));
+        }
+        if self.worktree {
+            argv.push(OsString::from("--worktree"));
+        }
+        if let Some(rewound_from) = &self.rewound_from {
+            argv.push(OsString::from(format!("--rewound-from={rewound_from}")));
+        }
+        if let Some(parent) = &self.parent {
+            argv.push(OsString::from(format!("--parent={parent}")));
+        }
+        if let Some(delegate_id) = &self.delegate_id {
+            argv.push(OsString::from(format!("--delegate-id={delegate_id}")));
+        }
+        if let Some(depth) = self.depth {
+            argv.push(OsString::from(format!("--depth={depth}")));
+        }
+        if self.login_shell {
+            argv.push(OsString::from("--login-shell"));
+        }
+        argv
+    }
+}
+
 #[derive(Debug, clap::Args)]
 pub(crate) struct AskArgs {
     /// The model for this run, as a person types it.

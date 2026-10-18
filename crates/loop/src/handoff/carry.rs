@@ -44,8 +44,14 @@ pub(crate) struct Carry {
     /// The skills this context loaded, in first-load order, one per name,
     /// each with the path of its latest load: every completed call's
     /// `control.skill` (`docs/tools.md`, "Skills"). A completed handoff
-    /// clears it.
+    /// moves it into `resend`.
     pub(crate) skills: Vec<SkillLoad>,
+    /// The previous context's loads, in first-load order, armed by a
+    /// completed handoff: the next opening sends each one again
+    /// (`docs/handoff.md`, "What the model sees after a handoff"). A
+    /// completed handoff replaces it, and the `skills_resent` render, the
+    /// `opening_message` render and `write_opening` taking it clear it.
+    pub(crate) resend: Vec<SkillLoad>,
     /// Where the next `session_start` context goes, once an opening
     /// message rendered: right after it, so the hook's contexts sit
     /// between the opening and the turn's input and the note
@@ -144,7 +150,11 @@ impl Carry {
         let mut conversation = self.input.clone();
         let texts = std::mem::take(&mut self.texts);
         let step = std::mem::take(&mut self.step);
-        self.skills.clear();
+        // The loads move into the resend the next opening sends again: a
+        // skill sent again counts as loaded in the new context, so a later
+        // handoff sends it again too (`docs/handoff.md`, "What the model
+        // sees after a handoff").
+        self.resend = std::mem::take(&mut self.skills);
         let ids: &[ActionId] = match &done.note {
             Some(Note::Actions { note }) => note,
             Some(Note::Hook { .. }) | None => &[],
@@ -245,11 +255,25 @@ impl Carry {
                 .unwrap_or_default();
         }
         if let Some(load) = control.and_then(|control| control.skill.clone()) {
-            match self.skills.iter_mut().find(|kept| kept.name == load.name) {
-                Some(kept) => kept.path = load.path,
-                None => self.skills.push(load),
-            }
+            self.loaded(load);
         }
+    }
+
+    /// Records one skill load, in first-load order, one per name, with the
+    /// path of its latest load: a reload keeps its position and takes the
+    /// new path.
+    pub(crate) fn loaded(&mut self, load: SkillLoad) {
+        match self.skills.iter_mut().find(|kept| kept.name == load.name) {
+            Some(kept) => kept.path = load.path,
+            None => self.skills.push(load),
+        }
+    }
+
+    /// Whether `action` is an inner call's: its request ran under an
+    /// extension, so neither it nor its later lines enter the model's
+    /// conversation or the handoff carry.
+    pub(crate) fn is_inner(&self, action: &ActionId) -> bool {
+        self.inner.contains(action)
     }
 
     /// The questions the last reply's completed calls set, concatenated in

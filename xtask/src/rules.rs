@@ -244,7 +244,6 @@ pub(crate) fn unsafe_mismatches(
 /// test seam. An entry must refuse an id of 1 or less before anything
 /// runs: group -1 reaches every process the user owns.
 const SIGNAL_ALLOWLIST: &[&str] = &[
-    "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
     "crates/main/src/switch/read.rs",
     "crates/tui/src/paste_image.rs",
@@ -473,7 +472,6 @@ const SESSION_ALLOWANCES: &[SourceAllowance] = &[
 ];
 #[rustfmt::skip]
 const HOME_ALLOWANCES: &[SourceAllowance] = &[
-    source_allowance!("crates/cli/src/hub_status.rs", "fn port|root:home", "join:config.json", "#1720"),
     source_allowance!("crates/cli/src/hub_status.rs", "fn devices|root:home", "join:hub/devices", "#1720"),
     source_allowance!("crates/cli/src/mcp.rs", "fn rollback|root:home", "join:credentials", "#1720"),
     source_allowance!("crates/cli/src/mcp.rs", "fn record_approval", "config-path:.fiber/config.json", "#1720"),
@@ -566,10 +564,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/loop/src/skills.rs", "fn places|root:inputs.home", "join:docs/skills", "#1720"),
     source_allowance!("crates/main/src/case/call.rs", "fn provider_extension|root:home|scope:let extension_for = | package : & extensions : : Installed |::let dir = home . join ( extensions ) . join ( config : : dir_name ( & package . name ) )", "join:extensions", "#1720"),
     source_allowance!("crates/main/src/case/call.rs", "fn provider_extension|root:home|scope:installed . iter ( ) . find_map ( | package |::let dir = home . join ( extensions ) . join ( config : : dir_name ( & package . name ) )", "join:extensions", "#1720"),
-    source_allowance!("crates/main/src/case/run.rs", "fn write_inputs|root:home", "join:config.json", "#1720"),
     source_allowance!("crates/main/src/configure.rs", "fn set|root:self.home", "join:projects", "#1720"),
-    source_allowance!("crates/main/src/configure.rs", "fn set|root:self.home/projects/project", "join:config.json", "#1720"),
-    source_allowance!("crates/main/src/configure.rs", "fn global_file|root:self.home", "join:config.json", "#1720"),
     source_allowance!("crates/main/src/crash.rs", "fn write_report|root:home", "join:crashes", "#1720"),
     source_allowance!("crates/main/src/launch.rs", "fn launch|root:home", "join:cache", "#1720"),
     source_allowance!("crates/main/src/main.rs", "fn ask_permissions|root:home", "join:credentials", "#1720"),
