@@ -166,8 +166,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        5515,
-        0x26aa32897cfa13bc,
+        5756,
+        0x9beea9cef13596cc,
     );
 }
 
@@ -220,6 +220,8 @@ fn messages_md_holds_every_section_the_doc_names() {
         "rewind-jobs",
         "skill-added",
         "skill-removed",
+        "quota-notice",
+        "quota-notice-reset",
     ] {
         assert!(
             !message(name).is_empty(),

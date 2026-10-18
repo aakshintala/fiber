@@ -19,7 +19,7 @@ use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -342,6 +342,7 @@ impl Setup {
 /// A finished `fiber` run whose stdout is one JSON line per line: every
 /// binary-level `ask` test reads the same shape, so the event kinds and
 /// the session id are shared here (`docs/testing.md`, "Levels").
+#[derive(Debug)]
 pub(crate) struct Run {
     pub(crate) code: Option<i32>,
     pub(crate) lines: Vec<Value>,
@@ -373,6 +374,76 @@ impl Run {
             .filter(|line| line["kind"] == kind)
             .collect()
     }
+}
+
+/// A finished `fiber` run that keeps stdout's text alongside its parsed
+/// lines: every binary-level test that pins stdout text while reading
+/// parsed events shares this shape (`docs/testing.md`, "Levels").
+/// `session_status` lines are dropped; file-specific readers live in local
+/// `impl` blocks.
+#[derive(Debug)]
+pub(crate) struct StdoutRun {
+    pub(crate) run: Run,
+    pub(crate) stdout: String,
+}
+
+impl std::ops::Deref for StdoutRun {
+    type Target = Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<std::process::Output> for StdoutRun {
+    fn from(output: std::process::Output) -> Self {
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+            .collect();
+        Self {
+            run: Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
+            stdout,
+        }
+    }
+}
+
+/// A finished `fiber` run with stdout and stderr as text: every
+/// binary-level text test reads the same shape, so the exit code and the
+/// two streams are shared here (`docs/testing.md`, "Levels").
+pub(crate) struct Output {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+impl From<std::process::Output> for Output {
+    fn from(output: std::process::Output) -> Self {
+        Self {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+}
+
+#[test]
+fn output_from_a_zero_exit_has_empty_text() {
+    use std::os::unix::process::ExitStatusExt;
+    let output = Output::from(std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    });
+    assert_eq!(output.code, Some(0));
+    assert_eq!(output.stdout, "");
+    assert_eq!(output.stderr, "");
 }
 
 pub(crate) fn write_json(file: &Path, value: &Value) {
@@ -813,7 +884,11 @@ pub(crate) fn close_session(socket: &Socket) {
 /// the test's [`Deadline`], naming `what` on expiry, and checks it left no
 /// process in its group.
 #[track_caller]
-pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) -> Output {
+pub(crate) fn run_to_exit(
+    deadline: Deadline,
+    what: &str,
+    mut command: Command,
+) -> std::process::Output {
     let child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);

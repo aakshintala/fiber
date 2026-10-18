@@ -19,7 +19,7 @@ use std::thread;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery};
-use contract::provider::{Input, ToolDefinition};
+use contract::provider::ToolDefinition;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
@@ -414,43 +414,6 @@ fn review_skill(workspace: &Path) {
         "---\nname: review-pr\ndescription: Reviews.\n---\nReview the pull request named in the arguments.\n",
     )
     .unwrap();
-}
-
-#[test]
-fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
-    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    review_skill(&session.workspace);
-    session
-        .inbox
-        .send(support::delivery("/review-pr 42"))
-        .unwrap();
-    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let lines = session.lines();
-    assert_eq!(kinds(&lines), plain());
-    let input = &lines[3].payload["input"];
-    assert_eq!(input.as_array().unwrap().len(), 1);
-    assert_eq!(
-        input[0]["content"][0]["text"],
-        "Review the pull request named in the arguments.\n\n42"
-    );
-    // The provider's last user message carries the expanded text too.
-    let expanded = session
-        .requests()
-        .iter()
-        .flat_map(|request| request.conversation.clone())
-        .rev()
-        .find_map(|input| match input {
-            Input::User { text, .. } => Some(text),
-            Input::Assistant { .. }
-            | Input::Reasoning { .. }
-            | Input::ToolCall { .. }
-            | Input::ToolResult { .. } => None,
-        })
-        .unwrap();
-    assert_eq!(
-        expanded,
-        "Review the pull request named in the arguments.\n\n42"
-    );
 }
 
 #[test]

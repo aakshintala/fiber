@@ -1,0 +1,59 @@
+{
+ "url": "https://api.anthropic.com/v1/messages",
+ "request": {
+  "model": "claude-sonnet-5-5",
+  "max_tokens": 256,
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file.",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      },
+      "offset": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "note": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "all": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "path",
+      "offset",
+      "note",
+      "all"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  ],
+  "tool_choice": {
+   "type": "any"
+  }
+ },
+ "status": 400,
+ "elapsed_s": 0.66,
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"tool_choice: type \\\"tool\\\" and \\\"any\\\" are not supported for this model.\"},\"request_id\":\"req_011CgA7AUkSPLug4wv5J7QPP\"}"
+}

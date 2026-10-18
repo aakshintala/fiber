@@ -23,7 +23,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::{Value, json};
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
@@ -82,7 +82,7 @@ impl Setup {
     /// Runs `fiber approve` with `args` in repository `name`, with `input`
     /// on standard input (none is an empty, closed input).
     #[track_caller]
-    fn approve(&self, name: &str, args: &[&str], input: Option<&str>) -> Run {
+    fn approve(&self, name: &str, args: &[&str], input: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .arg("approve")
@@ -112,21 +112,11 @@ impl Setup {
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber approve` to exit"),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 }
 
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-impl Run {
+impl Output {
     /// The `approved <kind> <name> <hash prefix>` lines, as their words.
     fn approvals(&self) -> Vec<Vec<&str>> {
         self.stderr

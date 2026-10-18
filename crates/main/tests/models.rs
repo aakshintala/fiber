@@ -24,7 +24,7 @@ use support::write_record;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, group_alive, spawn_watched};
+use support::{Deadline, KillGroup, Output, group_alive, spawn_watched};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -120,7 +120,7 @@ impl Setup {
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
     #[track_caller]
-    fn fiber(&self, args: &[&str]) -> Run {
+    fn fiber(&self, args: &[&str]) -> Output {
         let mut command = Command::new(self.exe());
         command
             .args(args)
@@ -153,18 +153,8 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
-}
-
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
 }
 
 fn write(file: &PathBuf, value: &Value) {
@@ -312,7 +302,7 @@ fn openrouter(setup: &Setup, server: &fakes::ProviderServer) {
 }
 
 /// The `openrouter/<id>` references `fiber models --json` prints, in order.
-fn listed_ids(run: &Run) -> Vec<String> {
+fn listed_ids(run: &Output) -> Vec<String> {
     run.stdout
         .lines()
         .map(|line| {

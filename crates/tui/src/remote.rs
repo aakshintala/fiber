@@ -17,9 +17,9 @@ mod router;
 use crate::ThemeSetting;
 use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
-    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
-    Stored, SwitchScope, ToolGroup, ToolSwitches,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesSaved,
+    NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection, Saved,
+    SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolSwitches,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
@@ -535,6 +535,38 @@ impl Configure for Remote {
             json!({"name":name,"id":id}),
             Caller::Loop,
             |_| Some(()),
+        )
+    }
+    fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError> {
+        self.call(
+            "reviewer_notes",
+            json!({"workspace":self.workspace(workspace)?}),
+            Caller::Loop,
+            decode::notes,
+        )
+    }
+    fn save_reviewer_notes(
+        &self,
+        workspace: &Path,
+        global: Option<NotesWrite>,
+        project: Option<NotesWrite>,
+    ) -> Result<NotesSaved, ConfigureError> {
+        let mut args = Map::from_iter([("workspace".into(), json!(self.workspace(workspace)?))]);
+        // A layer not sent is absent, never null: the hub refuses an
+        // explicit null, as it does on every other operation.
+        for (name, sent) in [("global", global), ("project", project)] {
+            if let Some(write) = sent {
+                drop(args.insert(
+                    name.into(),
+                    json!({"version":write.version,"text":write.text}),
+                ));
+            }
+        }
+        self.call(
+            "save_reviewer_notes",
+            Value::Object(args),
+            Caller::Loop,
+            decode::notes_saved,
         )
     }
     fn themes(&self, _workspace: &Path) -> Vec<String> {

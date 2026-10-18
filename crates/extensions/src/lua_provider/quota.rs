@@ -374,6 +374,11 @@ impl LuaProvider {
     /// supplies a value.
     pub fn quota_now(self: &Arc<Self>, pair: &CredentialPair, key: Option<&Secret>) -> QuotaEntry {
         self.refresh_quota(pair, key);
+        self.quota_cached(pair)
+    }
+
+    /// Reads only the existing quota cache, without starting a fetch or waiting.
+    pub fn quota_cached(self: &Arc<Self>, pair: &CredentialPair) -> QuotaEntry {
         let mut states = lock(&self.quotas.state);
         let clock = self.extension.clock();
         let now = clock.now();

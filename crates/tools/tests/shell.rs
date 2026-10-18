@@ -477,7 +477,12 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
         "the run did not park at the timeout"
     );
     assert!(group_alive(pgid), "stopped before the deadline");
-    running.clock.advance(Duration::from_secs(1));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(1)),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(DEADLINE),
+    );
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(text(&output).contains("Timed out after 1000 ms and stopped."));
@@ -540,12 +545,12 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    assert!(
-        running
-            .clock
-            .await_parked(running.start + Duration::from_secs(1), DEADLINE)
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(1)),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(DEADLINE),
     );
-    running.clock.advance(Duration::from_secs(1));
     cancel.cancel();
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
@@ -577,7 +582,12 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
         "the run did not park for the grace period"
     );
     assert!(group_alive(pgid), "killed before the grace elapsed");
-    running.clock.advance(Duration::from_millis(800));
+    running.clock.advance_when_parked(
+        Some(grace),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
@@ -610,7 +620,12 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
     for pid in &pids {
         assert!(pid_alive(*pid), "{pid} died before the grace");
     }
-    running.clock.advance(Duration::from_millis(800));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_millis(800)),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
@@ -640,7 +655,12 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
             .await_parked(running.start + Duration::from_secs(2), DEADLINE),
         "the run did not park at the drain bound"
     );
-    running.clock.advance(Duration::from_secs(2));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(2)),
+        None,
+        Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Exit code 0."), "{}", text(&output));
@@ -678,7 +698,12 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
             .await_parked(running.start + Duration::from_secs(2), DEADLINE),
         "the run did not park at the drain bound"
     );
-    running.clock.advance(Duration::from_secs(2));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(2)),
+        None,
+        Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Indeterminate));
     assert!(
@@ -867,11 +892,12 @@ fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
         "waited {DEADLINE:?} for the partial line to stream"
     );
     let due = running.start + Duration::from_secs(1);
-    assert!(
-        running.clock.await_parked(due, DEADLINE),
-        "the run did not park at the timeout"
+    running.clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(DEADLINE),
     );
-    running.clock.advance(Duration::from_secs(1));
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the command to finish");
@@ -881,6 +907,7 @@ fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
 }
 
 struct JobRun {
+    call: thread::ThreadId,
     clock: Arc<FakeClock>,
     start: Instant,
     output: mpsc::Receiver<contract::tool::Output>,
@@ -911,11 +938,14 @@ fn start_jobs(
     let tapped = Arc::clone(&recorder);
     let cancel_for_run = cancel;
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let call = thread::spawn(move || {
         tx.send(shell.run(&arguments, &cancel_for_run, tapped.as_ref()))
             .unwrap();
-    });
+    })
+    .thread()
+    .id();
     JobRun {
+        call,
         clock,
         start,
         output: rx,
@@ -1085,7 +1115,12 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
         "the command moved before 30 seconds"
     );
     assert!(group_alive(pgid));
-    running.clock.advance(Duration::from_secs(30));
+    running.clock.advance_when_parked(
+        Some(move_at),
+        None,
+        Duration::from_secs(30),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the 30-second receipt");
@@ -1204,13 +1239,12 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    assert!(
-        running
-            .clock
-            .await_parked(running.start + Duration::from_secs(30), DEADLINE),
-        "the run did not park at 30 seconds"
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(30)),
+        None,
+        Duration::from_secs(30),
+        &Deadline::after(DEADLINE),
     );
-    running.clock.advance(Duration::from_secs(30));
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1274,7 +1308,12 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         "the run did not park at the timeout"
     );
     assert!(group_alive(pgid), "stopped before the deadline");
-    running.clock.advance(Duration::from_secs(30));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_secs(30)),
+        None,
+        Duration::from_secs(30),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the timeout");
@@ -1374,7 +1413,12 @@ fn a_moved_job_times_out_from_the_commands_start() {
         "the job did not park at its timeout"
     );
     assert!(group_alive(pgid), "stopped before the deadline");
-    running.clock.advance(Duration::from_secs(5));
+    running.clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_secs(5),
+        &Deadline::after(DEADLINE),
+    );
     let ended = jobs.ended(DEADLINE).expect("the job to time out");
     assert_eq!(ended.status, Outcome::Failed);
     assert_eq!(
@@ -1454,11 +1498,12 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     cancel.cancel();
     // Marked after the cancel, then woken: a later park at the timeout ran a
     // whole pass after the turn cancel and did not stop.
-    let mark = running
-        .clock
-        .mark_parked(timeout_at, DEADLINE)
-        .expect("the job left its timeout park");
-    running.clock.advance(Duration::ZERO);
+    let mark = running.clock.advance_when_parked(
+        Some(timeout_at),
+        None,
+        Duration::ZERO,
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         running
             .clock
@@ -1598,11 +1643,14 @@ fn start_tty(
     let recorder = Arc::new(Recorder::default());
     let tapped = Arc::clone(&recorder);
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let call = thread::spawn(move || {
         tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
             .unwrap();
-    });
+    })
+    .thread()
+    .id();
     JobRun {
+        call,
         clock,
         start,
         output: rx,
@@ -1681,7 +1729,12 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         "the output did not arrive: {:?}",
         jobs.deltas().text()
     );
-    running.clock.advance(Duration::from_millis(250));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_millis(250)),
+        Some(running.call),
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1760,7 +1813,12 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         matches!(running.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the receipt returned before 250 ms"
     );
-    running.clock.advance(Duration::from_millis(250));
+    running.clock.advance_when_parked(
+        Some(due),
+        Some(running.call),
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1790,8 +1848,12 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
-    assert!(running.clock.await_parked(due, DEADLINE));
-    running.clock.advance(Duration::from_millis(250));
+    running.clock.advance_when_parked(
+        Some(due),
+        Some(running.call),
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1854,7 +1916,12 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     Deadline::after(DEADLINE)
         .recv(&release)
         .expect("waited for the command's read of the block fifo");
-    running.clock.advance(Duration::from_millis(250));
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_millis(250)),
+        Some(running.call),
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     let _receipt = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1865,13 +1932,13 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         jobs.deltas().text()
     );
     let timeout_at = running.start + Duration::from_secs(5);
-    assert!(
-        running.clock.await_parked(timeout_at, DEADLINE),
-        "the job did not park at its timeout; parked at {:?}",
-        running.clock.parked()
-    );
     assert!(group_alive(pgid), "stopped before the deadline");
-    running.clock.advance(Duration::from_millis(4_750));
+    running.clock.advance_when_parked(
+        Some(timeout_at),
+        None,
+        Duration::from_millis(4_750),
+        &Deadline::after(DEADLINE),
+    );
     let ended = jobs.ended(DEADLINE).expect("the job to time out");
     assert_eq!(ended.status, Outcome::Failed);
     assert_eq!(
@@ -1905,12 +1972,12 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    assert!(
-        running
-            .clock
-            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    running.clock.advance_when_parked(
+        Some(running.start + Duration::from_millis(250)),
+        Some(running.call),
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
     );
-    running.clock.advance(Duration::from_millis(250));
     let output = Deadline::after(DEADLINE)
         .recv(&running.output)
         .expect("the receipt");
@@ -1992,11 +2059,14 @@ fn start_monitor(
     let recorder = Arc::new(Recorder::default());
     let tapped = Arc::clone(&recorder);
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let call = thread::spawn(move || {
         tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
             .unwrap();
-    });
+    })
+    .thread()
+    .id();
     JobRun {
+        call,
         clock,
         start,
         output: rx,
@@ -2044,11 +2114,7 @@ fn print_steps(
     fakes::within("monitor steps", STEPS, move || {
         let mut feed = feed;
         for (step, line) in steps {
-            assert!(
-                clock.await_parked(deadline, DEADLINE),
-                "the monitor did not park at its deadline before {line}"
-            );
-            clock.advance(step);
+            clock.advance_when_parked(Some(deadline), None, step, &Deadline::after(DEADLINE));
             // One write: `writeln!` can split the newline into its own write, and
             // a delta of the line alone would hold the newline past the step.
             feed.write_all(format!("{line}\n").as_bytes()).unwrap();
@@ -2446,7 +2512,12 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     let due = running.start + Duration::from_secs(5);
     assert!(running.clock.await_parked(due, DEADLINE));
     assert!(group_alive(pgid), "stopped before the deadline");
-    running.clock.advance(Duration::from_secs(5));
+    running.clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_secs(5),
+        &Deadline::after(DEADLINE),
+    );
     let ended = jobs
         .ended(DEADLINE)
         .expect("the deadline to end the monitor");

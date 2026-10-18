@@ -1,0 +1,59 @@
+{
+ "url": "https://api.anthropic.com/v1/messages",
+ "request": {
+  "model": "claude-sonnet-5-5",
+  "max_tokens": 256,
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file.",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      },
+      "offset": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "note": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "all": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "path",
+      "offset",
+      "note",
+      "all"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  ],
+  "tool_choice": {
+   "type": "auto"
+  }
+ },
+ "status": 200,
+ "elapsed_s": 5.48,
+ "body": "{\"model\":\"claude-sonnet-5-5\",\"id\":\"msg_011CgA7BvUXSPyNGUvD2gzdq\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01Ca6nE2JqWcaebt14zThh8X\",\"name\":\"read\",\"input\":{\"path\":\"a.txt\",\"offset\":null,\"note\":null,\"all\":null},\"caller\":{\"type\":\"direct\"}}],\"container\":null,\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":459,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":112,\"output_tokens_details\":{\"thinking_tokens\":0},\"service_tier\":\"standard\",\"inference_geo\":\"global\",\"speed\":\"standard\"},\"diagnostics\":null}"
+}

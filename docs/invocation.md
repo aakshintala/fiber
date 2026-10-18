@@ -552,12 +552,19 @@ the running jobs and telling it to stop any that look hung or that it no
 longer needs, judging from each job's output file. The session does not end.
 The check fires once and is armed again only by the next prompt or steer, so a job
 the model keeps does not cost a turn every delay.
+A job an extension started with `host.delegate` holds no session open and is
+not in the jobs check: it does not make a session busy, and a session that
+ends normally stops it.
 
 **A delegate exits as soon as its run finishes**: its final answer is written
 and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 `delegate_message` resumes it (`docs/delegates.md`).
+The jobs in this rule do not include a job an extension started with
+`host.delegate`: it holds no session open and is not in the jobs check.
 
 **A `fiber ask` session exits when its turn ends** and its jobs are done.
+The jobs in this rule do not include a job an extension started with
+`host.delegate`: it holds no session open and is not in the jobs check.
 
 **A prompt sent to an exited session through the hub resumes it**, then
 delivers the prompt. A client showing a session that exits keeps showing it,
@@ -1022,6 +1029,8 @@ required unless marked optional; unknown keys, wrong types and explicit
 | `reviewer_models` | `name` (string) | `models` (array of strings), optional `selected` (string), and `notices` (array of strings), from the hub's installed provider |
 | `models` | `workspace` (string), `refresh` (string, optional: `cached`, `stale` or `every`; default `cached`) | `models`, `notices` and `lists`, the hub's installed models as the terminal's picker lists them: a `models` element holds `reference`, `provider`, `id`, optional `name`, `levels`, optional `default_level` and `configured`, `roles`, and optional `price` (`micros_per_mtok`, `input`, `output`, `tiers`); a `lists` element holds `provider`, optional `updated_ms` and `stale`; `cached` starts no extension, `stale` and `every` refresh the lists first (with and without the age check) |
 | `set_reviewer` | `name`, `id` (strings) | no result |
+| `reviewer_notes` | `workspace` (string) | `global` and `project`, each with `file`, `text` and `version` (strings), the layer's own `reviewer.context`, empty when unset; `version` is the string `absent` when the file does not exist |
+| `save_reviewer_notes` | `workspace` (string), `global` and `project` (each optional: `version` and `text`, strings) | `saved` (`written` or `stale`); on `written`, `files` (array: `file`, `saved` (boolean), `error` (error, optional), one per sent layer, global first); `stale` writes nothing; each file is written as `docs/state.md` "Concurrent access" says, and a sync failure after its rename is saved with an error |
 | `tool_switches` | `workspace` (string) | `groups`, objects with `group`, `project` and `everywhere`; `group` is one of `{"mcp":"name"}` or `{"extension":"name"}`; each layer holds `disabled` (array of strings) and optional `enabled` (array of strings) |
 | `switch_tool` | `workspace`, `tool`, `scope` (strings), `group` (object as above), `on` (boolean) | no result; `scope` is `project` or `everywhere` |
 | `skills_disabled` | `workspace` (string) | `project` and `everywhere` (arrays of strings) |

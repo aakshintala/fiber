@@ -1884,3 +1884,27 @@ fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
         ]})
     );
 }
+
+#[test]
+fn a_required_nullable_property_uses_strict_mode() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = vec![ToolDefinition {
+        input_schema: json!({
+            "type": "object",
+            "properties": {"offset": {"type": ["integer", "null"]}},
+            "required": ["offset"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    }];
+    run(Box::new(
+        Completions::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["tools"][0]["function"]["strict"],
+        true
+    );
+}

@@ -117,8 +117,13 @@ fn a_deadline_passed_while_work_ran_stops_the_work() {
         deadline,
         Limit::Request,
         |hop| {
-            miss_the_watcher(&fake, hop, deadline);
-            fake.advance(Duration::from_secs(60));
+            fake.advance_when_parked_then(
+                Some(deadline),
+                None,
+                Duration::from_secs(60),
+                &Deadline::after(SIGNAL),
+                || hop.lock().done = true,
+            );
             Ok::<_, ()>(1)
         },
     );

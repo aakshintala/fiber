@@ -7,14 +7,13 @@ use std::time::Duration;
 
 use contract::diag::Op;
 use contract::emit::Emit;
-use contract::events::DelegateStarted;
+use contract::events::{DelegateStarted, JobStarted};
 use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ErrorCode, SessionId};
+use contract::{JobId, SessionId};
 use serde_json::{Map, Value, json};
-
 pub(crate) mod group;
 pub(crate) mod models;
 pub(crate) mod outcome;
@@ -28,6 +27,7 @@ pub use run::{Launch, Launched, Watch, Watched};
 
 use run::Runner;
 
+use crate::error::JobsError;
 use crate::registry::{Registry, mint_job_id};
 
 /// Starts a Fiber delegate: a child `fiber session` that runs the prompt
@@ -66,16 +66,11 @@ pub struct DelegateSpawn {
 
 pub(crate) const DEPTH_CAP: u32 = 2;
 
-pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
+pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<JobsError> {
     if depth >= DEPTH_CAP {
-        let message = format!(
-            "This delegate is at depth {DEPTH_CAP}, the deepest a delegate can be, so it cannot use `{tool}`; do the work in this session."
-        );
-        Some(crate::registry::failed(
-            ErrorCode::DepthExceeded,
-            message.clone(),
-            message,
-        ))
+        Some(JobsError::DepthExceeded {
+            tool: tool.to_owned(),
+        })
     } else {
         None
     }
@@ -85,9 +80,13 @@ pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
 /// string. `model` is checked in `run`, not here, so a missing or
 /// wrongly typed one reaches the tool's own check, which lists the valid
 /// roles and references (`docs/delegates.md`, "Choosing a model").
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn check_effects_arguments(
     arguments: &Map<String, Value>,
-) -> Result<(String, String, Option<Duration>), String> {
+) -> Result<(String, String, Option<Duration>), JobsError> {
     let (description, prompt) = check_pair(arguments, "description", "prompt")?;
     let timeout = match arguments.get("timeout_ms") {
         None => None,
@@ -95,7 +94,7 @@ fn check_effects_arguments(
             let milliseconds = value
                 .as_u64()
                 .filter(|milliseconds| *milliseconds >= 1)
-                .ok_or_else(|| "`timeout_ms` must be an integer of 1 or more.".to_owned())?;
+                .ok_or(JobsError::TimeoutNotPositive)?;
             Some(Duration::from_millis(milliseconds))
         }
     };
@@ -104,44 +103,32 @@ fn check_effects_arguments(
 
 /// Reads each of the two names from the call's arguments: each is
 /// required, and each is a string.
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 pub(crate) fn check_pair(
     arguments: &Map<String, Value>,
     first: &str,
     second: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), JobsError> {
     let mut missing = Vec::new();
     for name in [first, second] {
         if !arguments.contains_key(name) {
-            missing.push(name);
+            missing.push(name.to_owned());
         }
     }
     if !missing.is_empty() {
-        return Err(format!(
-            "Give {} as {}.",
-            missing.join(", "),
-            if missing.len() == 1 {
-                "a string"
-            } else {
-                "strings"
-            }
-        ));
+        return Err(JobsError::ArgumentsMissing { names: missing });
     }
     let mut wrong = Vec::new();
     for name in [first, second] {
         if !arguments[name].is_string() {
-            wrong.push(name);
+            wrong.push(name.to_owned());
         }
     }
     if !wrong.is_empty() {
-        return Err(format!(
-            "{} must be {}.",
-            wrong.join(", "),
-            if wrong.len() == 1 {
-                "a string"
-            } else {
-                "strings"
-            }
-        ));
+        return Err(JobsError::ArgumentsNotStrings { names: wrong });
     }
     Ok((string(arguments, first), string(arguments, second)))
 }
@@ -150,6 +137,15 @@ pub(crate) fn check_pair(
 /// reads as empty and never reaches here.
 fn string(arguments: &Map<String, Value>, name: &str) -> String {
     arguments[name].as_str().unwrap_or_default().to_owned()
+}
+
+type ExtensionStart<'a> = (&'a str, &'a mut dyn FnMut(&JobId));
+
+struct Started {
+    job_id: JobId,
+    output_path: String,
+    started: JobStarted,
+    delegate: DelegateStarted,
 }
 
 impl Tool for DelegateSpawn {
@@ -193,7 +189,8 @@ impl Tool for DelegateSpawn {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        check_effects_arguments(arguments).map_err(EffectsError::Arguments)?;
+        check_effects_arguments(arguments)
+            .map_err(|error| EffectsError::Arguments(error.to_string()))?;
         Ok(Effects {
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -218,42 +215,85 @@ impl Tool for DelegateSpawn {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        if let Some(output) = depth_refusal(self.depth, "delegate_spawn") {
-            return output;
+        match self.start(arguments, None) {
+            Ok(start) => Output {
+                content: vec![ContentPart::Text {
+                    text: format!(
+                        "Started delegate {}. Its log is {}.",
+                        start.job_id.0, start.output_path
+                    ),
+                }],
+                jobs: vec![
+                    JobRecord::Started(start.started),
+                    JobRecord::DelegateStarted(start.delegate),
+                ],
+                ..Output::default()
+            },
+            Err(error) => error.output(false),
         }
-        let (description, prompt, timeout) = match check_effects_arguments(arguments) {
-            Ok(call) => call,
-            Err(message) => {
-                return crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                );
+    }
+}
+
+impl DelegateSpawn {
+    /// Starts an extension-owned delegate with the model tool's admission
+    /// and limits. Binds its id before spawning; the caller must unbind on
+    /// a later failure. `bind` must not start or resume another delegate.
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
+    pub fn start_extension(
+        &self,
+        extension: &str,
+        arguments: &Map<String, Value>,
+        bind: &mut dyn FnMut(&JobId),
+    ) -> Result<JobId, JobsError> {
+        self.start(arguments, Some((extension, bind)))
+            .map(|start| start.job_id)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
+    fn start(
+        &self,
+        arguments: &Map<String, Value>,
+        mut extension: Option<ExtensionStart<'_>>,
+    ) -> Result<Started, JobsError> {
+        if let Some(error) = depth_refusal(self.depth, "delegate_spawn") {
+            return Err(error);
+        }
+        if extension.is_some() {
+            let unknown: Vec<_> = arguments
+                .keys()
+                .filter(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "description" | "prompt" | "model" | "timeout_ms"
+                    )
+                })
+                .cloned()
+                .collect();
+            if !unknown.is_empty() {
+                return Err(JobsError::ArgumentsNotAllowed { keys: unknown });
             }
-        };
+        }
+        let (description, prompt, timeout) = check_effects_arguments(arguments)?;
         // The schema leaves `model` optional and untyped, so a missing or
         // wrongly typed value reaches this check, which lists the valid
         // roles and references (`docs/delegates.md`, "Choosing a model").
         let model = match arguments.get("model") {
             Some(Value::String(model)) => model.clone(),
             None => {
-                let message = format!(
-                    "Give model: a role or a full reference.\n{}",
-                    self.resolve.catalogue
-                );
-                return crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                );
+                return Err(JobsError::ModelMissing {
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
             Some(_) => {
-                let message = format!("model must be a string.\n{}", self.resolve.catalogue);
-                return crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                );
+                return Err(JobsError::ModelNotString {
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
         };
         // Checked when the call is made, before any process starts: an
@@ -261,12 +301,10 @@ impl Tool for DelegateSpawn {
         let resolved = match (self.resolve.lookup)(&model) {
             Ok(resolved) => resolved,
             Err(reason) => {
-                let message = format!("{reason}\n{}", self.resolve.catalogue);
-                return crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                );
+                return Err(JobsError::ModelUnresolved {
+                    reason,
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
         };
         // Checked after the model resolved and before anything starts:
@@ -276,103 +314,122 @@ impl Tool for DelegateSpawn {
         let credential = match (self.resolve.credential)(&model) {
             Ok(credential) => credential,
             Err(message) => {
-                return crate::registry::failed(
-                    ErrorCode::CredentialMissing,
-                    message.clone(),
-                    message,
-                );
+                return Err(JobsError::CredentialUnavailable { message });
             }
         };
-        let admitted = self.registry.admit(|| {
-            let job_id = mint_job_id();
-            let session_id = run::mint_session_id();
-            let output_path = self
-                .sessions
-                .join(&session_id.0)
-                .join("events.jsonl")
-                .to_string_lossy()
-                .into_owned();
-            let launched = Launched {
-                depth: self.depth.saturating_add(1),
-                session_id: session_id.clone(),
-                job_id: job_id.clone(),
-                parent: self.parent.clone(),
-                model: resolved.clone(),
-                prompt,
-                workspace: self.workspace.clone(),
-                resume: false,
-                credential,
-            };
-            // The stamp covers building the runner, spawning and listing the
-            // child, and recording the job. No clock is read without an
-            // installed timing.
-            let start = self
-                .registry
-                .timing()
-                .map(|timing| (timing, self.clock.now()));
-            let (runner, stop) = Runner::new(
-                job_id.clone(),
-                session_id.clone(),
-                PathBuf::from(&output_path),
-                Arc::clone(&self.clock),
-                self.bound,
-                self.cap,
-                Arc::clone(&self.watch),
-                None,
-                timeout,
-            );
-            let (child, listing) = runner.spawn(&self.launch, &launched)?;
-            let delegate = DelegateStarted {
-                job_id: job_id.clone(),
-                delegate_session_id: session_id.clone(),
-                harness: "fiber".to_owned(),
-                // The resolved reference, with any role resolved: a full
-                // reference argument records the same text as before
-                // (`docs/events.md`, "`delegate_started`").
-                model: format!("fiber:{resolved}"),
-                workspace: self.workspace.to_string_lossy().into_owned(),
-                worktree: None,
-                forked_from: None,
-            };
-            let (started, finish) = self.registry.open_started(
-                job_id.clone(),
-                "delegate_spawn".to_owned(),
-                description,
-                output_path.clone(),
-                stop,
-                delegate.clone(),
-            );
-            std::thread::spawn(move || runner.drive(child, Some(listing), finish));
-            Ok::<_, std::io::Error>((
-                Output {
-                    content: vec![ContentPart::Text {
-                        text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),
-                    }],
-                    jobs: vec![
-                        JobRecord::Started(started),
-                        JobRecord::DelegateStarted(delegate),
-                    ],
-                    ..Output::default()
-                },
-                start,
-            ))
-        });
+        let admitted = self.registry.admit(
+            #[allow(
+                clippy::result_large_err,
+                reason = "every jobs boundary returns the crate's error enum by value"
+            )]
+            || {
+                if extension.is_some() && !self.registry.has_inbox() {
+                    return Err(JobsError::NoInbox);
+                }
+                let job_id = mint_job_id();
+                if let Some((_, bind)) = extension.as_mut() {
+                    bind(&job_id);
+                }
+                let session_id = run::mint_session_id();
+                let output_path = self
+                    .sessions
+                    .join(&session_id.0)
+                    .join("events.jsonl")
+                    .to_string_lossy()
+                    .into_owned();
+                let launched = Launched {
+                    depth: self.depth.saturating_add(1),
+                    session_id: session_id.clone(),
+                    job_id: job_id.clone(),
+                    parent: self.parent.clone(),
+                    model: resolved.clone(),
+                    prompt,
+                    workspace: self.workspace.clone(),
+                    resume: false,
+                    credential,
+                };
+                // The stamp covers building the runner, spawning and listing the
+                // child, and recording the job. No clock is read without an
+                // installed timing.
+                let start = self
+                    .registry
+                    .timing()
+                    .map(|timing| (timing, self.clock.now()));
+                let (runner, stop) = Runner::new(
+                    job_id.clone(),
+                    session_id.clone(),
+                    PathBuf::from(&output_path),
+                    Arc::clone(&self.clock),
+                    self.bound,
+                    self.cap,
+                    Arc::clone(&self.watch),
+                    None,
+                    timeout,
+                );
+                let (child, listing) = runner
+                    .spawn(&self.launch, &launched)
+                    .map_err(|source| JobsError::SpawnFailed { source })?;
+                let delegate = DelegateStarted {
+                    job_id: job_id.clone(),
+                    delegate_session_id: session_id.clone(),
+                    harness: "fiber".to_owned(),
+                    // The resolved reference, with any role resolved: a full
+                    // reference argument records the same text as before
+                    // (`docs/events.md`, "`delegate_started`").
+                    model: format!("fiber:{resolved}"),
+                    workspace: self.workspace.to_string_lossy().into_owned(),
+                    worktree: None,
+                    forked_from: None,
+                };
+                let (started, finish) = if let Some((extension, _)) = extension {
+                    let started = JobStarted {
+                        job_id: job_id.clone(),
+                        tool: None,
+                        extension: Some(extension.to_owned()),
+                        description: description.clone(),
+                        output_path: output_path.clone(),
+                    };
+                    let finish = self.registry.open_extension_started(
+                        job_id.clone(),
+                        extension.to_owned(),
+                        description,
+                        output_path.clone(),
+                        stop,
+                        delegate.clone(),
+                    );
+                    (started, finish)
+                } else {
+                    self.registry.open_started(
+                        job_id.clone(),
+                        "delegate_spawn".to_owned(),
+                        description,
+                        output_path.clone(),
+                        stop,
+                        delegate.clone(),
+                    )
+                };
+                std::thread::spawn(move || runner.drive(child, Some(listing), finish));
+                Ok((
+                    Started {
+                        job_id,
+                        output_path,
+                        started,
+                        delegate,
+                    },
+                    start,
+                ))
+            },
+        );
         match admitted {
             Ok((output, start)) => {
                 // Timing emission holds no start gate: its sink may enter the registry.
                 if let Some((timing, started)) = start {
                     drop(timing(Op::JobsStart, None, Some(started)));
                 }
-                output
+                Ok(output)
             }
-            Err(crate::registry::runs::Admit::Full) => {
-                let message = crate::registry::runs::cap_message();
-                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
-            }
-            Err(crate::registry::runs::Admit::Start(source)) => {
-                let message = format!("Starting the delegate failed: {source}.");
-                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
-            }
+            Err(crate::registry::runs::Admit::Full) => Err(JobsError::DelegatesFull),
+            Err(crate::registry::runs::Admit::Start(error)) => Err(error),
         }
     }
 }

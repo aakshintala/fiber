@@ -594,11 +594,13 @@ mod lock_tests;
 
 pub(crate) mod atomic;
 pub(crate) mod lines;
+mod notes;
 
 mod entries;
 
 pub use atomic::write_atomic;
 pub use entries::update_global_entries;
+pub use notes::{FileOutcome, FileSaved, NotesSaved, NotesWrite, save_reviewer_notes, version};
 
 #[cfg(test)]
 #[path = "write_tests.rs"]

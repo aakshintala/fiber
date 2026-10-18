@@ -276,9 +276,9 @@ impl Socket {
     }
 }
 
-/// Collects lines until `done`, each taking what remains of the test's
-/// [`Deadline`].
-fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+/// Collects the hub [`Socket`]'s lines until `done`, each taking what
+/// remains of the test's [`Deadline`]..
+fn until_hub(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
         let line = client.next(what, &lines);
@@ -362,7 +362,7 @@ fn echo_call() -> Response {
 /// be gone: until then it still holds its connections and its log, and
 /// answers a command `closing`.
 fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
-    let lines = until(client, "fiber_exited", |line| {
+    let lines = until_hub(client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     fakes::try_matching_exits(&setup.workspace_text(), setup.deadline.left()).unwrap_or_else(
@@ -382,13 +382,13 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
     client.send(&subscribe("c_sub", &id));
-    until(&client, "the full subscribe", |line| {
+    until_hub(&client, "the full subscribe", |line| {
         acknowledges(line, "c_sub")
     });
     client.send(&close(&id));
     until_exited(&client, &setup);
     client.send(&command("c_tools", &id, "tools", json!({})));
-    let reopened = until(&client, "the reopened stream", |line| {
+    let reopened = until_hub(&client, "the reopened stream", |line| {
         line["kind"] == "stream_reopened"
     });
     let boundary = reopened.last().unwrap();
@@ -398,7 +398,7 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
     let last = boundary["payload"]["last_seq"]
         .as_u64()
         .expect("a nonempty fold has a boundary");
-    let fold = until(&client, "the fold's last line", |line| {
+    let fold = until_hub(&client, "the fold's last line", |line| {
         line["seq"].as_u64() == Some(last)
     });
     let seqs: Vec<_> = fold
@@ -421,7 +421,7 @@ fn a_full_resume_announces_its_fold_without_a_subscribe_acknowledgement() {
         acks.is_empty(),
         "no subscribe acknowledgement during reopening: {acks:?}"
     );
-    let answered = until(&client, "the tools acknowledgement", |line| {
+    let answered = until_hub(&client, "the tools acknowledgement", |line| {
         acknowledges(line, "c_tools")
     });
     assert_eq!(
@@ -449,7 +449,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
     client.send(&subscribe("c_sub", &id));
-    let replay = until(&client, "the subscribe acknowledgement", |line| {
+    let replay = until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
     assert_eq!(
@@ -462,7 +462,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     // acknowledgement, after the resumed `fiber_started`.
     let mut resumed = false;
     let mut prompted = false;
-    let turn = until(&client, "the resumed turn", |line| {
+    let turn = until_hub(&client, "the resumed turn", |line| {
         resumed |= line["kind"] == "fiber_started" && line["payload"]["resumed"] == true;
         prompted |= acknowledges(line, "c_prompt");
         resumed && prompted && line["kind"] == "turn_completed"
@@ -476,13 +476,13 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
     // A second client finds the session running and attaches.
     let second = connect_hub(&setup, &hub);
     second.send(&subscribe("c_sub2", &id));
-    until(&second, "the second subscribe", |line| {
+    until_hub(&second, "the second subscribe", |line| {
         acknowledges(line, "c_sub2")
     });
 
     // A valid id with no log names no session.
     client.send(&subscribe("c_none", "s_0000000000000000"));
-    let rejected = until(&client, "the rejection", |line| {
+    let rejected = until_hub(&client, "the rejection", |line| {
         line["kind"] == "command_rejected"
     });
     let rejected = rejected.last().unwrap();
@@ -515,7 +515,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
     let hub = Arc::new(Mutex::new(None));
     let first = connect_hub(&setup, &hub);
     first.send(&subscribe("c_sub", &id));
-    until(&first, "the first subscribe", |line| {
+    until_hub(&first, "the first subscribe", |line| {
         acknowledges(line, "c_sub")
     });
 
@@ -523,7 +523,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
     // already took, so this connection holds no level on it.
     let second = connect_hub(&setup, &hub);
     second.send(&subscribe("c_sub", &id));
-    let refused = until(&second, "the refusal", |line| {
+    let refused = until_hub(&second, "the refusal", |line| {
         line["kind"] == "command_rejected"
     });
     let refused = refused.last().unwrap();
@@ -536,7 +536,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
     // The resumed session sees only this subscribe from the second
     // connection, so it is accepted.
     second.send(&subscribe("c_sub2", &id));
-    let answered = until(&second, "the second subscribe's answer", |line| {
+    let answered = until_hub(&second, "the second subscribe's answer", |line| {
         (line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
             && line["payload"]["command_id"] == "c_sub2"
     });
@@ -581,11 +581,11 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
     // Subscribed while the model call is held: the approval's idle wait
     // starts only after it.
     client.send(&subscribe("c_sub", &id));
-    until(&client, "the subscribe acknowledgement", |line| {
+    until_hub(&client, "the subscribe acknowledgement", |line| {
         acknowledges(line, "c_sub")
     });
     server.release();
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = until_hub(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().unwrap()["payload"]["request_id"]
@@ -600,7 +600,7 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
     setup.idle(None);
 
     client.send(&allow("c_reply", &id, &request));
-    let resumed = until(&client, "the resumed turn", |line| {
+    let resumed = until_hub(&client, "the resumed turn", |line| {
         line["kind"] == "turn_completed"
     });
     // The hub sent the subscription again; its acknowledgement is not
@@ -665,7 +665,7 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
     let client = connect_hub(&setup, &hub);
     client.send(&subscribe("c_sub", &id));
     let mut resumed = false;
-    until(&client, "the re-raised permission_requested", |line| {
+    until_hub(&client, "the re-raised permission_requested", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
             resumed = true;
         }
@@ -674,7 +674,7 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
             && line["payload"]["request_id"] == request.as_str()
     });
     client.send(&allow("c_reply", &id, &request));
-    let decided = until(&client, "turn_completed", |line| {
+    let decided = until_hub(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(decided.iter().any(|line| acknowledges(line, "c_reply")));

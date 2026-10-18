@@ -378,7 +378,7 @@ impl Running {
 /// A client on the session's socket that tells a read deadline from the
 /// session closing the socket. Every read and write takes what remains of
 /// the test's [`Deadline`]: expiry panics naming what was awaited, while the session closing the socket
-/// ends [`until_close`] and panics from [`recv`] and [`until`] naming
+/// ends [`until_session_close`] and panics from [`recv`] and [`until_session`] naming
 /// the wait the close cut short.
 struct Socket {
     write: Mutex<UnixStream>,
@@ -451,7 +451,7 @@ fn recv(client: &Socket, what: &str) -> Value {
 
 /// Collects socket lines until the session closes the socket, each taking
 /// what remains of the test's [`Deadline`].
-fn until_close(client: &Socket) -> Vec<Value> {
+fn until_session_close(client: &Socket) -> Vec<Value> {
     let mut lines = Vec::new();
     while let Some(line) = client.next("the session to close the socket", &lines) {
         lines.push(line);
@@ -516,13 +516,13 @@ const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
 /// session writes it after the subscribe acknowledgement, with no order
 /// against lines the loop writes meanwhile (`docs/events.md`, `clients`).
 fn until_clients(client: &Socket) -> Vec<Value> {
-    until(client, "the clients line", |line| line["kind"] == "clients")
+    until_session(client, "the clients line", |line| line["kind"] == "clients")
 }
 
 /// Collects lines until `done`, each taking what remains of the test's
 /// [`Deadline`]: expiry panics
 /// naming `what`, and the socket closing first panics too.
-fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+fn until_session(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
         let line = match client.next(what, &lines) {
@@ -562,7 +562,7 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let turn_started = rest
@@ -580,7 +580,7 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -629,7 +629,7 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/review-pr 42"}]}}"#,
     );
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let expanded = "Review the pull request named in the arguments.\n\n42";
@@ -655,7 +655,7 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -701,7 +701,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     let attached = until_clients(&client);
     server.release();
 
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -781,7 +781,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     let attached = until_clients(&client);
     server.release_one();
-    let first = until(&client, "the first turn_completed", |line| {
+    let first = until_session(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let started = attached
@@ -809,7 +809,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
         "the held second response was requested"
     );
     server.release();
-    let second = until(&client, "the second turn_completed", |line| {
+    let second = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let restarted = second
@@ -828,7 +828,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     assert_eq!(
         tail.last()
             .expect("the close was answered and the session exited")["kind"],
@@ -1108,7 +1108,7 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
     );
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = until_session(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().expect("the escalation was requested");
@@ -1121,7 +1121,7 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
         ),
     );
-    let decided = until(&client, "turn_completed", |line| {
+    let decided = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let resolved = decided
@@ -1143,7 +1143,7 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1268,7 +1268,7 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(
@@ -1277,7 +1277,7 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
         "the first session answered after the refusal: {rest:?}"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = first.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1348,7 +1348,7 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
     // The replay holds the first process's request; the resumed process
     // raises it again after its own `fiber_started`.
     let mut resumed = false;
-    let replay = until(&client, "the re-raised permission_requested", |line| {
+    let replay = until_session(&client, "the re-raised permission_requested", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
             resumed = true;
         }
@@ -1377,7 +1377,7 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{pending}","decision":"allow"}}}}"#
         ),
     );
-    let decided = until(&client, "turn_completed", |line| {
+    let decided = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let accepted = decided
@@ -1405,7 +1405,7 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1470,7 +1470,7 @@ fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_skills","command":"skills"}"#);
-    let lines = until(client, "the skills answer", |line| {
+    let lines = until_session(client, "the skills answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
     });
     let result = lines.last().unwrap()["payload"]["result"].clone();
@@ -1485,7 +1485,7 @@ fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until(client, "the commands answer", |line| {
+    let lines = until_session(client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = lines.last().unwrap()["payload"]["result"].clone();
@@ -1520,7 +1520,7 @@ fn commands_answers_with_the_workspaces_skills_and_templates() {
              "tag": "template"}]})
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1609,7 +1609,7 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
              "shadows": []}]})
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    events.extend(until_close(&client));
+    events.extend(until_session_close(&client));
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1661,7 +1661,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     let mut resumed = false;
-    let mut events = until(&client, "the re-raised permission request", |line| {
+    let mut events = until_session(&client, "the re-raised permission request", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
             resumed = true;
         }
@@ -1675,7 +1675,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
     );
 
     send(&client, r#"{"id":"c_skills","command":"skills"}"#);
-    let skills = until(&client, "the skills answer", |line| {
+    let skills = until_session(&client, "the skills answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
     });
     let result = skills.last().unwrap()["payload"]["result"].clone();
@@ -1698,10 +1698,10 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         &client,
         r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
     );
-    events.extend(until(&client, "the close answer", |line| {
+    events.extend(until_session(&client, "the close answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
     }));
-    events.extend(until_close(&client));
+    events.extend(until_session_close(&client));
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1755,7 +1755,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
 
 /// The acknowledgement or rejection naming `id`.
 fn answer(client: &Socket, id: &str) -> Value {
-    until(client, "the answer", |line| {
+    until_session(client, "the answer", |line| {
         line["payload"].get("command_id") == Some(&json!(id))
     })
     .into_iter()
@@ -1785,7 +1785,7 @@ fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
     );
     recv(&client, "the subscribe acknowledgement");
     send(&client, &image_prompt("c_prompt", "look", PIXEL_BASE64));
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let turn_started = rest
@@ -1843,7 +1843,7 @@ fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -1918,7 +1918,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
 
     let mut saw_applied = false;
-    let rest = until(
+    let rest = until_session(
         &client,
         "the steer applied and the turn completed",
         |line| {
@@ -1967,7 +1967,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -2040,7 +2040,7 @@ fn unreadable_pasted_images_are_rejected_without_a_turn() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -2216,7 +2216,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
         "the held second response was requested"
     );
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     server.release();
@@ -2254,11 +2254,11 @@ fn close_now_while_idle_with_a_job_starts_no_turn() {
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
     let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
     // The prompt's turn completed: the session is idle with the job running.
-    let _done = until(&client, "the prompt's turn_completed", |line| {
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_exited_clean(&assert_exited_0(status, &out, &stderr));
@@ -2317,7 +2317,7 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the editor"}]}}"#,
     );
-    let started = until(&client, "the job_started line", |line| {
+    let started = until_session(&client, "the job_started line", |line| {
         line["kind"] == "job_started"
     });
     let job_id = started.last().unwrap()["payload"]["job_id"]
@@ -2336,7 +2336,7 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
     let mut accepted = false;
     let mut echoed = false;
     let mut ended = false;
-    let lines = until(
+    let lines = until_session(
         &client,
         "the input's acknowledgement, echo and turn end",
         |line| {
@@ -2367,7 +2367,7 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
         "the prompt's turn ended"
     );
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_exited_clean(&assert_exited_0(status, &out, &stderr));
@@ -2407,7 +2407,7 @@ fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
     );
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = until_session(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().expect("the escalation was requested");
@@ -2416,7 +2416,7 @@ fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
         .expect("the request has an id")
         .to_owned();
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     let exited = assert_exited_0(status, &out, &stderr);
@@ -2470,11 +2470,11 @@ fn close_now_while_idle_with_no_jobs_exits_0() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    let _done = until(&client, "the prompt's turn_completed", |line| {
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_exited_clean(&assert_exited_0(status, &out, &stderr));
@@ -2487,14 +2487,14 @@ fn close_without_now_waits_for_the_job_to_finish() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
     let (mut running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
-    let _done = until(&client, "the prompt's turn_completed", |line| {
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let accepted = answer(&client, "c_close");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
     // The ending-notice turn completes, and the session waits for the job.
-    let _notice = until(&client, "the notice turn_completed", |line| {
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(
@@ -2503,7 +2503,7 @@ fn close_without_now_waits_for_the_job_to_finish() {
     );
     assert!(group_alive(setup.deadline, job_group), "the job still runs");
     fs::write(setup.workspace().join("go"), "").unwrap();
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_exited_0(status, &out, &stderr);
@@ -2551,17 +2551,17 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
     let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
-    let _done = until(&client, "the prompt's turn_completed", |line| {
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let accepted = answer(&client, "c_close");
     assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
-    let _notice = until(&client, "the notice turn_completed", |line| {
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send_close_now(&client);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert_exited_0(status, &out, &stderr);
@@ -2644,14 +2644,14 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
     );
     // Each receive below takes what remains of the test's `Deadline`,
     // naming the wait (`docs/testing.md`, "Waits and timeouts").
-    let asked = until(&client, "the escalation's permission_requested", |line| {
+    let asked = until_session(&client, "the escalation's permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request = asked.last().expect("the escalation was requested");
     assert_eq!(request["payload"]["step"], "review");
     let request_id = request["payload"]["request_id"].as_str().unwrap();
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let denied = until(&client, "the close's permission_resolved", |line| {
+    let denied = until_session(&client, "the close's permission_resolved", |line| {
         line["kind"] == "permission_resolved"
     });
     let resolved = denied
@@ -2668,7 +2668,7 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
         resolved["payload"]["reason"],
         "The session closed while waiting for an answer."
     );
-    let done = until(&client, "the denied turn's turn_completed", |line| {
+    let done = until_session(&client, "the denied turn's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let end = done.last().expect("the turn ended");
@@ -2678,7 +2678,7 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
         .find(|line| line["kind"] == "tool_call_completed")
         .expect("the denied call completed");
     assert_eq!(completed["payload"]["status"], "denied");
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     let exited = assert_exited_0(status, &out, &stderr);
@@ -2726,7 +2726,7 @@ fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
     let sub = recv(&client, "the subscribe acknowledgement");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let mut tail = until_close(&client);
+    let mut tail = until_session_close(&client);
     tail.insert(0, sub);
     drop(client);
     let (status, out, stderr) = running.wait();
@@ -2791,7 +2791,7 @@ fn the_notes_are_fixed_for_the_session_across_two_turns() {
         &client,
         r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"save the first snippet"}]}}"#,
     );
-    until(&client, "the first turn's turn_completed", |line| {
+    until_session(&client, "the first turn's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     // The notes change on disk between the turns; the running session
@@ -2805,11 +2805,11 @@ fn the_notes_are_fixed_for_the_session_across_two_turns() {
         &client,
         r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"save the second snippet"}]}}"#,
     );
-    until(&client, "the second turn's turn_completed", |line| {
+    until_session(&client, "the second turn's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -3060,7 +3060,7 @@ fn the_prompt_command_runs_a_servers_prompt() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/greet Ada warm"}]}}"#,
     );
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let expanded = "Say hello to Ada, warmly.";
@@ -3093,7 +3093,7 @@ fn the_prompt_command_runs_a_servers_prompt() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -3128,7 +3128,7 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
              "argument_hint": "<who> [tone]", "tag": "fx"}]})
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    events.extend(until_close(&client));
+    events.extend(until_session_close(&client));
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -3183,7 +3183,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     let mut resumed = false;
-    let mut events = until(&client, "the re-raised permission request", |line| {
+    let mut events = until_session(&client, "the re-raised permission request", |line| {
         if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
             resumed = true;
         }
@@ -3197,7 +3197,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
     );
 
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let commands = until(&client, "the commands answer", |line| {
+    let commands = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = commands.last().unwrap()["payload"]["result"].clone();
@@ -3212,10 +3212,10 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         &client,
         r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
     );
-    events.extend(until(&client, "the close answer", |line| {
+    events.extend(until_session(&client, "the close answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
     }));
-    events.extend(until_close(&client));
+    events.extend(until_session_close(&client));
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -3303,7 +3303,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    let first = until(&client, "the first turn_completed", |line| {
+    let first = until_session(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let mut stream = vec![sub];
@@ -3349,7 +3349,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
         &client,
         r#"{"id":"c_load","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
     );
-    let second = until(&client, "the second turn_completed", |line| {
+    let second = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert_eq!(
@@ -3409,7 +3409,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
         &client,
         r#"{"id":"c_load_off","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
     );
-    let third = until(&client, "the third turn_completed", |line| {
+    let third = until_session(&client, "the third turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert_eq!(
@@ -3449,7 +3449,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     assert!(completed["payload"].get("control").is_none());
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
     drop(client);
     let (status, out, stderr) = running.wait();

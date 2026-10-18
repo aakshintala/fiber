@@ -20,9 +20,9 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    CallStatus, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted, JobStarted,
-    Notice, OnFork, Outcome, Parent, ShellCommand, ToolCallArgumentsDelta, ToolCallRequested,
-    TurnOutcome,
+    CallStatus, Clients, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted,
+    JobStarted, Notice, OnFork, Outcome, Parent, RepositoryCodeOffered, ShellCommand,
+    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, HookFailure, Hooks, JobDelivery, StateLine,
@@ -625,6 +625,450 @@ fn one_step_with<'a>(between: &[&'a str]) -> Vec<&'a str> {
 }
 
 // Idle: a notice starts a turn.
+
+fn write_extension_started(world: &mut World, id: &str) {
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId(id.into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "extension scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    write_delegate_started(world, id, "fiber");
+}
+
+#[test]
+fn an_extension_end_is_claimed_hooked_and_logged_without_turn_input() {
+    for running in [false, true] {
+        for hold in [false, true] {
+            for block in [false, true] {
+                let hooks = Arc::new(RecordingHooks::default());
+                hooks.answer_with(move |seen| {
+                    if block {
+                        withheld()
+                    } else {
+                        changed(&seen.content.replace("SECRET", "redacted"))
+                    }
+                });
+                let mut world =
+                    World::new(Vec::new(), Vec::new(), |_| Vec::new()).hooked(Arc::clone(&hooks));
+                write_extension_started(&mut world, DELEGATE);
+                let asked = Asked::default();
+                let delivery = counted_delegate(DELEGATE, "SECRET", hold, &asked);
+                let looped = world.looped.as_mut().unwrap();
+                let before = looped.conversation.clone();
+                if running {
+                    looped
+                        .admit_running(delivery, &TurnId("t_test".into()))
+                        .unwrap();
+                } else {
+                    let mut input = crate::inbox::TurnInput::of(Vec::new());
+                    looped.admit_idle(delivery, &mut input).unwrap();
+                    assert!(input.pieces.is_empty());
+                }
+                assert_eq!(asked.count(), 1);
+                assert!(looped.queued.is_empty());
+                assert_eq!(looped.conversation, before);
+                assert!(world.requests().is_empty());
+                let ends: Vec<_> = log::read(&world.dir)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|line| {
+                        matches!(line.kind.as_str(), "delegate_finished" | "job_completed")
+                    })
+                    .collect();
+                assert_eq!(ends.len(), if hold { 2 } else { 0 });
+                if hold {
+                    assert_eq!(kinds(&ends), ["delegate_finished", "job_completed"]);
+                    assert!(
+                        ends.iter()
+                            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+                    );
+                    assert_eq!(
+                        ends[0].payload["text"],
+                        if block {
+                            withheld_line()
+                        } else {
+                            "redacted".into()
+                        }
+                    );
+                    let seen = hooks.calls();
+                    assert_eq!(seen[0].delivery, Some(JobDelivery::Delegate));
+                    assert_eq!(seen[0].tool, "");
+                    assert_eq!(seen[0].content, "SECRET");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn only_model_jobs_hold_idle_and_appear_in_the_jobs_check() {
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[JOB, DELEGATE]);
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new())
+        .with_jobs(jobs)
+        .idle(Duration::from_secs(60));
+    write_extension_started(&mut world, DELEGATE);
+    let looped = world.looped.as_mut().unwrap();
+    let model = looped.model_running(looped.running());
+    assert_eq!(model, [JobId(JOB.into())]);
+    looped.start_unattended();
+    assert!(looped.check_deadline(&model).is_some());
+    assert!(looped.check_deadline(&[]).is_none());
+    let until = looped.idle_deadline();
+    assert!(looped.idle_until(until, &model).is_none());
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped.check_jobs(&mut input).unwrap();
+    assert_eq!(input.pieces.len(), 1);
+    assert!(
+        matches!(looped.queued.back(), Some(super::Queued::Pending(ids, _)) if ids == &[JobId(JOB.into())])
+    );
+}
+
+fn extension_start(id: &str) -> Delivery {
+    Delivery::ExtensionJob(
+        JobStarted {
+            job_id: JobId(id.into()),
+            tool: None,
+            extension: Some("test/scan".into()),
+            description: "scan".into(),
+            output_path: "/child/events.jsonl".into(),
+        },
+        DelegateStarted {
+            job_id: JobId(id.into()),
+            delegate_session_id: SessionId("s_child".into()),
+            harness: "fiber".into(),
+            model: "fake/model".into(),
+            workspace: "/w".into(),
+            worktree: None,
+            forked_from: None,
+        },
+    )
+}
+
+#[test]
+fn extension_start_racing_a_running_read_neither_holds_idle_nor_notifies_on_close() {
+    for close in [false, true] {
+        let jobs = Arc::new(Listed::default());
+        jobs.set(&[DELEGATE]);
+        let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new())
+            .with_jobs(jobs.clone())
+            .idle(Duration::from_secs(60));
+        *jobs.arriving.lock().unwrap() =
+            Some((world.inbox.clone(), vec![extension_start(DELEGATE)]));
+        let (stops, stopped) = mpsc::channel();
+        *jobs.stops.lock().unwrap() = Some(stops);
+        world.looped.as_mut().unwrap().closing = close;
+        let origin = world.clock.now();
+        let finished = world.spawn_run();
+        if !close {
+            assert!(
+                world
+                    .clock
+                    .await_parked(origin + Duration::from_secs(60), DEADLINE)
+            );
+            world.clock.advance(Duration::from_secs(60));
+            world.send(Delivery::Cancelled);
+        }
+        let wait = Deadline::after(DEADLINE);
+        assert_eq!(wait.recv(&stopped).unwrap(), JobId(DELEGATE.into()));
+        {
+            let mut ids = jobs.ids.lock().unwrap();
+            world.send(delegate_held(DELEGATE, "PRIVATE SENTINEL".into()));
+            ids.clear();
+        }
+        ran(&finished, &wait);
+        let lines = log::read(&world.dir).unwrap();
+        assert!(
+            !lines
+                .iter()
+                .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
+        );
+        assert!(lines.iter().any(|line| line.kind == "delegate_finished"));
+        assert!(world.requests().is_empty());
+    }
+}
+
+#[test]
+fn jobs_check_drains_an_extension_start_after_reading_the_running_list() {
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[DELEGATE]);
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new()).with_jobs(jobs.clone());
+    *jobs.arriving.lock().unwrap() = Some((world.inbox.clone(), vec![extension_start(DELEGATE)]));
+    let looped = world.looped.as_mut().unwrap();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped.check_jobs(&mut input).unwrap();
+    assert!(input.pieces.is_empty());
+    assert!(looped.queued.is_empty());
+    assert!(looped.handoff.carry.owned(DELEGATE));
+}
+
+struct EmptyOffer;
+
+impl contract::repository::RepositoryCode for EmptyOffer {
+    fn unapproved(&self) -> Result<Vec<contract::repository::Unapproved>, Failure> {
+        Ok(Vec::new())
+    }
+
+    fn file(&self, _: &str) -> Result<String, Failure> {
+        Err(Failure {
+            code: ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
+
+    fn decide(
+        &self,
+        _: &contract::events::OfferedItem,
+        _: contract::events::OfferDecision,
+    ) -> Result<contract::repository::Decided, Failure> {
+        unreachable!("the pending offer has no items")
+    }
+}
+
+/// Drives a turn to an approval wait, unwinds it past the idle delay, exits
+/// with the approval suspended, resumes, and finishes the turn. When
+/// `send_start` the resume finds an extension start waiting in the inbox;
+/// when `send_end` the finishing turn's first model request sends the
+/// extension job's end, so `admit_running` takes it in the step drain.
+fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
+    let jobs = Arc::new(Listed::default());
+    let mut world = World::new(
+        vec![calls("gated"), calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    )
+    .with_jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+    .idle(Duration::from_secs(60));
+    let (id_tx, id_rx) = mpsc::channel();
+    let watched = on_request(&world.log, move |id| {
+        id_tx.send(id).unwrap();
+    });
+    world.send(prompt("go"));
+    let origin = world.clock.now();
+    let rx = world.spawn();
+    let _suspended_on: RequestId =
+        Deadline::after(DEADLINE).recv_or_fail(&id_rx, "the approval was raised");
+    world.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(DEADLINE),
+    );
+    world.send(Delivery::Cancelled);
+    assert_eq!(
+        world.join(&rx, &Deadline::after(DEADLINE)),
+        None,
+        "the idle delay unwinds the turn"
+    );
+    watched.join().unwrap();
+    // The fake keeps the job in `running()` from the resume on. Phase 1
+    // lists no job: its approval wait needs the idle deadline to unwind.
+    if send_start {
+        jobs.set(&[DELEGATE]);
+    }
+    crate::fiber_exited(&world.log, &world.dir, Ok(()), false, None).unwrap();
+    drop(world.looped.take());
+    let resumed = crate::resumed(&world.dir).expect("the exit suspends a batch");
+    let (tx, inbox_rx) = mpsc::channel();
+    let by_call = if send_end {
+        vec![vec![delegate_held(DELEGATE, "PRIVATE SENTINEL".into())]]
+    } else {
+        Vec::new()
+    };
+    let provider = Arc::new(During {
+        inner: Arc::clone(&world.provider),
+        inbox: tx.clone(),
+        by_call: Mutex::new(by_call.into()),
+    });
+    let home = world.home().to_path_buf();
+    let workspace = home.join("workspace");
+    let credentials = home.join("credentials");
+    let looped = Loop::resume(
+        crate::Session {
+            log: Arc::clone(&world.log),
+            provider,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home,
+                "/bin/sh".into(),
+                world.dir.join("events.jsonl").display().to_string(),
+                Arc::clone(&world.clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: inbox_rx,
+            tools: vec![("builtin".to_owned(), Arc::new(Gated) as Arc<dyn Tool>)],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules: Arc::new(AskGated),
+            },
+        },
+        resumed,
+    )
+    .unwrap()
+    .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+    .idle_exit(Some(Duration::from_secs(60)));
+    world.inbox = tx;
+    world.looped = Some(looped);
+    if send_start {
+        world.send(extension_start(DELEGATE));
+    }
+    let mut watcher = world.log.watch();
+    let answered = thread::spawn({
+        let inbox = world.inbox.clone();
+        move || {
+            for _ in 0..2 {
+                let (next, lines) = read_until(watcher, "a permission_requested line", |line| {
+                    line.kind == "permission_requested"
+                });
+                watcher = next;
+                let line = lines.last().unwrap();
+                inbox
+                    .send(allow(RequestId(
+                        line.payload["request_id"].as_str().unwrap().into(),
+                    )))
+                    .unwrap();
+            }
+        }
+    });
+    let rx = world.spawn();
+    assert_eq!(
+        world.join(&rx, &Deadline::after(DEADLINE)),
+        Some(TurnOutcome::Completed)
+    );
+    answered.join().unwrap();
+    world
+}
+
+#[test]
+fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
+    let mut world = finish_suspended_turn(true, true);
+    let lines = log::read(&world.dir).unwrap();
+    // The finishing turn recorded the waiting start with no turn and no action.
+    let started: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "job_started")
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert!(started[0].turn_id.is_none() && started[0].action_id.is_none());
+    assert_eq!(started[0].payload["extension"], json!("test/scan"));
+    let delegates: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "delegate_started")
+        .collect();
+    assert_eq!(delegates.len(), 1);
+    assert!(delegates[0].turn_id.is_none() && delegates[0].action_id.is_none());
+    // The finish completes the suspended turn: no new turn started.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.kind == "turn_started")
+            .count(),
+        1
+    );
+    // The step drain wrote the end with no turn and no wake.
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| matches!(line.kind.as_str(), "delegate_finished" | "job_completed"))
+        .collect();
+    assert_eq!(
+        ends.iter()
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["delegate_finished", "job_completed"]
+    );
+    assert_eq!(ends[0].payload["text"], json!("PRIVATE SENTINEL"));
+    assert!(
+        ends.iter()
+            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+    );
+    // The step's next request equals a run without the end: the model
+    // saw nothing of it, only the calls and user texts match (ids and
+    // directories differ per run).
+    let control = finish_suspended_turn(false, false);
+    let requests = world.requests();
+    let control_requests = control.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(control_requests.len(), 3);
+    for (got, want) in requests[1..].iter().zip(control_requests[1..].iter()) {
+        let scrub = |texts: Vec<String>, dir: &str| {
+            texts
+                .iter()
+                .map(|text| text.replace(dir, "<home>"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            scrub(users(got), &world.home().display().to_string()),
+            scrub(users(want), &control.home().display().to_string())
+        );
+        let calls = |request: &ModelRequest| {
+            request
+                .conversation
+                .iter()
+                .filter_map(|input| match input {
+                    Input::ToolCall { call, .. } => Some(call.name.clone()),
+                    Input::User { .. }
+                    | Input::Assistant { .. }
+                    | Input::Reasoning { .. }
+                    | Input::ToolResult { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(calls(got), calls(want));
+    }
+    // With a repository offer pending and the fake keeping the job in
+    // `running()`, the offer wait still ends at the idle delay: the
+    // filtered list is empty.
+    let mut looped = world.looped.take().unwrap();
+    let origin = world.clock.now();
+    let pending = RepositoryCodeOffered {
+        request_id: RequestId("r_offer".into()),
+        items: Vec::new(),
+    };
+    let mut folded = crate::offer::Folded::default();
+    folded.fold(&Event::RepositoryCodeOffered(pending));
+    looped.repository = crate::offer::State::resumed(folded);
+    looped = looped.repository_code(Arc::new(EmptyOffer));
+    looped
+        .log
+        .append(&Event::Clients(Clients { count: 1 }), None, None)
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(looped.offer(None));
+    });
+    world.clock.advance_when_parked(
+        Some(origin + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(DEADLINE),
+    );
+    world.send(Delivery::Cancelled);
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the offer wait ended")
+            .unwrap()
+    );
+}
 
 #[test]
 fn a_notice_while_idle_starts_a_turn_named_by_its_job() {
@@ -1448,6 +1892,7 @@ struct Listed {
     racing: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     arriving: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     reads: Mutex<Option<Sender<usize>>>,
+    stops: Mutex<Option<Sender<JobId>>>,
 }
 
 impl Listed {
@@ -1464,8 +1909,12 @@ impl Jobs for Listed {
         })
     }
 
-    fn stop(&self, _: &JobId) -> bool {
-        false
+    fn stop(&self, id: &JobId) -> bool {
+        self.stops
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|stops| stops.send(id.clone()).is_ok())
     }
 
     fn stop_delegates(&self) -> usize {

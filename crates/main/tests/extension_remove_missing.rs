@@ -18,7 +18,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::json;
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 impl Setup {
     fn new_with_home() -> Self {
@@ -43,7 +43,7 @@ impl Setup {
     }
 
     #[track_caller]
-    fn extension(&self, args: &[&str]) -> Run {
+    fn extension(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(["extension"])
@@ -71,16 +71,8 @@ impl Setup {
             ),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
-}
-
-struct Run {
-    code: Option<i32>,
-    stderr: String,
 }
 
 #[test]

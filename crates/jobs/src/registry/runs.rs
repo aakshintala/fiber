@@ -11,13 +11,14 @@ use contract::events::Outcome;
 use contract::events::{DelegateFinished, DelegateStarted, JobCompleted};
 use contract::inbox::Claim;
 use contract::jobs::{JobRecord, Stop, Taken};
-use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Output, Settle};
-use contract::{ActionId, ErrorCode, JobId, SessionId};
+use contract::shapes::Failure;
+use contract::tool::{Cancel, Settle};
+use contract::{ActionId, JobId, SessionId};
 
 use super::park::Parked;
 use super::{Registry, final_text, lock};
 use crate::delegate::outcome::empty;
+use crate::error::JobsError;
 
 /// What `id` names in this session's registry.
 #[derive(Debug)]
@@ -109,13 +110,6 @@ pub(crate) struct Resumed<T> {
 
 pub(crate) const DELEGATE_CAP: usize = 10;
 
-pub(crate) fn cap_message() -> String {
-    format!(
-        "This session already runs {} delegates, the most it can run at once, so nothing was started; wait for one with `jobs wait` or stop one with `jobs stop`, then try again.",
-        DELEGATE_CAP
-    )
-}
-
 fn running_delegates(inner: &super::Inner) -> usize {
     inner
         .jobs
@@ -172,6 +166,9 @@ impl Registry {
         let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
             return Target::Unknown;
         };
+        if job.started.extension.is_some() {
+            return Target::Unknown;
+        }
         let Some(delegate) = &job.delegate else {
             return Target::NotDelegate;
         };
@@ -214,6 +211,9 @@ impl Registry {
             let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
                 return Err(Resume::Unknown);
             };
+            if job.started.extension.is_some() {
+                return Err(Resume::Unknown);
+            }
             let Some(delegate) = &job.delegate else {
                 return Err(Resume::NotDelegate);
             };
@@ -417,6 +417,11 @@ impl Registry {
             let ended = job.ends.iter().find(|ended| ended.run == run)?;
             (&ended.completed, ended.finished.as_ref())
         };
+        let finished = if job.started.extension.is_some() {
+            None
+        } else {
+            finished
+        };
         let text = final_text(&job.path, completed, finished);
         Some(Answer {
             text,
@@ -508,12 +513,7 @@ impl Registry {
             JobCompleted {
                 job_id,
                 status: Outcome::Failed,
-                error: Some(Failure {
-                    code: ErrorCode::Indeterminate,
-                    message: "The job ended without a result.".to_owned(),
-                    retry_after_ms: None,
-                    provider: None,
-                }),
+                error: Some(Failure::from(&JobsError::JobNoResult)),
                 process: None,
                 output_tail: None,
 
@@ -530,21 +530,6 @@ pub(super) fn is_running(inner: &super::Inner, id: &str, run: u64) -> bool {
     inner.jobs.iter().any(|job| {
         job.started.job_id.0 == id && job.run == run && matches!(job.phase, super::Phase::Running)
     })
-}
-
-/// A tool call's failure: the model reads `content`, the caller matches
-/// on the error's message.
-pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text { text: content }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
-    }
 }
 
 #[cfg(test)]

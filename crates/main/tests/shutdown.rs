@@ -20,9 +20,9 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Setup, function_call};
+use support::{Deadline, KillGroup, Setup, function_call, hello_item_done, stream};
 
 impl Setup {
     fn new_with_fs_root() -> Self {
@@ -237,10 +237,13 @@ impl Fiber {
             raw: raw
                 .into_iter()
                 .zip(&seen)
-                .filter(|(_, line)| !is_status(line))
+                .filter(|(_, line)| !is_status_line(line))
                 .map(|(text, _)| text)
                 .collect(),
-            lines: seen.into_iter().filter(|line| !is_status(line)).collect(),
+            lines: seen
+                .into_iter()
+                .filter(|line| !is_status_line(line))
+                .collect(),
             stderr: match deadline.recv(&stderr) {
                 Ok(text) => text,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -265,33 +268,8 @@ fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
 
 /// A `session_status` line, written by an observer thread: where it falls
 /// is not what these tests pin.
-fn is_status(line: &Value) -> bool {
+fn is_status_line(line: &Value) -> bool {
     line["kind"] == "session_status"
-}
-
-/// An `openai-responses` stream of `events`, then its completion.
-fn stream(events: &[Value]) -> Response {
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    let body: String = events
-        .iter()
-        .chain([&done])
-        .map(|event| {
-            format!(
-                "event: {}\ndata: {event}\n\n",
-                event["type"].as_str().unwrap()
-            )
-        })
-        .collect();
-    Response::stream(body)
-}
-
-fn hello() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-    }})])
 }
 
 /// Stdout's event kinds are `kinds`, in order; its durable lines, byte for
@@ -333,7 +311,7 @@ fn assert_exited(setup: &Setup, ended: &Ended, code: i32, kinds: &[&str], before
 #[track_caller]
 fn held_ask(signal: &'static str, code: i32) {
     let setup = Setup::new_with_fs_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([hello_item_done()]).unwrap();
     server.hold();
     setup.provider(&server);
     let fiber = setup.start(&["ask", "hi"], Stdio::null());
@@ -408,8 +386,8 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
             "shell",
             &json!({"command": "sh job.sh", "run_in_background": true}),
         )]),
-        hello(),
-        hello(),
+        hello_item_done(),
+        hello_item_done(),
     ])
     .unwrap();
     setup.provider(&server);
@@ -490,7 +468,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
 #[test]
 fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
     let setup = Setup::new_with_fs_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([hello_item_done()]).unwrap();
     setup.provider(&server);
     let mut fiber = setup.start(&["ask", "-"], Stdio::piped());
     // Past a pipe's buffer: the write returns only once `fiber` is reading
@@ -519,7 +497,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
 #[test]
 fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
     let setup = Setup::new_with_fs_root();
-    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    let server = ProviderServer::start([hello_item_done(), hello_item_done()]).unwrap();
     setup.provider(&server);
     let first = setup.start(&["ask", "hi"], Stdio::null()).end();
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
@@ -568,7 +546,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
 #[test]
 fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     let setup = Setup::new_with_fs_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([hello_item_done()]).unwrap();
     setup.provider(&server);
     let ready = ready_fifo(&setup);
     // A FIFO only the server holds open for writing: its read end sees
@@ -638,7 +616,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
 #[test]
 fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let setup = Setup::new_with_fs_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([hello_item_done()]).unwrap();
     setup.provider(&server);
     let ready = ready_fifo(&setup);
     let marker = setup.root.path().join("marker");

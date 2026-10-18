@@ -18,16 +18,10 @@ use std::process::Output;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{HELLO_KINDS, Setup, hello, is_status, run_to_exit, write_json};
+use support::{HELLO_KINDS, Run, Setup, hello, is_status, run_to_exit, write_json};
 
-/// One finished `fiber` run with its stdout parsed as one JSON value per
-/// line, on the pattern of `tests/ask.rs`.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
+/// Parses `fiber ask` stdout into a run: one JSON value per line, without
+/// `session_status` lines, which an observer thread writes.
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -45,13 +39,6 @@ impl From<Output> for Run {
 }
 
 impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
     fn text_completed(&self) -> &str {
         self.lines
             .iter()

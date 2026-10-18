@@ -26,15 +26,8 @@ use std::thread;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    KillGroup, Setup, function_call, group_alive, hello, is_status, spawn_watched, stream,
+    KillGroup, Run, Setup, function_call, group_alive, hello, is_status, spawn_watched, stream,
 };
-
-#[derive(Debug)]
-struct Run {
-    code: Option<i32>,
-    stderr: String,
-    lines: Vec<Value>,
-}
 
 impl Setup {
     /// Runs `fiber` with `args` in `dir` under `home` to exit under the
@@ -413,7 +406,7 @@ fn session_id(run: &Run) -> String {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| panic!("an ask names its session: {run:?}"))
+        .unwrap_or_else(|| panic!("an ask names its session: {:?}", run.lines))
 }
 
 #[test]

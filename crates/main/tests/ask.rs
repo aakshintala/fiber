@@ -18,18 +18,18 @@ use std::fs;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
+use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, Setup, git, group_alive, hello_inline_completed as hello, is_status,
+    Deadline, HELLO_KINDS, KillGroup, Setup, git, group_alive, hello_inline_completed as hello,
+    is_status, spawn_watched,
 };
 
 #[path = "../../provider/tests/support/probes.rs"]
@@ -94,13 +94,13 @@ impl Setup {
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
     #[track_caller]
-    fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
+    fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> TextRun {
         self.run(home, args, Stdio::piped(), stdin, &[])
     }
 
     /// Runs `fiber` with `args` and the extra environment `env`.
     #[track_caller]
-    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> TextRun {
         let home = self.home();
         self.run(home.to_str().unwrap(), args, Stdio::piped(), None, env)
     }
@@ -114,20 +114,20 @@ impl Setup {
 
     /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
     #[track_caller]
-    fn fiber_on_terminal(&self, args: &[&str]) -> Run {
+    fn fiber_on_terminal(&self, args: &[&str]) -> TextRun {
         self.fiber_typing(args, "")
     }
 
     /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
     /// `typed` was already typed.
     #[track_caller]
-    fn fiber_typing(&self, args: &[&str], typed: &str) -> Run {
+    fn fiber_typing(&self, args: &[&str], typed: &str) -> TextRun {
         self.fiber_typing_env(args, typed, &[])
     }
 
     /// [`Self::fiber_typing`] with extra environment variables.
     #[track_caller]
-    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Run {
+    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> TextRun {
         let terminal = Terminal::open();
         let mut main = fs::File::from(terminal.main.try_clone().unwrap());
         let typed = typed.to_owned();
@@ -151,7 +151,7 @@ impl Setup {
         stdin: Stdio,
         text: Option<&str>,
         env: &[(&str, &str)],
-    ) -> Run {
+    ) -> TextRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -198,11 +198,11 @@ impl Setup {
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        TextRun::from(output)
     }
 
     #[track_caller]
-    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Run {
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> TextRun {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
 
@@ -210,7 +210,7 @@ impl Setup {
     /// still holds stays open until this returns, so an unread pipe is open
     /// when `fiber` exits.
     #[track_caller]
-    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
+    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> TextRun {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
     }
 }
@@ -258,44 +258,24 @@ impl Terminal {
     }
 }
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. The watchdog's stdin is a pipe only this process holds: a newline
-/// means the child is reaped, and EOF means this process died, so the
-/// watchdog kills the group. The watchdog is started immediately after the
-/// child; a kill in the gap between the two spawns can still orphan it.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    // A failed watchdog spawn still kills the child on unwind.
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
+/// One finished run that keeps stdout's text and raw lines: the help and
+/// `list` tests pin the text, the others read parsed lines. Shared behaviour
+/// (`kinds`, `session_id`) comes from the inner run.
+struct TextRun {
+    run: support::Run,
+    stdout: String,
+    raw: Vec<String>,
 }
 
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
+impl std::ops::Deref for TextRun {
+    type Target = support::Run;
 
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        // A panic between spawn and reap still kills the group. Failure
-        // here is ignored: the process may already be gone.
-        support::kill_group_detached(self.0, "KILL");
+    fn deref(&self) -> &Self::Target {
+        &self.run
     }
 }
 
-/// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    raw: Vec<String>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
-impl From<Output> for Run {
+impl From<Output> for TextRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let raw: Vec<String> = stdout
@@ -309,29 +289,20 @@ impl From<Output> for Run {
             .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             stdout,
             raw,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|l| l["kind"].as_str().unwrap())
-            .collect()
-    }
-
+impl TextRun {
     fn last(&self) -> &Value {
         self.lines.last().expect("stdout has a line")
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
     }
 
     /// The session's directory, from its id.
@@ -371,20 +342,6 @@ fn anthropic_hello() -> Response {
     Response::stream(body)
 }
 
-/// A Gemini `streamGenerateContent` stream answering `Hello.` in two parts.
-fn gemini_hello() -> Response {
-    let chunks = [
-        json!({"responseId": "resp_1", "candidates": [{"content": {
-            "parts": [{"text": "Hel"}], "role": "model"}}]}),
-        json!({"responseId": "resp_1", "candidates": [{"content": {
-            "parts": [{"text": "lo."}], "role": "model"},
-            "finishReason": "STOP"}],
-            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}}),
-    ];
-    let body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
-    Response::stream(body)
-}
-
 /// An `openai-completions` stream answering `Hello.` in two fragments,
 /// its usage chunk carrying `cost`: OpenRouter's inline figure.
 fn completions_hello(id: &str, cost: Value) -> Response {
@@ -406,7 +363,7 @@ fn completions_hello(id: &str, cost: Value) -> Response {
 }
 
 /// The text of the first message in the session's `turn_started`.
-fn turn_input(run: &Run) -> &str {
+fn turn_input(run: &TextRun) -> &str {
     let started = run
         .lines
         .iter()
@@ -487,7 +444,7 @@ fn install_docs_skills(home: &Path) {
     }
 }
 
-fn opening_skills(run: &Run) -> Vec<(String, String, String)> {
+fn opening_skills(run: &TextRun) -> Vec<(String, String, String)> {
     let opening = run
         .lines
         .iter()
@@ -600,7 +557,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
 }
 
 /// The one line stdout holds when the process failed before any session.
-fn assert_pre_session(run: &Run, exit: i32, code: &str) {
+fn assert_pre_session(run: &TextRun, exit: i32, code: &str) {
     assert_eq!(run.code, Some(exit));
     assert_eq!(run.kinds(), ["fiber_exited"]);
     let line = run.last();
@@ -909,7 +866,7 @@ Examples:
   fiber help ask
 "#;
 
-fn printed(run: &Run) -> String {
+fn printed(run: &TextRun) -> String {
     if run.raw.is_empty() {
         String::new()
     } else {
@@ -917,7 +874,7 @@ fn printed(run: &Run) -> String {
     }
 }
 
-fn assert_help(run: &Run, about: &str) {
+fn assert_help(run: &TextRun, about: &str) {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stderr, "");
     let text = printed(run);
@@ -1627,7 +1584,7 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
 }
 
 /// Asserts a completed turn that answered the weather question.
-fn assert_weather(run: &Run) {
+fn assert_weather(run: &TextRun) {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let step = [
         "step_started",
@@ -2181,54 +2138,6 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 }
 
 #[test]
-fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([anthropic_hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
-        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/messages");
-    assert_fingerprint(&requests[0], "x-api-key", "sk-test-anthropic");
-}
-
-#[test]
-fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package("openai", "https://api.openai.com", &server.url()),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "openai/gpt-6-luna", "hi"],
-        &[("OPENAI_API_KEY", "sk-test-openai")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/responses");
-    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openai");
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(body["store"], Value::Bool(false));
-}
-
-#[test]
 fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     let setup = Setup::new_with_started_deadline();
     let server = support::package::openrouter_ask_server(vec![completions_hello(
@@ -2426,7 +2335,7 @@ fn openrouter_claude_request(
     setup: &Setup,
     home_config: Value,
     repo_config: Option<Value>,
-) -> (Run, Value) {
+) -> (TextRun, Value) {
     install(
         setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2463,7 +2372,7 @@ fn openrouter_claude_request(
 
 /// A 5-minute run records `"5m"` in `preamble_built` and marks the system
 /// and last-message blocks with a `ttl`-less marker.
-fn assert_five_minute_markers(run: &Run, body: &Value) {
+fn assert_five_minute_markers(run: &TextRun, body: &Value) {
     assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
@@ -2507,235 +2416,6 @@ fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
 }
 
 #[test]
-fn the_openrouter_data_file_holds_no_models_for_models_to_supply() {
-    let providers = config::read_providers(&package("openrouter")).unwrap();
-    assert_eq!(providers.len(), 1);
-    let provider = &providers[0];
-    assert_eq!(provider.name, "openrouter");
-    assert!(
-        matches!(
-            &provider.credential,
-            Some(config::CredentialSource::Env(var)) if var == "OPENROUTER_API_KEY"
-        ),
-        "{provider:?}"
-    );
-    assert_eq!(
-        provider.reviewer_model.as_deref(),
-        Some("anthropic/claude-sonnet-5.5")
-    );
-    assert!(provider.models.is_empty());
-}
-
-#[test]
-fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([gemini_hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package(
-            "gemini",
-            "https://generativelanguage.googleapis.com",
-            &server.url(),
-        ),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
-        &[("GEMINI_API_KEY", "sk-test-gemini")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0].path,
-        "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
-    );
-    assert_fingerprint(&requests[0], "x-goog-api-key", "sk-test-gemini");
-}
-
-#[test]
-fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
-    let packages = [
-        (
-            "anthropic",
-            config::Protocol::AnthropicMessages,
-            "https://api.anthropic.com/v1",
-            17,
-        ),
-        (
-            "openai",
-            config::Protocol::OpenaiResponses,
-            "https://api.openai.com/v1",
-            43,
-        ),
-        (
-            "gemini",
-            config::Protocol::GoogleGenerativeAi,
-            "https://generativelanguage.googleapis.com/v1beta",
-            18,
-        ),
-    ];
-    for (name, protocol, url, minimum) in packages {
-        let providers = config::read_providers(&package(name)).unwrap();
-        assert_eq!(providers.len(), 1, "{name}");
-        let provider = &providers[0];
-        assert_eq!(provider.name, name);
-        let reviewer = match name {
-            "anthropic" => "claude-sonnet-5-5",
-            "openai" => "gpt-6-luna",
-            _ => "gemini-3.8-flash",
-        };
-        assert_eq!(provider.reviewer_model.as_deref(), Some(reviewer), "{name}");
-        assert!(provider.models.iter().any(|m| m.id == reviewer), "{name}");
-        assert!(
-            provider.models.len() >= minimum,
-            "{name}: {} models, below {minimum}",
-            provider.models.len()
-        );
-        for model in &provider.models {
-            assert_eq!(model.protocol, protocol, "{}", model.id);
-            assert_eq!(model.base_url, url, "{}", model.id);
-            assert!(model.context_window.unwrap_or(0) > 0, "{}", model.id);
-            assert!(model.max_output_tokens.unwrap_or(0) > 0, "{}", model.id);
-            assert!(!model.input.is_empty(), "{}", model.id);
-            for kind in &model.input {
-                assert!(kind == "text" || kind == "image", "{}", model.id);
-            }
-            if let Some(cost) = model.cost.as_ref() {
-                assert!(cost.input > 0.0 && cost.output > 0.0, "{}", model.id);
-            }
-            if name == "gemini" && model.id == "gemma-4-31b-it" {
-                assert!(model.cost.is_none(), "{}", model.id);
-            }
-            let mut previous = 0;
-            if let Some(cost) = model.cost.as_ref() {
-                for tier in &cost.tiers {
-                    assert!(tier.input_tokens_above > previous, "{}", model.id);
-                    previous = tier.input_tokens_above;
-                    assert!(
-                        tier.input >= 0.0
-                            && tier.output >= 0.0
-                            && tier.cache_read >= 0.0
-                            && tier.cache_write >= 0.0,
-                        "{}",
-                        model.id
-                    );
-                }
-            }
-            if name == "openai" {
-                assert_eq!(
-                    model.compat.get("store"),
-                    Some(&Value::Bool(false)),
-                    "{}",
-                    model.id
-                );
-            } else {
-                assert!(model.compat.get("store").is_none(), "{}", model.id);
-            }
-        }
-    }
-}
-
-/// The reviewer rule for first-party provider data (`docs/model-routing.md`,
-/// "What a provider extension declares"): a named `reviewer_model` is one
-/// of the provider's own models, and never a contributor model, whose id
-/// contains `contributor`. A provider that names none is valid here; which
-/// providers must name one is asserted on the real data below.
-fn reviewer_model_valid(provider: &config::ProviderData) -> bool {
-    match &provider.reviewer_model {
-        None => true,
-        Some(model) => {
-            provider.models.iter().any(|m| m.id == *model) && !model.contains("contributor")
-        }
-    }
-}
-
-#[test]
-fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
-    // Every first-party `providers/<name>.json`, compiled in: listing them
-    // at run time would read the repository at test time (`docs/ci.md`,
-    // "Selection").
-    const REVIEWED_PROVIDERS: &[&str] = &[
-        include_str!("../../../providers/anthropic/providers/anthropic.json"),
-        include_str!("../../../providers/codex/providers/codex.json"),
-        include_str!("../../../providers/gemini/providers/gemini.json"),
-        include_str!("../../../providers/muse/providers/muse.json"),
-        include_str!("../../../providers/openai/providers/openai.json"),
-        include_str!("../../../providers/opencode/providers/opencode-go.json"),
-        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
-        include_str!("../../../providers/openrouter/providers/openrouter.json"),
-    ];
-    assert!(!REVIEWED_PROVIDERS.is_empty());
-    let mut seen: Vec<String> = Vec::new();
-    for text in REVIEWED_PROVIDERS {
-        let provider: config::ProviderData =
-            serde_json::from_str(text).expect("provider data parses");
-        // A provider whose `models()` lists live ships no static models, so
-        // its reviewer model can only be checked for not being a contributor.
-        let valid = if provider.models.is_empty() {
-            provider
-                .reviewer_model
-                .as_deref()
-                .is_none_or(|m| !m.contains("contributor"))
-        } else {
-            reviewer_model_valid(&provider)
-        };
-        assert!(
-            valid,
-            "{} names {:?} outside its models or a contributor model",
-            provider.name, provider.reviewer_model
-        );
-        match provider.name.as_str() {
-            "muse" | "opencode-zen" => assert_eq!(
-                provider.reviewer_model.as_deref(),
-                Some("muse-spark-1.3"),
-                "{}",
-                provider.name
-            ),
-            "opencode-go" => assert_eq!(provider.reviewer_model, None, "opencode-go"),
-            _ => {}
-        }
-        seen.push(provider.name.clone());
-    }
-    for name in ["muse", "opencode-zen", "opencode-go"] {
-        assert!(seen.iter().any(|seen| seen == name), "{seen:?}");
-    }
-}
-
-#[test]
-fn a_contributor_or_unshipped_reviewer_model_is_not_valid() {
-    let setup = Setup::new_with_started_deadline();
-    let package = setup.root.path().join("pkg");
-    let read = |reviewer: Option<&str>, models: &[&str]| {
-        let models: Vec<Value> = models
-            .iter()
-            .map(|id| {
-                json!({"id": id, "protocol": "openai-responses",
-                    "base_url": "https://x/v1", "context_window": 1000})
-            })
-            .collect();
-        let mut data = json!({"name": "p", "models": models});
-        if let Some(reviewer) = reviewer {
-            data["reviewer_model"] = json!(reviewer);
-        }
-        fs::create_dir_all(package.join("providers")).unwrap();
-        fs::write(package.join("providers/p.json"), data.to_string()).unwrap();
-        config::read_providers(&package).unwrap().pop().unwrap()
-    };
-    assert!(reviewer_model_valid(&read(Some("m"), &["m"])));
-    assert!(reviewer_model_valid(&read(None, &[])));
-    assert!(!reviewer_model_valid(&read(
-        Some("m-contributor"),
-        &["m-contributor"]
-    )));
-    assert!(!reviewer_model_valid(&read(Some("ghost"), &["m"])));
-    assert!(!reviewer_model_valid(&read(Some("m"), &[])));
-}
-
-#[test]
 fn a_zen_model_is_sent_to_zens_url() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -2759,122 +2439,6 @@ fn a_zen_model_is_sent_to_zens_url() {
         requests[0].header("x-opencode-session"),
         Some(run.session_id())
     );
-}
-
-#[test]
-fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
-    let providers = config::read_providers(&package("opencode")).unwrap();
-    let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names.len(), 2, "{names:?}");
-    for provider in &providers {
-        let (url, subscription) = match provider.name.as_str() {
-            "opencode-go" => ("https://opencode.ai/zen/go/v1", true),
-            "opencode-zen" => ("https://opencode.ai/zen/v1", false),
-            other => panic!("unexpected provider {other}"),
-        };
-        assert!(!provider.models.is_empty(), "{}", provider.name);
-        for model in &provider.models {
-            assert_eq!(model.base_url, url, "{}", model.id);
-            assert_eq!(model.subscription, subscription, "{}", model.id);
-            assert!(model.cost.is_some(), "{} declares its prices", model.id);
-            assert_eq!(model.compat["cache_key_header"], "x-opencode-session");
-        }
-    }
-    let go = providers.iter().find(|p| p.name == "opencode-go").unwrap();
-    assert!(
-        go.models
-            .iter()
-            .any(|m| m.id == "muse-spark-1.3-contributor")
-    );
-}
-
-#[test]
-fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
-    use contract::ThinkingLevel::{High, Low, Max, Medium, Minimal, Xhigh};
-    let levels = vec![Minimal, Low, Medium, High, Xhigh, Max];
-    let muse = config::read_providers(&package("muse")).unwrap();
-    let muse = muse.iter().find(|p| p.name == "muse").unwrap();
-    for id in ["muse-spark-1.3", "muse-spark-1.3-contributor"] {
-        let model = muse.models.iter().find(|m| m.id == id).unwrap();
-        assert_eq!(model.thinking_levels, levels, "{id}");
-        assert_eq!(model.thinking_default, None, "{id}");
-    }
-    let opencode = config::read_providers(&package("opencode")).unwrap();
-    let go = opencode.iter().find(|p| p.name == "opencode-go").unwrap();
-    let model = go
-        .models
-        .iter()
-        .find(|m| m.id == "muse-spark-1.3-contributor")
-        .unwrap();
-    assert_eq!(model.thinking_levels, levels);
-    assert_eq!(model.thinking_default, None);
-    let old = go
-        .models
-        .iter()
-        .find(|m| m.id == "muse-spark-1.2-contributor")
-        .unwrap();
-    // The Go route takes minimal through xhigh here
-    // (research/opencode-thinking/raw/go-muse-spark-1.2-contributor.json).
-    assert_eq!(old.thinking_levels, vec![Minimal, Low, Medium, High, Xhigh]);
-    assert_eq!(old.thinking_default, None);
-    let zen = opencode.iter().find(|p| p.name == "opencode-zen").unwrap();
-    let model = zen
-        .models
-        .iter()
-        .find(|m| m.id == "muse-spark-1.3")
-        .unwrap();
-    assert_eq!(model.thinking_levels, levels);
-    assert_eq!(model.thinking_default, None);
-}
-
-#[test]
-fn the_codex_entries_declare_the_thinking_levels_their_routes_accept() {
-    use contract::ThinkingLevel::{High, Low, Max, Medium, Xhigh};
-    let levels = vec![Low, Medium, High, Xhigh, Max];
-    let codex = config::read_providers(&package("codex")).unwrap();
-    let codex = codex.iter().find(|p| p.name == "codex").unwrap();
-    for (id, default) in [
-        ("gpt-6.1-sol", Low),
-        ("gpt-6-sol", Medium),
-        ("gpt-6-astra", Low),
-        ("gpt-6-luna", Medium),
-    ] {
-        let model = codex.models.iter().find(|m| m.id == id).unwrap();
-        assert_eq!(model.thinking_levels, levels, "{id}");
-        assert_eq!(model.thinking_default, Some(default), "{id}");
-    }
-    let anthropic = config::read_providers(&package("anthropic")).unwrap();
-    let anthropic = anthropic.iter().find(|p| p.name == "anthropic").unwrap();
-    let model = anthropic
-        .models
-        .iter()
-        .find(|m| m.id == "claude-opus-4-7")
-        .unwrap();
-    assert_eq!(
-        model.thinking_levels,
-        vec![contract::ThinkingLevel::Off, Low, Medium, High, Xhigh, Max]
-    );
-    assert_eq!(model.thinking_default, None);
-    let gemini = config::read_providers(&package("gemini")).unwrap();
-    let gemini = gemini.iter().find(|p| p.name == "gemini").unwrap();
-    let model = gemini
-        .models
-        .iter()
-        .find(|m| m.id == "gemini-3.8-flash")
-        .unwrap();
-    assert_eq!(model.thinking_levels, vec![Low, Medium, High]);
-    assert_eq!(model.thinking_default, None);
-    let openai = config::read_providers(&package("openai")).unwrap();
-    let openai = openai.iter().find(|p| p.name == "openai").unwrap();
-    let model = openai.models.iter().find(|m| m.id == "gpt-5.2").unwrap();
-    assert_eq!(
-        model.thinking_levels,
-        vec![contract::ThinkingLevel::Off, Low, Medium, High, Xhigh]
-    );
-    assert_eq!(model.thinking_default, None);
-    let plain = openai.models.iter().find(|m| m.id == "gpt-4o").unwrap();
-    assert!(plain.thinking_levels.is_empty());
-    assert_eq!(plain.thinking_default, None);
 }
 
 #[test]
@@ -4096,7 +3660,7 @@ fn requested_models(server: &ProviderServer) -> Vec<String> {
 }
 
 /// The reviewed call's `permission_resolved` line.
-fn resolved(run: &Run) -> &Value {
+fn resolved(run: &TextRun) -> &Value {
     run.lines
         .iter()
         .find(|line| line["kind"] == "permission_resolved")
@@ -4198,7 +3762,7 @@ fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
 
 /// One `fiber ask` run without the provider key in its environment: the
 /// startup wire diagnoses the same failure doctor names.
-fn ask_without_key(setup: &Setup, args: &[&str]) -> Run {
+fn ask_without_key(setup: &Setup, args: &[&str]) -> TextRun {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
         .args(args)
@@ -4212,7 +3776,7 @@ fn ask_without_key(setup: &Setup, args: &[&str]) -> Run {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    Run::from(support::run_to_exit(
+    TextRun::from(support::run_to_exit(
         setup.deadline,
         "`fiber ask` with no key to exit",
         command,

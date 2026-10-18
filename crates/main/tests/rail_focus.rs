@@ -61,6 +61,52 @@ fn card_row(grid: &Grid, name: &str) -> usize {
     card_row_at(grid, name).unwrap_or_else(|| panic!("a card for {name:?}:\n{}", grid.contents))
 }
 
+/// Which of the three hint-and-lift conditions holds on `grid`: the foot
+/// hint, the first card's lift, the second card's flat tint. A missing
+/// card counts as false, so the report names it instead of panicking.
+fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool, bool) {
+    let hint = grid.contents.contains(HINT_MIDDLE);
+    let first = card_row_at(grid, "first live")
+        .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == lifted(raised));
+    let second = card_row_at(grid, "second live")
+        .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == *flat);
+    (hint, first, second)
+}
+
+/// Waits for the hint and the lifted first card, reporting which of the
+/// three conditions was false in the last checked grid when the wait
+/// expires. It keeps `wait_screen`'s deadline and fast-fail path: the
+/// report rides on the timeout panic instead of replacing it.
+#[track_caller]
+fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
+    let last = std::cell::Cell::new((false, false, false));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.wait_screen("the hint and the lifted first card", |grid| {
+            let checks = hint_lift_checks(grid, raised, flat);
+            last.set(checks);
+            checks.0 && checks.1 && checks.2
+        })
+    }));
+    match result {
+        Ok(grid) => grid,
+        Err(payload) => {
+            let base = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|held| (*held).to_owned())
+                })
+                .unwrap_or_else(|| "the hint and the lifted first card".to_owned());
+            let (hint, first, second) = last.get();
+            panic!(
+                "{base}; last check: hint present={hint}, first card lifted={first}, second card flat={second}"
+            );
+        }
+    }
+}
+
 /// The bg of a cell inside the named card's text rows: the cards start at
 /// the third column, and the tint covers the card's full width.
 fn tint(grid: &Grid, name: &str) -> Colour {
@@ -186,11 +232,7 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
 
     // ← focuses the on-screen card: the hint shows and its bg lifts.
     run.write(b"\x1b[D");
-    let grid = run.wait_screen("the hint and the lifted first card", |grid| {
-        grid.contents.contains(HINT_MIDDLE)
-            && tint(grid, "first live") == lifted(&raised)
-            && tint(grid, "second live") == flat
-    });
+    let grid = wait_hint_lifted(&mut run, &raised, &flat);
     let plus_flat = plus_bg(&grid);
 
     // ↓ moves the lift to the next group's "+" stop: the hint stays,
@@ -317,7 +359,8 @@ fn rail_focus_bolds_the_focused_card_without_colour() {
             && !other_right.bold
     });
     // Back home before the teardown: closing a session only releases
-    // its process once no terminal stays attached.
+    // its process once no terminal stays attached. The next test names
+    // the false hint-and-lift condition on a spent deadline (see #2707).
     run.write(b"\x1b[D");
     run.wait_screen("the cleared focus", |grid| {
         !grid.contents.contains(HINT_MIDDLE)
@@ -331,4 +374,93 @@ fn rail_focus_bolds_the_focused_card_without_colour() {
     drop(control);
     finish_run(run);
     reap(&hub);
+}
+
+/// The hint-and-lift wait names the false condition when its deadline is
+/// spent: an empty grid reports all three false, and a grid holding only
+/// the hint reports the hint true with both tints false, so the next
+/// sighting says which condition failed. Both waits start on a fake clock
+/// advanced past the waits bound, so they expire at once with no sleep
+/// (`docs/testing.md`, "Waits and timeouts").
+#[test]
+fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
+    use std::io::Write;
+
+    let raised = Colour::Rgb(10, 20, 30);
+    let flat = Colour::Rgb(40, 50, 60);
+    // An empty grid: all three conditions false.
+    let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+    let deadline = support::Deadline::on(&**clock);
+    clock.advance(support::WAITS);
+    assert!(
+        deadline.left().is_zero(),
+        "the wait starts with no time left"
+    );
+    let terminal = support::pty::open(80, 24);
+    let main = std::fs::File::from(terminal.main);
+    let mut run = Run::attach(main, 80, 24, deadline);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_hint_lifted(&mut run, &raised, &flat)
+    }));
+    let message = result
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("the hint and the lifted first card"),
+        "the failure names the wait: {message:?}"
+    );
+    assert!(
+        message.contains("hint present=false"),
+        "the failure names the hint: {message:?}"
+    );
+    assert!(
+        message.contains("first card lifted=false"),
+        "the failure names the first card: {message:?}"
+    );
+    assert!(
+        message.contains("second card flat=false"),
+        "the failure names the second card: {message:?}"
+    );
+    assert!(
+        message.contains("left when the wait began"),
+        "the failure names the spent deadline: {message:?}"
+    );
+    // A grid holding only the hint: the hint flips true while both tints
+    // stay false, so a flipped `&&` (an `||`) would stop failing here.
+    let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+    let deadline = support::Deadline::on(&**clock);
+    let terminal = support::pty::open(80, 24);
+    let main = std::fs::File::from(terminal.main);
+    let mut run = Run::attach(main, 80, 24, deadline);
+    let mut terminal_side = terminal.terminal;
+    let from = run.output().len();
+    terminal_side.write_all(HINT_MIDDLE.as_bytes()).unwrap();
+    run.wait_bytes(from, HINT_MIDDLE.as_bytes(), "the fed hint");
+    clock.advance(support::WAITS);
+    assert!(
+        deadline.left().is_zero(),
+        "the second wait starts with no time left"
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_hint_lifted(&mut run, &raised, &flat)
+    }));
+    let message = result
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("hint present=true"),
+        "the failure names the present hint: {message:?}"
+    );
+    assert!(
+        message.contains("first card lifted=false"),
+        "the failure still names the first card: {message:?}"
+    );
+    assert!(
+        message.contains("second card flat=false"),
+        "the failure still names the second card: {message:?}"
+    );
 }

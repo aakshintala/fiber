@@ -109,6 +109,12 @@ thread_local! {
     static FAIL_AT: std::cell::Cell<Option<Stage>> = const { std::cell::Cell::new(None) };
 }
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_NTH: std::cell::Cell<Option<(usize, Stage, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Injects an I/O failure at `stage` in `write_atomic` on this thread;
 /// `None` clears it. Test-only; non-test builds never fail.
 #[cfg(test)]
@@ -121,10 +127,42 @@ fn fail_stage() -> Option<Stage> {
     FAIL_AT.with(|cell| cell.get())
 }
 
+/// Fails only the `n`th [`write_atomic`] call on this thread at `stage`:
+/// `BeforeRename` leaves the file unchanged, `AfterRename` fails the
+/// directory sync with the new content already in place. Calls count from
+/// one; every other call runs as [`fail_at`] says. Test-only; non-test
+/// builds never fail.
+#[cfg(test)]
+pub(crate) fn fail_nth(n: usize, stage: Stage) {
+    FAIL_NTH.with(|cell| cell.set(Some((n, stage, 0))));
+}
+
+/// Counts this thread's [`write_atomic`] calls, starting at one, so
+/// [`fail_nth`] names one of them; zero when no `fail_nth` is armed.
+#[cfg(test)]
+fn call_count() -> usize {
+    FAIL_NTH.with(|cell| match cell.get() {
+        Some((n, stage, seen)) => {
+            cell.set(Some((n, stage, seen.saturating_add(1))));
+            seen.saturating_add(1)
+        }
+        None => 0,
+    })
+}
+
+/// Whether [`fail_nth`] armed the `call`th [`write_atomic`] call to fail
+/// at `stage`.
+#[cfg(test)]
+fn fail_nth_stage(call: usize, stage: Stage) -> bool {
+    FAIL_NTH.with(|cell| matches!(cell.get(), Some((n, at, _)) if n == call && at == stage))
+}
+
 /// Writes `bytes` to a temporary file created with `mode` beside `file`,
 /// syncs it, and renames it over `file`, so a reader sees the old file or the
 /// new one, never half.
 pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
+    #[cfg(test)]
+    let call = call_count();
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
@@ -147,7 +185,7 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigEr
             }
         });
         #[cfg(test)]
-        if fail_stage() == Some(Stage::BeforeRename) {
+        if fail_stage() == Some(Stage::BeforeRename) || fail_nth_stage(call, Stage::BeforeRename) {
             return Err(std::io::Error::other("injected"));
         }
         fs::rename(&tmp, file)
@@ -158,7 +196,7 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigEr
     written.map_err(io)?;
     let synced = (|| {
         #[cfg(test)]
-        if fail_stage() == Some(Stage::AfterRename) {
+        if fail_stage() == Some(Stage::AfterRename) || fail_nth_stage(call, Stage::AfterRename) {
             return Err(std::io::Error::other("injected"));
         }
         File::open(dir)?.sync_all()

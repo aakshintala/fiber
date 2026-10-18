@@ -481,6 +481,9 @@ pub struct QuotaWindow {
     /// The window's reset time has passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset: Option<crate::shapes::True>,
+    /// When the window resets, in milliseconds since the epoch, where the provider reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<u64>,
 }
 
 /// A provider's remaining credit.

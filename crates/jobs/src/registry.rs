@@ -11,6 +11,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
@@ -21,9 +22,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{
     End, Foreground, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
 };
-use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Output};
-use contract::{ErrorCode, JobId};
+use contract::tool::Cancel;
 
 #[path = "registry/park.rs"]
 mod park;
@@ -303,6 +302,51 @@ impl Registry {
             Some(delegate),
         ));
         (started, finish)
+    }
+
+    /// Whether a session has wired its inbox for delegate starts and ends.
+    pub(crate) fn has_inbox(&self) -> bool {
+        lock(&self.inner).inbox.is_some()
+    }
+
+    /// Records an extension-owned delegate and sends its start under the
+    /// same lock, before a reader can see it in the running list.
+    pub(crate) fn open_extension_started(
+        self: &Arc<Self>,
+        job_id: JobId,
+        extension: String,
+        description: String,
+        output_path: String,
+        stop: Stop,
+        delegate: DelegateStarted,
+    ) -> Unreported {
+        let started = JobStarted {
+            job_id: job_id.clone(),
+            tool: None,
+            extension: Some(extension),
+            description,
+            output_path: output_path.clone(),
+        };
+        let finish = Unreported {
+            job_id,
+            run: 1,
+            registry: Some(Arc::clone(self)),
+            delegate: true,
+        };
+        let mut inner = lock(&self.inner);
+        // Send before registering, under this same lock: a running() reader
+        // that sees the job can already take its start in the second drain.
+        if let Some(inbox) = &inner.inbox {
+            let _sent = inbox.send(Delivery::ExtensionJob(started.clone(), delegate.clone()));
+        }
+        inner.jobs.push(Job::running(
+            started,
+            PathBuf::from(output_path),
+            Arc::from(stop.0),
+            None,
+            Some(delegate),
+        ));
+        finish
     }
 
     /// Sends a monitor's batch to the inbox, under the lock an end sends
@@ -594,24 +638,6 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
-    }
-}
-
-/// A tool call's failure: the model reads `content`, the caller matches
-/// on the error's `message`. The trailing newline differs by caller —
-/// the `jobs` tool ends its content line, `delegate_spawn` does not —
-/// so both are passed in and neither is invented here. The one place a
-/// tool `Output`'s `Failure` is built.
-pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text { text: content }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
     }
 }
 

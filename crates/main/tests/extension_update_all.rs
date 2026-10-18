@@ -17,39 +17,17 @@
 mod support;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use support::{Deadline, KillGroup, Setup, git, group_alive, is_status, spawn_watched};
-
-/// One finished run: its exit code, stdout's text lines, and stderr.
-struct Run {
-    code: Option<i32>,
-    raw: Vec<String>,
-    stderr: String,
-}
-
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        Self {
-            code: output.status.code(),
-            raw: stdout
-                .lines()
-                .filter(|l| !is_status(l))
-                .map(str::to_owned)
-                .collect(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-}
+use support::{Deadline, KillGroup, Output, Setup, git, group_alive, is_status, spawn_watched};
 
 impl Setup {
     /// Runs `fiber` with `args` and the extra environment `env`, stdin
     /// closed, in its own process group under the test's deadline.
     #[track_caller]
-    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -84,12 +62,12 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        Output::from(output)
     }
 
     /// Runs `fiber` with `args` and a closed stdin.
     #[track_caller]
-    fn run(&self, args: &[&str]) -> Run {
+    fn run(&self, args: &[&str]) -> Output {
         self.fiber_with_env(args, &[])
     }
 }
@@ -218,9 +196,11 @@ fn muse_record(setup: &Setup) -> serde_json::Value {
 fn muse_line(setup: &Setup) -> Option<String> {
     setup
         .run(&["extension", "list"])
-        .raw
-        .into_iter()
+        .stdout
+        .lines()
+        .filter(|line| !is_status(line))
         .find(|line| line.contains("providers/muse "))
+        .map(str::to_owned)
 }
 
 #[test]

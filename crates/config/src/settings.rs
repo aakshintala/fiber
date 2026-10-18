@@ -3,12 +3,13 @@
 //! `docs/configuration.md`, "Keys", "Layers").
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::keys::{self, WriteScope};
 use crate::path::{display, get};
-use crate::{Config, Layer, Source};
+use crate::{Config, Layer, ProjectKey, Source};
 
 /// A key's effective value as `/settings` shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +35,67 @@ pub struct SettingInfo {
     pub value: SettingValue,
     /// The files it may be written to.
     pub scope: WriteScope,
+}
+
+/// One notes layer's file with its own `reviewer.context` text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotesFile {
+    /// The layer's file, named whether or not it exists.
+    pub file: PathBuf,
+    /// The layer's own `reviewer.context`, empty when unset or when the
+    /// file is missing; whitespace is kept as is.
+    pub text: String,
+    /// 16 lowercase hex digits of the file's bytes, or `absent` when the
+    /// file does not exist.
+    pub version: String,
+}
+
+/// Both person layers' notes files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerNotes {
+    /// Fiber home's `config.json` notes.
+    pub global: NotesFile,
+    /// The project's `config.json` notes.
+    pub project: NotesFile,
+}
+
+/// Both person layers' own `reviewer.context`, each with its file and
+/// version. The repository layer is never read.
+pub fn reviewer_notes(
+    home: &Path,
+    project: &ProjectKey,
+) -> Result<ReviewerNotes, crate::ConfigError> {
+    // The repository layer is someone else's text: only the person's
+    // own files are read.
+    Ok(ReviewerNotes {
+        global: notes_file(&crate::layout::global_config_file(home))?,
+        project: notes_file(&crate::layout::project_config_file(home, project))?,
+    })
+}
+
+/// One layer's own notes: its file, its `reviewer.context` or empty, and
+/// the version of its bytes. A shape the save would refuse still reads
+/// its version, with empty text.
+fn notes_file(file: &Path) -> Result<NotesFile, crate::ConfigError> {
+    let bytes = crate::home::read_bytes(file)?;
+    let text = match &bytes {
+        None => String::new(),
+        Some(bytes) => {
+            let root = crate::home::parse(file, bytes)?;
+            root.as_object()
+                .and_then(|root| root.get("reviewer"))
+                .and_then(|reviewer| reviewer.as_object())
+                .and_then(|reviewer| reviewer.get("context"))
+                .and_then(|context| context.as_str())
+                .unwrap_or_default()
+                .to_owned()
+        }
+    };
+    Ok(NotesFile {
+        file: file.to_path_buf(),
+        text,
+        version: crate::write::version(bytes.as_deref()),
+    })
 }
 
 impl Config {

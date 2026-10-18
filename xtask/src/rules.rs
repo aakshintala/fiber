@@ -466,7 +466,7 @@ const SESSION_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/recent.rs", "fn session_dir", "join:sessions", "#1725"),
     source_allowance!("crates/hub/src/resume.rs", "fn find_log", "join:sessions", "#1725"),
     source_allowance!("crates/hub/src/resume.rs", "fn find_log", "join:events.jsonl", "#1725"),
-    source_allowance!("crates/jobs/src/delegate.rs", "fn run", "join:events.jsonl", "#1725"),
+    source_allowance!("crates/jobs/src/delegate.rs", "fn start", "join:events.jsonl", "#1725"),
     source_allowance!("crates/main/src/resume.rs", "fn resumed_session", "join:events.jsonl", "#1725"),
     source_allowance!("crates/main/src/session_command.rs", "fn run_new", "join:events.jsonl", "#1725"),
 ];
@@ -554,7 +554,6 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/resume.rs", "fn find_log|root:home", "join:projects", "#1720"),
     source_allowance!("crates/hub/src/rewind.rs", "fn reach|root:hub.home", "join:run", "#1720"),
     source_allowance!("crates/hub/src/start.rs", "fn run|root:hub.home", "join:run", "#1720"),
-    source_allowance!("crates/log/src/dependents.rs", "fn pointers|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/diag.rs", "fn new|root:home", "join:logs", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn sessions_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/name.rs", "fn session_name|root:home", "join:projects", "#1720"),

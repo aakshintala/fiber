@@ -119,7 +119,8 @@ impl Provider for Messages {
 /// `strict` per tool (`docs/model-routing.md`, "Protocols and
 /// providers"). Anthropic's strict subset is wider than OpenAI's (it
 /// takes optional properties, `anyOf` and `$ref`), so a schema that fits
-/// `strict::fits` fits Anthropic's too, except an enum with an object or
+/// `strict::fits` fits Anthropic's too (required nullable scalars probed in
+/// `research/strict-nullable-probe/raw/P3_anthropic_messages.json`), except an enum with an object or
 /// array value, which Anthropic excludes (platform.claude.com, "JSON
 /// Schema limitations": "complex types in enums"). Anthropic refuses a request with
 /// more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:

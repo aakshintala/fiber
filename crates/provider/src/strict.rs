@@ -10,7 +10,9 @@
 //! - every object lists `properties`, `required` names exactly those
 //!   properties, and `additionalProperties` is `false`
 //! - every array has `items`, which fits in turn
-//! - `type` is one string, never a list
+//! - `type` is one string, except required properties may use a two-element
+//!   union of `null` and `integer`, `string` or `boolean`, without `enum`,
+//!   `properties` or `items` (`research/strict-nullable-probe`)
 //! - no keyword appears beyond `type`, `properties`, `required`,
 //!   `additionalProperties`, `items`, `enum` and `description`
 //! - it is within OpenAI's documented size limits
@@ -63,13 +65,13 @@ struct Tally {
 pub(crate) fn fits(schema: &Value) -> bool {
     let mut tally = Tally::default();
     schema.get("type").and_then(Value::as_str) == Some("object")
-        && fits_node(schema, 1, &mut tally)
+        && fits_node(schema, 1, &mut tally, false)
         && tally.properties <= MAX_PROPERTIES
         && tally.enum_values <= MAX_ENUM_VALUES
         && tally.chars <= MAX_CHARS
 }
 
-fn fits_node(schema: &Value, depth: usize, tally: &mut Tally) -> bool {
+fn fits_node(schema: &Value, depth: usize, tally: &mut Tally, property: bool) -> bool {
     let Some(map) = schema.as_object() else {
         return false;
     };
@@ -97,12 +99,27 @@ fn fits_node(schema: &Value, depth: usize, tally: &mut Tally) -> bool {
         Some("object") => fits_object(map, depth, tally),
         Some("array") => map
             .get("items")
-            .is_some_and(|items| fits_node(items, depth + 1, tally)),
+            .is_some_and(|items| fits_node(items, depth + 1, tally, false)),
         Some("string" | "number" | "integer" | "boolean" | "null") => {
             !map.contains_key("properties") && !map.contains_key("items")
         }
-        _ => false,
+        _ => property && nullable_scalar(map),
     }
+}
+
+fn nullable_scalar(map: &Map<String, Value>) -> bool {
+    let Some(types) = map.get("type").and_then(Value::as_array) else {
+        return false;
+    };
+    let names: Vec<_> = types.iter().filter_map(Value::as_str).collect();
+    types.len() == 2
+        && names.contains(&"null")
+        && names
+            .iter()
+            .any(|name| matches!(*name, "integer" | "string" | "boolean"))
+        && !map.contains_key("enum")
+        && !map.contains_key("properties")
+        && !map.contains_key("items")
 }
 
 fn fits_object(map: &Map<String, Value>, depth: usize, tally: &mut Tally) -> bool {
@@ -122,7 +139,7 @@ fn fits_object(map: &Map<String, Value>, depth: usize, tally: &mut Tally) -> boo
         && map.get("additionalProperties") == Some(&Value::Bool(false))
         && properties
             .values()
-            .all(|property| fits_node(property, depth + 1, tally))
+            .all(|property| fits_node(property, depth + 1, tally, true))
 }
 
 #[cfg(test)]

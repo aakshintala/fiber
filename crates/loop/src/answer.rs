@@ -48,7 +48,7 @@ impl Loop {
         loop {
             let delivery = match self.take_held_answer(&request_id) {
                 Some(delivery) => delivery,
-                None => match self.recv_until(deadline, false, None) {
+                None => match self.recv_until(deadline, false, None)? {
                     InboxRecv::Delivery(delivery) => delivery,
                     // Every sender is gone, so no answer can come: the session
                     // closed while the request was pending, and the request
@@ -184,6 +184,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled

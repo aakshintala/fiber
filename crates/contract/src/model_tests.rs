@@ -66,6 +66,7 @@ fn extension_usage_carries_its_line() {
         | crate::inbox::Delivery::Job(_)
         | crate::inbox::Delivery::JobLine(_)
         | crate::inbox::Delivery::ExtensionExec(_)
+        | crate::inbox::Delivery::ExtensionJob(..)
         | crate::inbox::Delivery::Interaction(_)
         | crate::inbox::Delivery::Resolved(..)
         | crate::inbox::Delivery::InnerCall(_)

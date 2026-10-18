@@ -311,6 +311,7 @@ impl Rendered {
             | Event::RepositoryCodeResolved(_)
             | Event::UsageRecorded(_)
             | Event::QuotaNoticed(_)
+            | Event::QuotaRearmed(_)
             | Event::RetryScheduled(_)
             | Event::Notice(_)
             | Event::PreambleBuilt(_)
@@ -366,6 +367,10 @@ impl Rendered {
             // A notice a resume logged while a suspended batch was open
             // waits for that batch's results.
             Event::JobCompleted(job) => {
+                if self.carry.owned(&job.job_id.0) {
+                    self.render(event, action, model);
+                    return;
+                }
                 if action.is_none() {
                     self.flush();
                 }
@@ -383,6 +388,10 @@ impl Rendered {
                 }
             }
             Event::DelegateFinished(finished) => {
+                if self.carry.owned(&finished.job_id.0) {
+                    self.render(event, action, model);
+                    return;
+                }
                 if action.is_none() {
                     self.flush();
                 }
@@ -559,7 +568,7 @@ pub(crate) fn render(
         // A job's end the model was not already given: one message. A
         // `wait` or `stop` record carries its call's action and renders
         // nothing; that call's result already said it.
-        Event::JobCompleted(completed) if action.is_none() => {
+        Event::JobCompleted(completed) if action.is_none() && !carry.owned(&completed.job_id.0) => {
             let text = crate::jobs::notice_text(completed);
             if !text.is_empty() {
                 conversation.push(Input::User {
@@ -571,7 +580,7 @@ pub(crate) fn render(
         // A delegate's finish the model was not already given: its final
         // message. A `wait` or `stop` record carries its call's action
         // and renders nothing; that call's result already said it.
-        Event::DelegateFinished(finished) if action.is_none() => {
+        Event::DelegateFinished(finished) if action.is_none() && !carry.owned(&finished.job_id.0) => {
             conversation.push(Input::User {
             text: crate::jobs::delegate_text(finished),
          images: Vec::new(),})
@@ -725,7 +734,7 @@ pub(crate) fn render(
             | Event::RepositoryCodeOffered(_)
             | Event::RepositoryCodeResolved(_)
         | Event::UsageRecorded(_)
-        | Event::QuotaNoticed(_)
+        | Event::QuotaNoticed(_) | Event::QuotaRearmed(_)
         | Event::RetryScheduled(_)
         | Event::Notice(_)
         | Event::PreambleBuilt(_)

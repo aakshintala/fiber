@@ -5,7 +5,6 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use contract::{Envelope, Seq, SessionId};
@@ -175,47 +174,12 @@ pub fn last_line(dir: &Path) -> Option<Envelope> {
 /// [`Error::NotFound`]; anything else that is not a `session_started`
 /// first line is [`Error::Pointer`}.
 fn first_fork(dir: &Path) -> Result<Option<(SessionId, Seq)>, Error> {
-    let path = dir.join(EVENTS);
-    let file = File::open(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Error::NotFound(dir.to_owned())
-        } else {
-            io_at(&path)(error)
-        }
-    })?;
-    let mut first = Vec::new();
-    BufReader::new(file)
-        .read_until(b'\n', &mut first)
-        .map_err(io_at(&path))?;
-    if first.last() != Some(&b'\n') {
-        return Err(Error::Pointer {
-            path,
-            reason: "the log's first line is missing".to_owned(),
-        });
-    }
-    let line: Envelope = serde_json::from_slice(&first).map_err(|_| Error::Pointer {
-        path: dir.join(EVENTS),
-        reason: "the log's first line is not an event".to_owned(),
-    })?;
-    if line.kind != "session_started" {
-        return Err(Error::Pointer {
-            path: dir.join(EVENTS),
-            reason: "the log's first line is not session_started".to_owned(),
-        });
-    }
-    let forked = line.payload.get("forked_from").and_then(|from| {
-        let session = from.get("session_id")?.as_str()?;
-        let seq = from.get("seq")?.as_u64()?;
-        Some((SessionId(session.to_owned()), Seq(seq)))
-    });
-    // A `forked_from` that does not read as a pointer is corrupt, not absent.
-    if line.payload.get("forked_from").is_some() && forked.is_none() {
-        return Err(Error::Pointer {
+    crate::scan::first_line(dir)?
+        .fork_point()
+        .map_err(|_| Error::Pointer {
             path: dir.join(EVENTS),
             reason: "the log's forked_from is not a session and a seq".to_owned(),
-        });
-    }
-    Ok(forked)
+        })
 }
 
 #[cfg(test)]

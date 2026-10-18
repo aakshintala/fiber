@@ -43,6 +43,8 @@ An extension is one directory. Its manifest, `extension.json`, states
 - its version
 - the lowest Fiber version it runs on
 - the extension API version it was written for ("The extension API version")
+- the session-half version range the TUI extension works with
+  (`tui.session_versions`)
 - the other extensions it depends on, each with a minimum version
 - the native binaries it ships, if any, with one download URL and one sha256
   per platform
@@ -89,7 +91,7 @@ nothing in the manifest and an install finds them by looking:
 | `skills/` | one directory per skill, each with a `SKILL.md` |
 | `prompts/` | one directory per prompt template, in the same format; every skill here is one only a person runs, as if its header set `disable-model-invocation: true` |
 | `themes/` | one file per theme; a switched-off extension's themes are not listed or loaded |
-| `tui/` | the TUI extension's Lua scripts |
+| `tui/` | the TUI extension's Lua scripts, entered at `tui/init.lua` |
 
 What a skill and a prompt template are, and where Fiber finds them besides
 packages, is `docs/system-prompt.md`, "Skills". A theme sets the terminal's
@@ -1148,6 +1150,13 @@ session half's extension state and what that half sends with `host.emit`, and
 sends driver commands, including its own extension's commands. A crash in a
 TUI extension cannot stop the session (`docs/invocation.md`, "Processes").
 
+A TUI extension registers each slot it fills with `fiber.slot(name, {
+timeout, render, animate })`, the same shape as `fiber.command` above:
+`timeout` in milliseconds is required, `render` draws the slot, and `animate`
+is present only on a slot that animates (`docs/tui.md`, "Animation"). A
+missing `timeout` fails at registration, as a missing callback `timeout` does
+("How an extension runs").
+
 A TUI extension has the host calls that need no session: `host.http`,
 `host.exec`, `host.fs`, `host.config`, `host.data_dir`, `host.after`,
 `host.every`, `host.drive`, `host.log`, the hashes and `json`. It has no
@@ -1295,7 +1304,7 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - `require` loads files from your extension's own directory only. To use
   someone else's Lua, vendor a copy into your directory or depend on the
   extension that holds it.
-- Give your extension a version tag for every release. Dependents name a
+- Give your extension a version tag for every release (see [Versions](#versions)). Dependents name a
   minimum version, and Fiber installs nothing newer than someone asked for.
 - JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`.
 - In Lua, do not reach for `io`, `os`, `fetch`, sockets or environment
@@ -1374,6 +1383,8 @@ later, and 1.9 is the newest, Fiber installs 1.4. The same inputs always give
 the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
+A git address a person installs by name gets the repository's newest version tag. A repository with no version tag cannot be installed from its git address: the install fails with `extension_not_found`. A local path install needs no tag.
+
 A version a person installed or updated by name counts as one more minimum,
 and it stays until they remove that extension. So `fiber extension update <name>` on a
 dependency keeps the newer version, and the same installed set always gives
@@ -1408,6 +1419,8 @@ for 300 seconds, fails with `fetch_failed`.
 | `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
 | `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |
+
+An install from a git address needs a version tag (see [Versions](#versions)).
 
 In a terminal, `install` and `update` show a summary and ask before going
 ahead. The summary is the one in

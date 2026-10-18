@@ -100,7 +100,12 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         "the wait did not park at 250 ms"
     );
     assert!(done.try_recv().is_err());
-    let mark = clock.advance_marked(Duration::from_millis(249));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(249),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(due), DEADLINE),
         "the wait parks again a millisecond short of 250 ms"
@@ -109,7 +114,12 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         done.try_recv().is_err(),
         "the wait ended a millisecond early"
     );
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the wait to end at 250 ms");
@@ -153,13 +163,19 @@ fn output_arriving_does_not_end_the_wait() {
     }
     // The clock's subscription delivers the wake, so advancing by zero wakes
     // the wait without moving the deadline.
-    let mark = clock.advance_marked(Duration::ZERO);
+    let mark =
+        clock.advance_when_parked(Some(due), None, Duration::ZERO, &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked_since(&mark, Some(due), DEADLINE),
         "output arriving parks the wait again at 250 ms"
     );
     assert!(done.try_recv().is_err());
-    clock.advance(Duration::from_millis(250));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the wait to end at 250 ms");
@@ -225,7 +241,12 @@ fn a_full_queue_parks_for_ten_ms_on_the_clock_and_tries_again() {
         "the write did not wait for room"
     );
     assert!(rx.try_recv().is_err());
-    clock.advance(Duration::from_millis(10));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(10),
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 5);
 }
 
@@ -372,7 +393,12 @@ fn a_lock_released_before_the_cancel_is_taken() {
     );
     assert!(rx.try_recv().is_err());
     drop(held);
-    clock.advance(Duration::from_millis(10));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(10),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         Deadline::after(DEADLINE)
             .recv(&rx)

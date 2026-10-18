@@ -652,7 +652,7 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     // again with no later wake.
     world.clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (mut looped, outcome) = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("the turn ended");
     assert!(outcome.unwrap().is_none());

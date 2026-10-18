@@ -53,11 +53,14 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
 ## Before a call runs
 
-- Arguments the model sent are repaired first, and only where a property's
-  schema names a single type, after following any `$ref` to its definition.
-  Three repairs are made. A `null` sent for an optional property is dropped,
-  so the tool sees it as absent, unless the property's type is `null` alone. A
-  required property keeps a `null` its type allows. A string holding a plain JSON number, such
+- Arguments the model sent are repaired first, after following any `$ref` to
+  its definition. Repairs need a single type, except for dropping nullable-union
+  nulls. Three repairs are made. A `null` sent for an optional property is
+  dropped unless its type is `null` alone or it has no type. A required
+  property's `null` is also dropped when every typed schema at that property
+  joins `null` with another type in a type list, and at least one has a type.
+  The tool sees these nulls as absent. A lone `"null"` or `["null"]` keeps its
+  null. A string holding a plain JSON number, such
   as `5`, `-2.5` or `1e3`, becomes a number where the type is `number`, and
   where the type is `integer` only if its value is whole, so `5.0` becomes
   `5` and `5.5` is left as sent; the string `true` or `false` becomes a
@@ -67,7 +70,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   repaired, and the value passes the check as sent or fails it. A `$ref`
   that leads back to itself before reaching a type repairs nothing. Nothing
   else is repaired: JSON that does not parse, a misspelt or foreign tool name,
-  and a missing or unknown property all fail the check. Repair is the same for
+  and an unknown property all fail the check. A missing required property fails
+  unless it meets the same nullable-union rule that permits dropping its null.
+  Repair is the same for
   every protocol, model and tool, built-in, MCP or extension. The model is not
   told, and its call is sent back to it as written. `tool_call_requested`
   records what was repaired (`docs/events.md`). Arguments a `before_tool` hook
@@ -226,8 +231,8 @@ path's directory, ending in `/`.
 - Arguments: `path` (required); `offset`, the first line to return, counted
   from 1; `limit`, the number of lines; `pages`, a page range such as `1-5`,
   for a PDF only.
-- Its optional properties put its schema outside the strict subset, so it is
-  sent with `strict: false`.
+- `read` is strict: its optional arguments are typed nullable and listed in
+  `required`.
 - Text comes back as it is in the file, without line numbers and without a
   byte order mark. Nothing needs stripping before it is copied into an edit.
 - `details` is `{ "start_line": N }` on a text result, the number of the
@@ -487,8 +492,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   (optional); `monitor` (optional; starts a monitor, "Background jobs");
   `deadline_ms` (optional; a monitor's deadline). Each call starts fresh: a `cd` does not carry over to the
   next call.
-- Its optional properties and the `minimum` limits put its schema outside the
-  strict subset, so it is sent with `strict: false`.
+- Its optional arguments are typed nullable and listed in `required`. The
+  `minimum` limits put its schema outside the strict subset, so it is sent
+  with `strict: false`.
 - A monitor takes neither `tty` nor `run_in_background`, and its only limit
   is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
   `monitor` is refused too. Each of these fails with `invalid_arguments`,
@@ -734,6 +740,12 @@ The kinds are `docs/events.md`.
   message does. Jobs finishing together are delivered together in one turn,
   not one turn each. If a `jobs wait` already returned a job's final state to
   the model, no completion notice is sent for it.
+  A job an extension started with `host.delegate` is the exception: its end
+  wakes nothing and starts no turn. The model does not see its completion
+  notice, live or after a resume. A `jobs wait`, `jobs stop` or `jobs write`
+  answer still reports the final state, without the delegate's final message.
+  Its `delegate_finished` and `job_completed` are written with no turn, after
+  the `after_tool` hooks (`docs/extensions.md`, "Host calls").
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output
@@ -785,6 +797,9 @@ The kinds are `docs/events.md`.
   (`docs/invocation.md`, "Shutdown"),
   because a cap on the waiter cannot tell a hang from long healthy work such
   as a CI watch.
+  A job an extension started is not counted here: it holds no session open,
+  is not in the ending notice or the jobs check, and a session that ends
+  normally stops it.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
@@ -1361,7 +1376,12 @@ tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
 When a window crosses `quota.notice_at` percent used (default 80), one line
 naming the provider, the credential label, the window and its reset time goes into the model's next
 turn input. It fires once per crossing, and again for that window only after
-it resets. The notice is the durable event `quota_noticed`
+it resets (its reset time has passed, or a later reading is below `quota.notice_at`).
+A credit with a positive limit counts as the window `credit`, at
+`100 × (limit − remaining) / limit` percent used. It has no reset time, so it
+fires again only after a reading below `quota.notice_at`. The line leaves out
+the reset time when there is none: for a credit, and for a window whose
+provider reports no reset time. The notice is the durable event `quota_noticed`
 (`docs/events.md`, "Usage and notices"). An OpenRouter key without a limit reports no quota, so it never gives a notice.
 
 ### Fetching

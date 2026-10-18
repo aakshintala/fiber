@@ -2686,3 +2686,22 @@ fn a_default_model_sends_x_api_key_and_no_authorization() {
     assert_ne!(sent.header("x-api-key"), None);
     assert_eq!(sent.header("authorization"), None);
 }
+
+#[test]
+fn a_required_nullable_property_uses_strict_mode() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = vec![ToolDefinition {
+        input_schema: json!({
+            "type": "object",
+            "properties": {"offset": {"type": ["integer", "null"]}},
+            "required": ["offset"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    }];
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"][0]["strict"], true);
+}
