@@ -740,6 +740,115 @@ A package with no case files fails the command. An invalid package path is a
 usage error. The runner reports each case and exits non-zero if any case fails
 (`docs/invocation.md`, "Commands and flags").
 
+### Testing a tool that executes
+
+A call to a tool that declares `executes` goes to the reviewer, as every
+reviewed call does (`docs/permissions.md`, "The reviewer"). A case has no
+field that approves a call, so it approves one through configuration:
+`config` sets `reviewer.model` to `scripted/script.json`, and the script's
+first step carries the reviewer's reply.
+
+A case writes exactly one file into its workspace, the session script, so the
+reviewer reads the same `script.json` from its own step 1. The allow case's
+first step therefore carries both halves: `"text": "allow"` answers the
+reviewer's first stage, and the `tool_calls` entry is the session's call. The
+reviewer takes the text and never sees a tool call, because a review request
+carries no tools. The expected stream records the reviewer's verdict as
+`permission_resolved` with `decided_by: reviewer` and `decision: allow`, and
+the call runs to `tool_call_completed` with `status: completed`.
+
+With no `reviewer.model` the call is denied with `decided_by: no_reviewer`:
+the reviewer cannot be set up, a `notice` with code `no_model` is written,
+the call never runs, and `tool_call_completed` has `status: denied`. That is
+how a case tests the denial: the same tool with no `config`.
+
+The reviewer's first stage answers `allow` or `check`; a `check` goes to a
+second stage whose reply is `allow` or `block` plus a reason
+(`docs/permissions.md`, "Its verdict"). The cases below answer the first
+stage with `allow`.
+
+The `launch` tool declares `executes` and returns without a host call:
+
+```lua
+fiber.tool("launch", {
+  description = "Launches the job.",
+  input_schema = { type = "object" },
+  timeout = 2000,
+  effects = { effects = { "executes" }, reversible = false },
+  run = function() return "launched" end
+})
+```
+
+`tests/launch-allowed.json` sets the reviewer through `config` and expects
+the allowed stream:
+
+```json
+{
+  "script": {"steps": [{"text": "allow", "tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Launched."}]},
+  "prompt": "launch it",
+  "config": {"reviewer": {"model": "scripted/script.json"}},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "allow"}},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "usage_recorded"},
+    {"kind": "permission_resolved", "payload": {"decided_by": "reviewer", "decision": "allow"}},
+    {"kind": "tool_call_started"},
+    {"kind": "tool_call_completed", "payload": {"status": "completed"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Launched."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
+`tests/launch-denied.json` sets no reviewer and expects the denial stream:
+the call never runs, so there is no `tool_call_started` and no reviewer
+`usage_recorded`:
+
+```json
+{
+  "script": {"steps": [{"tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Denied."}]},
+  "prompt": "launch it",
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "notice", "payload": {"code": "no_model"}},
+    {"kind": "permission_resolved", "payload": {"decided_by": "no_reviewer", "decision": "deny"}},
+    {"kind": "tool_call_completed", "payload": {"status": "denied"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Denied."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
 ## Hooks
 
 A hook is asked at a fixed point in a session and may change what happens
