@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use contract::events::{
-    Event, JobCompleted, JobStarted, Outcome, SessionStarted, TurnCompleted, Variables,
-    VariablesSource,
+    Event, ExtensionStateSet, JobCompleted, JobStarted, OnFork, Outcome, SessionStarted,
+    TurnCompleted, Variables, VariablesSource,
 };
 use contract::shapes::Failure;
 use contract::{ErrorCode, JobId, Seq, SessionId};
@@ -157,6 +157,54 @@ fn stopped(ids: &[(&str, Option<&str>)]) -> Vec<StoppedJob> {
             description: description.map(str::to_owned),
         })
         .collect()
+}
+
+/// A hook's carried state beside a stop: a durable line the stop run
+/// must read past.
+fn state_set() -> Event {
+    Event::ExtensionStateSet(ExtensionStateSet {
+        extension: "redactor".into(),
+        key: "seen".into(),
+        value: serde_json::json!(true),
+        on_fork: OnFork::Fresh,
+    })
+}
+
+#[test]
+fn hook_state_between_two_stops_keeps_the_earlier_job_in_the_note() {
+    let (_home, dir) = session_log(&[
+        session_start(),
+        started("j_1", "npm run dev"),
+        started("j_2", "lint"),
+        cancelled("j_1"),
+        state_set(),
+        cancelled("j_2"),
+        rewound_line(),
+    ]);
+    assert_eq!(
+        stopped_jobs(&dir).unwrap(),
+        stopped(&[("j_1", Some("npm run dev")), ("j_2", Some("lint"))])
+    );
+}
+
+#[test]
+fn the_scan_stops_at_the_settled_turn_before_the_run() {
+    let (_home, dir) = session_log(&[
+        session_start(),
+        started("j_0", "stale"),
+        cancelled("j_0"),
+        // The settled turn before the stop wait: the boundary the scan
+        // must not cross, even with hook state past it.
+        turn_done(),
+        state_set(),
+        started("j_1", "npm run dev"),
+        cancelled("j_1"),
+        rewound_line(),
+    ]);
+    assert_eq!(
+        stopped_jobs(&dir).unwrap(),
+        stopped(&[("j_1", Some("npm run dev"))])
+    );
 }
 
 #[test]

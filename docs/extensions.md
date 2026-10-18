@@ -829,7 +829,7 @@ no artifact text returned it keeps what the tool or a hook wrote there, and a
 returned `content` over the cap is cut with a notice naming it.
 
 `after_tool` also runs on every job delivery: a job's completion notice, each
-batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
+batch of a monitor's lines, and a delegate's full, unbounded final message (`docs/tools.md`,
 "Background jobs"). It gets the tool name of the call that started the job, and
 `delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
 job ends, it runs once more on the job's whole output file, with `delivery`
@@ -975,8 +975,9 @@ What a `blocking` failure stops, at each point:
 ### Recording a change
 
 The log holds what a hook returned, never what it was given. Each line a hook
-changed names the extensions that changed it in `changed_by`, so a reader can
-see that a message or result was rewritten and by whom (`docs/events.md`).
+changed names the extensions that took attribution for the change in `changed_by`, so a reader can
+see that a message or result was rewritten and by whom (`docs/events.md`). A change no extension took
+attribution for carries no `changed_by` key.
 
 Handing a value to a hook and taking its answer back is cheap next to the
 hook's own work. A 16 KiB tool result crosses into Lua and back in under

@@ -656,7 +656,7 @@ is listed in `docs/errors.md`. `changes` is the one tool-neutral account of a
 change: any tool may set it, so a client shows the counts without knowing
 which tool ran (`docs/tools.md`, "What a result carries").
 
-A line whose content a hook changed carries `changed_by`. It appears on
+A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
 `tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
 rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
 for a changed final message, on `job_completed` for a changed completion notice,

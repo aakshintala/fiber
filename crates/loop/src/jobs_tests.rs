@@ -4417,7 +4417,12 @@ const OUT: &str = "artifacts/out.log";
 
 #[test]
 fn an_output_file_at_the_bound_is_handed_as_content_and_past_it_as_path() {
-    for (size, as_content) in [(1_048_575, true), (1_048_576, true), (1_048_577, false)] {
+    for (size, as_content) in [
+        (0, true),
+        (1_048_575, true),
+        (1_048_576, true),
+        (1_048_577, false),
+    ] {
         let hooks = Arc::new(RecordingHooks::default());
         let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
             .hooked(Arc::clone(&hooks));
