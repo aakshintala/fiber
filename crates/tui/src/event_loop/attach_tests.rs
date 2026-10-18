@@ -2625,21 +2625,20 @@ fn the_raise_is_written_after_the_frame_draws() {
         wait.recv_or_fail(&events, "the parked first flush"),
         "frame-enter"
     );
-    // The launch open went out whole while the writer was slow: feed,
-    // recent, the `summary` subscribe and commands, no `full`. One
-    // deadline for the whole wait: a scoped thread reads the lines
-    // into a channel, and the four takes share what remains of it.
+    // Feed, recent and summary go out while the writer is slow;
+    // commands waits for summary acceptance, and full for the frame.
+    // The three reads share one deadline.
     let (open_tx, open_rx) = mpsc::channel();
     let mut seen = Vec::new();
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            for _ in 0..4 {
+            for _ in 0..3 {
                 let line = socket_line(&mut reader).unwrap_or_else(|| panic!("an open line"));
                 open_tx.send(line).unwrap_or(());
             }
         });
         let open = Deadline::after(DEADLINE);
-        for _ in 0..4 {
+        for _ in 0..3 {
             seen.push(open.recv_or_fail(&open_rx, "an open line"));
         }
     });
@@ -2695,6 +2694,9 @@ fn the_raise_is_written_after_the_frame_draws() {
     // no lines, as an empty log would, so the frame installs its
     // preview and parks. No reader thread bridges the socket here, so
     // the answer goes straight onto the worker's channel.
+    let commands = socket_line(&mut reader).unwrap_or_else(|| panic!("commands after acceptance"));
+    let commands: serde_json::Value = serde_json::from_str(&commands).unwrap_or_default();
+    assert_eq!(commands["command"], "commands");
     let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
     let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
     assert_eq!(read["command"], "history");
@@ -2995,16 +2997,10 @@ fn tail_open(
         let input = wait.recv_or_fail(&rx, what);
         assert_eq!(lp.step(input, &rx), None);
     }
-    // The launch open answers: the summary ack starts the tail read, so
-    // the commands ack steps first and the read cannot stash it.
-    let mut first = wait.recv_or_fail(&rx, "the first open answer");
-    let mut second = wait.recv_or_fail(&rx, "the second open answer");
-    let is_commands = |input: &Input| matches!(input, Input::Hub(Line::Session(envelope)) if envelope.payload.get("result").is_some_and(|result| result.get("commands").is_some()));
-    if !is_commands(&first) && is_commands(&second) {
-        std::mem::swap(&mut first, &mut second);
-    }
-    assert_eq!(lp.step(first, &rx), None);
-    assert_eq!(lp.step(second, &rx), None);
+    // Summary acceptance releases commands and starts the tail read.
+    // Its commands reply can be stashed while the read awaits history.
+    let summary = wait.recv_or_fail(&rx, "the summary subscribe answer");
+    assert_eq!(lp.step(summary, &rx), None);
     if want_full && !want_drop {
         wait.recv_or_fail(&full_seen, "the hub to read the raise");
     }

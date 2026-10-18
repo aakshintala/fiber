@@ -202,15 +202,33 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     );
     clock.advance(HALF);
     signalled(&called, "the reconnect", &Deadline::after(DEADLINE));
+    let mut replies = theirs_again
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
     let reader = BufReader::new(theirs_again);
     let (reader, subscribe) = command(reader, "the subscribe after reconnecting");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "summary");
-    let (reader, commands) = command(reader, "the commands after reconnecting");
-    assert_eq!(commands["command"], "commands");
-    let (_, resent) = command(reader, "the resent prompt");
+    let (reader, resent) = command(reader, "the resent prompt");
     assert_eq!(resent, prompt);
+    let (reader, feed) = command(reader, "the reconnect feed");
+    assert_eq!(feed["command"], "feed");
+    let (reader, recent) = command(reader, "the reconnect recent");
+    assert_eq!(recent["command"], "recent");
+    let (reader, sessions) = command(reader, "the reconnect sessions");
+    assert_eq!(sessions["command"], "sessions");
+    writeln!(
+        replies,
+        "{}",
+        serde_json::json!({
+            "kind": "command_accepted", "ts": 0, "schema_version": contract::SCHEMA_VERSION,
+            "session_id": "s_aaaaaaaaaaaaaaaa", "payload": {"command_id": subscribe["id"]}
+        })
+    )
+    .unwrap_or_else(|err| panic!("summary acceptance: {err}"));
+    let (_, commands) = command(reader, "commands after subscribe acceptance");
+    assert_eq!(commands["command"], "commands");
     assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
 }
 

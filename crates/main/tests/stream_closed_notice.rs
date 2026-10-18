@@ -301,6 +301,17 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         "home does not meet the reopen wait: {}",
         held.contents
     );
+    // Drain the observer through a session reply before reopening, so
+    // an old full-client count cannot satisfy the new attach wait.
+    observer.send(
+        &serde_json::json!({
+            "id": "c_before_reopen", "command": "commands", "session_id": id
+        })
+        .to_string(),
+    );
+    until(&observer, "the observer barrier before reopening", |line| {
+        line["payload"]["command_id"] == "c_before_reopen"
+    });
     run.write(b"\x1b[A\r");
     let reopened = run.wait_screen("the reopened conversation", reopened_shown);
     assert_eq!(
@@ -309,6 +320,15 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         "no second close notice: {}",
         reopened.contents
     );
+
+    // The conversation can draw before the summary is accepted and the
+    // full raise follows it. Wait for the subscription, not just that
+    // frame, before releasing the held turn.
+    let attached = until(&observer, "the reopened full subscription", |line| {
+        line.get("kind").and_then(Value::as_str) == Some("session_status")
+            && line["payload"].get("clients").and_then(Value::as_u64) == Some(1)
+    });
+    assert_eq!(attached.last().unwrap()["payload"]["clients"], 1);
 
     // The held turn runs on: the reply finishes the turn, the session
     // exits, and the terminal quits with its resume line.
