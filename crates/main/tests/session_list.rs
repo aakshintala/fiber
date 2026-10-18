@@ -93,8 +93,8 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         &json!({"id":doors::mint("c_"),"command":"subscribe","args":{"level":"summary"}})
             .to_string(),
     );
-    let b_status = support::until(&socket, "B summary exists", |line| {
-        line["kind"] == "session_status"
+    let b_status = support::until(&socket, "B summary names its prompt", |line| {
+        line["kind"] == "session_status" && line["payload"]["name"] == "fix the parser"
     });
     assert_eq!(
         b_status.last().unwrap()["payload"]["name"],
