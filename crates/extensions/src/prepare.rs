@@ -2,6 +2,7 @@
 //! this platform's binary, and the manifest's install step
 //! (`docs/extensions.md`, "Versions" and "Installing").
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -102,6 +103,7 @@ fn run_step(
         args: args.to_vec(),
         cwd: dir.to_path_buf(),
         // The step's output is not capped today.
+        env: BTreeMap::new(),
         cap: usize::MAX,
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the step as it does today.

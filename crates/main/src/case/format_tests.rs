@@ -367,6 +367,12 @@ fn malformed_case_fields_name_the_field() {
     let mut value = session_case();
     value["host"] = json!({"exec": [{"request": {"program": "git", "cwd": true}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
     cases.push(("cwd", value));
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "env": "x"}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
+    cases.push(("env", value));
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "env": {"A": 1}}, "reply": {"code": 0, "stdout": "", "stderr": ""}}]});
+    cases.push(("env", value));
 
     for (field, value) in cases {
         let error = parse(&value)
@@ -374,6 +380,22 @@ fn malformed_case_fields_name_the_field() {
             .unwrap_or_else(|| panic!("{field}: case was accepted"));
         assert!(error.contains(field), "{field}: {error}");
     }
+}
+
+#[test]
+fn an_exec_request_with_env_is_read() {
+    let value = json!({
+        "script": {"steps": [{"text": "hello"}]},
+        "prompt": "hi",
+        "host": {"exec": [{"request": {"program": "git", "env": {"FIBER_X": "1"}},
+                               "reply": {"code": 0, "stdout": "", "stderr": ""}}]},
+        "expect": [{"kind": "turn_completed"}]
+    });
+    let Case::Session(parsed) = parse(&value).expect("valid session case") else {
+        panic!("session case parsed as a call case");
+    };
+    assert_eq!(parsed.host.exec.len(), 1);
+    assert_eq!(parsed.host.exec[0].request["env"], json!({"FIBER_X": "1"}));
 }
 
 #[test]

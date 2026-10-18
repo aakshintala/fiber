@@ -378,6 +378,7 @@ fn git_files(name: &str, dir: &Path, clock: &dyn Clock) -> Result<Vec<String>, E
         // workspace path that is not UTF-8 still reaches `git` intact.
         cwd: dir.to_path_buf(),
         // The file list is not capped today.
+        env: BTreeMap::new(),
         cap: usize::MAX,
         // In Fiber's process group, so terminal prompts still work as they
         // do today.

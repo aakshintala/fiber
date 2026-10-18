@@ -2,6 +2,7 @@
 //! "Names"). Fiber runs `git` as a person would, so their SSH keys and
 //! credential helpers apply.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -120,6 +121,7 @@ impl Origin {
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             cwd: dir.map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf),
             // `git`'s output is not capped today.
+            env: BTreeMap::new(),
             cap: usize::MAX,
             // In Fiber's process group, so SSH and credential-helper
             // prompts on the terminal still work as they do today.

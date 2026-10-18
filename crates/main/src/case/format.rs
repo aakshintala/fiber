@@ -514,7 +514,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.request: expected an object"))?;
     only(
         request,
-        &["program", "args", "cwd"],
+        &["program", "args", "cwd", "env"],
         &format!("{prefix}.request"),
     )?;
     string(request, "program", &format!("{prefix}.request"))?;
@@ -530,6 +530,13 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         && !cwd.is_null()
     {
         return Err(format!("{prefix}.request.cwd: expected a string or null"));
+    }
+    if let Some(env) = request.get("env")
+        && !env
+            .as_object()
+            .is_some_and(|env| env.values().all(Value::is_string))
+    {
+        return Err(format!("{prefix}.request.env: expected a table of strings"));
     }
     let reply = map
         .get("reply")

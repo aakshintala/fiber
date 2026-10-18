@@ -510,7 +510,7 @@ end })"#,
 fn a_scripted_exec_is_delivered_as_an_extension_exec_event() {
     let setup = setup(
         r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
-  local reply = host.exec("/case-test-do-not-run", {}, {})
+  local reply = host.exec("/case-test-do-not-run", {}, {env = {FIBER_X = "1"}})
   assert(reply.exit_code == 0 and reply.stdout == "ok")
   host.log("exec response was used")
 end })"#,
@@ -542,7 +542,7 @@ end })"#,
     let mut value = session(tool_script(), "hi", expected(&kinds));
     value["until"] = json!({"kind": "extension_log", "nth": 1});
     value["host"] = json!({"exec": [{
-        "request": {"program": "/case-test-do-not-run"},
+        "request": {"program": "/case-test-do-not-run", "env": {"FIBER_X": "1"}},
         "reply": {"code": 0, "stdout": "ok", "stderr": ""}
     }]});
     assert_success(&run_case(&setup, "exec", &value));
