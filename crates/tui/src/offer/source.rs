@@ -1,5 +1,7 @@
 //! One offered item's source, read only through the driver's command.
 
+use std::cell::RefCell;
+
 use contract::events::OfferedItem;
 use contract::{ErrorCode, RequestId, SessionId};
 use ratatui::text::Line;
@@ -17,12 +19,19 @@ enum Shown {
 }
 
 #[derive(Debug)]
+struct Body {
+    width: u16,
+    rows: Vec<Row>,
+}
+
+#[derive(Debug)]
 pub(crate) struct Source {
     pub(super) item: usize,
     file: usize,
     top: usize,
     asked: Option<String>,
     shown: Shown,
+    body: RefCell<Option<Body>>,
 }
 
 impl Source {
@@ -33,7 +42,13 @@ impl Source {
             top: 0,
             asked: None,
             shown: Shown::Loading,
+            body: RefCell::new(None),
         }
+    }
+
+    fn show(&mut self, shown: Shown) {
+        self.shown = shown;
+        *self.body.get_mut() = None;
     }
 
     pub(crate) fn ask(
@@ -44,7 +59,7 @@ impl Source {
         path: &str,
     ) -> String {
         self.asked = Some(id.to_owned());
-        self.shown = Shown::Loading;
+        self.show(Shown::Loading);
         session_command(
             id,
             "offered_file",
@@ -58,7 +73,7 @@ impl Source {
         if self.asked.as_deref() != Some(id) {
             return false;
         }
-        self.shown = Shown::Text(text);
+        self.show(Shown::Text(text));
         true
     }
 
@@ -66,7 +81,7 @@ impl Source {
         if self.asked.as_deref() != Some(id) || *code == ErrorCode::DuplicateCommand {
             return false;
         }
-        self.shown = Shown::Refused(message.to_owned());
+        self.show(Shown::Refused(message.to_owned()));
         true
     }
 
@@ -82,7 +97,7 @@ impl Source {
         self.file = next;
         self.top = 0;
         self.asked = None;
-        self.shown = Shown::Loading;
+        self.show(Shown::Loading);
         Some(next)
     }
 
@@ -133,19 +148,32 @@ impl Source {
             item.files.len()
         );
         let mut rows = vec![Row::text(Line::raw(header)), Row::text(Line::raw(""))];
-        let text = match &self.shown {
-            Shown::Loading => "Loading…",
-            Shown::Refused(message) => message,
-            Shown::Text(text) if text.is_empty() => "(empty file)",
-            Shown::Text(text) => text,
-        };
-        for line in text.lines() {
-            rows.extend(
-                wrap(line, width)
-                    .into_iter()
-                    .map(|line| clipped(Line::raw(line), vec![], width)),
-            );
+        // Paging and height changes reuse the wrapped body. Keep only the
+        // current width; a resize must not retain another full file's rows.
+        let mut body = self.body.borrow_mut();
+        if body.as_ref().is_some_and(|body| body.width != width) {
+            *body = None;
         }
+        let body = body.get_or_insert_with(|| {
+            let text = match &self.shown {
+                Shown::Loading => "Loading…",
+                Shown::Refused(message) => message,
+                Shown::Text(text) if text.is_empty() => "(empty file)",
+                Shown::Text(text) => text,
+            };
+            Body {
+                width,
+                rows: text
+                    .lines()
+                    .flat_map(|line| {
+                        wrap(line, width)
+                            .into_iter()
+                            .map(|line| clipped(Line::raw(line), vec![], width))
+                    })
+                    .collect(),
+            }
+        });
+        rows.extend_from_slice(&body.rows);
         rows
     }
 

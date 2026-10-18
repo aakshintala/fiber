@@ -164,14 +164,55 @@ fn source_wrapped_40() {
 }
 
 #[test]
+fn source_rows_follow_width_and_answer_changes() {
+    let mut app = offered(
+        json!([{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]),
+        40,
+        24,
+    );
+    let Effect::Send(lines) = press(&mut app, Key::Enter) else {
+        panic!("source request");
+    };
+    let command: Value = serde_json::from_str(&lines[0]).unwrap();
+    let body = |app: &App, width| {
+        app.offer_rows(width)
+            .unwrap()
+            .0
+            .into_iter()
+            .skip(3)
+            .map(|row| row.line.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(body(&app, 40), ["Loading…"]);
+    assert_eq!(body(&app, 4), ["Load", "ing…"]);
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": command["id"], "result": {"text": "abcde"}}),
+    ));
+    assert_eq!(body(&app, 4), ["abcd", "e"]);
+    assert_eq!(body(&app, 4), ["abcd", "e"]);
+    assert_eq!(body(&app, 3), ["abc", "de"]);
+    assert_eq!(body(&app, 5), ["abcde"]);
+    assert_eq!(body(&app, 4), ["abcd", "e"]);
+    app.on_line(session_line(
+        "command_rejected",
+        json!({"command_id": command["id"], "code": "invalid_arguments", "message": "refused"}),
+    ));
+    assert_eq!(body(&app, 4), ["refu", "sed"]);
+    app.on_edit(crate::keys::Edit::Right);
+    assert_eq!(body(&app, 4), ["Load", "ing…"]);
+    assert_eq!(body(&app, 40), ["Loading…"]);
+}
+
+#[test]
 fn a_line_past_65535_rows_scrolls_to_its_end() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let text = format!("{}FINALCHUNK", "0123456789".repeat(70_000));
         assert_eq!(text.len(), 700_010);
         let mut app = source_app(10, 100, Some(Ok(&text)));
-        // Shrinking page sizes reach the far end without rebuilding 70,000
-        // rows once for each tiny page. The final drawing is still 10 by 5.
+        // Shrinking page sizes reach the far end in bounded steps. Height
+        // changes reuse the same wrapped body; the final drawing is 10 by 5.
         for _ in 0..128 {
             let (rows, top) = app.offer_rows(10).unwrap();
             let total: usize = rows.iter().map(|row| row.height(10)).sum();
