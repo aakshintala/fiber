@@ -126,14 +126,14 @@ pub fn paging_session(scale: usize) -> String {
     };
     let empty = serde_json::json!({});
     log.line(
-        "fiber_started",
-        None,
-        &serde_json::json!({"version": "0.0.0", "resumed": false}),
-    );
-    log.line(
         "session_started",
         None,
         &serde_json::json!({"workspace": "~/work/fiber"}),
+    );
+    log.line(
+        "fiber_started",
+        None,
+        &serde_json::json!({"version": "0.0.0", "resumed": false}),
     );
     let mut step = 0usize;
     for turn in 0..TURNS.saturating_mul(scale) {
