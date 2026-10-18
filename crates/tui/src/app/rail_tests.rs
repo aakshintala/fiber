@@ -2461,3 +2461,21 @@ fn a_rebound_plain_focus_rail_key_in_a_non_empty_box_leaves_the_text_alone() {
     assert_eq!(rail_focus(&app), None);
     assert_eq!(app.input().cursor(app.draft_width()).1, 4);
 }
+
+#[test]
+fn a_plain_up_with_an_item_open_leaves_a_focused_card_alone() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    app.on_line(turn(
+        A,
+        "job_started",
+        json!({"job_id": "j_1", "description": "build", "output_path": "/tmp/out"}),
+    ));
+    let _ = app.open_item(&contract::JobId("j_1".to_owned()));
+    assert!(app.item_open());
+    let _ = stroke_press(&mut app, plain(Code::Up));
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert!(app.item_open());
+}
