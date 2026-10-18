@@ -1,9 +1,13 @@
 //! Scripted `host.http` and `host.exec` calls for extension cases (`docs/testing.md`, "Testing an extension").
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::time::Instant;
 
 use contract::ErrorCode;
+use contract::clock::{Clock, Wake};
 use serde_json::{Map, Value};
+use support::clock::Parker;
+use support::group::GROUP_POLL;
 
 use super::{HttpRequest, exec::ExecRequest};
 
@@ -188,6 +192,50 @@ impl HostScript {
         state.exec_next = index.saturating_add(1);
         entry.reply.map(|reply| (index, reply))
     }
+
+    /// Parks a scripted hang on the case clock until `deadline`, as a real
+    /// `host.exec` parks on the injected clock. True when the deadline was
+    /// reached; false when the stop sender dropped first, which records the
+    /// still-parked hang as a miss. The deadline is checked before the stop
+    /// on every pass, so a stop caused by the timeout itself is never a
+    /// miss. Returns within `GROUP_POLL` of either condition.
+    pub(crate) fn park_hang(
+        &self,
+        index: usize,
+        request: &Value,
+        clock: &dyn Clock,
+        deadline: Instant,
+        stop: &mpsc::Receiver<()>,
+    ) -> bool {
+        let parker = Arc::new(Parker::new());
+        let waker: Arc<dyn Wake> = parker.clone();
+        clock.subscribe(Arc::downgrade(&waker));
+        loop {
+            let seen = parker.generation();
+            if clock.now() >= deadline {
+                return true;
+            }
+            if matches!(stop.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                lock(&self.state).misses.push(hung_miss(index, request));
+                return false;
+            }
+            parker.park_polled(clock, Some(deadline), Some(GROUP_POLL), seen);
+        }
+    }
+
+    /// Fails a scripted hang with no callback deadline: it never parks, so
+    /// the miss names the request at once and the case fails on close.
+    pub(crate) fn hang_without_deadline(
+        &self,
+        index: usize,
+        request: &Value,
+    ) -> (ErrorCode, String) {
+        lock(&self.state).misses.push(hung_miss(index, request));
+        (
+            ErrorCode::IoFailed,
+            "host.exec: scripted hang needs a callback deadline".to_owned(),
+        )
+    }
 }
 
 /// Matches a case's expected JSON subset against an actual request or event.
@@ -297,6 +345,16 @@ fn redact_env(request: &Value) -> Value {
         }
     }
     redacted
+}
+
+/// A hang still parked when the session closes: the entry that parked it
+/// and the redacted request, so the case names the hang on close.
+fn hung_miss(index: usize, request: &Value) -> String {
+    format!(
+        "host.exec[{}] hung: request {} still parked at close",
+        index.saturating_add(1),
+        redact_env(request)
+    )
 }
 
 fn miss(kind: &str, index: usize, request: &Value) -> String {

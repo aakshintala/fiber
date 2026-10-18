@@ -314,8 +314,8 @@ pub(super) fn admit<'a>(
                 cwd: request.cwd.clone(),
             });
             if let Some(script) = hub.host_script() {
-                drop(shared);
-                let result = match script.exec(request.case_value()) {
+                let case_value = request.case_value();
+                match script.exec(case_value.clone()) {
                     Ok((
                         _,
                         ExecReply::Ran {
@@ -324,6 +324,7 @@ pub(super) fn admit<'a>(
                             stderr,
                         },
                     )) => {
+                        drop(shared);
                         let (exit_code, signal) = match end {
                             ExecEnd::Code(code) => (Some(code), None),
                             ExecEnd::Signal(number) => {
@@ -338,15 +339,49 @@ pub(super) fn admit<'a>(
                             timed_out: false,
                         };
                         send_exec(&hub_exec, meta.as_ref(), &ran);
-                        Ok(ran)
+                        Admitted::Replied(Reply::Exec(Ok(ran)))
                     }
-                    Ok((_, ExecReply::Hang)) => Err((
-                        contract::ErrorCode::IoFailed,
-                        "host.exec: a scripted hang needs the hang park".to_owned(),
-                    )),
-                    Err(failed) => Err(failed),
-                };
-                Admitted::Replied(Reply::Exec(result))
+                    Ok((index, ExecReply::Hang)) => match deadline {
+                        Some(until) => {
+                            // A hang parks on the case clock until the
+                            // callback deadline, as a real exec parks on the
+                            // injected clock; the Lua thread stays free and
+                            // the scheduler ends the callback at its own
+                            // deadline, so the worker sends no reply.
+                            let stop = shared.register_exec(id);
+                            let clock = hub.clock_handle();
+                            Admitted::Spawning {
+                                shared,
+                                spawn: Spawn {
+                                    builder: thread::Builder::new().name(format!("exec {name}")),
+                                    work: Box::new(move || {
+                                        script.park_hang(
+                                            index,
+                                            &case_value,
+                                            clock.as_ref(),
+                                            until,
+                                            &stop,
+                                        );
+                                        // The hang ended or stopped: a
+                                        // cancelled call may return only now.
+                                        hub_exec.lock().finish_exec(id);
+                                        hub_exec.notify();
+                                    }),
+                                    exec: true,
+                                },
+                            }
+                        }
+                        None => {
+                            let failed = script.hang_without_deadline(index, &case_value);
+                            drop(shared);
+                            Admitted::Replied(Reply::Exec(Err(failed)))
+                        }
+                    },
+                    Err(failed) => {
+                        drop(shared);
+                        Admitted::Replied(Reply::Exec(Err(failed)))
+                    }
+                }
             } else {
                 // The stop sender stays in the hub, so the stop reaches the
                 // run without the Lua thread, and the run's end clears it.
