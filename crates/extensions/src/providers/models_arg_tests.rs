@@ -1,23 +1,9 @@
 use std::fs;
-use std::sync::mpsc;
-use std::time::Duration;
 
 use config::{CredentialSource, ProjectKey, ProviderData, Sources};
 use fakes::clock::FakeClock;
 
 use super::*;
-
-#[allow(clippy::unwrap_used, reason = "test setup; a failure is the test's")]
-#[allow(clippy::panic, reason = "the test's wait deadline is its failure")]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    const WAIT: Duration = Duration::from_secs(5);
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match fakes::Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
 
 /// A credential source that cannot be read is the error, never an
 /// absent key: `models_arg` returns `Error::Config`, so the caller
@@ -74,15 +60,19 @@ fn models_arg_returns_a_credential_read_failure() {
         overrides: Vec::new(),
     })
     .unwrap();
-    let error = within(move || {
-        providers.models_arg(
-            "ext",
-            &provider,
-            &config,
-            &fakes::children::grouped_output,
-            &|_| None,
-        )
-    })
+    let error = fakes::within(
+        "providers.models_arg",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            providers.models_arg(
+                "ext",
+                &provider,
+                &config,
+                &fakes::children::grouped_output,
+                &|_| None,
+            )
+        },
+    )
     .unwrap_err();
     assert!(
         matches!(error, Error::Config(_)),

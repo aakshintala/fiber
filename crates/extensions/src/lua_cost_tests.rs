@@ -26,16 +26,6 @@ const WAIT: Duration = Duration::from_secs(5);
 /// callback's thread.
 const GRACE: Duration = Duration::from_secs(1);
 
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 /// A test-local provider `p` whose package's `init.lua` is `script`, in a
 /// fresh temporary directory, on `clock`.
 fn provider_on(
@@ -64,7 +54,7 @@ fn cost_provider(root: &fakes::TempDir, body: &str) -> Arc<LuaProvider> {
 fn cost(provider: &Arc<LuaProvider>, key: Option<&str>) -> Result<Option<f64>, Error> {
     let provider = Arc::clone(provider);
     let key = key.map(|k| Secret::new(k.to_owned()));
-    within(move || {
+    fakes::within("provider.cost", fakes::MUST_SUCCEED_WITHIN, move || {
         provider.cost(
             &GenerationId("gen-1".into()),
             "http://127.0.0.1:1/api/v1",
@@ -215,7 +205,10 @@ fn costed_without_cost_is_the_inner_provider_itself() {
     let inner: Arc<dyn Provider> = Arc::new(Inner::default());
     let wrapped = {
         let inner = Arc::clone(&inner);
-        within(move || lua.costed(inner, "http://h/v1", None)).unwrap()
+        fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
+            lua.costed(inner, "http://h/v1", None)
+        })
+        .unwrap()
     };
     assert!(std::ptr::addr_eq(
         Arc::as_ptr(&wrapped),
@@ -237,7 +230,10 @@ fn costed_with_cost_delegates_calls_and_tools_and_looks_up_through_cost() {
     let inner = Arc::new(Inner::default());
     let wrapped = {
         let inner = Arc::clone(&inner) as Arc<dyn Provider>;
-        within(move || lua.costed(inner, "http://h/v1", Some(Secret::new("sk-1".into())))).unwrap()
+        fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
+            lua.costed(inner, "http://h/v1", Some(Secret::new("sk-1".into())))
+        })
+        .unwrap()
     };
     let tools = [tool("b"), tool("a")];
     assert_eq!(wrapped.wire_tools(&tools), inner.wire_tools(&tools));
@@ -247,11 +243,15 @@ fn costed_with_cost_delegates_calls_and_tools_and_looks_up_through_cost() {
     let lookup = wrapped.cost_lookup().unwrap();
     let found = {
         let lookup = Arc::clone(&lookup);
-        within(move || lookup.cost(&GenerationId("gen-ok".into())))
+        fakes::within("lookup.cost", fakes::MUST_SUCCEED_WITHIN, move || {
+            lookup.cost(&GenerationId("gen-ok".into()))
+        })
     };
     assert_eq!(found, Some(0.125));
     // A raised error is nothing to the loop.
-    let missing = within(move || lookup.cost(&GenerationId("gen-gone".into())));
+    let missing = fakes::within("lookup.cost", fakes::MUST_SUCCEED_WITHIN, move || {
+        lookup.cost(&GenerationId("gen-gone".into()))
+    });
     assert_eq!(missing, None);
 }
 
@@ -268,7 +268,10 @@ fn costed_forwards_whether_the_inner_provider_warms() {
             warms,
             ..Inner::default()
         });
-        let wrapped = within(move || lua.costed(inner, "http://h/v1", None)).unwrap();
+        let wrapped = fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
+            lua.costed(inner, "http://h/v1", None)
+        })
+        .unwrap();
         assert!(wrapped.cost_lookup().is_some());
         assert_eq!(wrapped.warms(&request()), warms);
     }
