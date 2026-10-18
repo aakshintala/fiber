@@ -547,6 +547,17 @@ impl App {
     /// draft cleared, the old session left running. While a `start` waits
     /// for its answer only the draft is cleared.
     pub(super) fn go_home(&mut self) {
+        if self.reset_session() {
+            self.attached_screen_mut().clear();
+        }
+    }
+
+    /// Resets the screen before a session without clearing its rows,
+    /// so a reconnect keeps them for the landing: the conversation and
+    /// the draft cleared everywhere else, the old session left running.
+    /// While a `start` waits for its answer only the draft is cleared.
+    /// False without the reset.
+    pub(super) fn reset_session(&mut self) -> bool {
         self.draft.clear();
         self.close_find();
         self.leave_session(self.session().cloned());
@@ -557,11 +568,10 @@ impl App {
         self.leave_item();
         self.end_overlay();
         if matches!(self.phase, Phase::Pending { .. }) {
-            return;
+            return false;
         }
         self.phase = Phase::Starting;
         self.clear_selection();
-        self.attached_screen_mut().clear();
         // Home keeps no session's images: a late answer or viewer
         // completion from it is dropped.
         self.forget_images();
@@ -571,6 +581,7 @@ impl App {
         self.overlays.slash_rows = slash::rows(&[]);
         self.overlays.extensions.clear();
         self.overlays.commands_id = None;
+        true
     }
 
     /// The attached session, when the command can go out: with none

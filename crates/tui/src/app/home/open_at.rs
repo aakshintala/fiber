@@ -16,14 +16,21 @@ impl App {
     /// refusal shows on home. The first stage, one `summary` unless the
     /// connection already holds `summary`, goes out now; the `full`
     /// raise follows the first frame. The raise's acknowledgement ends
-    /// the gate.
+    /// the gate. With `held` the screen keeps its rows for a reconnect:
+    /// home is reset without clearing them, nothing is read, and the
+    /// raise goes as the first frame sends it.
     pub(in crate::app) fn open_session(
         &mut self,
         session: SessionId,
         expected: Option<Level>,
         credential: Option<String>,
+        held: bool,
     ) -> Vec<String> {
-        self.go_home();
+        if held {
+            self.reset_session();
+        } else {
+            self.go_home();
+        }
         self.attach(session.clone());
         let levels = opening(expected);
         let mut ack: Option<String> = None;
@@ -42,7 +49,7 @@ impl App {
         }
         lines.push(self.ask_commands(&session));
         if let Some(home) = self.home.as_mut() {
-            home.subs.gate(session, ack);
+            home.subs.gate(session, ack, held);
         }
         lines
     }
@@ -64,7 +71,7 @@ impl App {
             }
             Some(OpenAt::Home | OpenAt::List) | None => return Vec::new(),
         };
-        self.open_session(session, None, credential)
+        self.open_session(session, None, credential, false)
     }
 
     /// Folds the launch's list request into the first `recent` answer:

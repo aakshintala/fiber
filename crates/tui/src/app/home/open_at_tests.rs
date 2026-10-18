@@ -391,6 +391,7 @@ fn an_expected_full_open_puts_the_label_on_its_summary_subscribe() {
         id("s_aaaaaaaaaaaaaaaa"),
         Some(crate::home::Level::Full),
         Some("work".to_owned()),
+        false,
     ));
     let subscribes: Vec<&Value> = lines
         .iter()
@@ -408,7 +409,7 @@ fn an_expected_full_open_puts_the_label_on_its_summary_subscribe() {
 #[test]
 fn a_row_open_and_a_reconnect_carry_no_label() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     let subscribes: Vec<&Value> = lines
         .iter()
         .filter(|line| line["command"] == "subscribe")
@@ -448,6 +449,7 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
         id("s_aaaaaaaaaaaaaaaa"),
         Some(crate::home::Level::Full),
         Some("work".to_owned()),
+        false,
     ));
     let first = lines[0]["id"]
         .as_str()
@@ -484,6 +486,7 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
         id("s_aaaaaaaaaaaaaaaa"),
         Some(crate::home::Level::Full),
         Some("work".to_owned()),
+        false,
     ));
     let first = lines[0]["id"]
         .as_str()
@@ -506,7 +509,7 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
 #[test]
 fn an_open_sends_summary_and_commands_and_no_full() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -522,7 +525,8 @@ fn an_open_sends_summary_and_commands_and_no_full() {
 #[test]
 fn an_open_with_summary_expected_sends_no_subscribe() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None));
+    let lines =
+        commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "commands");
     // The raise is due at once: the first frame releases it.
@@ -543,7 +547,12 @@ fn raise_line(app: &mut App) -> Value {
 #[test]
 fn the_first_stage_ack_keeps_the_gate_and_makes_the_raise_due() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, Some("work".to_owned())));
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        None,
+        Some("work".to_owned()),
+        false,
+    ));
     assert_eq!(
         lines[0]["args"],
         json!({"level": "summary", "credential": "work"}),
@@ -578,7 +587,7 @@ fn the_first_stage_ack_keeps_the_gate_and_makes_the_raise_due() {
 #[test]
 fn the_raise_ack_ends_the_gate_and_the_first_stage_ack_does_not() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
@@ -638,7 +647,7 @@ fn home_text(app: &mut App) -> String {
 #[test]
 fn a_rejected_first_stage_or_raise_fails_the_open() {
     let mut app = home_with_row();
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
@@ -654,7 +663,7 @@ fn a_rejected_first_stage_or_raise_fails_the_open() {
         "the refusal is the row's note"
     );
     let mut app = home_with_row();
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
@@ -680,7 +689,7 @@ fn a_rejected_first_stage_or_raise_fails_the_open() {
 #[test]
 fn home_during_the_open_sends_no_raise() {
     let mut app = home_at(OpenAt::Home);
-    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
     let first = lines[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("first id"));
@@ -704,6 +713,7 @@ fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
         id("s_aaaaaaaaaaaaaaaa"),
         Some(Level::Full),
         Some("work".to_owned()),
+        false,
     ));
     let subscribes: Vec<_> = lines
         .iter()

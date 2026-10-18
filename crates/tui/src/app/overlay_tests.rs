@@ -217,7 +217,7 @@ fn folded(lines: &[Line]) -> crate::window::Pages {
 fn opening(last: u64) -> App {
     let mut app = home_at(crate::OpenAt::Home);
     let lines: Vec<Value> = app
-        .open_session(id(SESSION), None, None)
+        .open_session(id(SESSION), None, None, false)
         .into_iter()
         .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
         .collect();
@@ -257,6 +257,7 @@ fn folding(preview: &[Line], fold: &[Line], last: u64) -> App {
         session: id(SESSION),
         fold: Box::new(folded(fold)),
         busy: None,
+        held: false,
     };
     app.passes
         .push((id(SESSION), Pass::Until(contract::Seq(last))));
@@ -447,7 +448,7 @@ fn landing_clears_the_selection_and_remaps_focus() {
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);
     let lines: Vec<Value> = app
-        .open_session(id(SESSION), None, None)
+        .open_session(id(SESSION), None, None, false)
         .into_iter()
         .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
         .collect();
@@ -617,6 +618,7 @@ fn go_home_and_leave_mid_pass_end_the_overlay() {
         session: id(SESSION),
         fold: Box::new(folded(&preview)),
         busy: None,
+        held: false,
     };
     app.passes
         .push((id(SESSION), Pass::Until(contract::Seq(last))));
@@ -945,6 +947,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
         session: id(SESSION),
         fold: Box::new(fold),
         busy: None,
+        held: false,
     };
     app.land_pass();
     assert!(matches!(app.overlay, Overlay::None));
@@ -982,4 +985,234 @@ fn fold_image(pages: &mut crate::window::Pages, path: &str) {
         .cloned()
         .unwrap_or_default(),
     });
+}
+
+/// The tail read's window answers, as the doors answer history: the last
+/// 256 lines at or below the asked `to_seq`, oldest first, or the last
+/// 256 when the args hold none.
+fn doors(lines: &[contract::Envelope], args: &Value) -> Vec<contract::Envelope> {
+    let end = args
+        .get("to_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let mut out: Vec<contract::Envelope> = lines
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= end))
+        .cloned()
+        .collect();
+    out.drain(..out.len().saturating_sub(256));
+    out
+}
+
+/// The session lines as durable envelopes.
+fn envelopes(lines: &[Line]) -> Vec<contract::Envelope> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            if let Line::Session(envelope) = line {
+                Some(envelope.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `count` plain lines numbered from zero.
+fn plain(count: u64) -> Vec<contract::Envelope> {
+    (0..count)
+        .map(|seq| {
+            if let Line::Session(envelope) = line("usage_recorded", seq, None, json!({})) {
+                envelope
+            } else {
+                unreachable!("a session line");
+            }
+        })
+        .collect()
+}
+
+/// Reads `all` through a fresh tail, following the answers' windows, and
+/// returns each `next_args` in order.
+fn read_all(all: Vec<contract::Envelope>) -> (Vec<Value>, crate::app::overlay::Tail) {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    let mut asked = Vec::new();
+    loop {
+        let args = tail.next_args();
+        asked.push(args.clone());
+        let answer = doors(&all, &args);
+        let empty = answer.is_empty();
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        if tail.start_reached() || empty {
+            break;
+        }
+    }
+    (asked, tail)
+}
+
+/// A read ends after one window when the log fits it, and walks
+/// `to_seq` down to zero when it does not: the exact args sequence at
+/// 255, 256, 257 and 258 lines.
+#[test]
+fn reads_follow_the_answer_window_at_the_edges() {
+    for (count, expected) in [
+        (255u64, vec![json!({})]),
+        (256, vec![json!({})]),
+        (257, vec![json!({}), json!({"to_seq": 0})]),
+        (258, vec![json!({}), json!({"to_seq": 1})]),
+    ] {
+        let (asked, tail) = read_all(plain(count));
+        let many = usize::try_from(count).unwrap_or(usize::MAX);
+        assert_eq!(asked, expected, "{count} lines");
+        assert!(tail.start_reached(), "{count} lines");
+        assert_eq!(tail.lines().len(), many, "{count} lines");
+    }
+}
+
+/// The read stops when the held lines fill the screen: at one row below
+/// the total the tail asks again, at the total and above it is filled.
+#[test]
+fn reads_stop_when_the_held_lines_fill_the_screen() {
+    use crate::app::overlay::Tail;
+    let mut seq = 0u64;
+    let mut all = Vec::new();
+    for at in 0..3 {
+        all.extend(turn(&mut seq, &format!("a_m{at}"), &format!("reply {at}")));
+    }
+    let all = envelopes(&all);
+    // The held window starts past zero, so only the row count fills.
+    let all: Vec<contract::Envelope> = all
+        .into_iter()
+        .map(|mut envelope| {
+            envelope.seq = envelope.seq.map(|seq| contract::Seq(seq.0 + 1000));
+            envelope
+        })
+        .collect();
+    let app = app();
+    let mut fresh = app.attached_screen().pages().fresh();
+    for envelope in &all {
+        fresh.apply(envelope);
+    }
+    let total = fresh.index().total();
+    let mut tail = Tail::new();
+    tail.prepend(all)
+        .unwrap_or_else(|_| panic!("a contiguous answer"));
+    assert!(!tail.filled(&fresh, total + 1), "one row short asks again");
+    assert!(tail.filled(&fresh, total), "at the total it is filled");
+    assert!(
+        tail.filled(&fresh, total - 1),
+        "past the total it is filled"
+    );
+}
+
+/// A 700-line turn reads to the start with no cap: three windows, the
+/// first two partial and never filled at conversation height.
+#[test]
+fn a_long_turn_reads_until_the_screen_is_full_with_no_cap() {
+    use crate::app::overlay::Tail;
+    let message = "a_m";
+    let mut all = vec![if let Line::Session(envelope) = line(
+        "turn_started",
+        0,
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+    ) {
+        envelope
+    } else {
+        unreachable!("a session line");
+    }];
+    for seq in 1..=697 {
+        let kind = if seq == 1 {
+            "step_started"
+        } else if seq == 2 {
+            "assistant_message_started"
+        } else {
+            "text_completed"
+        };
+        let action = if kind == "step_started" || kind == "turn_started" {
+            None
+        } else {
+            Some(message)
+        };
+        if let Line::Session(envelope) = line(kind, seq, action, json!({"text": "part"})) {
+            all.push(envelope);
+        }
+    }
+    for (seq, kind) in [
+        (698, "assistant_message_completed"),
+        (699, "turn_completed"),
+    ] {
+        if let Line::Session(envelope) =
+            line(kind, seq, Some(message), json!({"outcome": "completed"}))
+        {
+            all.push(envelope);
+        }
+    }
+    let mut tail = Tail::new();
+    let mut reads = 0;
+    loop {
+        let args = tail.next_args();
+        let answer = doors(&all, &args);
+        let empty = answer.is_empty();
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        reads += 1;
+        if tail.start_reached() || empty {
+            break;
+        }
+    }
+    assert_eq!(reads, 3, "256, 256 and 188 lines");
+    assert_eq!(tail.lines().len(), 700);
+    assert_eq!(
+        tail.lines().first().and_then(|line| line.seq),
+        Some(contract::Seq(0))
+    );
+}
+
+/// An empty answer ends the read with nothing held.
+#[test]
+fn an_empty_log_ends_with_nothing_held() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(Vec::new())
+        .unwrap_or_else(|_| panic!("an empty answer"));
+    assert!(tail.start_reached());
+    assert!(tail.lines().is_empty());
+}
+
+/// One line at seq zero starts at the beginning and ends the read.
+#[test]
+fn a_log_of_one_line_starts_at_zero() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(plain(1))
+        .unwrap_or_else(|_| panic!("one line"));
+    assert!(tail.start_reached());
+    assert_eq!(tail.lines().len(), 1);
+}
+
+/// An answer that leaves a gap, or a line carrying no seq, is refused:
+/// the tail ends as failed with the out-of-order notice.
+#[test]
+fn an_answer_that_leaves_a_gap_is_refused() {
+    use crate::app::overlay::{Overlay, Tail};
+    let mut tail = Tail::new();
+    let window: Vec<contract::Envelope> = plain(200).drain(100..).collect();
+    tail.prepend(window.clone())
+        .unwrap_or_else(|_| panic!("the first answer"));
+    assert!(tail.prepend(plain(51)).is_err(), "a gap is refused");
+    let mut noseq = window.clone();
+    noseq[0].seq = None;
+    assert!(tail.prepend(noseq).is_err(), "a missing seq is refused");
+    let mut app = app();
+    app.overlay = Overlay::Reading(Tail::new());
+    app.tail_lines(window);
+    assert_eq!(app.notice(), None);
+    app.tail_lines(plain(51));
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order")
+    );
 }

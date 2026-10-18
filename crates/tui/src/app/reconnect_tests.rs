@@ -286,6 +286,19 @@ fn accepted(session: &str, id: &str) -> Line {
     from(session, "command_accepted", None, json!({"command_id": id}))
 }
 
+/// `session`'s `command_accepted` for `id` with the opening fold's
+/// boundary: the real raise acknowledgement carries `last_seq`, and
+/// the pass opens on it. A held reconnect keeps the screen's rows,
+/// so only the pass keeps the replay from folding twice.
+fn lasted(session: &str, id: &str, last: u64) -> Line {
+    from(
+        session,
+        "command_accepted",
+        None,
+        json!({"command_id": id, "result": {"last_seq": last}}),
+    )
+}
+
 /// `session`'s `command_rejected` for `id` with `code` and `message`.
 fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     from(
@@ -531,10 +544,11 @@ fn lines_from_before_the_drop_are_not_folded_twice() {
     assert!(once.iter().any(|line| line.contains("hello")), "{once:?}");
     let lines = parsed(&reconnect(&mut app));
     fold(&mut app, accepted(S_A, &id_of(&lines[0])));
-    // The first frame releases the raise; its answer ends the gate, so
-    // the replay folds once.
+    // The first frame releases the raise; its answer ends the gate
+    // and opens the pass, so the replay folds once into the fresh
+    // fold and lands.
     let raise = raise_id(&mut app);
-    fold(&mut app, accepted(S_A, &raise));
+    fold(&mut app, lasted(S_A, &raise, 1));
     for line in turn(S_A) {
         fold(&mut app, line);
     }

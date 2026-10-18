@@ -548,6 +548,85 @@ impl App {
             .any(|(held, pass)| held == session && matches!(pass, Pass::Until(_)))
     }
 
+    /// The args of the open's next tail read: none when the tail is
+    /// filled or ended, or no read runs.
+    pub(crate) fn tail_next(&mut self) -> Option<Value> {
+        let Overlay::Reading(tail) = &self.overlay else {
+            return None;
+        };
+        if tail.ended() {
+            return None;
+        }
+        let mut fresh = self.attached_screen().pages().fresh();
+        for line in tail.lines() {
+            fresh.apply(line);
+        }
+        if tail.filled(&fresh, self.conversation_height()) {
+            return None;
+        }
+        Some(tail.next_args())
+    }
+
+    /// Folds one tail answer into the open's read: an answer that
+    /// leaves a gap, or a line carrying no seq, ends the tail as failed
+    /// with the out-of-order notice.
+    pub(crate) fn tail_lines(&mut self, lines: Vec<Envelope>) {
+        let Overlay::Reading(tail) = &mut self.overlay else {
+            return;
+        };
+        if tail.prepend(lines).is_err() {
+            tail.end();
+            self.notices.push(
+                "io_failed",
+                "Could not load history: the answer was out of order".to_owned(),
+            );
+        }
+    }
+
+    /// Ends the open's tail read: failed with the notice, abandoned or
+    /// lost without one.
+    pub(crate) fn tail_ended(&mut self, notice: Option<&str>) {
+        if let Overlay::Reading(tail) = &mut self.overlay {
+            tail.end();
+        }
+        if let Some(notice) = notice {
+            self.notices
+                .push("io_failed", format!("Could not load history: {notice}"));
+        }
+    }
+
+    /// Installs the open's read tail as the preview: its lines from the
+    /// first turn start, never cut inside a turn, or an empty
+    /// conversation when no held line starts one. An empty log installs
+    /// nothing and shows no history. The screen follows, the overlay
+    /// shows the preview, and the screen freezes for the raise.
+    pub(crate) fn install_tail(&mut self) {
+        let Overlay::Reading(tail) = std::mem::replace(&mut self.overlay, Overlay::None) else {
+            return;
+        };
+        let Some(session) = self.opening_session() else {
+            return;
+        };
+        let mut preview = self.attached_screen().pages().fresh();
+        let mut busy = None;
+        if let Some(lines) = tail.turn_lines() {
+            for line in lines {
+                let applied = preview.apply(line);
+                if applied.busy.is_some() {
+                    busy = applied.busy;
+                }
+            }
+        }
+        *self.attached_screen_mut().pages_mut() = preview;
+        self.attached_screen_mut().follow();
+        self.overlay = Overlay::Shown {
+            session,
+            busy,
+            held: false,
+        };
+        self.attached_screen_mut().set_frozen(true);
+    }
+
     /// Starts the pass on the raise's ack: the preview stays on the
     /// screen and the session's lines fold into a fresh second `Pages`,
     /// held while a batch is open.
@@ -555,6 +634,7 @@ impl App {
         let Overlay::Shown {
             session: shown,
             busy,
+            held,
         } = &self.overlay
         else {
             return;
@@ -563,6 +643,7 @@ impl App {
             return;
         }
         let busy = *busy;
+        let held = *held;
         let mut fold = self.attached_screen().pages().fresh();
         if self.screen.pages().holding() {
             fold.hold();
@@ -571,6 +652,7 @@ impl App {
             session: session.clone(),
             fold: Box::new(fold),
             busy,
+            held,
         };
     }
 
@@ -596,6 +678,7 @@ impl App {
             session,
             fold,
             busy,
+            held,
         } = taken
         else {
             self.end_overlay();
@@ -610,19 +693,30 @@ impl App {
             session,
             fold: Box::new(fresh),
             busy,
+            held,
         };
-        self.land(*fold);
+        self.land(*fold, held);
     }
 
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
     /// opens carry, focus remaps to the same call or clears, the
-    /// selection clears, the kept busy applies, and the overlay ends.
-    fn land(&mut self, mut fold: Pages) {
+    /// selection clears, the kept busy applies, and the overlay ends. A
+    /// held landing keeps the preview's place: the top row's text is
+    /// read before the swap, and after it the top is the first row with
+    /// that text, or the end when the fold lacks it.
+    fn land(&mut self, mut fold: Pages, held: bool) {
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
         self.focus = focus.and_then(|id| self.remap_focus(id, &fold));
         self.clear_selection();
+        let anchor = held.then(|| self.top_anchor()).flatten();
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
+        if let Some((text, piece)) = anchor {
+            match self.find_anchor(&text, piece) {
+                Some(row) => self.jump(row),
+                None => self.attached_screen_mut().follow(),
+            }
+        }
         if let Overlay::Folding {
             busy: Some(busy), ..
         } = &self.overlay
@@ -630,6 +724,39 @@ impl App {
             self.set_busy(*busy);
         }
         self.end_overlay();
+    }
+
+    /// The preview's top row as its line's text and the piece within
+    /// it: the anchor a held landing keeps. None while following.
+    fn top_anchor(&self) -> Option<(String, usize)> {
+        let top = self.attached_screen().top()?;
+        let pages = self.attached_screen().pages();
+        let shown = pages.shown(0, pages.index().total());
+        let mut row = 0;
+        for (line, rows, _) in &shown.lines {
+            let rows = (*rows).max(1);
+            if row + rows > top {
+                return Some((line.to_string(), top - row));
+            }
+            row += rows;
+        }
+        None
+    }
+
+    /// The first row whose line reads `text`: the held landing's top,
+    /// keeping the piece within the line when wrapping allows.
+    fn find_anchor(&self, text: &str, piece: usize) -> Option<usize> {
+        let pages = self.attached_screen().pages();
+        let shown = pages.shown(0, pages.index().total());
+        let mut row = 0;
+        for (line, rows, _) in &shown.lines {
+            let rows = (*rows).max(1);
+            if line.to_string() == text {
+                return Some(row + piece.min(rows - 1));
+            }
+            row += rows;
+        }
+        None
     }
 
     /// Remaps focus across the swap: a line target follows its call by
@@ -737,7 +864,7 @@ impl App {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));
                         }
                         if self.folding(&session) {
-                            let Overlay::Folding { busy, .. } =
+                            let Overlay::Folding { busy, held, .. } =
                                 std::mem::replace(&mut self.overlay, Overlay::None)
                             else {
                                 unreachable!("folding without a fold");
@@ -751,6 +878,7 @@ impl App {
                                 session,
                                 fold: Box::new(fold),
                                 busy,
+                                held,
                             };
                         }
                     }
