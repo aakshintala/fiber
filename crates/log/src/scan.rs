@@ -75,10 +75,18 @@ pub fn started_sessions(home: &Path) -> Vec<Started> {
 
 /// A session's first line as a `session_started`: the lenient view both
 /// walks share. [`SessionStarted::parse`] reads what the scans accept;
-/// [`first_line`] reads what history needs.
-pub(crate) struct SessionStarted {
+/// [`first_line`] reads what history needs; [`started_first`] reads what
+/// resume needs: its workspace, repository and delegate bit.
+pub struct SessionStarted {
     /// `payload.workspace` when it is a string.
-    pub(crate) workspace: Option<String>,
+    pub workspace: Option<String>,
+    /// `payload.worktree.repository` when its worktree is an object
+    /// naming one as a string.
+    pub repository: Option<String>,
+    /// Whether `payload.parent` is present and not null: a delegate's.
+    /// A parent of any other shape counts, so a malformed one is never
+    /// resumed.
+    pub delegate: bool,
     /// `payload.forked_from`, raw: the two pointer policies read it
     /// differently.
     forked_from: Option<Value>,
@@ -92,6 +100,14 @@ impl SessionStarted {
                 .get("workspace")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            repository: payload
+                .get("worktree")
+                .and_then(|worktree| worktree.get("repository"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            delegate: payload
+                .get("parent")
+                .is_some_and(|parent| !parent.is_null()),
             forked_from: payload.get("forked_from").cloned(),
         }
     }
@@ -166,6 +182,55 @@ pub(crate) fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
         });
     }
     Ok(SessionStarted::of(&Value::Object(line.payload)))
+}
+
+/// What [`started_first`] found: the log's first line is no complete
+/// `session_started` with a workspace, or it is corrupt.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FirstLineError {
+    /// The log is missing, empty, or its first line has no `\n` yet:
+    /// the session is answered as for a missing log. Completeness is
+    /// decided on bytes before any decoding, so a line torn inside a
+    /// multi-byte character is incomplete, not corrupt.
+    Incomplete,
+    /// A read error on an existing log, bytes that are not UTF-8, a
+    /// complete line that does not parse, a kind other than
+    /// `session_started`, or a payload with no string workspace.
+    Corrupt,
+}
+
+/// The [`SessionStarted`] of the session in `dir`: the lenient read
+/// resume walks by, as today's `resume::first_line`. Reads only the
+/// first line, never the log past it.
+pub fn started_first(dir: &Path) -> Result<SessionStarted, FirstLineError> {
+    let path = dir.join(EVENTS);
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(FirstLineError::Incomplete);
+        }
+        Err(_) => return Err(FirstLineError::Corrupt),
+    };
+    let mut first = Vec::new();
+    match BufReader::new(file).read_until(b'\n', &mut first) {
+        Ok(_) => {}
+        Err(_) => return Err(FirstLineError::Corrupt),
+    }
+    if first.is_empty() || first.last() != Some(&b'\n') {
+        return Err(FirstLineError::Incomplete);
+    }
+    let line: Value = serde_json::from_slice(&first).map_err(|_| FirstLineError::Corrupt)?;
+    if line.get("kind").and_then(Value::as_str) != Some("session_started") {
+        return Err(FirstLineError::Corrupt);
+    }
+    let Some(payload) = line.get("payload") else {
+        return Err(FirstLineError::Corrupt);
+    };
+    let view = SessionStarted::of(payload);
+    if view.workspace.is_none() {
+        return Err(FirstLineError::Corrupt);
+    }
+    Ok(view)
 }
 
 /// The [`SessionStarted`] of the session in `dir`: `None` when the log
