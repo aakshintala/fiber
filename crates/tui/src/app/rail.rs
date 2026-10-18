@@ -180,7 +180,7 @@ impl App {
     }
 
     /// The on-screen session's card key, when its session has a card.
-    fn attached_card_key(&self) -> Option<u64> {
+    pub(super) fn attached_card_key(&self) -> Option<u64> {
         let (cards, _) = self.rail_cards()?;
         let attached = self.session()?;
         cards
@@ -248,6 +248,23 @@ impl App {
         {
             return None;
         }
+        // A focused rail's own keys win over a rebound `focus_rail`:
+        // rebinding that action cannot swallow them.
+        if self.rail_state.focus.is_some() && stroke.mods == Mods::NONE {
+            if matches!(
+                stroke.code,
+                Code::Up | Code::Down | Code::Enter | Code::Esc | Code::Tab
+            ) {
+                if let Some(Event::Key(key)) = default_event(stroke) {
+                    return Some(self.on_key(key, now));
+                }
+            } else if matches!(stroke.code, Code::Right) {
+                self.clear_rail_focus();
+                self.edited();
+                self.settle();
+                return Some(Effect::None);
+            }
+        }
         if self.keys().current("focus_rail").contains(stroke) {
             if !self.draft.is_empty() {
                 if stroke.mods == Mods::NONE && matches!(stroke.code, Code::Left) {
@@ -273,6 +290,8 @@ impl App {
             {
                 if let Some(key) = self.attached_card_key() {
                     self.set_rail_focus(key);
+                    self.edited();
+                    self.settle();
                     return Some(Effect::None);
                 }
                 let Some(key) = self.attached_row_key() else {
@@ -285,21 +304,6 @@ impl App {
                 return Some(effect);
             }
             return Some(self.leave());
-        }
-        if self.rail_state.focus.is_some() && stroke.mods == Mods::NONE {
-            if matches!(
-                stroke.code,
-                Code::Up | Code::Down | Code::Enter | Code::Esc | Code::Tab
-            ) {
-                if let Some(Event::Key(key)) = default_event(stroke) {
-                    return Some(self.on_key(key, now));
-                }
-            } else if matches!(stroke.code, Code::Right) {
-                self.clear_rail_focus();
-                self.edited();
-                self.settle();
-                return Some(Effect::None);
-            }
         }
         None
     }

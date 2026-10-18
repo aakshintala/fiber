@@ -1889,6 +1889,88 @@ fn unset_arrows_still_move_a_focused_rail_with_rebound_recall() {
     assert_eq!(rail_focus(&app), Some(key(&app, B)));
 }
 
+/// Eight live sessions with `A` on screen, its card scrolled out of view
+/// and focus back in the input box: entry, seven downs and Right.
+fn eight_scrolled_past_on_screen() -> App {
+    let mut app = opened(&[A, B, C, D, "s_e1", "s_e2", "s_e3", "s_e4"], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    for _ in 0..7 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    }
+    assert!(app.rail_state().scroll() > 0);
+    assert_eq!(stroke_press(&mut app, plain(Code::Right)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    app
+}
+
+#[test]
+fn a_focus_rail_key_rebound_to_up_moves_a_focused_rail() {
+    let mut app = opened(&[A, B], B);
+    // `up` alone would clash with the default recall and revert: move the
+    // recall aside so `focus_rail` holds it.
+    app.set_keys(keyed_setup(&[
+        ("recall_prompt", json!("ctrl+u")),
+        ("focus_rail", json!("up")),
+    ]));
+    // Entry still reaches the rail from the input box, not the recall.
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert!(!app.on_home());
+    // A focused rail takes Up as a rail move, not a widen home.
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert!(!app.on_home());
+}
+
+#[test]
+fn tab_lands_on_the_on_screen_card_scrolled_out_of_view() {
+    let mut app = eight_scrolled_past_on_screen();
+    let targets = framed(&mut app);
+    assert!(
+        !targets
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "the on-screen card scrolled out of view"
+    );
+    let panel = targets
+        .iter()
+        .find(|target| target.id == TargetId::Notice(5))
+        .expect("a panel stop")
+        .id;
+    app.focus = Some(panel);
+    app.drawn(&targets);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(app.focused(), None);
+    // The Tab's settle reveals the card: the next frame draws it.
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let shown = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        shown
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "the settle reveals the on-screen card"
+    );
+}
+
+#[test]
+fn left_entry_reveals_a_scrolled_off_on_screen_card_in_the_same_frame() {
+    let mut app = eight_scrolled_past_on_screen();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    // No further key or hub line: the entry's settle already revealed it.
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let shown = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        shown
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "the lifted card is drawn in the same frame"
+    );
+}
+
 fn keyed_setup(entries: &[(&str, Value)]) -> crate::KeysSetup {
     crate::KeysSetup {
         user: entries

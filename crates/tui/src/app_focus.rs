@@ -223,22 +223,18 @@ impl App {
             }
             Area::Rail => {
                 let stops = order(&self.stops, &self.regions, Area::Rail);
-                let on_screen = self.session().and_then(|id| {
-                    self.rail_cards().and_then(|(cards, _)| {
-                        cards.iter().find(|row| &row.id == id).map(|row| row.key)
+                // The attached card wins even scrolled out of view: the
+                // focus carries a reveal, so the settle shows it. Only a
+                // session with no card falls back to the first stop.
+                let key = self.attached_card_key().or_else(|| {
+                    stops.iter().find_map(|id| {
+                        if let TargetId::Rail(RailSpot::Card(key)) = id {
+                            Some(*key)
+                        } else {
+                            None
+                        }
                     })
                 });
-                let key = on_screen
-                    .filter(|key| stops.contains(&TargetId::Rail(RailSpot::Card(*key))))
-                    .or_else(|| {
-                        stops.iter().find_map(|id| {
-                            if let TargetId::Rail(RailSpot::Card(key)) = id {
-                                Some(*key)
-                            } else {
-                                None
-                            }
-                        })
-                    });
                 match key {
                     Some(key) => {
                         self.set_rail_focus(key);
