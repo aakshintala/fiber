@@ -239,6 +239,9 @@ impl Loop {
         for notice in installed.notices {
             self.write(&Event::Notice(notice), None, None)?;
         }
+        if let Some(hooks) = self.hooks.clone() {
+            self.drain_state(&hooks, None)?;
+        }
         Ok(())
     }
 }

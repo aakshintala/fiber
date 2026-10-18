@@ -536,9 +536,10 @@ pub(crate) fn run_new(
         shell_read_only,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
     );
-    // The notices the startup wrote: the late preparer drops the ones
-    // it would repeat and keeps the new ones.
-    let written = current.get().notices();
+    // Every notice the startup already wrote, including the ones
+    // `mcp_servers_started` writes after this read: the late preparer
+    // drops the ones it would repeat and keeps the new ones.
+    let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
     let (reloader, late) = reload.preparers(written);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.

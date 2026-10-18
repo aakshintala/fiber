@@ -161,7 +161,7 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
 
 /// `fiber extension list`: one line per installed extension: name,
 /// version and commit; then one line per approved repository extension
-/// of the launch project: name, version, `repository`, the workspace,
+/// of the launch project: name, version, `repository`, the project,
 /// the declared path and the approved content hash.
 pub fn extension_list(clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
@@ -257,9 +257,32 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
     Ok(0)
 }
 
+/// Whether the workspace's repository declares an extension: the project
+/// key costs a `git` call, so it is computed only then (ruling 17). A
+/// declaration that does not read still counts as declaring, so the
+/// repository path reports the failure as today.
+fn declares_extensions(workspace: &Path) -> bool {
+    match config::declared(workspace) {
+        Ok(declared) => !declared.extensions.is_empty(),
+        Err(_) => true,
+    }
+}
+
+/// The launch project's key, or `None` when the workspace declares no
+/// extension and the repository path is skipped.
+fn repository_project(
+    home: &Path,
+    workspace: &Path,
+) -> Result<Option<config::ProjectKey>, Failure> {
+    if !declares_extensions(workspace) {
+        return Ok(None);
+    }
+    crate::project_of(home, workspace).map(|(_, project)| Some(project))
+}
+
 /// `fiber extension list` in `workspace`: the personal lines, then one
 /// row per declared extension this project approved, at its current
-/// content: name, version, `repository`, the workspace, the declared
+/// content: name, version, `repository`, the project, the declared
 /// path and the content hash. A declaration that does not read names
 /// itself once and leaves the personal lines alone.
 fn list_in(
@@ -269,7 +292,9 @@ fn list_in(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
-    let (_, project) = crate::project_of(home, workspace)?;
+    let Some(project) = repository_project(home, workspace)? else {
+        return list(home, clock, out);
+    };
     let approved = match approved_extensions(home, &project, workspace, clock) {
         Ok(approved) => approved,
         Err(e) => {
@@ -286,7 +311,7 @@ fn list_in(
                 "{} {} repository {} {} {}",
                 entry.name,
                 entry.version,
-                workspace.display(),
+                doors::project(workspace).display(),
                 entry.path,
                 entry.hash
             ),
@@ -314,15 +339,18 @@ fn remove_in(
         input,
         err,
     } = io;
-    let (_, project) = crate::project_of(home, workspace)?;
-    let found = match approved_extension(home, &project, workspace, typed, clock) {
-        Ok(found) => found,
-        Err(e) => {
-            writeln!(err, "fiber: {e}").unwrap_or(());
-            None
-        }
+    let project = repository_project(home, workspace)?;
+    let found = match &project {
+        Some(project) => match approved_extension(home, project, workspace, typed, clock) {
+            Ok(found) => found,
+            Err(e) => {
+                writeln!(err, "fiber: {e}").unwrap_or(());
+                None
+            }
+        },
+        None => None,
     };
-    let Some((item, digest)) = found else {
+    let (Some(project), Some((item, digest))) = (project, found) else {
         return remove(
             home,
             typed,

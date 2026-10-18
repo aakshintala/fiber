@@ -887,7 +887,8 @@ fn two_versions_of_one_dependency_load_the_first_declared_package_s() {
         vec![Notice {
             code: ErrorCode::ExtensionShadowed,
             message: "The repository's `zzz.test/owner/helper` v1.2.0 loads in this project; \
-                      v1.4.0, which another of its extensions brings, does not."
+                      `zzz.test/owner/helper` v1.4.0 does not: two versions never load \
+                      under one name."
                 .to_owned(),
             extension: Some("zzz.test/owner/helper".to_owned()),
         }]
@@ -955,7 +956,8 @@ fn a_declared_package_beats_a_dependency_of_the_same_name() {
         vec![Notice {
             code: ErrorCode::ExtensionShadowed,
             message: "The repository's `zzz.test/owner/helper` v9.9.9 loads in this project; \
-                      v1.2.0, which another of its extensions brings, does not."
+                      `zzz.test/owner/helper` v1.2.0 does not: two versions never load \
+                      under one name."
                 .to_owned(),
             extension: Some("zzz.test/owner/helper".to_owned()),
         }]

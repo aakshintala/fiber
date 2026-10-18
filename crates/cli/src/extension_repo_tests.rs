@@ -12,7 +12,6 @@
 use std::fs;
 use std::io::{BufRead, Cursor};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use contract::shapes::Failure;
 use extensions::Request;
@@ -108,21 +107,21 @@ impl Setup {
         let clock = fakes::clock::FakeClock::new();
         let mut unread = Unread;
         let mut err = Vec::new();
-        let got = retry_busy(|| {
-            install(
-                &self.home(),
-                Request::Path(source.clone()),
-                None,
-                FIBER_VERSION,
-                &extensions::Origin::github(),
-                &*clock,
-                Io {
-                    terminal: false,
-                    input: &mut unread,
-                    err: &mut err,
-                },
-            )
-        });
+        // nextest runs each test in its own process, so no other test's
+        // child can hold this lock (`docs/testing/running.md`).
+        let got = install(
+            &self.home(),
+            Request::Path(source.clone()),
+            None,
+            FIBER_VERSION,
+            &extensions::Origin::github(),
+            &*clock,
+            Io {
+                terminal: false,
+                input: &mut unread,
+                err: &mut err,
+            },
+        );
         assert_eq!(got.unwrap(), 0, "{}", String::from_utf8(err).unwrap());
     }
 
@@ -165,45 +164,13 @@ impl BufRead for Unread {
     fn consume(&mut self, _: usize) {}
 }
 
-/// Runs `run` again while it fails because the install lock is held:
-/// parallel tests spawn `git` while this test holds the lock, and the
-/// forked child inherits the lock's file description, so the flock stays
-/// held past this thread's drop until the child execs. A relock in that
-/// window transiently fails busy; a moment later it succeeds. Anything
-/// else returns at once.
-fn retry_busy<T>(mut run: impl FnMut() -> Result<T, Failure>) -> Result<T, Failure> {
-    for _ in 0..100 {
-        match run() {
-            Err(failed) if is_busy(&failed) =>
-            {
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "the transient is a real OS file lock outliving this thread's drop; fake time cannot release it, so the retry yields real time"
-                )]
-                std::thread::sleep(Duration::from_millis(1))
-            }
-            got => return got,
-        }
-    }
-    run()
-}
-
-/// The install lock being held by another operation: the sentence
-/// `install`, `update` and `remove` fail with.
-fn is_busy(failed: &Failure) -> bool {
-    failed.code == contract::ErrorCode::IoFailed
-        && failed
-            .message
-            .starts_with("Another `fiber extension install`")
-}
-
 /// Runs `list_in` for `workspace`: its stdout, its stderr, and its
 /// failure, if any.
 fn run_list_in(home: &Path, workspace: &Path) -> (String, String, Result<(), Failure>) {
     let clock = fakes::clock::FakeClock::new();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let got = retry_busy(|| list_in(home, workspace, &*clock, &mut out, &mut err));
+    let got = list_in(home, workspace, &*clock, &mut out, &mut err);
     (
         String::from_utf8(out).unwrap(),
         String::from_utf8(err).unwrap(),
@@ -222,19 +189,17 @@ fn run_remove_in(
 ) -> (String, Result<i32, Failure>) {
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
-    let got = retry_busy(|| {
-        remove_in(
-            home,
-            workspace,
-            typed,
-            &*clock,
-            Io {
-                terminal,
-                input: &mut *input,
-                err: &mut err,
-            },
-        )
-    });
+    let got = remove_in(
+        home,
+        workspace,
+        typed,
+        &*clock,
+        Io {
+            terminal,
+            input: &mut *input,
+            err: &mut err,
+        },
+    );
     (String::from_utf8(err).unwrap(), got)
 }
 
@@ -288,7 +253,7 @@ fn list_shows_personal_lines_then_repository_rows() {
         out,
         format!(
             "github.com/acme/y v1.0.0 local\ngithub.com/acme/pkg v2.0.0 repository {} pkg {digest}\n",
-            setup.workspace().display()
+            doors::project(&setup.workspace()).display()
         )
     );
 }
@@ -441,6 +406,39 @@ fn remove_falls_through_without_an_approval_for_the_current_content() {
     assert_eq!(err, "");
 }
 
+/// The project key is computed only when the workspace declares an
+/// extension (ruling 17): a plain workspace computes none, so neither
+/// `list_in` nor `remove_in` reaches `git`.
+#[test]
+fn plain_workspace_computes_no_project() {
+    let setup = Setup::new();
+    setup.install_personal("y", &manifest("github.com/acme/y", "v1.0.0"));
+    let got = super::repository_project(&setup.home(), &setup.workspace()).unwrap();
+    assert_eq!(got, None);
+    let (out, err, listed) = run_list_in(&setup.home(), &setup.workspace());
+    listed.unwrap();
+    assert_eq!(err, "");
+    assert_eq!(out, "github.com/acme/y v1.0.0 local\n", "{out}");
+    let mut unread = Unread;
+    let (err, removed) = run_remove_in(
+        &setup.home(),
+        &setup.workspace(),
+        "github.com/acme/y",
+        false,
+        &mut unread,
+    );
+    assert_eq!(removed.unwrap(), 0, "{err}");
+    assert_eq!(err, "fiber: removed github.com/acme/y\n");
+}
+
+#[test]
+fn declaring_workspace_computes_the_project() {
+    let setup = Setup::new();
+    setup.declare(&[("pkg", manifest("github.com/acme/pkg", "v2.0.0"), &[], false)]);
+    let got = super::repository_project(&setup.home(), &setup.workspace()).unwrap();
+    assert_eq!(got, Some(setup.project()));
+}
+
 #[test]
 fn remove_reports_a_bad_declaration_and_removes_the_personal_install() {
     let setup = Setup::new();
@@ -473,19 +471,17 @@ fn update_all_leaves_repository_copies_and_approvals_alone() {
     let mut unread = Unread;
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
-    let got = retry_busy(|| {
-        update_all(
-            &setup.home(),
-            FIBER_VERSION,
-            &extensions::Origin::github(),
-            &*clock,
-            Io {
-                terminal: false,
-                input: &mut unread,
-                err: &mut err,
-            },
-        )
-    });
+    let got = update_all(
+        &setup.home(),
+        FIBER_VERSION,
+        &extensions::Origin::github(),
+        &*clock,
+        Io {
+            terminal: false,
+            input: &mut unread,
+            err: &mut err,
+        },
+    );
     got.unwrap();
     assert_eq!(snapshot(&setup.home()), before);
 }
@@ -497,21 +493,19 @@ fn update_of_the_personal_install_leaves_repository_copies_and_approvals_alone()
     let clock = fakes::clock::FakeClock::new();
     let mut unread = Unread;
     let mut err = Vec::new();
-    let got = retry_busy(|| {
-        install(
-            &setup.home(),
-            Request::Update(MEMORY.to_owned()),
-            None,
-            FIBER_VERSION,
-            &extensions::Origin::github(),
-            &*clock,
-            Io {
-                terminal: false,
-                input: &mut unread,
-                err: &mut err,
-            },
-        )
-    });
+    let got = install(
+        &setup.home(),
+        Request::Update(MEMORY.to_owned()),
+        None,
+        FIBER_VERSION,
+        &extensions::Origin::github(),
+        &*clock,
+        Io {
+            terminal: false,
+            input: &mut unread,
+            err: &mut err,
+        },
+    );
     got.unwrap();
     assert_eq!(snapshot(&setup.home()), before);
 }
@@ -525,21 +519,19 @@ fn update_of_a_repository_only_name_fails_and_changes_nothing() {
     let clock = fakes::clock::FakeClock::new();
     let mut unread = Unread;
     let mut err = Vec::new();
-    let got = retry_busy(|| {
-        install(
-            &setup.home(),
-            Request::Update("github.com/acme/pkg".to_owned()),
-            None,
-            FIBER_VERSION,
-            &extensions::Origin::github(),
-            &*clock,
-            Io {
-                terminal: false,
-                input: &mut unread,
-                err: &mut err,
-            },
-        )
-    });
+    let got = install(
+        &setup.home(),
+        Request::Update("github.com/acme/pkg".to_owned()),
+        None,
+        FIBER_VERSION,
+        &extensions::Origin::github(),
+        &*clock,
+        Io {
+            terminal: false,
+            input: &mut unread,
+            err: &mut err,
+        },
+    );
     let failure = got.unwrap_err();
     assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
     assert_eq!(snapshot(&setup.home()), before);

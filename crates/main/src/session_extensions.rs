@@ -86,6 +86,20 @@ pub(crate) fn written(log: &Log, extensions: &SessionExtensions) -> Result<(), r
     r#loop::extensions_loaded(log, extensions.loaded(), extensions.notices())
 }
 
+/// Every notice the startup already wrote: the session's extension
+/// notices, plus the startup notices `mcp_servers_started` writes
+/// after the late preparer reads them. The late preparer drops every
+/// notice equal to one of these, so `config_key_ignored` and the like
+/// reach the late turn once.
+pub(crate) fn startup_written(
+    extensions: &SessionExtensions,
+    startup: &[contract::events::Notice],
+) -> Vec<contract::events::Notice> {
+    let mut written = extensions.notices();
+    written.extend(startup.iter().cloned());
+    written
+}
+
 /// The startup notices `mcp_servers_started` still has to write: the
 /// providers load and the session extensions load share `candidates`,
 /// so a shadow report lands in both lists, and `written` already

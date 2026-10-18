@@ -238,8 +238,9 @@ impl RepositorySet {
                 self.notices.push(Notice {
                     code: ErrorCode::ExtensionShadowed,
                     message: format!(
-                        "The repository's `{}` {version} loads in this project; {}, \
-                         which another of its extensions brings, does not.",
+                        "The repository's `{}` {version} loads in this project; `{}` {} \
+                         does not: two versions never load under one name.",
+                        short_name(&entry.name),
                         short_name(&entry.name),
                         entry.version,
                     ),
@@ -463,9 +464,8 @@ pub fn approved_extension(
             Store::decision_in(home, project, OfferedKind::Extension, &current),
             Some(Decision::Approve)
         ) {
-            if hashed {
-                index.save().unwrap_or(());
-            }
+            // `hashed` is true on every path that reaches here.
+            index.save().unwrap_or(());
             return Ok(Some((item.clone(), current)));
         }
     }

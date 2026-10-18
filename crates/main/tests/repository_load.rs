@@ -89,33 +89,10 @@ fn ask(setup: &Setup, dir: &Path) -> support::StdoutRun {
 }
 
 /// Installs the personal extension `name` at `version` with this
-/// `init.lua`, as `reload.rs` installs its demo: retried while the
-/// install lock is transiently busy. Parallel tests fork while this
-/// thread holds it, and the forked child inherits the lock past this
-/// thread's drop until it execs; the fake clock cannot wait that out,
-/// so the retry yields real time (as `extension_repo_tests.rs` does).
+/// `init.lua`, as `reload.rs` installs its demo. nextest runs each test in
+/// its own process, so no other test's child can hold this lock
+/// (`docs/testing/running.md`).
 fn personal(setup: &Setup, name: &str, version: &str, init: &str) {
-    for _ in 0..100 {
-        match try_personal(setup, name, version, init) {
-            Err(extensions::Error::Busy) => {
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "the transient is a real OS file lock outliving this thread's drop; fake time cannot release it, so the retry yields real time"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            done => return done.unwrap(),
-        }
-    }
-    try_personal(setup, name, version, init).unwrap();
-}
-
-fn try_personal(
-    setup: &Setup,
-    name: &str,
-    version: &str,
-    init: &str,
-) -> Result<(), extensions::Error> {
     let source = setup
         .root
         .path()
@@ -131,9 +108,11 @@ fn try_personal(
         "0.1.0",
         &extensions::Origin::github(),
         &*fakes::clock::FakeClock::new(),
-    )?
+    )
+    .unwrap()
     .commit()
     .map(|_| ())
+    .unwrap();
 }
 
 fn of<'a>(lines: &'a [Value], kind: &str) -> Vec<&'a Value> {
@@ -535,6 +514,10 @@ fn list_prints_the_repository_line_with_the_project() {
         words[3].contains("fiber-repository-load") || words[3].contains("fh-"),
         "the project identity: {line}"
     );
+    assert!(
+        words[3].ends_with(".git"),
+        "the project is git's shared directory, not the workspace: {line}"
+    );
     assert_eq!(words[4], "pkg");
     assert_eq!(words[5].len(), 64, "{line}");
     assert!(words[5].chars().all(|c| c.is_ascii_hexdigit()), "{line}");
@@ -600,7 +583,7 @@ fn resume_in_another_worktree_keeps_the_folded_version() {
         );
         session.wait("the resolution", "repository_code_resolved");
         session.wait("the turn", "turn_completed");
-        let (setup, stream, stderr, success) = session.finish();
+        let (setup, stream, _stdout, stderr, success) = session.finish();
         assert!(success, "{stderr}");
         let kinds: Vec<&str> = stream
             .iter()
@@ -711,6 +694,8 @@ struct Session {
     client: Socket,
     setup: Setup,
     stream: Vec<Value>,
+    stdout: mpsc::Receiver<String>,
+    reader: thread::JoinHandle<()>,
 }
 
 impl Session {
@@ -728,7 +713,7 @@ impl Session {
         let stdout = child.stdout.take().unwrap();
         let stderr_pipe = child.stderr.take().unwrap();
         let (tx, lines) = mpsc::channel();
-        thread::spawn(move || {
+        let reader = thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 if tx.send(line.unwrap()).is_err() {
                     break;
@@ -746,6 +731,7 @@ impl Session {
         });
         first_line(setup.deadline, &lines);
         let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
+        let stdout = lines;
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // `clients` is written when the `full` connection attaches, with no
         // order against the startup events: the wait returns once both
@@ -769,6 +755,8 @@ impl Session {
             client,
             setup,
             stream,
+            stdout,
+            reader,
         }
     }
 
@@ -779,7 +767,7 @@ impl Session {
         found
     }
 
-    fn finish(self) -> (Setup, Vec<Value>, String, bool) {
+    fn finish(self) -> (Setup, Vec<Value>, Vec<Value>, String, bool) {
         let Self {
             mut child,
             guard,
@@ -787,6 +775,8 @@ impl Session {
             stderr,
             client,
             setup,
+            stdout,
+            reader,
             ..
         } = self;
         client.send(r#"{"id":"close","command":"close"}"#);
@@ -802,7 +792,15 @@ impl Session {
         assert!(!group_alive(setup.deadline, group));
         std::mem::forget(guard);
         watchdog.stand_down(setup.deadline.cleanup());
-        (setup, stream, err, status.success())
+        // The child's stdout is closed, so the reader ended: every line
+        // is here, including the ephemeral notices the durable log and
+        // a late-subscribed client never see.
+        reader.join().unwrap();
+        let stdout: Vec<Value> = stdout
+            .try_iter()
+            .map(|line| serde_json::from_str(&line).unwrap())
+            .collect();
+        (setup, stream, stdout, err, status.success())
     }
 }
 
@@ -832,7 +830,7 @@ fn an_approved_offer_loads_before_the_first_preamble() {
     );
     session.wait("the resolution", "repository_code_resolved");
     session.wait("the turn", "turn_completed");
-    let (setup, stream, stderr, success) = session.finish();
+    let (setup, stream, _stdout, stderr, success) = session.finish();
     assert!(success, "{stderr}");
     let id = stream
         .iter()
@@ -896,6 +894,63 @@ fn an_approved_offer_loads_before_the_first_preamble() {
     assert!(resolved[0] < loaded[1]);
     assert!(loaded[1] < built[0]);
     assert!(!durable.contains(&"reloaded".to_owned()), "{durable:?}");
+}
+
+/// A startup notice is written once when the offer loads late: the late
+/// preparer reads every notice the startup wrote, including the ones
+/// `mcp_servers_started` writes after that read (`session_command.rs`
+/// and `resume.rs` pass them through `startup_written`).
+#[test]
+fn a_startup_notice_is_not_written_twice_by_the_late_load() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write_global(&setup, &json!({"model": "fake/m", "bogus": 1}));
+    declare(
+        &setup.workspace(),
+        &[(
+            "pkg",
+            manifest("fiber.test/pkg", "v1.0.0", Some("prompt.md")),
+            "fiber.command('lint',{timeout=5000,run=function() return 'lint' end})",
+            false,
+        )],
+    );
+    let mut session = Session::start(setup);
+    session.client.send(
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let offered = session.wait("the offer", "repository_code_offered");
+    let request = offered["payload"]["request_id"].as_str().unwrap();
+    session.client.send(
+        &json!({"id":"c_reply","command":"reply","args":{"request_id":request,"decisions":["approve"]}})
+            .to_string(),
+    );
+    session.wait("the resolution", "repository_code_resolved");
+    session.wait("the turn", "turn_completed");
+    let (_setup, stream, stdout, stderr, success) = session.finish();
+    assert!(success, "{stderr}");
+    // The offer approved `pkg`, so the late preparer ran: the second
+    // load carries it. Without the `startup_written` read the unknown
+    // key below would surface twice, once per load.
+    let loaded: Vec<_> = stream
+        .iter()
+        .filter(|line| line["kind"] == "extensions_loaded")
+        .collect();
+    assert_eq!(loaded.len(), 2);
+    assert!(
+        loaded_set(loaded[1]).contains(&("fiber.test/pkg".to_owned(), "v1.0.0".to_owned())),
+        "{:?}",
+        loaded[1]
+    );
+    // Notices are ephemeral: they reach the session's stdout, never the
+    // durable log, and a client subscribing after the startup write
+    // misses them. The startup wrote the unknown key once; the late
+    // load must not write it again.
+    let ignored: Vec<_> = stdout
+        .iter()
+        .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
+        .collect();
+    assert_eq!(ignored.len(), 1, "{ignored:?}");
 }
 
 #[test]

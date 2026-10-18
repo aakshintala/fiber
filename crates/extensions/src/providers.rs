@@ -394,8 +394,8 @@ impl Providers {
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
-            // claims it is left out, with one notice, like a bad addendum
-            // leaves its providers out.
+            // claims it keeps none of its providers, with one
+            // `extension_failed` notice naming the package.
             datas.retain(|data| {
                 if data.name != scripted::SCRIPTED {
                     return true;
