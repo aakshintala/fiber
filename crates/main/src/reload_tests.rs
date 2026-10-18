@@ -28,6 +28,33 @@ impl contract::model::HostModel for NoDrive {
     }
 }
 
+struct Named(&'static str);
+impl contract::tool::Tool for Named {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: self.0.into(),
+            description: "reload test tool".into(),
+            input_schema: json!({"type":"object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        panic!("unexpected effects lookup")
+    }
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("unexpected tool call")
+    }
+}
+
 struct Fixture {
     rig: Rig,
     state: Arc<State>,
@@ -214,6 +241,62 @@ fn reload_replaces_command_list_and_dropped_preparation_does_not_install() {
     );
     assert!(replacements[0].hooks.is_some());
     assert!(fixture.declared.lock().unwrap().is_empty());
+}
+
+#[test]
+fn reload_preserves_tool_precedence_late_tools_and_only_current_declarations() {
+    use contract::events::ToolSource;
+    let mut fixture = Fixture::new();
+    let read = Arc::new(Named("read"));
+    let echo = Arc::new(Named("mcp__db__echo"));
+    let late = Arc::new(Named("late"));
+    let read_info = crate::builtin::info(&*read, ToolSource::Builtin).unwrap();
+    let echo_info = crate::builtin::info(
+        &*echo,
+        ToolSource::Mcp {
+            server: "db".into(),
+            tool: "echo".into(),
+        },
+    )
+    .unwrap();
+    let late_info = crate::builtin::info(&*late, ToolSource::Builtin).unwrap();
+    let web_info = crate::builtin::info(&Named("web_search"), ToolSource::Builtin).unwrap();
+    let removed = crate::builtin::info(&Named("removed"), ToolSource::Builtin).unwrap();
+    {
+        let state = Arc::get_mut(&mut fixture.state).unwrap();
+        // Input order forces the built-in/MCP precedence to be established by prepare.
+        state.tools = vec![("db".into(), echo), ("builtin".into(), read.clone())];
+        state.kept_infos = vec![read_info.clone(), echo_info, web_info];
+        *state.names.lock().unwrap() = vec!["removed".into(), "read".into()];
+        let mut held = state.late.lock().unwrap();
+        held.tools = vec![("repository".into(), read), ("repository".into(), late)];
+        held.infos.insert("late".into(), late_info);
+    }
+    fixture
+        .declared
+        .lock()
+        .unwrap()
+        .extend([("removed".into(), removed), ("read".into(), read_info)]);
+    let prepared = fixture.prepare();
+    assert_eq!(
+        prepared
+            .tools
+            .iter()
+            .map(|(owner, tool)| (owner.as_str(), tool.definition().name))
+            .collect::<Vec<_>>(),
+        [
+            ("builtin", "read".into()),
+            ("db", "mcp__db__echo".into()),
+            ("repository", "late".into())
+        ]
+    );
+    (prepared.installed)();
+    let declared = fixture.declared.lock().unwrap();
+    assert_eq!(
+        declared.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["late", "mcp__db__echo", "read"]
+    );
+    assert!(matches!(declared["read"].source, ToolSource::Builtin));
 }
 
 #[test]

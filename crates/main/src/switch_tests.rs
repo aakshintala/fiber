@@ -204,6 +204,59 @@ fn keyed(label: &str) -> (String, crate::lua_providers::KeyAndSigner) {
     )
 }
 
+#[test]
+fn reload_reviewer_uses_the_route_label_and_publishes_only_other_provider_reads() {
+    fakes::within(
+        "reload reviewer credential publication",
+        DEADLINE,
+        move || {
+            let fixture = fixture("fiber-reload-reviewer-labels");
+            let work = fixture.root.path().join("work-key");
+            std::fs::write(&work, "work-key").unwrap();
+            std::fs::create_dir_all(fixture.key_file.parent().unwrap()).unwrap();
+            std::fs::write(&fixture.key_file, "reviewer-key").unwrap();
+            std::fs::write(
+                fixture.home.join("config.json"),
+                json!({
+                    "providers":{"fake":{"credentials":{"work":{"file":work}}}}
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let switching = switching(&fixture, &[]);
+            let here = crate::Here {
+                workspace: fixture.workspace.clone(),
+                clock: switching.loader().clock,
+            };
+            let route = r#loop::ReloadRoute {
+                model: "fake/m".into(),
+                credential: Some("work".into()),
+            };
+            let own_config = config(&fixture, &["reviewer.model=fake/r"]);
+            let (reviewer, _, files, publish) = switching.reviewer_for(&route, &own_config, &here);
+            assert_eq!(reviewer.unwrap().model.reference, "fake/r");
+            assert_eq!(files, [work.canonicalize().unwrap()]);
+            publish();
+            // Preparing a reviewer does not switch the session's credential label.
+            assert_eq!(
+                prepared_with(&switching, &args("fake/m"), None, None).credential,
+                Some("default".into())
+            );
+            let other_config = config(&fixture, &["reviewer.model=filed/fm"]);
+            let (reviewer, _, files, publish) =
+                switching.reviewer_for(&route, &other_config, &here);
+            assert_eq!(reviewer.unwrap().model.reference, "filed/fm");
+            assert_eq!(files, [fixture.key_file.canonicalize().unwrap()]);
+            std::fs::remove_file(&fixture.key_file).unwrap();
+            publish();
+            // The installed reviewer reuses its key, without reopening its removed file.
+            let (reviewer, _, files, _) = switching.reviewer_for(&route, &other_config, &here);
+            assert_eq!(reviewer.unwrap().model.reference, "filed/fm");
+            assert!(files.is_empty());
+        },
+    );
+}
+
 /// The startup credential map holding each of `names` under `default`.
 fn startup(names: &[&str]) -> Credentials {
     names

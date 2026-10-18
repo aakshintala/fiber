@@ -541,7 +541,8 @@ fn resumed_session(
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
-    extensions.answerable(!one_turn);
+    let answerable = !one_turn;
+    extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
         session.attended(),
@@ -577,7 +578,7 @@ fn resumed_session(
         &session,
         host_model,
         session_servers,
-        !one_turn,
+        answerable,
         log.clone(),
         diag.clone(),
     );

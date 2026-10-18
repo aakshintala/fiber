@@ -477,7 +477,8 @@ pub(crate) fn run_new(
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
-    extensions.answerable(!one_turn);
+    let answerable = !one_turn;
+    extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
         session.attended(),
@@ -513,7 +514,7 @@ pub(crate) fn run_new(
         &session,
         host_model,
         session_servers,
-        !one_turn,
+        answerable,
         log.clone(),
         diag.clone(),
     );
