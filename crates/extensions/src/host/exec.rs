@@ -3,6 +3,7 @@
 //! (`docs/tools.md`, "Shell"). Each stream is read whole into its own
 //! buffer on its own reader thread, bounded by the extension's memory cap.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +25,9 @@ pub(crate) struct ExecRequest {
     pub args: Vec<String>,
     /// Its working directory, already resolved against the workspace.
     pub cwd: PathBuf,
+    /// Variables added to the inherited environment, overriding a
+    /// same-named variable; empty keeps today's behaviour.
+    pub env: BTreeMap<String, String>,
     /// Each stream's bound in bytes: the extension's memory cap.
     pub cap: usize,
     /// Whether the program runs in its own process group. `host.exec`
@@ -228,6 +232,7 @@ pub(crate) fn run(
     let mut cmd = Command::new(&req.program);
     cmd.args(&req.args)
         .current_dir(&req.cwd)
+        .envs(&req.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -3,6 +3,7 @@
 //! `json`, and converting between Lua values and JSON.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -438,6 +439,7 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         program,
         args,
         cwd,
+        env: BTreeMap::new(),
         cap,
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the program as it does today.

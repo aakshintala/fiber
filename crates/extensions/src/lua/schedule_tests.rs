@@ -9,6 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::super::CredentialFor;
@@ -494,6 +495,7 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
             program: "sh".to_owned(),
             args: vec!["-c".to_owned(), "exit 0".to_owned()],
             cwd: dir.path().to_path_buf(),
+            env: BTreeMap::new(),
             cap: 1024,
             own_group: true,
             #[cfg(test)]
@@ -863,6 +865,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                     format!("touch '{}'", exec_marker.display()),
                 ],
                 cwd: dir.path().to_path_buf(),
+                env: BTreeMap::new(),
                 cap: 1024,
                 own_group: true,
                 #[cfg(test)]
@@ -978,6 +981,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                         format!("touch '{}'", exec_marker.display()),
                     ],
                     cwd: dir.path().to_path_buf(),
+                    env: BTreeMap::new(),
                     cap: 1024,
                     own_group: true,
                     #[cfg(test)]
