@@ -716,3 +716,65 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
     );
     assert!(marker.exists(), "the next call's run started");
 }
+
+#[test]
+fn is_http_url_agrees_with_the_loops_host_rule() {
+    // Each accept is one `host_of` in `crates/loop/src/known_hosts.rs`
+    // parses to `Some`; each refusal to `None`.
+    let accepts = [
+        "https://example.com",
+        "HTTP://Example.COM:8080/a?b#c",
+        "http://[::1]:80/",
+        "https://user@host.test/",
+        "https://host.test:65535",
+        "http://a.test:0",
+        "http://a.test:",
+        "https://a.test/?next=@b",
+    ];
+    for url in accepts {
+        assert!(is_http_url(url), "{url} reads as an http(s) URL");
+    }
+    let refusals = [
+        "",
+        "example.com",
+        "ftp://a.test",
+        "https://",
+        "http://:80",
+        "http://a.test:65536",
+        "http://a.test:80x",
+        "http://a b",
+        "http://a%b",
+        "https:/a.test",
+        "https://exämple.test/",
+        "http://[::1:80/",
+        "http://[::1]80/",
+        "http://a.test: 80",
+    ];
+    for url in refusals {
+        assert!(!is_http_url(url), "{url} is not an http(s) URL");
+    }
+}
+
+#[test]
+fn urls_from_reads_only_a_list_of_http_or_https_urls() {
+    assert_eq!(urls_from(&json!([])), Some(Vec::new()));
+    assert_eq!(
+        urls_from(&json!(["https://a.test", "http://b.test/x"])),
+        Some(vec![
+            "https://a.test".to_owned(),
+            "http://b.test/x".to_owned()
+        ])
+    );
+    for value in [
+        json!("x"),
+        json!(null),
+        json!({"url": "https://a.test"}),
+        json!([1]),
+        json!([true]),
+        json!([["https://a.test"]]),
+        json!(["https://a.test", "nope"]),
+        json!(["https://a.test", 1]),
+    ] {
+        assert_eq!(urls_from(&value), None, "{value}");
+    }
+}

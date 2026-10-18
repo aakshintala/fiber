@@ -268,6 +268,70 @@ fn schema(value: &LuaValue) -> Result<Value, String> {
 /// the order each first appears; `reversible`; and `paths`, absent or a
 /// list of strings. Any other key, a wrong type or an unknown effect is
 /// refused.
+// debt: is_http_url mirrors crates/loop/src/known_hosts.rs host_of, ceiling: two parsers, upgrade trigger: a shared normaliser in contract. Every URL it accepts host_of parses to Some; the table test below pins both sides so drift shows.
+fn is_http_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return false;
+    }
+    let Some(authority) = rest.split(['/', '?', '#']).next() else {
+        return false;
+    };
+    let Some(authority) = authority.rsplit('@').next() else {
+        return false;
+    };
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, tail)) = bracketed.split_once(']') else {
+            return false;
+        };
+        if tail.is_empty() {
+            (host, "")
+        } else {
+            let Some(port) = tail.strip_prefix(':') else {
+                return false;
+            };
+            (host, port)
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((host, port)) => (host, port),
+            None => (authority, ""),
+        }
+    };
+    if host.is_empty() || !host.is_ascii() || host.contains(['%', '[', ']', ' ', '\t', '\n', '\r'])
+    {
+        return false;
+    }
+    if !port.is_empty() {
+        if !port.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if port.parse::<u16>().is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// A JSON list of `http` or `https` URLs as `is_http_url` reads them, kept
+/// as written. Anything else is `None`: not a list, or one entry that is
+/// not a string or not an `http` or `https` URL.
+pub(crate) fn urls_from(value: &Value) -> Option<Vec<String>> {
+    let Value::Array(items) = value else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .filter(|url| is_http_url(url))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 pub(crate) fn effects_from(value: &Value) -> Result<DeclaredEffects, String> {
     let Value::Object(map) = value else {
         return Err("it must be a table of `effects`, `paths` and `reversible`".to_owned());
