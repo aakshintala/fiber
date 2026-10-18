@@ -1816,3 +1816,86 @@ fn the_home_choice_marks_only_its_row() {
         .collect();
     assert_eq!(only, ["m2"]);
 }
+
+#[test]
+fn an_answer_with_nothing_owed_leaves_no_mark_and_keeps_balance() {
+    // Owed 0: an answer with no read out clears no mark, and the next
+    // take/store cycle still balances.
+    let mut picker = open_over(catalogue());
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    // A taken `Cached` read counts as owed too, without ever marking.
+    picker.want = Some(crate::catalogue::Refresh::Cached);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Cached));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn one_owed_read_clears_the_mark_when_it_answers() {
+    // Owed 1: one read out, and its answer clears the mark.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_second_owed_read_keeps_the_mark_until_it_answers() {
+    // Owed 2: a refresh queued behind a running read. The older answer
+    // counts down without clearing, so the queued read keeps its mark
+    // until its own answer lands.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the first read's group died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the second read's group died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn the_startup_read_counts_as_owed_until_it_answers() {
+    // The startup ask bypasses `take_read`, so it counts through
+    // `note_asked`: its answer landing after a meanwhile taken read keeps
+    // that read's mark.
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+            lists: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.note_asked();
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.open(Mode::Choose, None);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 2);
+    // The startup read answers first, while the open read still runs.
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}

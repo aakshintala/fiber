@@ -193,6 +193,11 @@ pub(crate) struct ModelPicker {
     /// Which `Stale` or `Every` read runs, if one does: the picker shows
     /// "refreshing…" beside its lists.
     pub(crate) refreshing: Option<Refresh>,
+    /// The catalogue reads started but not yet answered. Each taken read
+    /// counts one up, and each answer counts one down; the mark clears
+    /// only when none is owed, so a queued read starting after an older
+    /// answer keeps showing "refreshing…" until its own answer lands.
+    owed: usize,
     /// `scoped_models`: the references the picker shows; empty means
     /// every installed model (`docs/configuration.md`, "Keys").
     pub(crate) scoped: Vec<String>,
@@ -239,12 +244,18 @@ impl ModelPicker {
     /// Stores a read's answer: the catalogue, or the error with the old
     /// catalogue kept. What the loop owes is taken, never cleared here:
     /// an answer to the startup read must not drop a meanwhile opened
-    /// picker's `Stale`. A replacement reconciles the open picker by
+    /// picker's `Stale`. One owed read answered counts the owed reads
+    /// down, and the mark clears only when none is owed: an older
+    /// answer never drops a queued read's mark. A replacement reconciles
+    /// the open picker by
     /// model reference: the selection stays on its model, each touched
     /// chip stays on its level's name, every other row preselects, and
     /// a removed selection clamps into the answered catalogue.
     pub(crate) fn store(&mut self, result: Result<Catalogue, String>) {
-        self.refreshing = None;
+        self.owed = self.owed.saturating_sub(1);
+        if self.owed == 0 {
+            self.refreshing = None;
+        }
         let incoming = match result {
             Ok(catalogue) => catalogue,
             Err(error) => {
@@ -386,15 +397,30 @@ impl ModelPicker {
         };
     }
 
-    /// The read the loop owes, if one is owed.
+    /// The read the loop owes, if one is owed. Taking a read counts it
+    /// as owed, so its answer is awaited even when an older answer lands
+    /// first.
+    /// Only a `Stale` or `Every` read shows "refreshing…": the startup
+    /// `Cached` read shows "Reading the model lists…" instead.
     pub(crate) fn take_read(&mut self) -> Option<Refresh> {
         let read = self.want.take();
+        if read.is_some() {
+            self.owed = self.owed.saturating_add(1);
+        }
         // Only a `Stale` or `Every` read shows "refreshing…": the startup
         // `Cached` read shows "Reading the model lists…" instead.
         if matches!(read, Some(Refresh::Stale | Refresh::Every)) {
             self.refreshing = read;
         }
         read
+    }
+
+    /// Counts the startup read as owed: the loop asks it directly, not
+    /// through `take_read`, so its answer counts down with the rest. An
+    /// answer to the startup read landing after a meanwhile taken read
+    /// then keeps that read's mark, instead of clearing it early.
+    pub(crate) fn note_asked(&mut self) {
+        self.owed = self.owed.saturating_add(1);
     }
 
     /// Opens the picker fresh: the selection on the on-screen model, else

@@ -30,6 +30,12 @@ impl App {
         self.model_picker.store(result);
     }
 
+    /// Counts the startup catalogue read as owed, so its answer never
+    /// drops a meanwhile opened picker's mark.
+    pub(crate) fn note_catalogue_read(&mut self) {
+        self.model_picker.note_asked();
+    }
+
     /// The model-list read the loop owes, if one is owed. On a remote
     /// terminal the hub's catalogue reads use the workspace in use, stored
     /// just before the read is returned; with no read owed nothing is stored.
