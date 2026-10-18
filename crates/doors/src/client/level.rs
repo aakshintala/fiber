@@ -100,12 +100,6 @@ pub(super) struct Writing {
     pub(super) written: Option<u64>,
 }
 
-/// Whether the drain continues: until `cutoff - 1` is written. Nothing is
-/// owed when `cutoff` is 0.
-fn drain_more(written: Option<u64>, cutoff: u64) -> bool {
-    written.map_or(cutoff > 0, |seq| seq + 1 < cutoff)
-}
-
 /// Reader side: a `subscribe` on a subscribed connection. A same-level
 /// request is rejected and nothing else happens. Otherwise preparation
 /// runs first: on failure the outbox, `conn.full` and the `clients` count
@@ -262,7 +256,12 @@ pub(super) fn apply(
         // into the old queue or dropped from it (which set the lag flag)
         // before the control line, so reading on returns each of them
         // exactly once. Anything else is skipped, never written.
-        while drain_more(writing.written, switch.cutoff) {
+        // The drain continues until `cutoff - 1` is written. Nothing is
+        // owed when `cutoff` is 0.
+        while writing
+            .written
+            .map_or(switch.cutoff > 0, |seq| seq + 1 < switch.cutoff)
+        {
             match writing.watcher.recv() {
                 Ok(Some(line)) => {
                     if line.seq.is_some_and(|seq| seq.0 < switch.cutoff) {

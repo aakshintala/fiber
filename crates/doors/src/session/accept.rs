@@ -63,16 +63,12 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                 if gate.conns.stopped() {
                     return;
                 }
-                if accept_error_waits(error.kind()) {
+                // `Interrupted` is a stale wake and is retried. Any other
+                // accept error waits so the loop does not spin.
+                if error.kind() != io::ErrorKind::Interrupted {
                     gate.conns.wait_for_room();
                 }
             }
         }
     }
-}
-
-/// `Interrupted` is a stale wake and is retried. Any other accept error waits
-/// so the loop does not spin.
-pub(super) fn accept_error_waits(kind: io::ErrorKind) -> bool {
-    kind != io::ErrorKind::Interrupted
 }

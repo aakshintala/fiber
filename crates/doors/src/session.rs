@@ -34,14 +34,12 @@ mod clients;
 mod conns;
 mod event;
 mod shells;
-#[cfg(test)]
-use accept::accept_error_waits;
 use accept::accept_loop;
 use accepted::Accepted;
 use clients::Clients as ClientCounts;
 use conns::Conns;
 #[cfg(test)]
-use conns::{GRACE, grace_remains};
+use conns::GRACE;
 pub(crate) use event::envelope;
 use shells::Shells;
 pub(crate) use shells::Stopped;

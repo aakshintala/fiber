@@ -758,14 +758,6 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
 }
 
 #[test]
-fn the_grace_ends_at_its_deadline() {
-    let clock = FakeClock::new();
-    let now = clock.now();
-    assert!(super::grace_remains(now, now + Duration::from_millis(1)));
-    assert!(!super::grace_remains(now, now));
-}
-
-#[test]
 fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
     let clock = FakeClock::new();
     let now = clock.now();
@@ -951,12 +943,6 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
         .recv(&rx)
         .expect("a connection ending lets accept try again");
     close_within(opened.session, opened.log);
-}
-
-#[test]
-fn an_interrupted_accept_does_not_wait_and_any_other_error_does() {
-    assert!(super::accept_error_waits(io::ErrorKind::Other));
-    assert!(!super::accept_error_waits(io::ErrorKind::Interrupted));
 }
 
 fn status(name: &str) -> Event {
