@@ -25,19 +25,6 @@ use crate::{Error, LuaExtension};
 /// Wall-clock bound on a wait for the extension's thread.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Runs the blocking call `f` on a thread and receives its result with a
-/// deadline: calling code that blocks is a wait too (`docs/testing.md`,
-/// "Waits and timeouts").
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done_tx, done_rx) = mpsc::channel();
-    std::thread::spawn(move || done_tx.send(f()));
-    match Deadline::after(WAIT).recv(&done_rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 /// `clock` as the extension's clock.
 fn clocked(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
     Arc::clone(clock) as _
@@ -114,7 +101,9 @@ fn not_answerable_returns_declined_at_once() {
     );
     let held = Arc::clone(&ext);
     assert_eq!(
-        within(move || held.command("go", "")).unwrap(),
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
         "{\"declined\":true}"
     );
     assert!(rx.try_recv().is_err(), "nothing reaches the inbox");
@@ -351,7 +340,12 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
         true,
     );
     let held = Arc::clone(&ext);
-    assert_eq!(within(move || held.command("go", "")).unwrap(), "set");
+    assert_eq!(
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
+        "set"
+    );
     clock.advance(Duration::from_millis(60));
     let requested = interaction(&rx, &Deadline::after(WAIT));
     clock.advance(Duration::from_millis(200));
@@ -486,7 +480,9 @@ fn sealing_declines_new_asks_and_hands_answers_back() {
     ext.seal();
     let held = Arc::clone(&ext);
     assert_eq!(
-        within(move || held.command("go", "")).unwrap(),
+        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
+            .command("go", ""))
+        .unwrap(),
         "{\"declined\":true}"
     );
     assert!(rx.try_recv().is_err(), "a sealed ask writes nothing");
@@ -529,7 +525,10 @@ fn bad_specs_raise_strings_and_nothing_reaches_the_inbox() {
         true,
     );
     let held = Arc::clone(&ext);
-    let got = within(move || held.command("go", "")).unwrap();
+    let got = fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
+        held.command("go", "")
+    })
+    .unwrap();
     for (part, key) in got
         .split('|')
         .zip(["approve", "options", "option", "field", "\"a\"", "prompt"])
@@ -561,7 +560,11 @@ fn host_ask_in_init_lua_raises_the_entry_string() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    let Err(Error::Lua { message, .. }) = within(move || held.commands()) else {
+    let Err(Error::Lua { message, .. }) =
+        fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
+            held.commands()
+        })
+    else {
         panic!("the entry script fails to load");
     };
     assert_eq!(message, "host.ask: not available while init.lua runs");

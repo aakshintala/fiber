@@ -5,7 +5,6 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::FileChange;
 use contract::provider::ToolDefinition;
@@ -15,12 +14,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use similar::{ChangeTag, TextDiff};
 
+use crate::error::{FileError, WriteError};
 use crate::files::land::{land, shape_replacement};
 use crate::files::{
     Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve, resolved,
-    unsupported_message,
 };
-use crate::tool_util::failed;
+use crate::tool_util::errored;
 
 /// The call's arguments, checked against the schema before the call runs.
 #[derive(Debug, Deserialize)]
@@ -79,9 +78,9 @@ impl Tool for Write {
         if cancel.is_cancelled() {
             return crate::tool_util::cancelled_before();
         }
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(WriteError::from(error)),
         };
         let raw = args.path;
         let content = args.content;
@@ -99,34 +98,34 @@ impl Tool for Write {
             Err(output) => return output,
         };
         let judged = self.shared.judged(&raw);
-        if let Err(output) = crate::tool_util::recheck(
+        if let Err(error) = crate::tool_util::recheck(
             &raw,
             &path,
             Some(&key),
             judged.as_deref(),
             crate::tool_util::Act::Write,
         ) {
-            return output;
+            return crate::tool_util::errored(error);
         }
         let existing = match existing(&path) {
             Ok(existing) => existing,
-            Err((code, message)) => return failed(code, message),
+            Err(error) => return errored(WriteError::from(error)),
         };
         let (created, old, written) = match existing {
             None => (true, None, content.into_bytes()),
             Some(old) => {
-                if let Some(output) = stale(&path, captured, &old) {
-                    return output;
+                if let Some(error) = stale(&path, captured, &old) {
+                    return errored(error);
                 }
                 let written = shape_replacement(&old, &content);
                 (false, Some(old), written)
             }
         };
         if let Err(err) = land(&path, &written) {
-            return failed(
-                ErrorCode::ToolError,
-                format!("`{}` could not be written: {err}.", path.display()),
-            );
+            return errored(WriteError::File(FileError::CouldNotWrite {
+                path: path.to_path_buf(),
+                source: err,
+            }));
         }
         self.shared.set_seen(&path, hash_bytes(&written));
         stored(&path, created, old.as_deref(), &written)
@@ -146,22 +145,24 @@ fn reversible(path: &Path) -> bool {
     }
 }
 
-fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
+fn existing(path: &Path) -> Result<Option<Vec<u8>>, FileError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err((
-                ErrorCode::ToolError,
-                format!("`{}` could not be written: {err}.", path.display()),
-            ));
+            return Err(FileError::CouldNotWrite {
+                path: path.to_path_buf(),
+                source: err,
+            });
         }
     };
     if let Some((kind, hint)) = kind_of(meta.file_type()) {
-        return Err((
-            ErrorCode::UnsupportedFile,
-            unsupported_message(path, kind, meta.len(), hint),
-        ));
+        return Err(FileError::Unsupported {
+            path: path.to_path_buf(),
+            kind: kind.to_owned(),
+            size: meta.len(),
+            hint,
+        });
     }
     // A PDF over the read cap is never readable, so it is never seen and
     // never writable: refuse it before its whole bytes are loaded below
@@ -169,17 +170,17 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
     if crate::pdf::pdf_over_cap(meta.len()) {
         match crate::files::pdf_magic(path) {
             Ok(true) => {
-                return Err((
-                    ErrorCode::UnsupportedFile,
-                    crate::pdf::over_cap_message(path, meta.len()),
-                ));
+                return Err(FileError::PdfOverCap {
+                    path: path.to_path_buf(),
+                    size: meta.len(),
+                });
             }
             Ok(false) => {}
             Err(error) => {
-                return Err((
-                    ErrorCode::ToolError,
-                    format!("`{}` could not be written: {error}.", path.display()),
-                ));
+                return Err(FileError::CouldNotWrite {
+                    path: path.to_path_buf(),
+                    source: error,
+                });
             }
         }
     }
@@ -188,30 +189,28 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
 
 // Stat already classified this as a regular file. NotFound means it disappeared
 // before the read, which is the same as creating it.
-fn read_present(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
+fn read_present(path: &Path) -> Result<Option<Vec<u8>>, FileError> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err((
-            ErrorCode::ToolError,
-            format!("`{}` could not be written: {err}.", path.display()),
-        )),
+        Err(err) => Err(FileError::CouldNotWrite {
+            path: path.to_path_buf(),
+            source: err,
+        }),
     }
 }
 
-fn stale(path: &Path, captured: Option<u64>, bytes: &[u8]) -> Option<Output> {
-    let message = match captured {
-        None => format!(
-            "`{}` was not read in this context. Read it first.",
-            path.display()
-        ),
-        Some(seen) if seen != hash_bytes(bytes) => format!(
-            "`{}` changed since it was read. Read it first.",
-            path.display()
-        ),
+fn stale(path: &Path, captured: Option<u64>, bytes: &[u8]) -> Option<WriteError> {
+    let error = match captured {
+        None => WriteError::StaleNotRead {
+            path: path.to_path_buf(),
+        },
+        Some(seen) if seen != hash_bytes(bytes) => WriteError::StaleChanged {
+            path: path.to_path_buf(),
+        },
         Some(_) => return None,
     };
-    Some(failed(ErrorCode::StaleFile, message))
+    Some(error)
 }
 
 fn stored(path: &Path, created: bool, old: Option<&[u8]>, written: &[u8]) -> Output {

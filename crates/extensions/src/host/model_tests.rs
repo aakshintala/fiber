@@ -10,30 +10,12 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use contract::shapes::{ContentPart, Tokens};
-use fakes::Deadline;
 use fakes::clock::FakeClock;
 use mlua::{Lua, Value as LuaValue};
 
 use crate::{Error, LuaExtension};
-
-/// Wall-clock bound on a wait for the extension's thread.
-const WAIT: Duration = Duration::from_secs(5);
-
-/// Runs the blocking call `f` on a thread and receives its result with a
-/// deadline: calling code that blocks is a wait too (`docs/testing.md`,
-/// "Waits and timeouts").
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || done_tx.send(f()));
-    match Deadline::after(WAIT).recv(&done_rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
 
 /// `clock` as the extension's clock.
 fn clocked(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
@@ -56,7 +38,10 @@ fn run(body: &str) -> String {
         clocked(&clock),
     ));
     let held = Arc::clone(&ext);
-    within(move || held.command("go", "")).unwrap()
+    fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || {
+        held.command("go", "")
+    })
+    .unwrap()
 }
 
 /// The `pcall` verdict for `call`: `ok` with the returned text, or the
@@ -197,7 +182,9 @@ fn model_in_the_entry_script_raises_closing() {
     );
     let ext = Arc::new(ext);
     let held = Arc::clone(&ext);
-    match within(move || held.commands()) {
+    match fakes::within("held.commands", fakes::MUST_SUCCEED_WITHIN, move || {
+        held.commands()
+    }) {
         Err(Error::Lua { message, .. }) => {
             assert_eq!(message, "host.model: not available while init.lua runs");
         }

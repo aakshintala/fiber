@@ -14,6 +14,18 @@ use super::Target;
 use crate::view::Scroll;
 use crate::window::Pages;
 
+/// Whether the scroll position moves: live, or frozen while an open
+/// holds the preview, keeping one deferred resize for the unfreeze.
+/// One enum, never two fields: a frozen screen with no width stored
+/// is `Frozen { pending_width: None }`, never a contradiction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Freeze {
+    /// The scroll position moves.
+    Live,
+    /// The scroll keys wait; clearing applies one stored resize.
+    Frozen { pending_width: Option<u16> },
+}
+
 /// The screen's size, the scroll position and the resident pages. The top
 /// row is never past the bottom once settled, and the size is at least
 /// 1x1.
@@ -22,6 +34,7 @@ pub(crate) struct Screen {
     height: u16,
     pages: Pages,
     scroll: Scroll,
+    freeze: Freeze,
 }
 
 impl Screen {
@@ -32,7 +45,30 @@ impl Screen {
             height: 24,
             pages: Pages::new(80),
             scroll: Scroll::default(),
+            freeze: Freeze::Live,
         }
+    }
+
+    /// Freezes the scroll position while an open holds the preview: the
+    /// scroll keys wait, and clearing applies one stored resize.
+    pub(super) fn set_frozen(&mut self, frozen: bool) {
+        if frozen {
+            if matches!(self.freeze, Freeze::Live) {
+                self.freeze = Freeze::Frozen {
+                    pending_width: None,
+                };
+            }
+        } else if let Freeze::Frozen { pending_width } =
+            std::mem::replace(&mut self.freeze, Freeze::Live)
+            && let Some(width) = pending_width
+        {
+            self.pages.set_width(width);
+        }
+    }
+
+    /// Whether the scroll position is frozen.
+    pub(super) fn frozen(&self) -> bool {
+        matches!(self.freeze, Freeze::Frozen { .. })
     }
 
     /// Sets the size, each side at least 1. The pages wrap at what
@@ -43,9 +79,14 @@ impl Screen {
     }
 
     /// Wraps the pages at `width` columns; a new width re-counts every
-    /// page. Returns whether the width changed.
+    /// page. While frozen the width is stored for the unfreeze and
+    /// nothing moves. Returns whether the width changed.
     pub(super) fn wrap_at(&mut self, width: u16) -> bool {
         let width = width.max(1);
+        if let Freeze::Frozen { pending_width } = &mut self.freeze {
+            *pending_width = Some(width);
+            return false;
+        }
         let changed = width != self.pages.wrap_width();
         self.pages.set_width(width);
         changed
@@ -81,8 +122,11 @@ impl Screen {
         self.scroll.top
     }
 
-    /// Jumps to the bottom and follows new output.
+    /// Jumps to the bottom and follows new output. A follow ends the
+    /// held landing's anchor, wherever the follow comes from: a key,
+    /// a click on "new below", or the landing's own fallback.
     pub(super) fn follow(&mut self) {
+        self.pages.clear_anchor();
         self.scroll.follow();
     }
 
@@ -92,7 +136,22 @@ impl Screen {
     }
 
     /// Scrolls so `row` is the top row; the next settle clamps it.
+    /// While frozen the top does not move. A jump ends the held
+    /// landing's anchor, wherever the jump comes from: a key, a
+    /// search reveal, or a scroll-bar drag.
     pub(super) fn jump(&mut self, row: usize) {
+        self.pages.clear_anchor();
+        self.jump_kept(row);
+    }
+
+    /// Scrolls so `row` is the top row, keeping the held landing's
+    /// anchor: the landing's own restore and a later load's re-anchor,
+    /// never a scroll, follow or navigation. While frozen the top does
+    /// not move.
+    pub(super) fn jump_kept(&mut self, row: usize) {
+        if self.frozen() {
+            return;
+        }
         self.scroll.top = Some(row);
     }
 
@@ -123,14 +182,37 @@ impl Screen {
     }
 
     /// PageUp and PageDown move by `height` less one, at least one row.
+    /// While frozen the top does not move. A page ends the held
+    /// landing's anchor.
     pub(super) fn page(&mut self, up: bool, height: usize) {
-        self.scroll_rows(up, height.saturating_sub(1).max(1), height);
+        self.pages.clear_anchor();
+        if self.frozen() {
+            return;
+        }
+        self.scroll_rows_kept(up, height.saturating_sub(1).max(1), height);
     }
 
     /// Scrolls by `step` rows: up from the top row, or from the bottom
     /// while following, saturating at the top; down follows again on
     /// reaching the bottom (`docs/tui.md`, "History and paging").
+    /// While frozen the top does not move. A scroll ends the held
+    /// landing's anchor, wherever the scroll comes from: a key or the
+    /// mouse wheel.
     pub(super) fn scroll_rows(&mut self, up: bool, step: usize, height: usize) {
+        self.pages.clear_anchor();
+        if self.frozen() {
+            return;
+        }
+        self.scroll_rows_kept(up, step, height);
+    }
+
+    /// Scrolls by `step` rows, keeping the held landing's anchor: a
+    /// page's own step, never a scroll of its own. While frozen the
+    /// top does not move.
+    fn scroll_rows_kept(&mut self, up: bool, step: usize, height: usize) {
+        if self.frozen() {
+            return;
+        }
         let bottom = self.bottom_top(height);
         if up {
             self.scroll.up(step, bottom);
@@ -143,8 +225,11 @@ impl Screen {
     /// when it fits and following again at the bottom. With no
     /// conversation rows there is nothing to show, and the scroll stays as
     /// it was.
+    /// While frozen the top does not move. A reveal ends the held
+    /// landing's anchor: focus navigation moves the top.
     pub(super) fn reveal(&mut self, row: usize, height: usize) {
-        if height == 0 {
+        self.pages.clear_anchor();
+        if height == 0 || self.frozen() {
             return;
         }
         let Some((_, rows, _)) = self

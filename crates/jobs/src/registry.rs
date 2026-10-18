@@ -11,6 +11,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
@@ -21,9 +22,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{
     End, Foreground, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
 };
-use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Output};
-use contract::{ErrorCode, JobId};
+use contract::tool::Cancel;
 
 #[path = "registry/park.rs"]
 mod park;
@@ -639,24 +638,6 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
-    }
-}
-
-/// A tool call's failure: the model reads `content`, the caller matches
-/// on the error's `message`. The trailing newline differs by caller —
-/// the `jobs` tool ends its content line, `delegate_spawn` does not —
-/// so both are passed in and neither is invented here. The one place a
-/// tool `Output`'s `Failure` is built.
-pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text { text: content }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
     }
 }
 

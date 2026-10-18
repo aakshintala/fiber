@@ -1,0 +1,10 @@
+#!/bin/sh
+# A stand-in for the session binary: records its arguments and the
+# environment it ran with, then prints a `fiber_exited` line so the
+# starter's drain ends. The record directory arrives as one more entry in
+# the published `Environment.vars`. Only shell builtins, since a published
+# environment can hold no `PATH`.
+printf '%s\n' "$@" > "$RECORD_DIR/args"
+printf '%s\n' "${MARK-unset} ${FIBER_HOME-unset} ${CARGO_MANIFEST_DIR-unset}" > "$RECORD_DIR/env"
+printf '{"kind":"fiber_exited","ts":1,"schema_version":1,"payload":{"error":{"code":"io_failed","message":"recorded"}}}\n'
+exit 0

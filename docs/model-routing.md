@@ -63,6 +63,13 @@ accepted, and the response reported `strict: true` with the schema rewritten
 an explicit `strict: true` was rejected with a 400. Details:
 [research/openai-responses-probe](../research/openai-responses-probe/README.md).
 
+Required nullable integer, string and boolean properties were accepted with
+`strict: true` by OpenAI Responses, Chat Completions, Anthropic Messages,
+OpenCode Go Chat Completions and OpenRouter Messages. Each sampled call sent
+`null` for the arguments the prompt asked it to leave unset. The probe records
+and its limits are in
+[research/strict-nullable-probe](../research/strict-nullable-probe/README.md).
+
 So Fiber sends `strict` on every tool, on every protocol that has strict mode,
 and decides it per tool. It sends `true` only when the tool's schema already
 fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
@@ -165,6 +172,10 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
 - Function-calling mode `VALIDATED` returned schema-valid arguments where
   `AUTO` returned arguments that broke an enum and an integer type. In the
   sample it did not force a call.
+
+Gemini accepted required nullable integer, string and boolean properties in
+both `AUTO` and `VALIDATED` mode, returning nulls in both samples
+([nullable probe](../research/strict-nullable-probe/README.md)).
 
 Fiber sends mode `VALIDATED` only when every tool in the request fits the
 strict subset. `VALIDATED` on `gemini-3-flash-preview` does not enforce
@@ -375,7 +386,8 @@ set is fixed for a given Fiber build.
 
 A model's `web_search` names the vendor's hosted-search tool type as the
 vendor spells it. Each protocol accepts only the types its code reads back
-(`docs/tools.md`, "Hosted by the provider"). A model whose `web_search` names
+(`docs/tools.md`, "Hosted by the provider"): `openai-completions` reads
+`openrouter:web_search`. A model whose `web_search` names
 any other type is left out of the model list, with the notice
 `model_invalid` naming the model and the type, as for a forbidden
 `extra_body` field.

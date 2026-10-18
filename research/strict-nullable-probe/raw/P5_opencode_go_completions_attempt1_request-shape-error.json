@@ -1,0 +1,60 @@
+{
+ "url": "https://opencode.ai/zen/go/v1/chat/completions",
+ "request": {
+  "model": "glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Read a file.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "offset": {
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "note": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "all": {
+        "type": [
+         "boolean",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "path",
+       "offset",
+       "note",
+       "all"
+      ],
+      "additionalProperties": false
+     },
+     "strict": true
+    }
+   }
+  ],
+  "tool_choice": "required",
+  "max_tokens": 256
+ },
+ "status": 400,
+ "elapsed_s": 0.38,
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"MissingSessionID\",\"message\":\"Request is missing x-opencode-session and cannot be routed efficiently. Please see https://opencode.ai/docs/go/#where-can-i-use-it\"}}"
+}

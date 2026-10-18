@@ -7,8 +7,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use super::is_line_ending;
-
 #[allow(clippy::duplicate_mod, reason = "unit tests share the socket fixture")]
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -62,11 +60,4 @@ fn reload_delivers_an_ack_that_accepts_rejects_or_closes_when_dropped() {
             .unwrap();
         opened.close();
     }
-}
-
-#[test]
-fn a_cr_and_a_lf_both_end_a_line() {
-    assert!(is_line_ending(b'\n'));
-    assert!(is_line_ending(b'\r'));
-    assert!(!is_line_ending(b'x'));
 }

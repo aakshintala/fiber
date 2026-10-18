@@ -3,15 +3,15 @@
 
 use std::sync::Arc;
 
+use contract::SessionId;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::sessions::{ListError, Sessions};
 use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{effects, failed, text_output};
+use crate::tool_util::{effects, errored, text_output};
 
 /// Lists the account's running sessions, including the calling session.
 pub struct SessionList {
@@ -63,10 +63,7 @@ impl Tool for SessionList {
                 return text_output("Cancelled before it finished.".into());
             }
             Err(ListError::Io { path, message }) => {
-                return failed(
-                    ErrorCode::ToolError,
-                    format!("Could not list sessions at {}: {message}", path.display()),
-                );
+                return errored(crate::error::SessionListError::Io { path, message });
             }
         };
         let entries: Vec<_> = running

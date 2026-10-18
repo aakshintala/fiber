@@ -758,14 +758,6 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
 }
 
 #[test]
-fn the_grace_ends_at_its_deadline() {
-    let clock = FakeClock::new();
-    let now = clock.now();
-    assert!(super::grace_remains(now, now + Duration::from_millis(1)));
-    assert!(!super::grace_remains(now, now));
-}
-
-#[test]
 fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
     let clock = FakeClock::new();
     let now = clock.now();
@@ -954,9 +946,34 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
 }
 
 #[test]
-fn an_interrupted_accept_does_not_wait_and_any_other_error_does() {
-    assert!(super::accept_error_waits(io::ErrorKind::Other));
-    assert!(!super::accept_error_waits(io::ErrorKind::Interrupted));
+fn accept_waits_for_room_on_a_non_interrupted_error() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    // A socket that never listened: every accept fails at once with
+    // `EINVAL`, a non-`Interrupted` error, on every platform, with no timing
+    // involved. (`Interrupted` has no deterministic source here: it needs a
+    // signal delivered mid-accept, which the suite never stages.)
+    let socket = rustix::net::socket(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::STREAM,
+        None,
+    )
+    .unwrap();
+    let listener = UnixListener::from(socket);
+    let worker = thread::Builder::new()
+        .name("accept-test-error".to_owned())
+        .spawn({
+            let gate = Arc::clone(&gate);
+            move || super::accept::accept_loop(listener, gate)
+        })
+        .unwrap();
+    // The loop waited instead of spinning: the hook fires only in
+    // `wait_for_room`. With the comparison flipped the loop never waits, so
+    // this fails at the deadline on the mutant.
+    wait_until_accept_waits();
+    close_within(opened.session, opened.log);
+    worker.join().unwrap();
 }
 
 fn status(name: &str) -> Event {

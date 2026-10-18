@@ -3,8 +3,6 @@
 //! `artifacts/` (`docs/model-routing.md`, "Image limits"). The session runs no
 //! image code (`docs/invocation.md`, "Processes").
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::Read;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -12,7 +10,6 @@ use std::process::{Command, Output as Collected, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::diag::{Op, Timing};
 use contract::images::{ImageError, Images};
 use contract::provider::ImageRef;
@@ -20,7 +17,8 @@ use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
-use crate::tool_util::{failed, text_output};
+use crate::error::ImageReadError;
+use crate::tool_util::{errored, text_output};
 
 /// How much of the child's standard error a failure message keeps.
 const MESSAGE_CAP: usize = 2048;
@@ -297,18 +295,15 @@ pub(crate) fn read(
     cancel: &dyn Cancel,
 ) -> Output {
     let Some(child) = child else {
-        return failed(
-            ErrorCode::ToolError,
-            "image reading is not configured.".to_owned(),
-        );
+        return errored(ImageReadError::NotConfigured);
     };
     match child.process(bytes, cancel) {
         Ok(reference) => rendered_ref(&reference),
-        Err(ImageError::Unreadable(message)) => failed(
-            ErrorCode::UnsupportedFile,
-            format!("`{}` cannot be read as an image: {message}", path.display()),
-        ),
-        Err(ImageError::Failed(message)) => failed(ErrorCode::ToolError, message),
+        Err(ImageError::Unreadable(message)) => errored(ImageReadError::Unreadable {
+            path: path.to_path_buf(),
+            message,
+        }),
+        Err(ImageError::Failed(message)) => errored(ImageReadError::ChildFailed { message }),
         Err(ImageError::Cancelled) => text_output("Cancelled and stopped.\n".to_owned()),
     }
 }
@@ -316,7 +311,7 @@ pub(crate) fn read(
 /// A fresh stem per call: an older log line's path never points at new
 /// bytes. `prefix` is `i` for an image and `p` for a PDF.
 pub(crate) fn fresh_stem(prefix: &str) -> String {
-    format!("{prefix}_{:016x}", RandomState::new().hash_one(()))
+    support::mint(&format!("{prefix}_"))
 }
 
 /// Whether `file` is the name asked for: `<stem>.<ext>`, where `<ext>` is

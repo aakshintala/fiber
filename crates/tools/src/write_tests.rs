@@ -556,8 +556,9 @@ fn an_unsearchable_path_is_not_a_reversible_create() {
     assert!(!reversible(&child));
     let err = existing(&child).unwrap_err();
     set_mode(&locked, 0o755);
-    assert_eq!(err.0, ErrorCode::ToolError);
-    assert!(err.1.contains("a.txt"), "{}", err.1);
+    assert!(matches!(err, crate::error::FileError::CouldNotWrite { .. }));
+    assert_eq!(err.code(), ErrorCode::ToolError);
+    assert!(err.to_string().contains("a.txt"), "{err}");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Tool arguments against their input schema (`docs/tools.md`, "Before a call
-//! runs"): the repairs made where a property's schema names a single type,
-//! and the check. The check covers the subset `docs/dependencies.md`,
-//! "Written ourselves", names; any other keyword is skipped.
+//! runs"): single-type repairs, nullable-union null drops, and the check.
+//! The check covers the subset `docs/dependencies.md`, "Written ourselves",
+//! names; any other keyword is skipped.
 //!
 //! One position is one value in the arguments. [`applying`] lists the schemas
 //! that apply there; the check and the repair both read that list, and only
@@ -239,7 +239,7 @@ fn check_object(
 ) {
     for schema in schemas {
         for key in required(schema) {
-            if !map.contains_key(key) {
+            if !map.contains_key(key) && !nullable_key(root, &child_schemas(schemas, key)) {
                 errors.push(format!("`{pointer}/{}`: missing", escape(key)));
             }
         }
@@ -368,16 +368,15 @@ fn repair_object(
             continue;
         }
         let at = format!("{pointer}/{}", escape(&key));
-        // A null is dropped where the tool would see the property as
-        // absent: for an optional property of a single non-null type, or
-        // whose type list joins `null` with another type. A required key is
-        // never absent, so it keeps its null.
+        // Strict wire schemas make the model send every key, so a nullable
+        // property's null stands in for "unset" and counts as absent.
         let drop_null = map.get(&key).is_some_and(|inner| inner.is_null())
-            && !required_keys.contains(&key.as_str())
-            && repaired_list(root, &subs).is_some_and(|child| {
-                child.iter().any(|schema| nullable_union(schema))
-                    || single_type(&child).is_some_and(|kind| kind != "null")
-            });
+            && (nullable_key(root, &subs)
+                || (!required_keys.contains(&key.as_str())
+                    && repaired_list(root, &subs).is_some_and(|child| {
+                        child.iter().any(|schema| nullable_union(schema))
+                            || single_type(&child).is_some_and(|kind| kind != "null")
+                    })));
         if drop_null {
             map.remove(&key);
             repairs.push(Repair {
@@ -428,9 +427,22 @@ fn read_string(
     }
 }
 
-/// Whether `schema` joins `null` with another type in one `type` list, so
-/// a null there is absent when the property is optional. A lone `"null"`
-/// and a schema without `type` are not unions.
+/// Whether every typed schema at the key allows absence through a nullable
+/// union. Untyped constraints do not supply a type. `repaired_list` returns
+/// `None` under `anyOf` or `oneOf`, so those keywords block repair.
+fn nullable_key(root: &Value, reaching: &[&Value]) -> bool {
+    let Some(list) = repaired_list(root, reaching) else {
+        return false;
+    };
+    let typed: Vec<_> = list
+        .into_iter()
+        .filter(|schema| schema.get("type").is_some())
+        .collect();
+    !typed.is_empty() && typed.into_iter().all(nullable_union)
+}
+
+/// Whether `schema` joins `null` with another type in one `type` list.
+/// A lone `"null"` and a schema without `type` are not unions.
 fn nullable_union(schema: &Value) -> bool {
     let kinds = types(schema);
     kinds.contains(&"null") && kinds.iter().any(|kind| *kind != "null")

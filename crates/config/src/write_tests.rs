@@ -30,31 +30,17 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     );
 }
 
-/// Runs `f`, which may block, on a worker and returns its result,
-/// failing the test after [`DEADLINE`] with `what` named.
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let _sent = done.send(f());
-    });
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(value) => value,
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
-    }
-}
-
 #[test]
 fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
     let dir = TempDir::new("fiber-write-lock");
     let file = dir.path().join("fiber-acme.json");
     let setup = file.clone();
-    within("the first update", move || {
+    fakes::within("update", fakes::MUST_SUCCEED_WITHIN, move || {
         update(&setup, &["a".to_owned()], Value::from(1), false)
     })
     .unwrap();
     let setup = file.clone();
-    let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
+    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_file = file.clone();
@@ -93,7 +79,7 @@ fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
     let file = dir.path().join("rules");
     fs::write(&file, "{\"gone\": 1}\n").unwrap();
     let setup = file.clone();
-    let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
+    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_file = file.clone();
@@ -565,7 +551,7 @@ fn replace_global_waits_for_the_lock_then_rejects_a_concurrent_non_object() {
     let file = home.join("config.json");
     fs::write(&file, "{\"reviewer\": {\"model\": \"all/a\"}}\n").unwrap();
     let setup = file.clone();
-    let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
+    let held = fakes::within("locked", fakes::MUST_SUCCEED_WITHIN, move || locked(&setup)).unwrap();
     let (started, started_rx) = mpsc::channel();
     let (done, done_rx) = mpsc::channel();
     let worker_home = home.clone();

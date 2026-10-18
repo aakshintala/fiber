@@ -39,8 +39,6 @@ mod socket_timing_tests;
 mod steer;
 mod watch;
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -140,12 +138,7 @@ pub fn exit_before_session(failure: Failure, out: &mut dyn Write, err: &mut dyn 
     code
 }
 
-/// A new id from random bytes, such as a session's or a command's
-/// (`docs/events.md`, "Identity and ordering"). `RandomState` seeds its keys
-/// from the operating system's randomness.
-pub fn mint(prefix: &str) -> String {
-    format!("{prefix}{:016x}", RandomState::new().hash_one(()))
-}
+pub use support::mint;
 
 /// A workspace's project and whether git found a repository there.
 #[derive(Clone, Debug, PartialEq, Eq)]

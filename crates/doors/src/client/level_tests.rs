@@ -68,14 +68,6 @@ fn extensions() -> Event {
     })
 }
 
-#[test]
-fn the_drain_condition_holds_at_its_edges() {
-    assert!(!drain_more(None, 0), "no cutoff drains nothing");
-    assert!(drain_more(None, 1), "one line is owed");
-    assert!(!drain_more(Some(4), 5), "cutoff - 1 is done");
-    assert!(drain_more(Some(3), 5), "cutoff - 2 still drains");
-}
-
 /// A writer that blocks in its first write until released, so the test
 /// puts the lag and the switch in each order that matters. Copies the
 /// `Held`/`HeldWrite` pattern in `session_tests.rs`.

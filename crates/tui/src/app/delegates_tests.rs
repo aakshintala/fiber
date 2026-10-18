@@ -363,7 +363,7 @@ fn open_first(app: &mut App) -> Vec<Value> {
 /// linking again.
 fn reopen(app: &mut App) {
     let out = open_first(app);
-    ack(app, &out);
+    ack_open(app, &out);
 }
 
 /// Opens `SESSION` through home: links, feeds its row, opens and
@@ -372,16 +372,27 @@ fn opened(app: &mut App) {
     linked(app);
     app.on_line(live(SESSION, json!({"state": "streaming"})));
     let out = open_first(app);
-    ack(app, &out);
+    ack_open(app, &out);
 }
 
-/// The acknowledgement of the last subscribe in `out`.
-fn ack(app: &mut App, out: &[Value]) {
-    let id = out
+/// Acknowledges a staged home open: the first-stage `summary`, then
+/// the `full` raise the first frame releases, then the raise. One ack
+/// leaves the gate shut and the parent's later lines would drop. A
+/// reopen after `leave`'s lowering already holds `summary`, so no
+/// first-stage subscribe goes out and the raise is due at once.
+fn ack_open(app: &mut App, out: &[Value]) {
+    if let Some(id) = out
         .iter()
         .rfind(|line| line["command"] == "subscribe")
         .and_then(|line| line["id"].as_str())
-        .unwrap_or_else(|| panic!("a subscribe"))
+    {
+        app.on_line(session_accepted(SESSION, id));
+    }
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let id = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
         .to_owned();
     app.on_line(session_accepted(SESSION, &id));
 }

@@ -3,6 +3,7 @@
 
 mod ask_user;
 mod edit;
+mod error;
 mod files;
 mod guidelines;
 mod handoff;

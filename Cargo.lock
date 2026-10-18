@@ -1455,6 +1455,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "support",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3256,6 +3257,7 @@ dependencies = [
  "serde_json",
  "similar",
  "support",
+ "thiserror 2.0.21",
  "ureq",
 ]
 

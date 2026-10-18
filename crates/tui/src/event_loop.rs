@@ -420,6 +420,8 @@ impl<B: Backend> Loop<B> {
             // leaves the hold set.
             if held {
                 self.app.end_batch();
+                #[cfg(test)]
+                pause::batch_ended(taken);
             }
             if let Some(code) = code {
                 return code;
@@ -683,6 +685,9 @@ impl<B: Backend> Loop<B> {
         // brings it.
         let due = self.app.items_due(self.clock.now());
         self.hub.send(&due, &mut self.app);
+        // The open's tail reads before the frame pages: the first frame
+        // draws the preview it installs.
+        self.open_tail(rx);
         self.page_in(rx);
         self.apply_theme();
         // A selection's copy waiting on dropped pages runs once they load.
@@ -694,6 +699,11 @@ impl<B: Backend> Loop<B> {
         self.drain_images();
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
+        }
+        // The open's `full` raise goes out after the first frame draws,
+        // so no `full` line is written before it.
+        if let Some(line) = self.app.take_raise() {
+            self.hub.send(&[line], &mut self.app);
         }
         // What the frame asked wakes the tick: nothing moving arms
         // nothing.
@@ -797,6 +807,26 @@ impl<B: Backend> Loop<B> {
         let search = files::Search::spawn(move || files::list(&workspace), roots, out.clone());
         search.search(self.app.generation(), String::new());
         self.search = Some(search);
+    }
+
+    /// Reads the open's tail when one is due: the history windows fill
+    /// it, then the preview installs. No stream means the tail ended
+    /// with nothing read; a lost read ends everything through
+    /// `disconnected`, with no install.
+    fn open_tail(&mut self, rx: &Receiver<Input>) {
+        let Some(session) = self.app.tail_due() else {
+            return;
+        };
+        if !self.hub.has_stream() {
+            self.app.tail_ended(None);
+        } else if self
+            .hub
+            .fetch_tail(rx, &session, &mut self.app, &self.tick)
+            .is_err()
+        {
+            return;
+        }
+        self.app.install_tail();
     }
 
     /// Loads, one page at a time, every page the frame needs and does not

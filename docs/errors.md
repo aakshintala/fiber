@@ -279,7 +279,7 @@ the lines that carry it.
 | `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
 | `extension_incompatible` | exit, notice, driver command (`rewind`) | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit, driver command (`rewind`) | the provider of a `provider/model` is not installed |
-| `extension_not_found` | exit, driver command (`rewind`) | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
+| `extension_not_found` | exit, driver command (`rewind`) | an install names a repository or tag that does not exist, or a repository with no version tag; fix the name. Not retried automatically (`docs/extensions.md`, "Names" and "Versions") |
 | `extension_not_installed` | exit, driver command (`rewind`) | `fiber extension remove` names an extension with no directory under `extensions/`; nothing is deleted (`docs/extensions.md`, "Installing") |
 | `extension_required_failed` | exit, driver command (`rewind`) | a required extension failed to start |
 | `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions (`docs/extensions.md`, "Code a repository ships") |

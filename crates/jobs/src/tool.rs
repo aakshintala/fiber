@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use contract::ErrorCode;
+use contract::JobId;
 use contract::emit::Emit;
 use contract::jobs::{StopError, WriteError};
 use contract::provider::ToolDefinition;
@@ -11,6 +11,7 @@ use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
+use crate::error::JobsError;
 use crate::registry::{self, Registry};
 
 /// Lists, waits on, writes to and stops the jobs the calling session started.
@@ -67,14 +68,15 @@ impl Tool for JobsTool {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let action = action(arguments).map_err(EffectsError::Arguments)?;
+        let action =
+            action(arguments).map_err(|error| EffectsError::Arguments(error.to_string()))?;
         Ok(effects_of(action))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         let action = match action(arguments) {
             Ok(action) => action,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         match action {
             Action::List => self.list(arguments),
@@ -92,13 +94,17 @@ enum Action {
     Stop,
 }
 
-fn action(arguments: &Map<String, Value>) -> Result<Action, String> {
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
+fn action(arguments: &Map<String, Value>) -> Result<Action, JobsError> {
     match arguments.get("action").and_then(Value::as_str) {
         Some("list") => Ok(Action::List),
         Some("wait") => Ok(Action::Wait),
         Some("write") => Ok(Action::Write),
         Some("stop") => Ok(Action::Stop),
-        Some(_) | None => Err("`action` must be `list`, `wait`, `write` or `stop`.".to_owned()),
+        Some(_) | None => Err(JobsError::ActionUnknown),
     }
 }
 
@@ -124,8 +130,8 @@ fn effects_of(action: Action) -> Effects {
 
 impl JobsTool {
     fn list(&self, arguments: &Map<String, Value>) -> Output {
-        if let Some(message) = unknown_if_named(&self.registry, arguments) {
-            return failed(message);
+        if let Some(error) = unknown_if_named(&self.registry, arguments) {
+            return error.output(true);
         }
         text_only(self.registry.list_text())
     }
@@ -133,89 +139,112 @@ impl JobsTool {
     fn wait(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
         let id = match job_id(arguments) {
             Ok(id) => id,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         let timeout_ms = match timeout_ms(arguments) {
             Ok(timeout_ms) => timeout_ms,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         match self.registry.wait(&id, timeout_ms, cancel) {
             Ok(answer) => answered(answer.text, answer.settle),
-            Err(()) => failed(unknown_message(&id)),
+            Err(()) => JobsError::UnknownJob {
+                id: JobId(id.clone()),
+            }
+            .output(true),
         }
     }
 
     fn write(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
         let id = match job_id(arguments) {
             Ok(id) => id,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         let input = match arguments.get("input") {
             Some(Value::String(input)) => input.as_str(),
-            Some(_) => return failed("`input` must be a string.".to_owned()),
-            None => return failed("Give what to type as `input`.".to_owned()),
+            Some(_) => return JobsError::InputNotString.output(true),
+            None => return JobsError::InputMissing.output(true),
         };
         let wait_ms = match write_wait(arguments, input.is_empty()) {
             Ok(wait_ms) => wait_ms,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         match self.registry.write(&id, input, wait_ms, cancel) {
             Ok(answer) => answered(answer.text, answer.settle),
-            Err(WriteError::NotRunning) => failed(unknown_message(&id)),
-            Err(WriteError::NotTty) => failed(format!("Job {id} was not started with `tty`.")),
-            Err(WriteError::Ended(status)) => failed(format!(
-                "Job `{id}` has ended: {}.",
-                registry::status_word(status)
-            )),
-            Err(WriteError::Io(err)) => {
-                let message = format!("Writing to job {id} failed: {err}.");
-                registry::failed(ErrorCode::ToolError, format!("{message}\n"), message)
+            Err(WriteError::NotRunning) => JobsError::UnknownJob {
+                id: JobId(id.clone()),
             }
+            .output(true),
+            Err(WriteError::NotTty) => JobsError::NotTty {
+                id: JobId(id.clone()),
+            }
+            .output(true),
+            Err(WriteError::Ended(status)) => JobsError::JobEnded {
+                id: JobId(id.clone()),
+                status: registry::status_word(status),
+            }
+            .output(true),
+            Err(WriteError::Io(source)) => JobsError::WriteFailed {
+                id: JobId(id.clone()),
+                source,
+            }
+            .output(true),
         }
     }
 
     fn stop(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
         let id = match job_id(arguments) {
             Ok(id) => id,
-            Err(message) => return failed(message),
+            Err(error) => return error.output(true),
         };
         match self.registry.stop(&id, cancel) {
             Ok(answer) => answered(answer.text, answer.settle),
-            Err(StopError::NotRunning) => failed(unknown_message(&id)),
-            Err(StopError::Ended(status)) => failed(format!(
-                "Job `{id}` has ended: {}.",
-                registry::status_word(status)
-            )),
+            Err(StopError::NotRunning) => JobsError::UnknownJob {
+                id: JobId(id.clone()),
+            }
+            .output(true),
+            Err(StopError::Ended(status)) => JobsError::JobEnded {
+                id: JobId(id.clone()),
+                status: registry::status_word(status),
+            }
+            .output(true),
         }
     }
 }
 
 /// `list` fails when it names a job the session does not have. With no
 /// `job_id` it lists every job.
-fn unknown_if_named(registry: &Registry, arguments: &Map<String, Value>) -> Option<String> {
+fn unknown_if_named(registry: &Registry, arguments: &Map<String, Value>) -> Option<JobsError> {
     match arguments.get("job_id") {
         None => None,
         Some(Value::String(id)) if registry.contains(id) => None,
-        Some(Value::String(id)) => Some(unknown_message(id)),
-        Some(_) => Some("`job_id` must be a string.".to_owned()),
+        Some(Value::String(id)) => Some(JobsError::UnknownJob {
+            id: JobId(id.clone()),
+        }),
+        Some(_) => Some(JobsError::JobIdNotString),
     }
 }
 
-fn job_id(arguments: &Map<String, Value>) -> Result<String, String> {
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
+fn job_id(arguments: &Map<String, Value>) -> Result<String, JobsError> {
     match arguments.get("job_id") {
         Some(Value::String(id)) => Ok(id.clone()),
-        Some(_) => Err("`job_id` must be a string.".to_owned()),
-        None => Err("Give the job as `job_id`.".to_owned()),
+        Some(_) => Err(JobsError::JobIdNotString),
+        None => Err(JobsError::JobIdMissing),
     }
 }
 
-fn timeout_ms(arguments: &Map<String, Value>) -> Result<u64, String> {
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
+fn timeout_ms(arguments: &Map<String, Value>) -> Result<u64, JobsError> {
     match arguments.get("timeout_ms") {
-        None => Err("Give how long to wait as `timeout_ms`.".to_owned()),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .ok_or_else(|| "`timeout_ms` must be an integer of 0 or more.".to_owned()),
-        Some(_) => Err("`timeout_ms` must be an integer of 0 or more.".to_owned()),
+        None => Err(JobsError::TimeoutMissing),
+        Some(Value::Number(number)) => number.as_u64().ok_or(JobsError::TimeoutNotInteger),
+        Some(_) => Err(JobsError::TimeoutNotInteger),
     }
 }
 
@@ -230,25 +259,25 @@ const WRITE_WAIT_DEFAULT_MS: u64 = 250;
 const WRITE_WAIT_EMPTY_MS: u64 = 5_000;
 
 /// How long `write` waits for output. Empty `input` raises it to the floor.
-fn write_wait(arguments: &Map<String, Value>, empty: bool) -> Result<u64, String> {
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
+fn write_wait(arguments: &Map<String, Value>, empty: bool) -> Result<u64, JobsError> {
     let asked = match arguments.get("timeout_ms") {
         None => WRITE_WAIT_DEFAULT_MS,
         Some(_) => timeout_ms(arguments)?,
     };
     if asked > WRITE_WAIT_MAX_MS {
-        return Err(format!(
-            "`timeout_ms` for `write` is at most {WRITE_WAIT_MAX_MS}."
-        ));
+        return Err(JobsError::WriteWaitTooLong {
+            max: WRITE_WAIT_MAX_MS,
+        });
     }
     Ok(if empty {
         asked.max(WRITE_WAIT_EMPTY_MS)
     } else {
         asked
     })
-}
-
-pub(crate) fn unknown_message(id: &str) -> String {
-    format!("No job has id `{id}`.")
 }
 
 fn text_only(text: String) -> Output {
@@ -264,10 +293,6 @@ fn answered(text: String, settle: Option<contract::tool::Settle>) -> Output {
         settle,
         ..Output::default()
     }
-}
-
-fn failed(message: String) -> Output {
-    registry::failed(ErrorCode::InvalidArguments, format!("{message}\n"), message)
 }
 
 #[cfg(test)]

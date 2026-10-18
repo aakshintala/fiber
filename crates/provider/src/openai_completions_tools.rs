@@ -25,6 +25,15 @@ pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<M
     sorted
         .into_iter()
         .map(|tool| {
+            // A hosted search is the vendor's own tool alone, with its
+            // fixed settings and no `function` wrapper (`docs/tools.md`,
+            // "Hosted by the provider").
+            if tool.hosted.as_deref() == Some("openrouter:web_search") {
+                return crate::wire::object(json!({
+                    "type": "openrouter:web_search",
+                    "parameters": {"max_results": 5, "max_uses": 5},
+                }));
+            }
             let mut strict = strict::fits(&tool.input_schema);
             if compat.anthropic {
                 strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);

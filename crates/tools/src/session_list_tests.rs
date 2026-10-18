@@ -1,4 +1,5 @@
 use super::*;
+use contract::ErrorCode;
 use contract::events::SessionStatus;
 use contract::provider::ToolDefinition;
 use contract::sessions::Running;

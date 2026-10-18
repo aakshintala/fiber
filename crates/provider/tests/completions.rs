@@ -23,11 +23,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+    CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
@@ -1883,4 +1883,279 @@ fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
             image_url("YWJjZA=="),
         ]})
     );
+}
+
+#[test]
+fn a_required_nullable_property_uses_strict_mode() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = vec![ToolDefinition {
+        input_schema: json!({
+            "type": "object",
+            "properties": {"offset": {"type": ["integer", "null"]}},
+            "required": ["offset"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    }];
+    run(Box::new(
+        Completions::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["tools"][0]["function"]["strict"],
+        true
+    );
+}
+
+fn hosted_search_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("openrouter:web_search".into()),
+    }
+}
+
+#[test]
+fn hosted_search_tool_is_sent_in_its_own_shape() {
+    let tools = vec![hosted_search_tool()];
+    let wired: Vec<Value> = Completions::new(Endpoint::default())
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let want = vec![json!({"type": "openrouter:web_search",
+        "parameters": {"max_results": 5, "max_uses": 5}})];
+    assert_eq!(wired, want);
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut sent = request();
+    sent.tools = tools;
+    run(Box::new(Completions::new(endpoint(&server)).request(&sent)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(want));
+}
+
+fn web_search_recording() -> Vec<u8> {
+    include_bytes!("recordings/openrouter-web-search.sse").to_vec()
+}
+
+fn annotation(url: &str) -> Value {
+    json!({"type": "url_citation",
+        "url_citation": {"url": url, "title": url,
+            "start_index": 0, "end_index": 1}})
+}
+
+fn annotated_chunk(annotations: Value) -> Value {
+    chunk(json!({"content": "a", "annotations": annotations}), None)
+}
+
+fn usage_with_searches(searches: Option<u64>) -> Value {
+    let mut details = json!({});
+    if let Some(n) = searches {
+        details["server_tool_use_details"] = json!({"web_search_requests": n});
+    }
+    json!({"id": "gen-1", "choices": [], "usage": details})
+}
+
+fn hosted_calls(reply: &Reply) -> Vec<&contract::provider::HostedCall> {
+    reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Text(_)
+            | ReplyAction::Reasoning(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::HostedResult { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn hosted_search_reads_annotations_as_one_call() {
+    let bytes = web_search_recording();
+    let (reply, _) = decoded(&bytes);
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    assert_eq!(reply.web_searches, Some(2));
+    let hosted = hosted_calls(&reply);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(hosted.call.arguments, json!({}));
+    let annotations = json!([{"type": "url_citation",
+        "url_citation": {"url": "https://rust-lang.org/",
+            "title": "Rust Programming Language",
+            "start_index": 95, "end_index": 136}}]);
+    assert_eq!(
+        hosted.completed.provider_item.as_ref().unwrap(),
+        &annotations
+    );
+    assert_eq!(hosted.completed.status, CallStatus::Completed);
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://rust-lang.org/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.hosts_surfaced,
+        vec!["https://rust-lang.org/"]
+    );
+    assert_eq!(
+        reply.text(),
+        "The latest stable version of the Rust compiler is **Rust 1.99.1** \
+         (as shown on rust-lang.org). ([rust-lang.org](https://rust-lang.org/))"
+    );
+    // The hosted call comes before the text.
+    let hosted_at = reply
+        .actions
+        .iter()
+        .position(|a| matches!(a, ReplyAction::Hosted(_)))
+        .unwrap();
+    let text_at = reply
+        .actions
+        .iter()
+        .position(|a| matches!(a, ReplyAction::Text(_)))
+        .unwrap();
+    assert!(hosted_at < text_at);
+
+    // Annotations split across chunks append in order, and a repeated URL
+    // is kept once, in the order it first arrived.
+    let chunks = vec![
+        annotated_chunk(json!([annotation("https://a.example/")])),
+        annotated_chunk(json!([
+            annotation("https://a.example/"),
+            annotation("https://b.example/")
+        ])),
+        chunk(json!({"content": ""}), Some("stop")),
+        usage_with_searches(None),
+    ];
+    let (split, _) = decoded(&stream(&chunks));
+    let split = split.unwrap();
+    let hosted = hosted_calls(&split);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", split.actions);
+    };
+    assert_eq!(
+        hosted.completed.provider_item.as_ref().unwrap(),
+        &json!([
+            annotation("https://a.example/"),
+            annotation("https://a.example/"),
+            annotation("https://b.example/")
+        ])
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://a.example/\nhttps://b.example/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.hosts_surfaced,
+        vec!["https://a.example/", "https://b.example/"]
+    );
+}
+
+#[test]
+fn search_count_comes_from_server_tool_use_details() {
+    for (searches, want) in [
+        (Some(2), Some(2)),
+        (Some(1), Some(1)),
+        (Some(0), None),
+        (None, None),
+    ] {
+        let chunks = vec![
+            chunk(json!({"content": "hi"}), Some("stop")),
+            usage_with_searches(searches),
+        ];
+        let (reply, _) = decoded(&stream(&chunks));
+        assert_eq!(reply.unwrap().web_searches, want, "{searches:?}");
+    }
+}
+
+#[test]
+fn reply_without_annotations_has_no_hosted_call() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(json!({"content": "hi"}), Some("stop")),
+        usage(10, 4, 3),
+    ]));
+    let reply = reply.unwrap();
+    assert!(hosted_calls(&reply).is_empty());
+    assert_eq!(reply.web_searches, None);
+    assert_eq!(reply.text(), "hi");
+}
+
+#[test]
+fn non_citation_annotations_yield_no_hosted_call() {
+    let chunks = vec![
+        annotated_chunk(json!([
+            {"type": "file_citation", "file_citation": {"file_id": "f-1"}},
+            {"type": "other", "text": "x"},
+        ])),
+        chunk(json!({"content": "hi"}), Some("stop")),
+        usage_with_searches(None),
+    ];
+    let (reply, _) = decoded(&stream(&chunks));
+    let reply = reply.unwrap();
+    assert!(hosted_calls(&reply).is_empty());
+    assert_eq!(reply.text(), "ahi");
+}
+
+/// How long the live search may take.
+const LIVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One live hosted search through OpenRouter. The fixture
+/// `recordings/openrouter-web-search.sse` is the probe's reply, copied from
+/// `research/web-tools/openrouter-web-search-probe-2026-10-18.json`. This test
+/// is `#[ignore]`d and panics without
+/// `FIBER_LIVE_OPENROUTER_KEY`; it never runs in CI. The call runs on a
+/// thread bounded by a channel deadline instead of hanging the test.
+#[test]
+#[ignore = "live/needs FIBER_LIVE_OPENROUTER_KEY; run with --run-ignored only"]
+fn live_openrouter_web_search_completes_a_turn() {
+    let Ok(key) = std::env::var("FIBER_LIVE_OPENROUTER_KEY") else {
+        panic!("the live openrouter test needs FIBER_LIVE_OPENROUTER_KEY set");
+    };
+    let endpoint = Endpoint {
+        provider: "openrouter".into(),
+        model: "openai/gpt-5.2".into(),
+        base_url: "https://openrouter.ai/api/v1".into(),
+        key: Some(contract::Secret::new(key)),
+        direct: true,
+        ..Endpoint::default()
+    };
+    let request = ModelRequest {
+        tools: vec![hosted_search_tool()],
+        conversation: vec![Input::User {
+            text: "Search the web: what is the latest stable version of the Rust \
+                     compiler? Answer in one sentence and cite the source."
+                .into(),
+            images: Vec::new(),
+        }],
+        ..request()
+    };
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut deltas = Vec::new();
+        let reply = Completions::new(endpoint)
+            .request(&request)
+            .run(&mut |d| deltas.push(d));
+        done.send(reply).unwrap();
+    });
+    let reply = fakes::Deadline::after(LIVE_DEADLINE)
+        .recv(&finished)
+        .expect("the live search never returned")
+        .expect("the live search failed");
+    assert_eq!(reply.finish, Finish::Completed);
+    let hosted = hosted_calls(&reply);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    assert!(!hosted.completed.hosts_surfaced.is_empty());
 }

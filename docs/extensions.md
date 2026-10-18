@@ -237,7 +237,7 @@ extension sends the same calls as messages.
 ### Registering
 
 ```
-fiber.tool(name, { description, input_schema, effects, timeout, run })
+fiber.tool(name, { description, input_schema, effects, timeout, run, keep? })
 fiber.provider(name, { models, quota, credential, sign, cost })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
@@ -256,7 +256,12 @@ and an error fails the call `tool_error` before it runs. `run` returns a
 string, one text part, or `{ content, details?, error = { code, message }?,
 control?, hosts_surfaced? }`, where `control` and `hosts_surfaced` take what
 any tool may set (`docs/tools.md`, "What a result carries"). A raised error fails the call
-`tool_error` with its message. When two extensions register one tool name,
+`tool_error` with its message. `keep = { head, tail }` is the byte counts of the start and
+of the end of a long result the model is sent: `head` maps to `Bound.start` and `tail` to
+`Bound.end`. Either may be omitted (0), both are whole numbers, and at least one is above 0.
+Absent `keep` means the first 16 KiB. It is a value, not a function of the call. Any other key,
+including `start` and `end`, fails registration with a message naming it. A configured `tools."<name>".max_result_bytes` still wins
+(`docs/tools.md`, "Bounded results"). When two extensions register one tool name,
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
 
@@ -739,6 +744,85 @@ A mismatch, missing reply or unused OAuth entry fails the case, as for
 A package with no case files fails the command. An invalid package path is a
 usage error. The runner reports each case and exits non-zero if any case fails
 (`docs/invocation.md`, "Commands and flags").
+
+### Testing a tool that executes
+
+A call to a tool that declares `executes` goes to the reviewer, as every
+reviewed call does (`docs/permissions.md`, "The reviewer"). A case has no
+field that approves a call, so it approves one through configuration:
+`config` sets `reviewer.model` to `scripted/script.json`, and the script's
+first step carries the reviewer's reply.
+
+A case writes exactly one file into its workspace, the session script, so the
+reviewer reads the same `script.json` from its own step 1. The allow case's
+first step therefore carries both halves: `"text": "allow"` answers the
+reviewer's first stage, and the `tool_calls` entry is the session's call. The
+reviewer takes the text and never sees a tool call, because a review request
+carries no tools. The expected stream records the reviewer's verdict as
+`permission_resolved` with `decided_by: reviewer` and `decision: allow`, and
+the call runs to `tool_call_completed` with `status: completed`.
+
+With no `reviewer.model` the call cannot be allowed: a `notice` with code
+`no_model` is written and the failure escalates (`docs/permissions.md`,
+"How it runs"). The escalation goes to a person as `permission_requested`,
+so a session case with no reviewer waits for an answer instead of finishing.
+Where no person can answer, such as a headless run (`docs/permissions.md`,
+"Headless"), the same failure denies the call with `decided_by:
+no_reviewer` and it never runs, and `tool_call_completed` has `status:
+denied`.
+
+The reviewer's first stage answers `allow` or `check`; a `check` goes to a
+second stage whose reply is `allow` or `block` plus a reason
+(`docs/permissions.md`, "Its verdict"). The case below answers the first
+stage with `allow`.
+
+The `launch` tool declares `executes` and returns without a host call:
+
+```lua
+fiber.tool("launch", {
+  description = "Launches the job.",
+  input_schema = { type = "object" },
+  timeout = 2000,
+  effects = { effects = { "executes" }, reversible = false },
+  run = function() return "launched" end
+})
+```
+
+`tests/launch-allowed.json` sets the reviewer through `config` and expects
+the allowed stream:
+
+```json
+{
+  "script": {"steps": [{"text": "allow", "tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Launched."}]},
+  "prompt": "launch it",
+  "config": {"reviewer": {"model": "scripted/script.json"}},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "allow"}},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "usage_recorded"},
+    {"kind": "permission_resolved", "payload": {"decided_by": "reviewer", "decision": "allow"}},
+    {"kind": "tool_call_started"},
+    {"kind": "tool_call_completed", "payload": {"status": "completed"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Launched."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
 
 ## Hooks
 
@@ -1304,7 +1388,7 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - `require` loads files from your extension's own directory only. To use
   someone else's Lua, vendor a copy into your directory or depend on the
   extension that holds it.
-- Give your extension a version tag for every release. Dependents name a
+- Give your extension a version tag for every release (see [Versions](#versions)). Dependents name a
   minimum version, and Fiber installs nothing newer than someone asked for.
 - JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`.
 - In Lua, do not reach for `io`, `os`, `fetch`, sockets or environment
@@ -1383,6 +1467,8 @@ later, and 1.9 is the newest, Fiber installs 1.4. The same inputs always give
 the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
+A git address a person installs by name gets the repository's newest version tag. A repository with no version tag cannot be installed from its git address: the install fails with `extension_not_found`. A local path install needs no tag.
+
 A version a person installed or updated by name counts as one more minimum,
 and it stays until they remove that extension. So `fiber extension update <name>` on a
 dependency keeps the newer version, and the same installed set always gives
@@ -1417,6 +1503,8 @@ for 300 seconds, fails with `fetch_failed`.
 | `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
 | `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |
+
+An install from a git address needs a version tag (see [Versions](#versions)).
 
 In a terminal, `install` and `update` show a summary and ask before going
 ahead. The summary is the one in

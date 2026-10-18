@@ -1735,7 +1735,7 @@ fn opening_a_row_by_key_calls_on_attach() {
     let (reader, subscribe) = command(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(subscribe["args"]["level"], "full");
+    assert_eq!(subscribe["args"]["level"], "summary");
     let (_, commands) = command(reader, "the commands command");
     assert_eq!(commands["command"], "commands");
     assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
