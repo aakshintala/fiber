@@ -258,6 +258,7 @@ fn folding(preview: &[Line], fold: &[Line], last: u64) -> App {
         fold: Box::new(folded(fold)),
         busy: None,
         held: false,
+        landing: false,
     };
     app.passes
         .push((id(SESSION), Pass::Until(contract::Seq(last))));
@@ -444,6 +445,100 @@ fn landing_clears_the_selection_and_remaps_focus() {
     assert_eq!(app.focused(), None);
 }
 
+/// A held landing keeps the second copy of a repeated line: the anchor
+/// is the top row's `seq`, applied after the unfreeze. The fold carries
+/// the same lines with a longer first reply, so the later pages start
+/// on later rows: matching on text would point at the first copy, and
+/// jumping while frozen would leave the stale row, so both defects fail
+/// this test.
+#[test]
+fn a_held_landing_keeps_the_second_copy_by_seq() {
+    // Twenty-three turns, six lines each: three pages, with one reply
+    // text shared by turns 18 and 19. The top sits on the second copy,
+    // with turns below so the jump never clamps at the bottom.
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    for n in 0..23 {
+        let text = if n == 18 || n == 19 {
+            "same reply".to_owned()
+        } else {
+            format!("reply {n}")
+        };
+        preview.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &preview {
+        app.on_line(line.clone());
+    }
+    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    // Following keeps a suffix resident: the absolute row adds the
+    // rows trimmed above the resident window.
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let copies: Vec<usize> = resident
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (line, _))| line.to_string().contains("same reply"))
+        .map(|(at, _)| start + at)
+        .collect();
+    assert_eq!(copies.len(), 2, "two copies draw");
+    app.jump(copies[1]);
+    assert_eq!(app.attached_screen().top(), Some(copies[1]));
+    // Only the second copy shows, on the top row: the first sits
+    // above the window.
+    let buf = rendered(&app);
+    let shown = crate::view::text(&buf);
+    assert_eq!(shown.matches("same reply").count(), 1, "{shown}");
+    let area = app.conversation_area();
+    let first: String = (area.left()..area.right())
+        .map(|x| buf.cell((x, area.top())).map_or(" ", |cell| cell.symbol()))
+        .collect();
+    assert!(first.contains("same reply"), "{shown}");
+    // The same lines with a longer first reply: the splits stay on the
+    // same lines, but every later page starts on a later row.
+    let mut then = 0u64;
+    let mut fold_lines = turn(&mut then, "a_m0", &"x".repeat(200));
+    fold_lines.extend(preview.iter().skip(6).cloned());
+    // The fold wraps at the attached width, so its pages split on the
+    // same lines with the same rows inside each page.
+    let width = app.attached_screen().pages().wrap_width();
+    let mut fold = crate::window::Pages::new(width);
+    for line in &fold_lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&preview)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.land(fold, true);
+    assert!(
+        !app.attached_screen().frozen(),
+        "landing unfreezes before the jump"
+    );
+    let top = app
+        .attached_screen()
+        .top()
+        .unwrap_or_else(|| panic!("a top row"));
+    assert_ne!(top, copies[1], "the jump applies after the unfreeze");
+    // The first copy scrolled off above: only the second shows, on the
+    // top row. A text match would sit on the first copy, and a frozen
+    // jump would leave both copies showing.
+    let buf = rendered(&app);
+    let shown = crate::view::text(&buf);
+    assert_eq!(shown.matches("same reply").count(), 1, "{shown}");
+    let area = app.conversation_area();
+    let first: String = (area.left()..area.right())
+        .map(|x| buf.cell((x, area.top())).map_or(" ", |cell| cell.symbol()))
+        .collect();
+    assert!(first.contains("same reply"), "{shown}");
+}
+
 #[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);
@@ -504,7 +599,10 @@ fn reopening_resets_the_second_pages_and_keeps_the_screen() {
         held,
         "the preview keeps its lines"
     );
-    assert!(!app.landing);
+    assert!(matches!(
+        app.overlay,
+        Overlay::Folding { landing: false, .. }
+    ));
 }
 
 #[test]
@@ -650,6 +748,7 @@ fn go_home_and_leave_mid_pass_end_the_overlay() {
         fold: Box::new(folded(&preview)),
         busy: None,
         held: false,
+        landing: false,
     };
     app.passes
         .push((id(SESSION), Pass::Until(contract::Seq(last))));
@@ -979,6 +1078,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
         fold: Box::new(fold),
         busy: None,
         held: false,
+        landing: false,
     };
     app.land_pass();
     assert!(matches!(app.overlay, Overlay::None));
@@ -1098,7 +1198,7 @@ fn reads_follow_the_answer_window_at_the_edges() {
         assert_eq!(asked, expected, "{count} lines");
         assert!(tail.start_reached(), "{count} lines");
         assert_eq!(
-            tail.from_turn().map(|lines| lines.len()),
+            tail.turn_lines().map(|lines| lines.len()),
             Some(many),
             "{count} lines"
         );
@@ -1132,7 +1232,7 @@ fn reads_stop_when_the_held_lines_fill_the_screen() {
     tail.prepend(all)
         .unwrap_or_else(|_| panic!("a contiguous answer"));
     let from = tail
-        .from_turn()
+        .turn_lines()
         .unwrap_or_else(|| panic!("a turn start in the window"));
     assert_eq!(
         from.first().map(|line| line.kind.as_str()),
@@ -1211,7 +1311,9 @@ fn a_long_turn_reads_until_the_screen_is_full_with_no_cap() {
         }
     }
     assert_eq!(reads, 3, "256, 256 and 188 lines");
-    let from = tail.from_turn().unwrap_or_else(|| panic!("the turn start"));
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the turn start"));
     assert_eq!(from.len(), 700);
     assert_eq!(
         from.first().map(|line| line.kind.as_str()),
@@ -1227,7 +1329,7 @@ fn an_empty_log_ends_with_nothing_held() {
     tail.prepend(Vec::new())
         .unwrap_or_else(|_| panic!("an empty answer"));
     assert!(tail.start_reached());
-    assert!(tail.from_turn().is_none());
+    assert!(tail.turn_lines().is_none());
 }
 
 /// One line at seq zero starts at the beginning and ends the read.
@@ -1238,7 +1340,7 @@ fn a_log_of_one_line_starts_at_zero() {
     tail.prepend(plain(1))
         .unwrap_or_else(|_| panic!("one line"));
     assert!(tail.start_reached());
-    assert_eq!(tail.from_turn().map(|lines| lines.len()), Some(1));
+    assert_eq!(tail.turn_lines().map(|lines| lines.len()), Some(1));
 }
 
 /// An answer that leaves a gap, or a line carrying no seq, is refused:
@@ -1370,7 +1472,7 @@ fn reads_stop_at_the_turn_start_that_fills_the_screen() {
         // The newest turn starts inside the first answer; lines cut
         // before its start never count.
         let from = tail
-            .from_turn()
+            .turn_lines()
             .unwrap_or_else(|| panic!("the newest turn start"));
         assert_eq!(
             from.first().map(|line| line.kind.as_str()),
@@ -1419,7 +1521,7 @@ fn turn_start_tail(texts: usize) -> crate::app::overlay::Tail {
 fn turn_start_total(texts: usize) -> usize {
     let tail = turn_start_tail(texts);
     let from = tail
-        .from_turn()
+        .turn_lines()
         .unwrap_or_else(|| panic!("the newest turn start"));
     let probe = app();
     let mut fresh = probe.attached_screen().pages().fresh();
@@ -1449,7 +1551,7 @@ fn a_turn_longer_than_one_answer_reads_until_its_start() {
     let mut reads = 0;
     loop {
         let mut fresh = probe.attached_screen().pages().fresh();
-        if let Some(from) = tail.from_turn() {
+        if let Some(from) = tail.turn_lines() {
             for line in from {
                 fresh.apply(line);
             }
@@ -1464,7 +1566,9 @@ fn a_turn_longer_than_one_answer_reads_until_its_start() {
         reads += 1;
     }
     assert_eq!(reads, 3, "256, 256 and 248 lines");
-    let from = tail.from_turn().unwrap_or_else(|| panic!("the turn start"));
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the turn start"));
     assert_eq!(from.len(), 700);
     assert_eq!(
         from.first().map(|line| line.kind.as_str()),
@@ -1501,7 +1605,7 @@ fn a_failed_read_keeps_whole_turns_or_nothing() {
     tail.prepend(first)
         .unwrap_or_else(|_| panic!("the first answer"));
     let from = tail
-        .from_turn()
+        .turn_lines()
         .unwrap_or_else(|| panic!("a turn start in the window"));
     let mut fresh = app.attached_screen().pages().fresh();
     for line in from {

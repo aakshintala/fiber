@@ -1017,9 +1017,6 @@ impl Pages {
         self.count(at);
     }
 
-    /// Ctrl+O: closes every ledger when all on the resident pages are open,
-    /// else opens them all, and sets the default the dropped pages and
-    /// groups made later take. The dropped pages are counted again.
     /// An empty conversation at this one's wrap width, zone, ledger
     /// default and image sizing; nothing else: no overrides, shells or
     /// summaries, and the open page's recount not held.
@@ -1147,8 +1144,8 @@ impl Pages {
             .map(target_id)
     }
 
-    /// The action of the thought `id` names, anywhere resident.
-    fn thought_action(&self, id: usize) -> Option<String> {
+    /// Every resident thought's id and action, in fold order.
+    fn thoughts(&self) -> impl Iterator<Item = (usize, String)> {
         self.turns()
             .flat_map(Turn::groups)
             .flat_map(|group| {
@@ -1157,22 +1154,21 @@ impl Pages {
                     .iter()
                     .flat_map(|section| section.thoughts.iter())
             })
-            .find(|thought| thought.id == id)
-            .map(|thought| thought.action.clone())
+            .map(|thought| (thought.id, thought.action.clone()))
+    }
+
+    /// The action of the thought `id` names, anywhere resident.
+    fn thought_action(&self, id: usize) -> Option<String> {
+        self.thoughts()
+            .find(|(at, _)| *at == id)
+            .map(|(_, action)| action)
     }
 
     /// The id the fold gives the thought `action` names, if it folds it.
     fn find_thought(&self, action: &str) -> Option<usize> {
-        self.turns()
-            .flat_map(Turn::groups)
-            .flat_map(|group| {
-                group
-                    .sections
-                    .iter()
-                    .flat_map(|section| section.thoughts.iter())
-            })
-            .find(|thought| thought.action == action)
-            .map(|thought| thought.id)
+        self.thoughts()
+            .find(|(_, name)| name == action)
+            .map(|(id, _)| id)
     }
 
     /// The ordinal of the reply `id` names among the resident replies.
@@ -1219,6 +1215,9 @@ impl Pages {
             .flat_map(|part| part.turns.iter())
     }
 
+    /// Ctrl+O: closes every ledger when all on the resident pages are open,
+    /// else opens them all, and sets the default the dropped pages and
+    /// groups made later take. The dropped pages are counted again.
     pub(crate) fn toggle_ledgers(&mut self) {
         let open = {
             let mut ledgers = self

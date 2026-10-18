@@ -475,8 +475,7 @@ impl Paging<'_> {
                 .unwrap_or(u64::MAX);
             // Without `from_seq` the doors answer the last lines up to
             // `to_seq`, or up to the latest, at most 256; on an empty
-            // log, with none. A present `from_seq` answers exactly as
-            // before.
+            // log, with none.
             let held = match from_opt {
                 Some(from) => self.range_lines(from, to)?,
                 None => {

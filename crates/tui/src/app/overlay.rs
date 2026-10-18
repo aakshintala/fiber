@@ -33,6 +33,8 @@ pub(super) enum Overlay {
         busy: Option<bool>,
         /// Whether the open kept the screen's rows for a reconnect.
         held: bool,
+        /// The pass reached its boundary; the next line lands it.
+        landing: bool,
     },
     /// The pass ended abnormally; lines at or below `last` fold nowhere.
     Kept { last: Option<Seq> },
@@ -105,11 +107,7 @@ impl Tail {
     /// The preview's lines: the held lines from the earliest turn
     /// start, never cut inside a turn; the whole held run when its
     /// first seq is zero; none when neither holds.
-    #[allow(
-        clippy::wrong_self_convention,
-        reason = "the plan's interface names this turn-start view from_turn"
-    )]
-    pub(super) fn from_turn(&self) -> Option<&[Envelope]> {
+    pub(super) fn turn_lines(&self) -> Option<&[Envelope]> {
         if self.lines.first().and_then(|line| line.seq) == Some(Seq(0)) {
             return Some(&self.lines);
         }
@@ -126,7 +124,7 @@ impl Tail {
         self.start
             || self.ended
             || self
-                .from_turn()
+                .turn_lines()
                 .is_some_and(|_| fresh.index().total() >= height)
     }
 
@@ -147,7 +145,6 @@ impl App {
     /// resize.
     pub(super) fn end_overlay(&mut self) {
         self.overlay = Overlay::None;
-        self.landing = false;
         self.attached_screen_mut().set_frozen(false);
     }
 

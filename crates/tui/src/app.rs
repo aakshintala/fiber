@@ -224,8 +224,6 @@ pub(crate) struct App {
     passes: Vec<(SessionId, Pass)>,
     /// What an open holds over the attached screen.
     overlay: overlay::Overlay,
-    /// The pass reached its boundary; the next line lands it.
-    landing: bool,
     /// History command ids whose late answers are discarded after reopening.
     abandoned_history: BTreeSet<String>,
     /// The launch directory `start` names.
@@ -331,7 +329,6 @@ impl App {
         Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
-            landing: false,
             abandoned_history: BTreeSet::new(),
             workspace,
             home: None,
@@ -528,7 +525,10 @@ impl App {
         lines.extend(self.home_outgoing());
         lines.extend(self.sessions_outgoing());
         self.reconcile_attention();
-        if std::mem::take(&mut self.landing) {
+        if matches!(&self.overlay, Overlay::Folding { landing: true, .. }) {
+            if let Overlay::Folding { landing, .. } = &mut self.overlay {
+                *landing = false;
+            }
             self.land_pass();
         }
         self.settle();
@@ -558,7 +558,7 @@ impl App {
             return None;
         }
         let mut fresh = self.attached_screen().pages().fresh();
-        if let Some(lines) = tail.from_turn() {
+        if let Some(lines) = tail.turn_lines() {
             for line in lines {
                 fresh.apply(line);
             }
@@ -611,7 +611,7 @@ impl App {
         };
         let mut preview = self.attached_screen().pages().fresh();
         let mut busy = None;
-        if let Some(lines) = tail.from_turn() {
+        if let Some(lines) = tail.turn_lines() {
             for line in lines {
                 let applied = preview.apply(line);
                 if applied.busy.is_some() {
@@ -646,28 +646,64 @@ impl App {
         }
         let busy = *busy;
         let held = *held;
+        let fold = self.fresh_fold();
+        self.overlay = Overlay::Folding {
+            session: session.clone(),
+            fold,
+            busy,
+            held,
+            landing: false,
+        };
+    }
+
+    /// A fresh second `Pages` for the pass, held while a batch is open.
+    fn fresh_fold(&self) -> Box<Pages> {
         let mut fold = self.attached_screen().pages().fresh();
         if self.screen.pages().holding() {
             fold.hold();
         }
-        self.overlay = Overlay::Folding {
-            session: session.clone(),
-            fold: Box::new(fold),
-            busy,
-            held,
-        };
+        Box::new(fold)
+    }
+
+    /// The preview's last folded `seq`, if any line was held.
+    fn preview_last(&self) -> Option<Seq> {
+        self.attached_screen()
+            .pages()
+            .index()
+            .pages()
+            .iter()
+            .filter(|page| page.lines > 0)
+            .map(|page| page.last_seq)
+            .max()
     }
 
     /// The pages the session's line folds into: the overlay's second
-    /// `Pages` while its pass runs, else the attached screen's.
+    /// `Pages` while its pass runs, else the attached screen's. The
+    /// guard and the reborrow are one shape test split for the borrow
+    /// checker: no `folding` check, no `unreachable`.
     fn fold_pages(&mut self, session: &SessionId) -> &mut Pages {
-        if self.folding(session) {
-            let Overlay::Folding { fold, .. } = &mut self.overlay else {
-                unreachable!("folding without a fold");
-            };
-            fold
-        } else {
-            self.attached_screen_mut().pages_mut()
+        if let Overlay::Folding {
+            session: folding,
+            fold,
+            ..
+        } = &mut self.overlay
+            && folding == session
+        {
+            return fold;
+        }
+        if let Some(open) = self.items.open.as_mut()
+            && let Some(stashed) = open.stashed.as_mut()
+        {
+            return stashed.pages_mut();
+        }
+        self.screen.pages_mut()
+    }
+
+    /// Marks the folding pass to land at its boundary: the next line
+    /// ending the pass swaps the fold in at the held anchor.
+    fn mark_landing(&mut self) {
+        if let Overlay::Folding { landing, .. } = &mut self.overlay {
+            *landing = true;
         }
     }
 
@@ -681,6 +717,7 @@ impl App {
             fold,
             busy,
             held,
+            ..
         } = taken
         else {
             self.end_overlay();
@@ -690,12 +727,13 @@ impl App {
             self.end_overlay();
             return;
         }
-        let fresh = self.attached_screen().pages().fresh();
+        let fresh = self.fresh_fold();
         self.overlay = Overlay::Folding {
             session,
-            fold: Box::new(fresh),
+            fold: fresh,
             busy,
             held,
+            landing: false,
         };
         self.land(*fold, held);
     }
@@ -703,62 +741,57 @@ impl App {
     /// Swaps the pass's second `Pages` in at its boundary: the preview's
     /// opens carry, focus remaps to the same call or clears, the
     /// selection clears, the kept busy applies, and the overlay ends. A
-    /// held landing keeps the preview's place: the top row's text is
-    /// read before the swap, and after it the top is the first row with
-    /// that text, or the end when the fold lacks it.
+    /// held landing keeps the preview's place: the page holding the top
+    /// row is read by its first `seq` before the swap, and after the
+    /// unfreeze the top is that page's start plus the held offset, or
+    /// the end when the fold lacks that `seq`.
     fn land(&mut self, mut fold: Pages, held: bool) {
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
         self.focus = focus.and_then(|id| self.remap_focus(id, &fold));
         self.clear_selection();
         let anchor = held.then(|| self.top_anchor()).flatten();
+        let busy = match &self.overlay {
+            Overlay::Folding { busy, .. } => *busy,
+            Overlay::None | Overlay::Shown { .. } | Overlay::Kept { .. } | Overlay::Reading(_) => {
+                None
+            }
+        };
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
-        if let Some((text, piece)) = anchor {
-            match self.find_anchor(&text, piece) {
+        self.end_overlay();
+        if let Some((seq, offset)) = anchor {
+            match self.find_anchor(seq, offset) {
                 Some(row) => self.jump(row),
                 None => self.attached_screen_mut().follow(),
             }
         }
-        if let Overlay::Folding {
-            busy: Some(busy), ..
-        } = &self.overlay
-        {
-            self.set_busy(*busy);
+        if let Some(busy) = busy {
+            self.set_busy(busy);
         }
-        self.end_overlay();
     }
 
-    /// The preview's top row as its line's text and the piece within
-    /// it: the anchor a held landing keeps. None while following.
-    fn top_anchor(&self) -> Option<(String, usize)> {
+    /// The page holding the preview's top row, by its first `seq` and
+    /// the row's offset in the page: the anchor a held landing keeps.
+    /// None while following or when the page holds no line.
+    fn top_anchor(&self) -> Option<(Seq, usize)> {
         let top = self.attached_screen().top()?;
         let pages = self.attached_screen().pages();
-        let shown = pages.shown(0, pages.index().total());
-        let mut row = 0;
-        for (line, rows, _) in &shown.lines {
-            let rows = (*rows).max(1);
-            if row + rows > top {
-                return Some((line.to_string(), top - row));
-            }
-            row += rows;
+        let (at, offset) = pages.index().locate(top)?;
+        let page = pages.index().pages().get(at)?;
+        if page.lines == 0 {
+            return None;
         }
-        None
+        Some((page.first_seq, offset))
     }
 
-    /// The first row whose line reads `text`: the held landing's top,
-    /// keeping the piece within the line when wrapping allows.
-    fn find_anchor(&self, text: &str, piece: usize) -> Option<usize> {
+    /// The held landing's top: the page holding `seq`, at the held
+    /// offset within it, keeping the piece within the line when
+    /// wrapping allows. None when the fold lacks `seq`.
+    fn find_anchor(&self, seq: Seq, offset: usize) -> Option<usize> {
         let pages = self.attached_screen().pages();
-        let shown = pages.shown(0, pages.index().total());
-        let mut row = 0;
-        for (line, rows, _) in &shown.lines {
-            let rows = (*rows).max(1);
-            if line.to_string() == text {
-                return Some(row + piece.min(rows - 1));
-            }
-            row += rows;
-        }
-        None
+        let at = pages.index().page_of(seq)?;
+        let rows = pages.index().pages().get(at)?.rows.max(1);
+        Some(pages.index().start(at) + offset.min(rows.saturating_sub(1)))
     }
 
     /// Remaps focus across the swap: a line target follows its call by
@@ -834,7 +867,7 @@ impl App {
                 }
                 if waited && !self.until_waited(&line.session_id) && self.folding(&line.session_id)
                 {
-                    self.landing = true;
+                    self.mark_landing();
                 }
                 if line.kind == "command_accepted"
                     && let Some(accepted) = read!(line, CommandAccepted)
@@ -865,23 +898,29 @@ impl App {
                         if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));
                         }
-                        if self.folding(&session) {
-                            let Overlay::Folding { busy, held, .. } =
-                                std::mem::replace(&mut self.overlay, Overlay::None)
-                            else {
-                                unreachable!("folding without a fold");
-                            };
-                            let mut fold = self.attached_screen().pages().fresh();
-                            if self.screen.pages().holding() {
-                                fold.hold();
-                            }
-                            self.landing = false;
-                            self.overlay = Overlay::Folding {
-                                session,
-                                fold: Box::new(fold),
+                        match std::mem::replace(&mut self.overlay, Overlay::None) {
+                            Overlay::Folding {
+                                session: folding,
                                 busy,
                                 held,
-                            };
+                                ..
+                            } if folding == session => {
+                                let fold = self.fresh_fold();
+                                self.overlay = Overlay::Folding {
+                                    session,
+                                    fold,
+                                    busy,
+                                    held,
+                                    landing: false,
+                                };
+                            }
+                            rest @ (Overlay::None
+                            | Overlay::Shown { .. }
+                            | Overlay::Folding { .. }
+                            | Overlay::Kept { .. }
+                            | Overlay::Reading(_)) => {
+                                self.overlay = rest;
+                            }
                         }
                     }
                     "stream_closed" => {
@@ -891,57 +930,65 @@ impl App {
                         if matches!(&self.overlay, Overlay::Shown { session: shown, .. } if shown == &session)
                         {
                             self.end_overlay();
-                        } else if matches!(&self.overlay, Overlay::Folding { session: folding, .. } if folding == &session)
-                        {
+                        } else {
                             // The pass's stream ended: the preview stays,
                             // unfrozen, and replays skip to its last line.
                             // `session_left` instead ends the overlay below.
-                            self.landing = false;
-                            let last = self
-                                .attached_screen()
-                                .pages()
-                                .index()
-                                .pages()
-                                .iter()
-                                .filter(|page| page.lines > 0)
-                                .map(|page| page.last_seq)
-                                .max();
-                            if last.is_none() {
-                                // The tail read failed and installed no
-                                // preview, so the pass's lines are the
-                                // only copy: land them as the screen
-                                // instead of dropping them with the fold.
-                                let taken = std::mem::replace(&mut self.overlay, Overlay::None);
-                                let Overlay::Folding {
-                                    fold, busy, held, ..
-                                } = taken
-                                else {
-                                    unreachable!("stream_closed without the pass it matched");
-                                };
-                                let fresh = self.attached_screen().pages().fresh();
-                                self.overlay = Overlay::Folding {
-                                    session,
-                                    fold: Box::new(fresh),
+                            let last = self.preview_last();
+                            match std::mem::replace(&mut self.overlay, Overlay::None) {
+                                Overlay::Folding {
+                                    session: folding,
+                                    fold,
                                     busy,
                                     held,
-                                };
-                                self.land(*fold, held);
+                                    ..
+                                } if folding == session => {
+                                    if last.is_none() {
+                                        // The tail read failed and installed no
+                                        // preview, so the pass's lines are the
+                                        // only copy: land them as the screen
+                                        // instead of dropping them with the fold.
+                                        let fresh = self.fresh_fold();
+                                        self.overlay = Overlay::Folding {
+                                            session,
+                                            fold: fresh,
+                                            busy,
+                                            held,
+                                            landing: false,
+                                        };
+                                        self.land(*fold, held);
+                                    }
+                                    self.overlay = Overlay::Kept { last };
+                                    self.attached_screen_mut().set_frozen(false);
+                                }
+                                rest @ (Overlay::None
+                                | Overlay::Shown { .. }
+                                | Overlay::Folding { .. }
+                                | Overlay::Kept { .. }
+                                | Overlay::Reading(_)) => {
+                                    self.overlay = rest;
+                                }
                             }
-                            self.overlay = Overlay::Kept { last };
-                            self.attached_screen_mut().set_frozen(false);
                         }
                     }
                     "session_left" => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
-                        if matches!(&self.overlay, Overlay::Shown { session: shown, .. } if shown == &session)
-                        {
-                            self.end_overlay();
-                        } else if matches!(&self.overlay, Overlay::Folding { session: folding, .. } if folding == &session)
-                        {
-                            self.landing = false;
-                            self.end_overlay();
+                        match &self.overlay {
+                            Overlay::Shown { session: shown, .. } if shown == &session => {
+                                self.end_overlay();
+                            }
+                            Overlay::Folding {
+                                session: folding, ..
+                            } if folding == &session => {
+                                self.end_overlay();
+                            }
+                            Overlay::None
+                            | Overlay::Shown { .. }
+                            | Overlay::Folding { .. }
+                            | Overlay::Kept { .. }
+                            | Overlay::Reading(_) => {}
                         }
                     }
                     _ => {}
