@@ -442,7 +442,7 @@ fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
         .map_err(|error| format!("{}: {error}", script_path.display()))?;
     if let Some(config) = &case.config {
         let home = config::fiber_home_from_env().map_err(|error| error.to_string())?;
-        let config_path = home.join("config.json");
+        let config_path = config::global_config_file(&home);
         write_config(&config_path, config)?;
     }
     Ok(())

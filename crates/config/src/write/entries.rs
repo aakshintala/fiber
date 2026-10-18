@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use crate::Source;
 use crate::error::ConfigError;
 use crate::home::read;
+use crate::layout::global_config_file;
 
 use super::atomic::locked;
 use super::{checked, write_root};
@@ -27,7 +28,7 @@ pub fn update_global_entries(
     key: &str,
     entries: &[(String, Option<Value>)],
 ) -> Result<(), ConfigError> {
-    let file = home.join("config.json");
+    let file = global_config_file(home);
     let _lock = locked(&file)?;
     let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
     let held: Option<Map<String, Value>> = match root.get(key) {

@@ -204,7 +204,7 @@ impl tui::Configure for Seam {
     }
 
     fn global_file(&self) -> PathBuf {
-        self.home.join("config.json")
+        config::global_config_file(&self.home)
     }
 
     fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError> {

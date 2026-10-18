@@ -228,7 +228,7 @@ fn port(home: &Path) -> Result<Option<u16>, Failure> {
                 ErrorCode::ConfigInvalid,
                 format!(
                     "hub.port in {} is not a port: {value}",
-                    home.join("config.json").display()
+                    config::global_config_file(home).display()
                 ),
             )
         })
