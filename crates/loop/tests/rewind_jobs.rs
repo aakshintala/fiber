@@ -135,6 +135,18 @@ fn log_bytes(dir: &std::path::Path) -> Vec<u8> {
     std::fs::read(dir.join("events.jsonl")).unwrap()
 }
 
+/// Asserts two large strings equal by length and first differing offset,
+/// without printing either whole on failure.
+#[track_caller]
+fn assert_large_str_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "large string length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
 /// Sends `delivery` to an idle `looped` and runs its turn on a thread,
 /// failing at one named deadline instead of hanging.
 fn drive(
@@ -1335,7 +1347,7 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
         .iter()
         .find(|(delivery, _)| *delivery == Some(JobDelivery::Delegate))
         .expect("the delegate dispatch ran");
-    assert_eq!(delegate.1, long);
+    assert_large_str_eq(&delegate.1, &long);
     // The finish is cut with the hook's text in the artifact.
     let lines = log::read(&dir).unwrap();
     let finish = lines

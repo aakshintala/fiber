@@ -4068,6 +4068,39 @@ fn a_withheld_delegate_writes_the_line_twice_and_no_artifact() {
 }
 
 #[test]
+fn an_artifact_only_delegate_change_writes_the_hook_artifact_leaving_text() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| artifacted("HOOK-ARTIFACT"));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, "Done.".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The delegate dispatch ran; the artifact-only answer changes the
+    // finish, so `changed_by` names the hook. Flipping the artifact
+    // write back to ignored leaves the text changed or the artifact
+    // missing and fails below.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Delegate));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["text"], "Done.");
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    let artifact = lines[2].payload["artifact"]
+        .as_str()
+        .expect("an artifact-only delegate change writes its artifact");
+    assert_eq!(artifact, format!("artifacts/{DELEGATE}.txt"));
+    assert_eq!(
+        std::fs::read_to_string(world.dir.join(artifact)).unwrap(),
+        "HOOK-ARTIFACT"
+    );
+    // The completion dispatch saw the same artifact-only answer and
+    // passed through untouched: no notice, no attribution.
+    assert!(lines[3].payload.get("notice").is_none());
+    assert!(lines[3].payload.get("changed_by").is_none());
+}
+
+#[test]
 fn a_failed_hook_names_its_extension_and_what_went_wrong() {
     let hooks = Arc::new(RecordingHooks::default());
     hooks.answer_with(|_| failed_hook());
@@ -4153,6 +4186,47 @@ fn a_hooks_carried_state_is_written_before_the_changed_end() {
             .unwrap()
             .contains("[redacted]")
     );
+}
+
+#[test]
+fn an_artifact_only_output_file_change_writes_its_carried_state() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| artifacted("ARTIFACT"));
+    hooks.stage_state(vec![StateLine {
+        extension: "redactor".into(),
+        key: "last_seen".into(),
+        value: Some((json!(JOB), OnFork::AtPoint)),
+        landing: 0,
+    }]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    // A real output file, so the `output_file` pass reads it and the
+    // artifact-only answer replaces it.
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The artifact-only change commits the carried state: without the
+    // fix the state line is never written. The `output_file` pass runs
+    // at intake, before `turn_started`, so the state line precedes the
+    // turn's lines and the test reads the whole log.
+    let all: Vec<String> = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(
+        all.contains(&"extension_state_set".to_owned()),
+        "an artifact-only output-file change writes its carried state: {all:?}"
+    );
+    let stated = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind == "extension_state_set")
+        .expect("the carried state is written");
+    assert_eq!(stated.payload["extension"], "redactor");
+    assert_eq!(stated.payload["key"], "last_seen");
+    assert_eq!(output_bytes(&world, OUT), b"ARTIFACT");
 }
 
 #[test]
@@ -4251,7 +4325,7 @@ fn an_expanded_delegate_text_is_cut_with_its_full_text_in_an_artifact() {
     );
     let kept =
         std::fs::read_to_string(world.dir.join(format!("artifacts/{DELEGATE}.txt"))).unwrap();
-    assert_eq!(kept, "y".repeat(40 * 1024));
+    assert_large_str_eq(&kept, &"y".repeat(40 * 1024));
     let seen = users(&world.requests()[0]);
     assert_eq!(seen[seen.len() - 2], delegate_rendered(DELEGATE, text));
 }
@@ -4273,7 +4347,7 @@ fn an_expanded_completion_notice_is_cut_with_its_full_text_in_an_artifact() {
     assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
     let kept =
         std::fs::read_to_string(world.dir.join(format!("artifacts/{JOB}-notice.txt"))).unwrap();
-    assert_eq!(kept, "y".repeat(20 * 1024));
+    assert_large_str_eq(&kept, &"y".repeat(20 * 1024));
 }
 
 #[test]
@@ -4378,6 +4452,28 @@ fn output_bytes(world: &World, output_path: &str) -> Vec<u8> {
     std::fs::read(world.dir.join(output_path)).unwrap()
 }
 
+/// Asserts two large strings equal by length and first differing offset,
+/// without printing either whole on failure.
+fn assert_large_str_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "large string length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
+/// Asserts two large byte strings equal by length and first differing
+/// offset, without printing either whole on failure.
+fn assert_large_bytes_eq(actual: &[u8], expected: &[u8]) {
+    assert_eq!(actual.len(), expected.len(), "large bytes length");
+    let offset = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
 /// A `delegate_started` for `job` with `harness`.
 fn write_delegate_started(world: &mut World, job: &str, harness: &str) {
     world
@@ -4474,7 +4570,7 @@ fn an_artifact_answer_replaces_a_small_file_and_content_does_too() {
 #[test]
 fn a_large_file_is_replaced_by_artifact_only() {
     assert_eq!(output_after(1_048_577, "artifact"), b"ARTIFACT");
-    assert_eq!(output_after(1_048_577, "content"), vec![b'x'; 1_048_577]);
+    assert_large_bytes_eq(&output_after(1_048_577, "content"), &vec![b'x'; 1_048_577]);
 }
 
 #[test]
@@ -4700,6 +4796,37 @@ fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
         b"Output withheld: the job's output file could not be read.\n"
     );
     assert_eq!(output_bytes(&world, "artifacts/target.log"), b"target\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_pre_existing_sibling_symlink_never_redirects_the_redaction_write() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    write_output(&world, "artifacts/target.log", b"target\n");
+    // A job leaves the redaction sibling as a link to another file: an
+    // exclusive create must not follow it. Without `create_new` the
+    // write truncates the target and the rename leaves a link behind.
+    std::os::unix::fs::symlink(
+        world.dir.join("artifacts/target.log"),
+        world.dir.join("artifacts/out.log.fiber-redact"),
+    )
+    .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(output_bytes(&world, OUT), b"token [redacted]\n");
+    assert_eq!(output_bytes(&world, "artifacts/target.log"), b"target\n");
+    assert!(
+        !std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the redacted output file replaces any sibling link"
+    );
 }
 
 #[test]

@@ -166,12 +166,17 @@ impl Loop {
     /// and the decided `changed_by`, or nothing when no hook runs (no
     /// hooks, or a shutdown). Notices a `non-blocking` failure raised are
     /// written before the delivery's event; on a `Changed` answer the
-    /// hook's carried state is written too. No `tool.hooks` scope: a job
+    /// hook applies the hook's carried state is written too: when
+    /// `artifact_counts` the delivery applies the hook's artifact text as
+    /// well as its content (the delegate finish and the output file),
+    /// so an artifact-only change commits state; otherwise only content
+    /// counts. No `tool.hooks` scope: a job
     /// has no tool call to scope.
     fn ask_delivery(
         &mut self,
         call: AfterToolCall<'_>,
         turn: Option<&TurnId>,
+        artifact_counts: bool,
     ) -> Result<Option<AskedDelivery>, crate::Error> {
         let Some(hooks) = self.hooks.clone() else {
             return Ok(None);
@@ -189,13 +194,14 @@ impl Loop {
         for notice in notices {
             self.write(&Event::Notice(notice), turn, None)?;
         }
-        let outcome_changed = matches!(
-            &outcome,
+        let outcome_changed = match &outcome {
             AfterToolOutcome::Changed {
-                content: Some(_),
-                ..
-            }
-        );
+                content, artifact, ..
+            } => content.is_some() || (artifact_counts && artifact.is_some()),
+            AfterToolOutcome::Unchanged
+            | AfterToolOutcome::Withheld { .. }
+            | AfterToolOutcome::Failed(_) => false,
+        };
         if outcome_changed {
             self.write_carried(state, turn)?;
         }
@@ -232,6 +238,7 @@ impl Loop {
                 delivery: Some(JobDelivery::Completion),
             },
             turn,
+            false,
         )?
         else {
             return Ok(completed);
@@ -290,6 +297,7 @@ impl Loop {
                 delivery: Some(JobDelivery::Monitor),
             },
             turn,
+            false,
         )?
         else {
             return Ok(line);
@@ -317,7 +325,10 @@ impl Loop {
 
     /// A delegate's final message through the hooks: the hook sees the
     /// full, unbounded text, and its replacement is returned unbounded.
-    /// The cut and the artifact belong to `calls::job_event` after it.
+    /// The hook's artifact text is written to `artifacts/<job_id>.txt`
+    /// with the display text kept separate; an artifact-only change
+    /// leaves the text unchanged. The cut belongs to `calls::job_event`
+    /// after it.
     pub(crate) fn deliver_finish(
         &mut self,
         mut finished: DelegateFinished,
@@ -342,25 +353,39 @@ impl Loop {
                 delivery: Some(JobDelivery::Delegate),
             },
             turn,
+            true,
         )?
         else {
             return Ok(finished);
         };
         match outcome {
-            AfterToolOutcome::Unchanged | AfterToolOutcome::Changed { content: None, .. } => {}
-            AfterToolOutcome::Changed {
-                content: Some(replacement),
+            AfterToolOutcome::Unchanged
+            | AfterToolOutcome::Changed {
+                content: None,
+                artifact: None,
                 ..
+            } => {}
+            AfterToolOutcome::Changed {
+                content, artifact, ..
             } => {
-                finished.text = replacement;
+                if let Some(replacement) = content {
+                    finished.text = replacement;
+                }
+                if let Some(artifact) = artifact {
+                    let name = format!("{}.txt", finished.job_id.0);
+                    let (path, _) = self.log.write_artifact(&name, artifact.as_bytes())?;
+                    finished.artifact = Some(path);
+                }
                 finished.changed_by = changed_by;
             }
             AfterToolOutcome::Withheld { extension } => {
                 finished.text = withheld_line(&extension);
+                finished.artifact = None;
                 finished.changed_by = None;
             }
             AfterToolOutcome::Failed(failure) => {
                 finished.text = failed_line(&failure);
+                finished.artifact = None;
                 finished.changed_by = None;
             }
         }
@@ -607,6 +632,7 @@ impl Loop {
                 delivery: Some(JobDelivery::OutputFile),
             },
             turn,
+            true,
         )?
         else {
             return Ok(());
@@ -646,8 +672,11 @@ impl Loop {
 /// Replaces the file at `path` with `bytes`, keeping the original's
 /// permission bits: the bytes go to a sibling file first, which is given
 /// those bits and `rename`d over the path (over a link, the link). The
-/// sibling is removed on every error path.
+/// sibling is created exclusively and written through its own handle, so
+/// a pre-existing sibling link never redirects the write; only a sibling
+/// this call created is removed on an error path.
 fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
+    use std::io::Write as _;
     let mut name = path
         .file_name()
         .map(|name| name.to_owned())
@@ -655,15 +684,38 @@ fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
     name.push(".fiber-redact");
     let sibling = path.with_file_name(name);
     let permissions = std::fs::metadata(path).map(|stat| stat.permissions()).ok();
+    let mut created = false;
     let replaced = (|| -> std::io::Result<()> {
-        std::fs::write(&sibling, bytes)?;
+        let mut sibling_file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&sibling)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // A sibling this call did not create (a job could leave
+                // it as a link): unlink the name itself without
+                // following it, then create exclusively.
+                std::fs::remove_file(&sibling)?;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&sibling)?
+            }
+            Err(error) => return Err(error),
+        };
+        created = true;
+        sibling_file.write_all(bytes)?;
+        sibling_file.sync_all()?;
+        drop(sibling_file);
         if let Some(permissions) = permissions {
             std::fs::set_permissions(&sibling, permissions)?;
         }
         std::fs::rename(&sibling, path)?;
+        created = false;
         Ok(())
     })();
-    if replaced.is_err() {
+    if replaced.is_err() && created {
         let _removed = std::fs::remove_file(&sibling);
     }
     replaced.map_err(|source| log::Error::Io {
