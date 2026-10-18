@@ -230,6 +230,8 @@ fn line(lines: &str, suppressed: Option<u64>) -> JobLine {
         job_id: JobId("j_1".into()),
         lines: lines.into(),
         suppressed,
+
+        changed_by: None,
     }
 }
 

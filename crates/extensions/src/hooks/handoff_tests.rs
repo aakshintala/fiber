@@ -418,6 +418,9 @@ fn hooks_order_reorders_this_point_and_leaves_after_tool_alone() {
                 details: None,
                 process: None,
                 spilled: None,
+
+                not_regular: false,
+                delivery: None,
             });
             let AfterToolOutcome::Changed { content, .. } = answer.outcome else {
                 panic!(

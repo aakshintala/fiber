@@ -1261,7 +1261,7 @@ flags").
   the `arguments` of `tool_call_requested`, and of `tool_call_started` when a
   hook rewrote them, and the `command` of `shell_command`. `tool_output` is the
   `content` of `tool_call_completed`, the `output` of `shell_command`,
-  `job_line`, `delegate_finished` and `job_completed`'s `output_tail`. No other
+  `job_line`, `delegate_finished` and `job_completed`'s `output_tail` and `notice`. No other
   event is searched, and reasoning is not.
 - Only text artifacts are searched. A hit in one is labelled `tool_output` and
   takes the `seq` of the line that names the artifact's path (`artifact` on

@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 contract = { path = "../contract" }
 log = { path = "../log" }
+rustix.workspace = true
 support = { path = "../support" }
 serde_json.workspace = true
 similar.workspace = true

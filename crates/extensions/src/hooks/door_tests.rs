@@ -552,6 +552,9 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
                     details: None,
                     process: None,
                     spilled: None,
+
+                    not_regular: false,
+                    delivery: None,
                 });
                 assert!(answer.notices.is_empty());
                 let AfterToolOutcome::Failed(failure) = answer.outcome else {
@@ -602,7 +605,9 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
                             content: "raw",
                             details: None,
                             process: None,
-                            spilled: None
+                            spilled: None,
+                            not_regular: false,
+                            delivery: None,
                         })
                         .outcome,
                     AfterToolOutcome::Unchanged

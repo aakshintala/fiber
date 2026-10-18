@@ -251,6 +251,9 @@ pub struct JobLine {
     /// Deliveries suppressed since the last one, when any were.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppressed: Option<u64>,
+    /// The extensions whose hooks changed the delivered lines, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// An isolated delegate's worktree when it finished.
@@ -278,6 +281,9 @@ pub struct DelegateFinished {
     pub questions: Option<Vec<Question>>,
     /// The run's totals.
     pub usage: Usage,
+    /// The extensions whose hooks changed the final message, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
     /// When isolated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<FinishedWorktree>,
@@ -296,9 +302,17 @@ pub struct JobCompleted {
     /// For a job that ran a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<Process>,
-    /// For a failed job, the tail of its output, capped.
+    /// For a failed job, the tail of its output, capped; absent when a hook
+    /// changed the completion notice (`notice` holds what the model was sent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
+    /// The text the model was sent, when a hook changed or withheld the
+    /// completion notice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// The extensions whose hooks changed the completion notice, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// `jobs_pending_notified`.

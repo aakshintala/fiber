@@ -371,10 +371,13 @@ impl Rendered {
                 }
                 if action.is_none() && !self.outstanding.is_empty() {
                     self.carry.fold_jobs(event);
-                    self.held.push(Input::User {
-                        text: crate::jobs::notice_text(job),
-                        images: Vec::new(),
-                    });
+                    let text = crate::jobs::notice_text(job);
+                    if !text.is_empty() {
+                        self.held.push(Input::User {
+                            text,
+                            images: Vec::new(),
+                        });
+                    }
                 } else {
                     self.render(event, action, model);
                 }
@@ -556,9 +559,15 @@ pub(crate) fn render(
         // A job's end the model was not already given: one message. A
         // `wait` or `stop` record carries its call's action and renders
         // nothing; that call's result already said it.
-        Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
-            text: crate::jobs::notice_text(completed),
-         images: Vec::new(),}),
+        Event::JobCompleted(completed) if action.is_none() => {
+            let text = crate::jobs::notice_text(completed);
+            if !text.is_empty() {
+                conversation.push(Input::User {
+                    text,
+                    images: Vec::new(),
+                });
+            }
+        }
         // A delegate's finish the model was not already given: its final
         // message. A `wait` or `stop` record carries its call's action
         // and renders nothing; that call's result already said it.

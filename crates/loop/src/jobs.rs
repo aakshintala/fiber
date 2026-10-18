@@ -85,6 +85,9 @@ pub(crate) struct Ending {
     /// The jobs check was given since the last prompt or steer, so it is
     /// not armed (`docs/invocation.md`, "Lifecycle").
     checked: bool,
+    /// What each delivery's hooks read: the jobs the log started, folded
+    /// from `job_started` and `delegate_started` on the write path.
+    pub(crate) starts: super::deliveries::Starts,
 }
 
 /// The notice's completion and its delegate's finish, when its claim
@@ -216,9 +219,12 @@ impl Loop {
 
     /// A notice taken while a turn runs or an approval waits: queued for
     /// the next step boundary, after anything already queued. The claim
-    /// is asked when the notice is written, not here.
-    pub(crate) fn admit_job(&mut self, notice: JobNotice) {
+    /// is asked when the notice is written, not here; the output file
+    /// pass runs now, at intake.
+    pub(crate) fn admit_job(&mut self, notice: JobNotice, turn: &TurnId) -> Result<(), Error> {
+        self.redact_output(&notice.completed, Some(turn))?;
         self.queued.push_back(Queued::Notice(notice));
+        Ok(())
     }
 
     /// `turn_started`'s input, from what the idle wait collected, in
@@ -346,7 +352,7 @@ impl Loop {
                     self.write_end(turn, ahead, completed, delegate)?;
                     continue;
                 }
-                Queued::Line(line) => Event::JobLine(line),
+                Queued::Line(line) => Event::JobLine(self.deliver_line(line, Some(turn))?),
                 // Held for the step's handoff check, which runs it.
                 Queued::Handoff(_, instructions) => {
                     self.handoff.held.push(instructions);
@@ -371,8 +377,11 @@ impl Loop {
         completed: JobCompleted,
         delegate: Option<DelegateFinished>,
     ) -> Result<(), Error> {
+        let (ahead, completed, delegate) =
+            self.deliver_end(Some(turn), ahead, completed, delegate)?;
+        // Already hooked above: the raw write, so the hooks run once.
         for taken in ahead {
-            self.write_taken(taken, Some(turn), None)?;
+            self.write_taken_raw(taken, Some(turn), None)?;
         }
         if let Some(finished) = delegate {
             let event = super::calls::job_event(&self.log, JobRecord::DelegateFinished(finished));
@@ -482,6 +491,9 @@ impl Orphans {
                 }),
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             })
             .collect()
     }
@@ -554,10 +566,14 @@ pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
     text
 }
 
-/// What a `job_completed` with no action tells the model: the job, how it
-/// ended, then any exit code, signal, error and last output. Read from the
-/// line alone, so a resume renders the same bytes.
+/// What a `job_completed` with no action tells the model: the hook's
+/// rewritten notice when one changed it, else the job, how it ended,
+/// then any exit code, signal, error and last output. Read from the line
+/// alone, so a resume renders the same bytes.
 pub(crate) fn notice_text(completed: &JobCompleted) -> String {
+    if let Some(notice) = &completed.notice {
+        return notice.clone();
+    }
     let status = match completed.status {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",

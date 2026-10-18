@@ -1489,6 +1489,9 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: contract::inbox::Claim(Box::new(move || {
                 claim_counted.fetch_add(1, Ordering::SeqCst);
@@ -1510,6 +1513,8 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
                     subscription_cost: 0.0,
                 },
                 worktree: None,
+
+                changed_by: None,
             }),
         }))
         .unwrap();

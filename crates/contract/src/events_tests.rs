@@ -795,19 +795,21 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "job_line",
-            json!({"job_id": "j", "lines": "a\nb", "suppressed": 3}),
+            json!({"job_id": "j", "lines": "a\nb", "suppressed": 3,
+            "changed_by": ["e"]}),
         ),
         (
             "delegate_finished",
             json!({"job_id": "j", "text": "t", "artifact": "artifacts/f",
-            "questions": questions,
+            "questions": questions, "changed_by": ["e"],
             "usage": {"tokens": tokens, "cost": null, "subscription_cost": 0.0},
             "worktree": {"path": "/t", "branch": "b", "dirty": true}}),
         ),
         (
             "job_completed",
             json!({"job_id": "j", "status": "cancelled", "error": error,
-            "process": process, "output_tail": "tail"}),
+            "process": process, "output_tail": "tail",
+            "notice": "n", "changed_by": ["e"]}),
         ),
         (
             "jobs_pending_notified",
@@ -1312,6 +1314,32 @@ fn a_required_key_that_may_be_null_must_be_present() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn an_empty_notice_is_written_and_absent_keys_stay_absent() {
+    let empty = read(
+        "job_completed",
+        json!({"job_id": "j",
+        "status": "failed", "notice": ""}),
+    )
+    .unwrap()
+    .unwrap();
+    let written = Value::Object(empty.payload().unwrap());
+    assert_eq!(written.get("notice"), Some(&json!("")));
+    assert!(!written.as_object().unwrap().contains_key("output_tail"));
+    assert!(!written.as_object().unwrap().contains_key("changed_by"));
+
+    let plain = read(
+        "job_completed",
+        json!({"job_id": "j",
+        "status": "failed", "output_tail": "tail"}),
+    )
+    .unwrap()
+    .unwrap();
+    let written = Value::Object(plain.payload().unwrap());
+    assert!(!written.as_object().unwrap().contains_key("notice"));
+    assert!(!written.as_object().unwrap().contains_key("changed_by"));
 }
 
 #[test]
