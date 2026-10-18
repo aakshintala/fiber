@@ -9,9 +9,7 @@
 )]
 
 use std::io::Read as _;
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -23,7 +21,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::diag::{Diag, Level, Process};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-use std::os::unix::process::CommandExt as _;
 
 use super::{
     Action, KILL_AT, LINE_CAP, Phase, SHUTDOWN_BOUND, Signals, decide, signal_code, sleep_until,
@@ -220,58 +217,6 @@ fn arm_slow_kill(
     );
 }
 
-/// Makes the FIFO at `path` through a `mkfifo` child in its own process
-/// group under a watchdog: the group is killed and reaped on every path,
-/// so a stuck `mkfifo` never keeps running. The worst case is two bounds.
-fn mkfifo(path: &Path) {
-    let mut command = Command::new("mkfifo");
-    command
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command.process_group(0);
-    let mut child = command.spawn().expect("mkfifo started");
-    let group = child.id();
-    let (finished_tx, finished) = mpsc::channel();
-    thread::spawn(move || if let Ok(()) = finished_tx.send(child.wait()) {});
-    // The child is already spawned, so a watchdog that cannot start must
-    // still leave nothing running: kill the group and wait for the waiter
-    // before the panic continues.
-    let watchdog =
-        match std::panic::catch_unwind(AssertUnwindSafe(|| fakes::Watchdog::group(group))) {
-            Ok(watchdog) => watchdog,
-            Err(payload) => {
-                match fakes::kill_group(group, "KILL") {
-                    Ok(_) | Err(_) => {}
-                }
-                match Deadline::after(CHILD_WITHIN).recv(&finished) {
-                    Ok(_) | Err(_) => {}
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
-    match Deadline::after(CHILD_WITHIN).recv(&finished) {
-        Ok(status) => {
-            let cleanup = Deadline::after(CHILD_WITHIN);
-            assert!(
-                status.expect("mkfifo waited").success(),
-                "mkfifo made {path:?}"
-            );
-            watchdog.stand_down(cleanup.left());
-        }
-        Err(_) => {
-            let cleanup = Deadline::after(CHILD_WITHIN);
-            match fakes::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            let reaped = cleanup.recv(&finished).is_ok();
-            let emptied = fakes::group_empties(group, cleanup.left());
-            panic!("waited {CHILD_WITHIN:?} for mkfifo (reaped: {reaped}, group empty: {emptied})");
-        }
-    }
-}
-
 #[test]
 fn a_signal_while_booting_exits_with_its_code() {
     for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
@@ -398,7 +343,7 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
     let fifo = home
         .join("logs")
         .join(format!("ask-{}.log", std::process::id()));
-    mkfifo(&fifo);
+    fakes::fifo(&fifo);
     let clock = FakeClock::new();
     let diag = writer(&home, &clock);
     let timed: Arc<dyn contract::clock::Clock> = clock.clone();
