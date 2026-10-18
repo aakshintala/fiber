@@ -1664,3 +1664,113 @@ fn run_asking_cancelled_returns_no_content_and_no_error() {
     assert_eq!(output.error, None, "no error: {output:?}");
     assert!(runner.inner().is_empty(), "the call never ran");
 }
+
+// Declared and surfaced hosts (`docs/tools.md`, "What a tool declares"):
+// a static table and an effects function both carry `hosts`, and a `run`
+// result carries `hosts_surfaced`.
+
+const HOSTS: &str = r#"
+fiber.tool("static_hosts", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "network" }, hosts = { "https://a.test/x" }, reversible = true },
+  timeout = 1000,
+  run = function() return "" end,
+})
+fiber.tool("no_hosts", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "network" }, reversible = true },
+  timeout = 1000,
+  run = function() return "" end,
+})
+fiber.tool("empty_hosts", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "network" }, hosts = {}, reversible = true },
+  timeout = 1000,
+  run = function() return "" end,
+})
+fiber.tool("per_arg", {
+  description = "d", input_schema = { type = "object" },
+  effects = function(args) return { effects = { "network" }, hosts = { args.url }, reversible = true } end,
+  timeout = 1000,
+  run = function() return "" end,
+})
+fiber.tool("bad_hosts", {
+  description = "d", input_schema = { type = "object" },
+  effects = function() return { effects = { "network" }, hosts = { "a.test" }, reversible = true } end,
+  timeout = 1000,
+  run = function() return "" end,
+})
+fiber.tool("surfaced", {
+  description = "d", input_schema = { type = "object" },
+  effects = { effects = { "reads" }, reversible = true },
+  timeout = 1000,
+  run = function() return { content = "found", hosts_surfaced = { "https://x.test/a" } } end,
+})
+"#;
+
+#[test]
+fn a_static_hosts_list_reaches_effects_as_declared() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
+    let tools = by_name(&ext);
+    let output = effects(&tools["static_hosts"], json!({})).expect("static effects read");
+    assert_eq!(
+        output.hosts,
+        Some(vec!["https://a.test/x".to_owned()]),
+        "kept as written, not normalised"
+    );
+    assert_eq!(output.declared.effects, vec![Effect::Network]);
+}
+
+#[test]
+fn no_hosts_is_unknown_and_an_empty_list_contacts_no_host() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
+    let tools = by_name(&ext);
+    assert_eq!(effects(&tools["no_hosts"], json!({})).unwrap().hosts, None);
+    assert_eq!(
+        effects(&tools["empty_hosts"], json!({})).unwrap().hosts,
+        Some(Vec::new())
+    );
+}
+
+#[test]
+fn an_effects_function_returns_hosts_per_argument() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
+    let tools = by_name(&ext);
+    for url in ["https://a.test/1", "https://b.test/2"] {
+        assert_eq!(
+            effects(&tools["per_arg"], json!({ "url": url }))
+                .unwrap()
+                .hosts,
+            Some(vec![url.to_owned()]),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn an_effects_function_returning_a_bad_hosts_list_fails_naming_the_tool() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
+    let tools = by_name(&ext);
+    assert_eq!(
+        effects(&tools["bad_hosts"], json!({})),
+        Err(EffectsError::Tool(
+            "the effects function of the tool `bad_hosts` of `fiber.test/hosts` returned effects that do not read: `hosts` must be a list of http or https URLs"
+                .to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_run_result_carries_hosts_surfaced() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
+    let tools = by_name(&ext);
+    let output = ran(&run(&tools["surfaced"], json!({})), &Deadline::after(WAIT));
+    assert_eq!(text(&output), "found");
+    assert_eq!(output.error, None);
+    assert_eq!(output.hosts_surfaced, vec!["https://x.test/a".to_owned()]);
+}

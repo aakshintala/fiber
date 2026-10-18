@@ -1005,3 +1005,166 @@ fn a_tool_cannot_run_itself() {
         json!([{"type": "text", "text": "error:host.tool: the tool `selfish` cannot run itself"}])
     );
 }
+
+// Declared and surfaced hosts (`docs/tools.md`, "What a tool declares"):
+// an extension tool's `hosts` takes the network fast path when known, and
+// its `hosts_surfaced` makes a host known for the next call.
+
+/// A `network` tool declaring `hosts` as its only effect, writing `marker`.
+fn fetching(name: &str, hosts: &str, marker: &str) -> String {
+    tool(
+        name,
+        &format!("{{ effects = {{ \"network\" }}, hosts = {{ \"{hosts}\" }}, reversible = true }}"),
+        &format!("function() host.fs.write(\"{marker}\", \"x\") return \"fetched\" end"),
+        "2000",
+    )
+}
+
+#[test]
+fn a_declared_host_named_in_the_persons_message_takes_the_fast_path() {
+    let setup = Setup::new_with_fm_root();
+    let site = ProviderServer::start([fakes::Response::status(200, "page")]).unwrap();
+    let url = format!("{}/doc", site.url());
+    let server = calling(&[function_call("call_fetch", "fetcher", &json!({}))]);
+    setup.provider(&server);
+    setup.lua("fetch", &fetching("fetcher", &url, "marker-a"));
+    let run = ask(&setup, &format!("fetch {url}"));
+    assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
+    assert!(run.all("permission_resolved").is_empty());
+    let completed = run.payload("tool_call_completed");
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": "fetched"}])
+    );
+    assert!(setup.workspace().join("marker-a").is_file());
+}
+
+#[test]
+fn a_declared_host_nobody_named_is_reviewed_and_denied_with_no_reviewer() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[function_call("call_fetch", "fetcher", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "fetch",
+        &fetching("fetcher", "https://unknown.test/doc", "marker-b"),
+    );
+    let run = ask(&setup, "fetch https://example.test/other");
+    assert_eq!(
+        run.kinds(),
+        expected_kinds(
+            &[],
+            1,
+            &["notice", "permission_resolved"],
+            &["tool_call_completed"]
+        )
+    );
+    let resolved = run.payload("permission_resolved");
+    assert_eq!(resolved["decided_by"], "no_reviewer");
+    assert_eq!(resolved["decision"], "deny");
+    assert_eq!(run.payload("tool_call_completed")["status"], "denied");
+    assert!(!setup.workspace().join("marker-b").exists());
+}
+
+#[test]
+fn a_surfaced_host_is_known_for_the_next_call() {
+    let setup = Setup::new_with_fm_root();
+    let site = ProviderServer::start([fakes::Response::status(200, "page")]).unwrap();
+    let url = format!("{}/doc", site.url());
+    let server = ProviderServer::start([
+        stream(&[function_call("call_find", "finder", &json!({}))]),
+        stream(&[function_call("call_fetch", "fetcher", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.lua(
+        "finder",
+        &tool(
+            "finder",
+            "{ effects = { \"reads\" }, reversible = true }",
+            &format!(
+                "function() return {{ content = \"found\", hosts_surfaced = {{ \"{url}\" }} }} end"
+            ),
+            "2000",
+        ),
+    );
+    setup.lua("fetch", &fetching("fetcher", &url, "marker-c"));
+    let run = ask(&setup, "search the web then read the result");
+    let mut kinds = expected_kinds(&[], 1, &[], RAN);
+    kinds.splice(
+        13..13,
+        [
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert_eq!(run.kinds(), kinds);
+    assert!(run.all("permission_resolved").is_empty());
+    let completed = run.all("tool_call_completed");
+    assert_eq!(completed[0]["payload"]["hosts_surfaced"], json!([url]));
+    assert_eq!(completed[1]["payload"]["status"], "completed");
+    assert!(setup.workspace().join("marker-c").is_file());
+}
+
+#[test]
+fn an_effects_function_declares_hosts_per_argument() {
+    let setup = Setup::new_with_fm_root();
+    let site = ProviderServer::start([fakes::Response::status(200, "page")]).unwrap();
+    let url = format!("{}/doc", site.url());
+    let server = calling(&[
+        function_call("call_known", "greet", &json!({"which": "known"})),
+        function_call("call_unknown", "greet", &json!({"which": "unknown"})),
+    ]);
+    setup.provider(&server);
+    setup.lua(
+        "greet",
+        &tool(
+            "greet",
+            &format!(
+                "function(args) if args.which == \"known\" then \
+                   return {{ effects = {{ \"network\" }}, hosts = {{ \"{url}\" }}, reversible = true }} end\n\
+                   return {{ effects = {{ \"network\" }}, hosts = {{ \"https://unknown.test/doc\" }}, reversible = true }} end"
+            ),
+            "function(args) host.fs.write(\"ran-\" .. args.which, \"x\") return \"ok\" end",
+            "2000",
+        ),
+    );
+    let run = ask(&setup, &format!("greet both, one at {url}"));
+    assert_eq!(
+        run.kinds(),
+        expected_kinds(
+            &[],
+            2,
+            &["notice", "permission_resolved"],
+            &[
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed"
+            ]
+        )
+    );
+    let requested = run.all("tool_call_requested");
+    let completed = run.all("tool_call_completed");
+    let status_of = |index: usize| {
+        let action = requested[index]["action_id"].clone();
+        completed
+            .iter()
+            .find(|line| line["action_id"] == action)
+            .unwrap()["payload"]["status"]
+            .clone()
+    };
+    assert_eq!(status_of(0), "completed");
+    assert_eq!(status_of(1), "denied");
+    assert_eq!(
+        run.payload("permission_resolved")["decided_by"],
+        "no_reviewer"
+    );
+    assert!(setup.workspace().join("ran-known").is_file());
+    assert!(!setup.workspace().join("ran-unknown").exists());
+}
