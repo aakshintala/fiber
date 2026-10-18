@@ -1,7 +1,7 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
 //! process clock and the clock-parked wait, the process-group guard, the
-//! poison-ignoring `lock`, the admission lock and the stoppable read (`docs/architecture.md`,
-//! "The modules").
+//! poison-ignoring `lock`, the admission lock, the stoppable read, the line
+//! framing and the `mint` id (`docs/architecture.md`, "The modules").
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -21,6 +21,9 @@ pub mod id;
 
 /// The stoppable read: a socket reader that a `Stop` ends on demand.
 pub mod stoppable;
+
+/// One wire line: bytes to the next line feed.
+pub mod framing;
 
 /// Text on one line: control characters as spaces.
 pub mod text;
