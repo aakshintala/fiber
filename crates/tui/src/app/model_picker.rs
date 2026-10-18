@@ -45,24 +45,45 @@ impl App {
 
     /// Runs the owed start pick: opening Choose, asking the open's
     /// read now (`Stale`, or the read the open owes), and installing
-    /// the answer. A remote terminal with no hub yet keeps the pick
-    /// owed: the sync read would park on the link the loop itself
-    /// brings up. With no reader nothing runs; a models error is a
-    /// notice as today, opening nothing.
+    /// the answer. The pick waits for the chips: it opens only when
+    /// the hub named no model, and a named one drops it. A remote
+    /// terminal with no hub yet keeps the pick owed: the sync read
+    /// would park on the link the loop itself brings up. A local home
+    /// runs at once, as before. With no reader the open still shows;
+    /// a models error is a notice as today, opening nothing.
     pub(crate) fn start_model_pick(&mut self) -> Vec<String> {
-        if self.remote().is_some() && self.link != super::Link::Up {
+        let remote = self.remote().is_some();
+        if remote && self.link != super::Link::Up {
             self.owe_start_pick();
             return Vec::new();
         }
-        if !self.take_start_pick() {
+        if remote && self.chip_read_failed() {
+            // The chips failed: the pick stays owed until a new
+            // workspace or link reads them.
             return Vec::new();
         }
+        if remote && !self.take_start_pick() {
+            return Vec::new();
+        }
+        let _ = self.take_start_pick();
+        if remote
+            && self
+                .home
+                .as_ref()
+                .and_then(|home| home.launch.model.as_deref())
+                .is_some()
+        {
+            // The hub named the chip's model: the pick is taken and
+            // dropped, never opened.
+            return Vec::new();
+        }
+        // The open reads for itself: take its read and ask it now, so
+        // the loop owes the thread nothing more. With no reader the
+        // open still shows.
+        self.open_model_picker(Mode::Choose);
         let Some(read) = self.models_reader() else {
             return Vec::new();
         };
-        // The open reads for itself: take its read and ask it now, so
-        // the loop owes the thread nothing more.
-        self.open_model_picker(Mode::Choose);
         let refresh = self.model_picker.take_read().unwrap_or(Refresh::Stale);
         match read(refresh) {
             Ok(catalogue) => self.on_models(Ok(catalogue)),
@@ -797,7 +818,7 @@ impl App {
 /// as `config`'s dotted-path display spells it. `main` hands the terminal
 /// canonical keys, so this plain string supersedes the choice's own key
 /// with no parsing here.
-fn canonical_thinking_key(reference: &str) -> String {
+pub(in crate::app) fn canonical_thinking_key(reference: &str) -> String {
     if reference.contains('.') {
         format!("models.\"{reference}\".thinking")
     } else {

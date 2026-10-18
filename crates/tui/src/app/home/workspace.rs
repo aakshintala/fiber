@@ -11,6 +11,7 @@ use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
 use crate::keys::Key;
+use crate::remote::Chip;
 
 /// Whether the home chips' configuration is read: owed until one
 /// read answers, failed until a new workspace or link owes it again.
@@ -354,8 +355,15 @@ impl App {
     /// Reads the home chips' configuration when one is owed, folding
     /// it into the launch: the hub model and thinking on screen, and
     /// the scoped list the checklist marks. With no remote nothing is
-    /// owed and nothing is read; a failed read is a notice.
+    /// owed and nothing is read; a failed read is a notice. An answer
+    /// names only what the hub configures: an absent model, level or
+    /// list keeps the chip's text, and a flag-named key keeps its flag.
     fn read_chips(&mut self) {
+        // `Failed` waits for a new workspace or link: only `Owed`
+        // reads here.
+        if !self.chip_read_owed() {
+            return;
+        }
         let owed = self
             .home
             .as_ref()
@@ -364,24 +372,43 @@ impl App {
             return;
         }
         let Some(remote) = self.remote() else {
+            // A local home owes no chip read: there is no hub to ask.
+            if let Some(home) = self.home.as_mut() {
+                home.chooser.chip_read = ChipRead::Answered;
+            }
             return;
         };
         let read = remote.chip(&self.workspace());
+        self.fold_chip(read);
+    }
+
+    /// Folds a chip read into the launch: the hub model and thinking
+    /// on screen, and the scoped list the checklist marks. A flag
+    /// names its key, so the layer's `model=` and thinking keys stand:
+    /// the answer never replaces them. A rejection is one notice with
+    /// the hub's code and message, and the chip keeps its text.
+    fn fold_chip(&mut self, read: Result<Chip, crate::configure::ConfigureError>) {
         match read {
             Ok(chip) => {
+                let thinking_key = chip
+                    .model
+                    .as_deref()
+                    .map(super::super::model_picker::canonical_thinking_key);
+                let overrides = self.launch_overrides.clone();
                 let Some(home) = self.home.as_mut() else {
                     return;
                 };
-                home.launch.model = if chip.model.is_empty() {
-                    None
-                } else {
-                    Some(chip.model)
-                };
-                home.launch.thinking = if chip.thinking.is_empty() {
-                    None
-                } else {
-                    Some(chip.thinking)
-                };
+                if chip.model.is_some() && !Self::override_names("model", &overrides) {
+                    home.launch.model = chip.model;
+                }
+                if chip.thinking.is_some()
+                    && !Self::override_names("thinking", &overrides)
+                    && thinking_key
+                        .as_deref()
+                        .is_none_or(|key| !Self::override_names(key, &overrides))
+                {
+                    home.launch.thinking = chip.thinking;
+                }
                 home.launch.scoped_models = chip.scoped.clone();
                 home.chooser.chip_read = ChipRead::Answered;
                 self.model_picker.adopt_scoped(chip.scoped);
@@ -390,17 +417,38 @@ impl App {
                 if let Some(home) = self.home.as_mut() {
                     home.chooser.chip_read = ChipRead::Failed;
                 }
-                self.push_notice("io_failed", error.to_string());
+                let code = serde_json::to_value(&error.code)
+                    .ok()
+                    .and_then(|code| code.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "io_failed".to_owned());
+                self.push_notice(&code, error.message);
             }
         }
     }
 
-    /// Owes the home chips' next read: a new workspace or link folds
-    /// what the hub says now.
-    pub(in crate::app) fn chip_read_owed(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.chooser.chip_read = ChipRead::Owed;
-        }
+    /// Whether the launch layer names `key`: a flag's `key=value` or a
+    /// bare `key` stands, so the chip read never replaces it.
+    fn override_names(key: &str, overrides: &[String]) -> bool {
+        overrides
+            .iter()
+            .any(|text| text.split_once('=').map_or(text.as_str(), |(key, _)| key) == key)
+    }
+
+    /// Whether the chips still need their read: owed, or failed and
+    /// waiting for its re-owe. The read itself runs only in state
+    /// `Owed`; `Failed` waits for a new workspace or link.
+    pub(in crate::app) fn chip_read_owed(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| matches!(home.chooser.chip_read, ChipRead::Owed | ChipRead::Failed))
+    }
+
+    /// Whether the last chip read failed: the start pick stays owed
+    /// until a new workspace or link reads the chips again.
+    pub(in crate::app) fn chip_read_failed(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.chip_read == ChipRead::Failed)
     }
 
     /// Owes the pick the picker opens for: the next outgoing pass
@@ -425,7 +473,9 @@ impl App {
     /// The chips read again on the next pass: the hub and its levels
     /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
-        self.chip_read_owed();
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.chip_read = ChipRead::Owed;
+        }
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
@@ -556,12 +606,23 @@ impl App {
 
     /// Chooses `workspace` for the next `start` and names its project
     /// for `prompt_history`. The chips belong to the old workspace, so
-    /// the next pass reads them again.
+    /// with the link up the chips read at once at the new workspace,
+    /// and with it down the next hello reads them.
     pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
         if let Some(home) = self.home.as_mut() {
             home.choose(workspace);
         }
-        self.chip_read_owed();
+        if self.link == Link::Up
+            && let Some(remote) = self.remote()
+        {
+            let read = remote.chip(&self.workspace());
+            self.fold_chip(read);
+            self.sync_project();
+            return;
+        }
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.chip_read = ChipRead::Owed;
+        }
         self.sync_project();
     }
 

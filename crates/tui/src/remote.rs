@@ -32,11 +32,13 @@ pub(crate) use login::RemoteLogin;
 pub(crate) use router::{AskError, Caller, Cancel, Pending, Router};
 
 /// The home chips' configuration: the hub model and thinking level on
-/// screen, and the scoped models the checklist marks.
+/// screen, and the scoped models the checklist marks. Each is absent
+/// when the hub leaves it unset, redacts it, or writes what is not
+/// JSON: the fold keeps the chip's text for those.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Chip {
-    pub(crate) model: String,
-    pub(crate) thinking: String,
+    pub(crate) model: Option<String>,
+    pub(crate) thinking: Option<String>,
     pub(crate) scoped: Vec<String>,
 }
 
@@ -153,16 +155,12 @@ impl Remote {
                     Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
                 })
         };
-        let model: String = text("model")
-            .and_then(|text| serde_json::from_str::<String>(&text).ok())
-            .unwrap_or_default();
-        let thinking: String = if model.is_empty() {
-            String::new()
-        } else {
+        let model: Option<String> =
+            text("model").and_then(|text| serde_json::from_str::<String>(&text).ok());
+        let thinking: Option<String> = model.as_deref().and_then(|model| {
             text(&format!("models.\"{model}\".thinking"))
                 .and_then(|text| serde_json::from_str::<String>(&text).ok())
-                .unwrap_or_default()
-        };
+        });
         let scoped: Vec<String> = text("scoped_models")
             .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
             .unwrap_or_default();

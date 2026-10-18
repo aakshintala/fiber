@@ -148,8 +148,7 @@ pub(crate) fn run_with(
     app.set_home(launch);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
-        app.owe_start_pick();
-        let _ = app.start_model_pick();
+        app.start_model_pick();
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
