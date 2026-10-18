@@ -1102,7 +1102,11 @@ fn a_label_that_parses_as_json_is_still_a_string() {
 
 #[test]
 fn a_resume_launch_passes_no_credential_override() {
-    let command = launcher(std::path::Path::new("/bin/fiber"))(&resumed());
+    let mut launch = resumed();
+    // A label the resume carries anyway: the recorded session keeps
+    // it, so no `-c` may travel.
+    launch.credential = Some("work".to_owned());
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&launch);
     let argv: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())
