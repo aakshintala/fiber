@@ -208,16 +208,12 @@ impl Config {
         let mut notices = Vec::new();
         let mut layers = vec![(Source::Default, keys::defaults())];
         let (repository_file, repository) = read_repository(&sources.workspace)?;
+        let global_file = global_config_file(&home);
+        let project_file = project_config_file(&home, &sources.project);
         let files = [
-            (
-                Source::Global(home.join("config.json")),
-                read(&home.join("config.json"))?,
-            ),
+            (Source::Global(global_file.clone()), read(&global_file)?),
             (Source::Repository(repository_file), repository),
-            (
-                Source::Project(project_dir.join("config.json")),
-                read(&project_dir.join("config.json"))?,
-            ),
+            (Source::Project(project_file.clone()), read(&project_file)?),
         ];
         for (source, value) in files {
             if let Some(value) = value {
@@ -631,7 +627,7 @@ fn has_value(entry: &Value) -> bool {
 fn read_repository(workspace: &Path) -> Result<(PathBuf, Option<Value>), ConfigError> {
     let fiber = workspace.join(".fiber");
     plain(&fiber, true)?;
-    let file = fiber.join("config.json");
+    let file = repository_config_file(workspace);
     let value = if plain(&file, false)? {
         read(&file)?
     } else {
