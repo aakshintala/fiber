@@ -888,7 +888,15 @@ fn message_read_error_is_unreachable_not_retried() {
         deadline.recv_or_fail(&result, "read error is unreachable"),
         Err(MessageError::Unreachable)
     );
-    assert_closed(&peer);
+    // The sender returns on the injected error without reading the two
+    // answers above, so its close lands with unread bytes queued: Linux
+    // reports that close as ECONNRESET, macOS as EOF. Both mean closed.
+    match peer.read(&mut [0u8; 1]) {
+        Ok(0) => {}
+        Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {}
+        Ok(_) => panic!("the sender writes no third line after its answer"),
+        Err(e) => panic!("the sender closes straight after its answer: {e}"),
+    }
 }
 
 #[test]
