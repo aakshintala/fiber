@@ -62,7 +62,7 @@ pub use home::{
 };
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, images_cache_dir, logs_dir,
-    mcp_cache_dir, project_data_dir,
+    mcp_cache_dir, project_data_dir, run_dir,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
