@@ -3206,7 +3206,9 @@ fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
 
 /// No frame shows part of the replay through a slow channel: the test
 /// is the slow producer, sending the replay in parts and each part only
-/// after the loop reports the held batch before it ended. The first
+/// after the loop reports the held batch before it ended. The loop
+/// waits at each batch end until the next part is wholly queued, so
+/// every batch takes exactly the part meant for it. The first
 /// part fills one `HUB_BATCH` batch, the next empties the channel short
 /// of the boundary, a scroll key goes in mid-pass, and the last part
 /// holds the boundary with two live lines above it. Neither the full
@@ -3283,14 +3285,18 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     send(Input::Hub(raise_accepted(SESSION, &raise_id, last)));
     send_lines(&log[..head]);
     let (ended_tx, ended) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
-        pause::report_ends(ended_tx);
+        pause::report_ends(ended_tx, release);
         let code = lp.run(&rx);
         done_tx.send((code, lp)).unwrap_or(());
     });
     let wait = Deadline::after(DEADLINE);
     let mut taken = Vec::new();
+    // Each batch end holds the loop until this send: the next part is
+    // queued whole by then.
+    let resume = || release_tx.send(()).unwrap_or_else(|error| panic!("{error}"));
     let mut batch_end = |what: &str| {
         let count = wait.recv_or_fail(&ended, what);
         taken.push(count);
@@ -3309,12 +3315,14 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     // The second part, sent after the full batch ended: it empties the
     // channel short of the boundary.
     send_lines(&log[head..head + SHORT]);
+    resume();
     assert_eq!(batch_end("the emptied channel"), SHORT);
     // A scroll key mid-pass, then the last part: the rest of the replay
     // with the live lines pushed behind the boundary line.
     send(Input::Bytes(b"\x1b[5~".to_vec()));
     send_lines(&log[head + SHORT..]);
     send_lines(&live);
+    resume();
     let landing = batch_end("the landing batch");
     // The landing batch began after the full batch's, the emptied
     // channel's and the key's frames were all written: none was.
@@ -3323,6 +3331,8 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         "no frame before the landing: neither the full batch, the emptied channel nor the key draws"
     );
     assert_eq!(landing, log.len() - head - SHORT + live.len());
+    // Every later batch end runs through.
+    drop(release_tx);
     send(quit());
     let (code, lp) =
         Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after the replay");
