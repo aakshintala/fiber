@@ -32,6 +32,7 @@ mod pty;
 mod resume;
 mod run;
 mod screen;
+mod session_list;
 mod wheel;
 
 use std::collections::BTreeMap;
@@ -193,6 +194,7 @@ fn timing_names() -> Vec<&'static str> {
         .chain(&busy::WORKLOADS)
         .chain(&busy::ONCE)
         .chain(&resume::WORKLOADS)
+        .chain(&session_list::WORKLOADS)
         .chain(&paging::WORKLOADS)
         .chain(listing::SAMPLED.iter())
         .chain(attach::SAMPLED.iter())
@@ -239,6 +241,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         .iter()
         .chain(&busy::WORKLOADS)
         .chain(&resume::WORKLOADS)
+        .chain(&session_list::WORKLOADS)
         .chain(paging)
         .map(|workload| {
             let count = if workload.timing { timing_runs } else { runs };
