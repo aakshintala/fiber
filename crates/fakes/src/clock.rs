@@ -71,8 +71,10 @@ impl Mark {
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
 /// it never reads again. [`FakeClock::advance`], [`FakeClock::advance_marked`],
-/// [`FakeClock::advance_when_parked`] and [`Clock::sleep`] are the only things
-/// that move it.
+/// [`FakeClock::advance_when_parked`],
+/// [`FakeClock::advance_when_parked_threads`],
+/// [`FakeClock::advance_when_parked_then`] and [`Clock::sleep`] are the only
+/// things that move it.
 pub struct FakeClock {
     origin: Instant,
     state: Mutex<State>,
@@ -228,12 +230,19 @@ impl FakeClock {
 
     /// Waits for exactly `count` threads to hold a fresh park at `expected`,
     /// then advances by `advance`, returning each thread's latest park as in
-    /// [`FakeClock::advance_marked`]. A count of zero fails before waiting;
-    /// more parked threads than `count` fail at once; fewer wait to the
-    /// deadline. Parks made before the last move are stale and count for
-    /// nothing, and nested parks on one thread count once. All failures
-    /// panic at the caller's line and move no time. (Docs polished with the
-    /// hook method in a later task.)
+    /// [`FakeClock::advance_marked`]. `None` expects unbounded parks.
+    ///
+    /// Only fresh parks count: parks made before the last move are stale and
+    /// count for nothing, and nested parks on one thread count once. A park
+    /// at any other instant is the existing watched mismatch. More parked
+    /// threads than `count` fail at once, naming every parked thread and
+    /// instant; fewer wait to the deadline. A count of zero fails before
+    /// waiting. Overshoot, other-driver move, second active wait and
+    /// "deadline bounds only the wait for a park" are exactly as for
+    /// [`FakeClock::advance_when_parked`].
+    ///
+    /// Failures panic at the caller's line, naming every parked thread and
+    /// its instant, and move no time.
     #[track_caller]
     #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked_threads(
@@ -265,9 +274,21 @@ impl FakeClock {
         )
     }
 
-    /// Runs `hook` after the park is observed and before time moves, under
-    /// the clock's lock. (Temporary docs; polished with the behaviour in a
-    /// later task.)
+    /// [`FakeClock::advance_when_parked`], running `hook` after the park is
+    /// observed and before time moves.
+    ///
+    /// `hook` runs at most once: only after the park matched and the move
+    /// validated, immediately before the move, while the clock's state lock
+    /// is held. It therefore never runs for a validation failure, a
+    /// mismatch, an other-driver move, a second active wait or an expiry.
+    /// It must not call any [`FakeClock`] method, nor take a lock another
+    /// thread holds while calling the clock: the mutex is not reentrant, and
+    /// either deadlocks. Wakers run after the lock drops, as now. Returns
+    /// the same [`Mark`] the other waits return, taken under the move's
+    /// lock.
+    ///
+    /// A hook panic unwinds to the caller with its payload and leaves time
+    /// unmoved; no subscribed waker is called.
     #[track_caller]
     #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
     pub fn advance_when_parked_then(
