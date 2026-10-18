@@ -614,3 +614,42 @@ fn the_session_command_rewinds_with_the_old_session_and_no_model() {
         ]
     );
 }
+
+#[test]
+fn resume_spawns_with_the_given_workspace() {
+    let root = fakes::TempDir::new("hresumews");
+    let workspace = workspace(&root);
+    let starter = starter_with(recorder_fixture(), VariablesSource::Inherited, &root);
+    let started = Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace, None).unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, _) = reported(&root);
+    assert!(
+        args.contains(&format!("--workspace={}", workspace.display())),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn start_command_passes_worktree_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let with = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        true,
+        false,
+    );
+    assert!(args_of(&with).contains(&"--worktree".to_owned()));
+    let without = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        false,
+    );
+    assert!(!args_of(&without).contains(&"--worktree".to_owned()));
+}
