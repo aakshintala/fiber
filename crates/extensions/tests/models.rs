@@ -2412,7 +2412,7 @@ fn refresh_lists_passes_the_key_and_host_to_the_thread() {
             "https://{workspace}/v1",
         ),
     );
-    let started = fakes::within("started.len", fakes::MUST_SUCCEED_WITHIN, move || {
+    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
         extensions::refresh_lists(
             &[lua],
             &providers,
@@ -2457,7 +2457,7 @@ fn refresh_lists_starts_nothing_while_the_workspace_has_no_value() {
             "https://{workspace}/v1",
         ),
     );
-    let started = fakes::within("started.is_empty", fakes::MUST_SUCCEED_WITHIN, move || {
+    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
         extensions::refresh_lists(
             &[lua],
             &providers,

@@ -879,7 +879,7 @@ fn provider_purposes_record_once_per_attempt() {
         credential: "c".to_owned(),
         label: "l".to_owned(),
     };
-    let quota = fakes::within("pair.clone", fakes::MUST_SUCCEED_WITHIN, {
+    let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
         let models = Arc::clone(&models);
         let pair = pair.clone();
         move || models.quota(&pair, None)
@@ -888,7 +888,7 @@ fn provider_purposes_record_once_per_attempt() {
         quota,
         extensions::QuotaEntry::Reported(_) | extensions::QuotaEntry::NoQuota
     ));
-    let token = fakes::within("pair.clone", fakes::MUST_SUCCEED_WITHIN, {
+    let token = fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
         let credentials = Arc::clone(&credentials);
         let pair = pair.clone();
         move || credentials.credential_token(&pair)
@@ -1391,7 +1391,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         label: "l".to_owned(),
     };
     let provider_q = LuaProvider::new(Arc::clone(&ext_a), "q");
-    let quota = fakes::within("pair.clone", fakes::MUST_SUCCEED_WITHIN, {
+    let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
         let provider_q = Arc::clone(&provider_q);
         let pair = pair.clone();
         move || provider_q.quota(&pair, None)
@@ -1684,7 +1684,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         ("u", "token_refresh"),
         ("v", "cost"),
     ] {
-        let started = fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+        let started = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
             let session = Arc::clone(&session);
             let config = config.clone();
             let clock = clock.clone();
@@ -1696,7 +1696,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         assert_eq!(started.name(), provider);
         match purpose {
             "model_list" => {
-                fakes::within("started.list_models", fakes::MUST_SUCCEED_WITHIN, {
+                fakes::within("list_models", fakes::MUST_SUCCEED_WITHIN, {
                     let started = Arc::clone(&started);
                     move || started.list_models(&ModelsArg::default())
                 })
@@ -1707,7 +1707,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
                     credential: "c".to_owned(),
                     label: "l".to_owned(),
                 };
-                let quota = fakes::within("started.quota", fakes::MUST_SUCCEED_WITHIN, {
+                let quota = fakes::within("quota", fakes::MUST_SUCCEED_WITHIN, {
                     let started = Arc::clone(&started);
                     move || started.quota(&pair, None)
                 });
@@ -1718,14 +1718,14 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
                     credential: "c".to_owned(),
                     label: "l".to_owned(),
                 };
-                fakes::within("started.credential_token", fakes::MUST_SUCCEED_WITHIN, {
+                fakes::within("credential_token", fakes::MUST_SUCCEED_WITHIN, {
                     let started = Arc::clone(&started);
                     move || started.credential_token(&pair)
                 })
                 .expect("fresh credential() succeeds");
             }
             "cost" => {
-                let cost = fakes::within("url.clone", fakes::MUST_SUCCEED_WITHIN, {
+                let cost = fakes::within("cost", fakes::MUST_SUCCEED_WITHIN, {
                     let started = Arc::clone(&started);
                     let url = url.clone();
                     move || started.cost(&GenerationId("g1".into()), &url, None)
@@ -1738,7 +1738,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
     }
     // Reused: the hook-held extension lends its running VM, and two
     // providers on it keep their distinct attribution.
-    let reused = fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+    let reused = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
         let config = config.clone();
         let clock = clock.clone();
@@ -1755,7 +1755,7 @@ fn late_fresh_and_reused_vms_carry_the_sink() {
         credential: "c".to_owned(),
         label: "l".to_owned(),
     };
-    let quota = fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+    let quota = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
         let session = Arc::clone(&session);
         let config = config.clone();
         let clock = clock.clone();
@@ -1846,7 +1846,7 @@ fn failed_provider_loads_record_nothing_and_silent_loads_stay_silent() {
     // A missing provider and an undeclared one fail the same way with or
     // without a sink, inventing no request record.
     for (extension, provider) in [("fiber.test/diag", "missing"), ("fiber.test/undecl", "u")] {
-        let answer = fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+        let answer = fakes::within("start_provider", fakes::MUST_SUCCEED_WITHIN, {
             let session = Arc::clone(&session);
             let config = config.clone();
             let clock = clock.clone();

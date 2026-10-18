@@ -383,21 +383,17 @@ fn attended_callback_login_exchanges_a_code_for_a_token() {
         "Open https://login.example/verify to log in."
     );
     Deadline::after(WAIT).recv_or_fail(&ready, "callback recorded");
-    let response = fakes::within(
-        "socket.set_read_timeout",
-        fakes::MUST_SUCCEED_WITHIN,
-        move || {
-            let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
-            socket.set_read_timeout(Some(WAIT)).unwrap();
-            socket.set_write_timeout(Some(WAIT)).unwrap();
-            socket
-                .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
-                .unwrap();
-            let mut response = String::new();
-            socket.read_to_string(&mut response).unwrap();
-            response
-        },
-    );
+    let response = fakes::within("callback.get", fakes::MUST_SUCCEED_WITHIN, move || {
+        let mut socket = std::net::TcpStream::connect_timeout(&addr, WAIT).unwrap();
+        socket.set_read_timeout(Some(WAIT)).unwrap();
+        socket.set_write_timeout(Some(WAIT)).unwrap();
+        socket
+            .write_all(b"GET /?code=returned HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        response
+    });
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert_eq!(
         Deadline::after(WAIT)

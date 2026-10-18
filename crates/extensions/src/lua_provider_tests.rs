@@ -607,7 +607,7 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let data = credentialless_data();
     // No `credential` function and no key source: nothing to refresh with.
     assert!(
-        !fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+        !fakes::within("has_credential", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&bare);
             let config = config.clone();
             let data = data.clone();
@@ -627,7 +627,7 @@ fn has_credential_needs_a_registered_credential_or_a_stored_key() {
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     let credentialed = LuaProvider::new(extension, "p");
     assert!(
-        fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("has_credential", fakes::MUST_SUCCEED_WITHIN, {
             let config = config.clone();
             let data = data.clone();
             move || credentialed.has_credential(&config, &data, &fakes::children::grouped_output)

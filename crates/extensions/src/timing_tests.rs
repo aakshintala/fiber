@@ -665,7 +665,7 @@ fn cap_boundaries_hold_on_both_paths() {
             ProviderServer::start_responding(move |_| Response::status(status, body.clone()))
                 .unwrap();
         let request = get(&server.url(), None);
-        let plain = fakes::within("method.clone", fakes::MUST_SUCCEED_WITHIN, {
+        let plain = fakes::within("perform", fakes::MUST_SUCCEED_WITHIN, {
             let request = HttpRequest {
                 method: request.method.clone(),
                 url: request.url.clone(),
@@ -677,7 +677,7 @@ fn cap_boundaries_hold_on_both_paths() {
         });
         let (sink, _) = Watching::new();
         let held = sink.clone();
-        let seen = fakes::within("server.url", fakes::MUST_SUCCEED_WITHIN, {
+        let seen = fakes::within("perform_observed", fakes::MUST_SUCCEED_WITHIN, {
             let request = HttpRequest {
                 method: "GET".to_owned(),
                 url: server.url(),

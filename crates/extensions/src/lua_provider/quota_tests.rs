@@ -455,14 +455,14 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
     server.hold();
     let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
     assert!(
-        fakes::within("provider.clone", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("registers", fakes::MUST_SUCCEED_WITHIN, {
             let provider = provider.clone();
             move || provider.registers("quota")
         })
         .unwrap()
     );
     assert_eq!(
-        fakes::within("provider.clone", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -473,7 +473,7 @@ fn quota_now_returns_while_the_vm_is_busy_and_starts_only_one_fetch() {
         "the fetch reached the held server"
     );
     assert_eq!(
-        fakes::within("provider.clone", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -522,7 +522,7 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
     );
     assert_eq!(server.requests().len(), 2);
     assert_eq!(
-        fakes::within("provider.clone", fakes::MUST_SUCCEED_WITHIN, {
+        fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
             let provider = provider.clone();
             move || provider.quota_now(&pair(), None)
         }),
@@ -612,7 +612,7 @@ fn quota_now_expires_an_overdue_flight_without_waiting() {
             }
         };
         assert_eq!(
-            fakes::within("provider.clone", fakes::MUST_SUCCEED_WITHIN, {
+            fakes::within("quota_now", fakes::MUST_SUCCEED_WITHIN, {
                 let provider = provider.clone();
                 move || provider.quota_now(&pair(), None)
             }),
@@ -1392,7 +1392,7 @@ fn observed_and_ordinary_calls_share_one_due_quota_refresh() {
         QuotaEntry::Reported(percent("primary", 10.0, None)),
         "the ordinary call's trigger fetched"
     );
-    let _observed = fakes::within("server.requests", fakes::MUST_SUCCEED_WITHIN, {
+    let _observed = fakes::within("factory", fakes::MUST_SUCCEED_WITHIN, {
         let request = crate::test_support::request();
         move || factory(&request, std::num::NonZeroU32::new(2).unwrap())
     });
@@ -1543,7 +1543,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     let (provider, clock) = quota_provider(&root, "nil");
     // A fresh label never fetched: pending.
     assert!(fakes::within(
-        "provider.clone",
+        "quota_pending",
         fakes::MUST_SUCCEED_WITHIN,
         {
             let provider = provider.clone();
@@ -1558,7 +1558,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
         None,
     );
     assert!(!fakes::within(
-        "provider.clone",
+        "quota_pending",
         fakes::MUST_SUCCEED_WITHIN,
         {
             let provider = provider.clone();
@@ -1572,7 +1572,7 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
         .unwrap()
         .failed = true;
     assert!(!fakes::within(
-        "provider.clone",
+        "quota_pending",
         fakes::MUST_SUCCEED_WITHIN,
         {
             let provider = provider.clone();
@@ -1584,9 +1584,13 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
     server.hold();
     let busy = http_quota_provider(&root, &server.url(), FakeClock::new());
-    assert!(fakes::within("busy.clone", fakes::MUST_SUCCEED_WITHIN, {
-        let busy = busy.clone();
-        move || busy.quota_pending(&pair())
-    }));
+    assert!(fakes::within(
+        "quota_pending",
+        fakes::MUST_SUCCEED_WITHIN,
+        {
+            let busy = busy.clone();
+            move || busy.quota_pending(&pair())
+        }
+    ));
     server.release();
 }

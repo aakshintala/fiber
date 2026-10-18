@@ -801,7 +801,7 @@ fn a_command_runs_once_however_often_the_credential_is_read() {
     let script = format!("echo run >> '{}'; printf key", marker.display());
     let provider = acme(command(&["sh", "-c", &script]));
     let read = marker.clone();
-    let (runs, keys) = fakes::within("config.clone", fakes::MUST_SUCCEED_WITHIN, move || {
+    let (runs, keys) = fakes::within("default_key", fakes::MUST_SUCCEED_WITHIN, move || {
         let keys = [
             default_key(&config, &provider).unwrap(),
             default_key(&config, &provider).unwrap(),
