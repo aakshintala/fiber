@@ -107,6 +107,7 @@ fn extensions() -> Event {
         extensions: vec![LoadedExtension {
             name: "demo".into(),
             version: "1".into(),
+            replaces: Vec::new(),
         }],
     })
 }

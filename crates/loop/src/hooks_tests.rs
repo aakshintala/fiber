@@ -1179,6 +1179,7 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
         vec![contract::events::LoadedExtension {
             name: "acme".into(),
             version: "v1.0.0".into(),
+            replaces: Vec::new(),
         }],
         vec![notice],
     )

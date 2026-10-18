@@ -33,15 +33,6 @@ fn fake_clock() -> &'static Arc<FakeClock> {
     Box::leak(Box::new(FakeClock::new()))
 }
 
-/// Kills process group `group` on drop, without waiting.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// Spawns `sleep 60` in its own process group.
 fn sleeper() -> (std::process::Child, u32, KillGroup) {
     let child = Command::new("sleep")

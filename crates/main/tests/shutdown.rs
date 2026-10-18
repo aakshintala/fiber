@@ -22,7 +22,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call};
+use support::{Deadline, KillGroup, Setup, function_call};
 
 impl Setup {
     fn new_with_fs_root() -> Self {
@@ -267,15 +267,6 @@ fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
 /// is not what these tests pin.
 fn is_status(line: &Value) -> bool {
     line["kind"] == "session_status"
-}
-
-/// Kills process group `group` on drop; forgotten once the group is empty.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// An `openai-responses` stream of `events`, then its completion.

@@ -143,6 +143,17 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         area: "The input box",
+        id: "focus_rail",
+        when: "in an empty box",
+        description: "Move focus from an empty input box into the rail",
+        keys: "← in an empty box",
+        other_paths: "",
+        contexts: Contexts::INPUT,
+        defaults: &["left"],
+        events: &[Canon::Edit(Edit::Left)],
+    },
+    Binding {
+        area: "The input box",
         id: "search_prompts",
         when: "",
         description: "Search those prompts",

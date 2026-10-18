@@ -94,6 +94,10 @@ pub struct LoadedExtension {
     pub name: String,
     /// Its version.
     pub version: String,
+    /// The built-in tools and commands its manifest lists in `replaces`,
+    /// in manifest order, as declared: absent on the wire when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
 }
 
 /// What a fork gets of an extension state key (`docs/events.md`,

@@ -453,6 +453,7 @@ impl SessionExtensions {
             session.loaded.push(LoadedExtension {
                 name: s.name,
                 version: s.version,
+                replaces: s.manifest.replaces,
             });
         }
         chain.fill(config, &mut session);

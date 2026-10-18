@@ -101,6 +101,16 @@ Fiber: delegate {job_id} finished. Its final message:
 It ended waiting for answers to these questions:
 {questions}
 
+## fork-task
+
+Fiber: you are a fork of session {parent_session_id}, started at delegate depth {depth}. The conversation above is your parent's, up to the point where it called `delegate_fork`. From here you work alone, and your final message goes back to your parent. Jobs started above belong to your parent, not to you.
+
+{workspace}{unattended}
+
+Your task:
+
+{prompt}
+
 ## jobs-pending
 
 Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.

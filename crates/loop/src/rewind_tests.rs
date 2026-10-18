@@ -23,6 +23,33 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn fork_task_is_the_ruled_message_with_the_unattended_paragraph() {
+    assert_eq!(
+        fork_task(&SessionId("s_parent00000001".into()), 1, "check it"),
+        "Fiber: you are a fork of session s_parent00000001, started at delegate depth 1. The conversation above is your parent's, up to the point where it called `delegate_fork`. From here you work alone, and your final message goes back to your parent. Jobs started above belong to your parent, not to you.\n\nNobody is present to answer questions in this session. Work through to the end on your own judgment, and state every assumption you made in your final reply. Ask with `ask_user` only when you cannot go on without an answer: asking ends the run, and the caller answers by resuming the session.\n\nYour task:\n\ncheck it"
+    );
+}
+
+#[test]
+fn fork_task_names_its_depth() {
+    assert!(
+        fork_task(&SessionId("s_parent".into()), 2, "check it")
+            .contains("started at delegate depth 2.")
+    );
+}
+
+#[test]
+fn fork_task_leaves_braces_in_the_prompt_alone() {
+    let text = fork_task(
+        &SessionId("s_parent".into()),
+        1,
+        "use {depth} and {unattended} and {prompt}",
+    );
+    assert!(text.ends_with("Your task:\n\nuse {depth} and {unattended} and {prompt}"));
+    assert_eq!(text.matches("Your task:").count(), 1);
+}
+
 fn requested(name: &str, arguments: Value) -> Event {
     Event::ToolCallRequested(ToolCallRequested {
         name: name.to_owned(),
@@ -380,10 +407,12 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(1),
             },
-            note: String::new(),
-            summary: None,
             worktree: None,
-            name: None,
+            how: Continuation::Rewind {
+                note: String::new(),
+                summary: None,
+                name: None,
+            },
         },
     )
     .unwrap();
@@ -509,10 +538,12 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
                 session_id: SessionId("s_parent00000001".to_owned()),
                 seq: Seq(2),
             },
-            note: String::new(),
-            summary: None,
             worktree: None,
-            name: None,
+            how: Continuation::Rewind {
+                note: String::new(),
+                summary: None,
+                name: None,
+            },
         },
     )
     .unwrap();
@@ -600,10 +631,12 @@ fn rewound_from_parent(
                 session_id: SessionId(parent_id.to_owned()),
                 seq: Seq(point_seq),
             },
-            note: String::new(),
-            summary: None,
             worktree: None,
-            name,
+            how: Continuation::Rewind {
+                note: String::new(),
+                summary: None,
+                name,
+            },
         },
     )
     .unwrap();
@@ -1489,4 +1522,143 @@ fn a_hook_context_after_the_handoffs_opening_is_inherited() {
         earlier.iter().all(|input| !matches!(input, contract::provider::Input::User { text, .. } if text.contains("the hook context"))),
         "the context past the point stays out: {earlier:?}"
     );
+}
+
+#[test]
+fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
+    // The fold sees a credential `model_changed` after the point, but the
+    // rewound session continues the logged build verbatim, so it writes no
+    // `model_changed` (`docs/events.md`, "Rewind").
+    use contract::events::{
+        CacheLifetime, ModelChanged, ModelSettings, PreambleBuilt, PreambleReason, SessionStarted,
+        SwitchSource, Variables, VariablesSource,
+    };
+    let root = fakes::TempDir::new("loop-rewound-credential");
+    let home = root.path().to_path_buf();
+    let parent = home.join("s_parent00000001");
+    std::fs::create_dir_all(&parent).unwrap();
+    let line = |kind: &str, seq: u64, event: &Event| Envelope {
+        kind: kind.to_owned(),
+        session_id: SessionId("s_parent00000001".to_owned()),
+        ts: 1_759_150_000_000 + seq,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(Seq(seq)),
+        payload: event.payload().unwrap(),
+    };
+    let built = Event::PreambleBuilt(PreambleBuilt {
+        reason: PreambleReason::Start,
+        model: "fake/model-1".to_owned(),
+        context_window: 200_000,
+        trigger_at: None,
+        budget: None,
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: CacheLifetime::OneHour,
+        credential: Some("work".to_owned()),
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    });
+    let switched = Event::ModelChanged(ModelChanged {
+        before: ModelSettings {
+            model: "fake/model-1".to_owned(),
+            thinking: None,
+            cache_lifetime: CacheLifetime::OneHour,
+            credential: Some("work".to_owned()),
+        },
+        after: ModelSettings {
+            model: "fake/model-1".to_owned(),
+            thinking: None,
+            cache_lifetime: CacheLifetime::OneHour,
+            credential: Some("home".to_owned()),
+        },
+        source: SwitchSource::Driver,
+    });
+    let mut text = serde_json::to_string(&line(
+        "session_started",
+        0,
+        &Event::SessionStarted(SessionStarted {
+            workspace: "/w".to_owned(),
+            variables: Variables {
+                path: "/usr/bin".to_owned(),
+                names: Vec::new(),
+                source: VariablesSource::Inherited,
+            },
+            parent: None,
+            forked_from: None,
+            rewind: None,
+            worktree: None,
+        }),
+    ))
+    .unwrap();
+    text.push('\n');
+    text.push_str(&serde_json::to_string(&line("preamble_built", 1, &built)).unwrap());
+    text.push('\n');
+    text.push_str(&serde_json::to_string(&line("model_changed", 2, &switched)).unwrap());
+    text.push('\n');
+    std::fs::write(parent.join("events.jsonl"), text).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let log = std::sync::Arc::new(
+        log::Log::create(&home, SessionId("s_child00000001".into()), clock.clone()).unwrap(),
+    );
+    let dir = log.dir().to_path_buf();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let mut prompt = crate::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".to_owned(),
+        dir.join("events.jsonl").display().to_string(),
+        clock,
+        100_000,
+    );
+    prompt.credential = Some("work".to_owned());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _tx = tx;
+    let rules: std::sync::Arc<dyn contract::rules::Rules> = std::sync::Arc::new(NoRules);
+    Loop::rewound(
+        crate::Session {
+            log,
+            provider: std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: crate::Model {
+                reference: "fake/model-1".to_owned(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: home.display().to_string(),
+                credentials: home.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
+        Rewound {
+            from: contract::shapes::Point {
+                session_id: SessionId("s_parent00000001".to_owned()),
+                seq: Seq(2),
+            },
+            worktree: None,
+            how: Continuation::Fork {
+                parent: contract::events::Parent {
+                    session_id: SessionId("s_parent00000001".into()),
+                    delegate_id: contract::JobId("j_fork".into()),
+                },
+            },
+        },
+    )
+    .unwrap();
+    let kinds: Vec<String> = log::read(&dir)
+        .unwrap()
+        .iter()
+        .map(|line| line.kind.clone())
+        .collect();
+    // The fold ends on the switch's `after`, but the session continues
+    // the build at the point, whose label is unchanged: no `model_changed`.
+    assert_eq!(kinds, ["session_started"]);
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(lines[0].payload["parent"]["delegate_id"], "j_fork");
+    assert!(lines[0].payload.get("rewind").is_none());
 }

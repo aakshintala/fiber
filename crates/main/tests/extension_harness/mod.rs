@@ -14,7 +14,7 @@ use std::process::{Child, ExitStatus};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use crate::support::{Deadline, Setup, group_alive};
+use crate::support::{Deadline, KillGroup, Setup, group_alive};
 use fakes::{Response, Watchdog};
 use serde_json::{Value, json};
 
@@ -116,14 +116,6 @@ impl Setup {
 pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-pub(crate) struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        crate::support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// How the session stdout reader ended: an explicit EOF on a clean read

@@ -20,9 +20,14 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, function_call};
+use support::{Setup, bounded, function_call, session_dir};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
+
+/// `SYNC` held behind a FIFO read: `run` blocks reading the FIFO before it
+/// reports status, so the test decides when `extension_ui` lands. `{fifo}`
+/// is the FIFO's path, replaced at the use site.
+const SYNC_HELD: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.fs.read(\"{fifo}\") host.status(\"synced \" .. text) end })\n";
 
 /// Every line of the command's action, not just the expected endpoints.
 fn command_action<'a>(
@@ -512,6 +517,65 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn extensions_loaded_in_the_log_carries_each_replaces() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.lua_with(
+        "worker",
+        "fiber.command(\"model\", { timeout = 8000, run = function() end })\n",
+        json!({"replaces": ["model"]}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    until(&client, "command_accepted", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
+    });
+    // Read before close: a never-prompted session's directory is deleted
+    // on close, so after the exit the file is gone
+    // (`crates/doors/src/session.rs`, `prompted`).
+    let text = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    let log = support::complete_lines(&text);
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let loaded = log
+        .iter()
+        .rfind(|line| line["kind"] == "extensions_loaded")
+        .expect("the log holds extensions_loaded");
+    let extensions = loaded["payload"]["extensions"]
+        .as_array()
+        .expect("extensions_loaded carries extensions");
+    assert_eq!(
+        extensions
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["fake", "fiber.test/worker"]
+    );
+    assert_eq!(extensions[0].get("replaces"), None);
+    assert_eq!(extensions[1]["replaces"], json!(["model"]));
+    // The complete ordered kinds of the log: `clients` and
+    // `session_status` are ephemeral, so they never reach the file
+    // (docs/testing.md, "Event streams"). No turn runs, so no preamble
+    // is built and no opening message is written.
+    assert_eq!(
+        log.iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["session_started", "fiber_started", "extensions_loaded"]
+    );
 }
 
 #[test]
@@ -1052,7 +1116,12 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    setup.lua("worker", SYNC);
+    let fifo = setup.workspace().join("sync-hold.fifo");
+    fakes::fifo(&fifo);
+    setup.lua(
+        "worker",
+        &SYNC_HELD.replace("{fifo}", fifo.to_str().unwrap()),
+    );
     let dir = setup.workspace().join(".agents/skills/sync-now");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -1089,6 +1158,16 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
     assert!(!ran.is_empty());
+    // The held `run` is admitted but blocked reading the FIFO: release it,
+    // then wait for its status before closing, so `close` cannot win the
+    // race against `extension_ui`.
+    bounded(setup.deadline, "release the held command", move || {
+        std::fs::write(&fifo, b"").unwrap();
+    });
+    let status = until(&client, "the held command's status", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
+    });
+    assert_eq!(status.last().unwrap()["payload"]["status"], "synced x");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_close(&client);
     drop(client);

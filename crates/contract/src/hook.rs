@@ -437,6 +437,8 @@ pub enum StartReason {
     Start,
     /// A resumed session.
     Resume,
+    /// A fork of another session's conversation.
+    Fork,
     /// A rewound session.
     Rewind,
     /// A handoff, once the note is ready.

@@ -1219,10 +1219,12 @@ fn a_rewound_loop_reuses_its_logged_preamble_silently() {
                 session_id: SessionId("s_test".into()),
                 seq: contract::Seq(1),
             },
-            note: String::new(),
-            summary: None,
             worktree: None,
-            name: None,
+            how: crate::Continuation::Rewind {
+                note: String::new(),
+                summary: None,
+                name: None,
+            },
         },
     )
     .unwrap();
