@@ -53,11 +53,14 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
 ## Before a call runs
 
-- Arguments the model sent are repaired first, and only where a property's
-  schema names a single type, after following any `$ref` to its definition.
-  Three repairs are made. A `null` sent for an optional property is dropped,
-  so the tool sees it as absent, unless the property's type is `null` alone. A
-  required property keeps a `null` its type allows. A string holding a plain JSON number, such
+- Arguments the model sent are repaired first, after following any `$ref` to
+  its definition. Repairs need a single type, except for dropping nullable-union
+  nulls. Three repairs are made. A `null` sent for an optional property is
+  dropped unless its type is `null` alone or it has no type. A required
+  property's `null` is also dropped when every typed schema at that property
+  joins `null` with another type in a type list, and at least one has a type.
+  The tool sees these nulls as absent. A lone `"null"` or `["null"]` keeps its
+  null. A string holding a plain JSON number, such
   as `5`, `-2.5` or `1e3`, becomes a number where the type is `number`, and
   where the type is `integer` only if its value is whole, so `5.0` becomes
   `5` and `5.5` is left as sent; the string `true` or `false` becomes a
@@ -67,7 +70,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   repaired, and the value passes the check as sent or fails it. A `$ref`
   that leads back to itself before reaching a type repairs nothing. Nothing
   else is repaired: JSON that does not parse, a misspelt or foreign tool name,
-  and a missing or unknown property all fail the check. Repair is the same for
+  and an unknown property all fail the check. A missing required property fails
+  unless it meets the same nullable-union rule that permits dropping its null.
+  Repair is the same for
   every protocol, model and tool, built-in, MCP or extension. The model is not
   told, and its call is sent back to it as written. `tool_call_requested`
   records what was repaired (`docs/events.md`). Arguments a `before_tool` hook
