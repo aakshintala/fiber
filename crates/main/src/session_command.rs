@@ -299,17 +299,21 @@ pub(crate) fn run_new(
                 seed,
             )?
         }
-        None => parts_with(
-            overrides,
-            None,
-            None,
-            None,
-            Arc::clone(&clock),
-            host,
-            Arc::clone(&reads),
-            process,
-            extensions::StateSeed::new(),
-        )?,
+        None => {
+            let overrides_for_fix = overrides.clone();
+            parts_with(
+                overrides,
+                None,
+                None,
+                None,
+                Arc::clone(&clock),
+                host,
+                Arc::clone(&reads),
+                process,
+                extensions::StateSeed::new(),
+            )
+            .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
+        }
     };
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
@@ -317,6 +321,7 @@ pub(crate) fn run_new(
     // names it.
     parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
     let Parts {
+        sources,
         provider,
         observe,
         reviewer_observe,
@@ -460,11 +465,6 @@ pub(crate) fn run_new(
             return Err(e);
         }
     };
-    // What the session loads once its offer step has run, before its first
-    // preamble: the repository code approved since the process started.
-    let load = session_servers
-        .later
-        .into_load(session.declarer(), caps.clone());
     session.shell(driver);
     session.jobs(jobs.clone());
     session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
@@ -473,7 +473,17 @@ pub(crate) fn run_new(
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
-    extensions.answerable(!one_turn);
+    let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
+    let host_model = Arc::new(crate::model_host::ModelHost::new(
+        switching.reacher(Arc::new(crate::connect)),
+        budget,
+        &retry,
+        dir.clone(),
+        id.clone(),
+    ));
+    extensions.model_to(host_model.clone());
+    let answerable = !one_turn;
+    extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
         session.attended(),
@@ -498,11 +508,27 @@ pub(crate) fn run_new(
         hosted_stands,
         backend: extensions.search_backend(),
     };
+    let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    let switcher = switching.clone().closure(door);
+    let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
+        sources,
+        prompt_inputs.clone(),
+        current.clone(),
+        switching.clone(),
+        &tools,
+        &session,
+        host_model,
+        session_servers,
+        answerable,
+        log.clone(),
+        diag.clone(),
+    );
+    let reloader = reload.preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     let reads = switching.reads();
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
-        session_servers.servers.stop();
+        servers.stop();
         close(session, log, &home, &dir, &workspace, &*clock);
         return Ok(code);
     }
@@ -512,7 +538,7 @@ pub(crate) fn run_new(
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
-    let fetch_prompts = session_servers.prompts.clone();
+    let fetch_prompts = prompts.clone();
     let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
         fetch_prompts.get(server, prompt, text, cancel)
     });
@@ -534,7 +560,7 @@ pub(crate) fn run_new(
         run_one_turn,
         cancel,
         &diag,
-        &extensions,
+        &current,
         |inbox, cancel| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`
@@ -583,8 +609,8 @@ pub(crate) fn run_new(
                 };
                 started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                    session_extensions::written(&log, &extensions)?;
-                    r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
+                    session_extensions::written(&log, &current.get())?;
+                    r#loop::mcp_servers_started(&log, server_failures, mcp.notices)?;
                     Ok(looped)
                 })
             });
@@ -594,7 +620,7 @@ pub(crate) fn run_new(
             };
             finish(
                 started.map(|looped| {
-                    let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
+                    let looped = session_extensions::hooked(looped.jobs(jobs), &current);
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)
@@ -602,10 +628,8 @@ pub(crate) fn run_new(
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
-                        .switcher(
-                            switching.diagnostics(Arc::clone(&diag)).closure(door),
-                            switchable,
-                        )
+                        .switcher(switcher, switchable)
+                        .reloader(reloader)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
@@ -642,7 +666,7 @@ pub(crate) fn run_new(
             }
         }
     }
-    session_servers.servers.stop();
+    servers.stop();
     close(session, log, &home, &dir, &workspace, &*clock);
     Ok(code)
 }

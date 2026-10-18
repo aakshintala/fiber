@@ -14,6 +14,7 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
+use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
@@ -359,20 +360,13 @@ fn the_launch_runs_the_child_session_with_its_ids_model_and_prompt() {
         argv,
         [
             "session",
-            "--id",
-            "s_child",
-            "--workspace",
-            "/w",
-            "--model",
-            "fake/m:high",
-            "--prompt",
-            "scan the tree",
-            "--parent",
-            "s_parent",
-            "--delegate-id",
-            "j_1",
-            "--depth",
-            "1",
+            "--id=s_child",
+            "--workspace=/w",
+            "--model=fake/m:high",
+            "--prompt=scan the tree",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
         ]
     );
 }
@@ -387,8 +381,8 @@ fn launch_carries_the_childs_depth() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     assert!(
-        argv.windows(4)
-            .any(|args| args == ["--delegate-id", "j_1", "--depth", "2"])
+        argv.windows(2)
+            .any(|args| args == ["--delegate-id=j_1", "--depth=2"])
     );
 }
 
@@ -573,21 +567,16 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
         argv,
         [
             "session",
-            "--id",
-            "s_child",
-            "--workspace",
-            "/w",
+            "--id=s_child",
+            "--workspace=/w",
             "--resume",
             "--prompt=- also check Y",
-            "--parent",
-            "s_parent",
-            "--delegate-id",
-            "j_1",
-            "--depth",
-            "1",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
         ]
     );
-    assert!(!argv.iter().any(|arg| arg == "--model"));
+    assert!(!argv.iter().any(|arg| arg.starts_with("--model")));
 }
 
 #[test]
@@ -1037,7 +1026,26 @@ fn a_repository_layer_role_credential_is_ignored() {
     );
     let resolve = resolver(&providers, &config);
     // A repository's role cannot name a credential: the label is ignored,
-    // and a non-string `credential` reads as no label too.
+    // and a non-string `credential` reads as no label too. The load raises
+    // one ignored-key notice per role carrying one, naming the key.
+    let notices = config.notices();
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.code == ErrorCode::ConfigKeyIgnored),
+        "{notices:?}"
+    );
+    let file = root.path().join("workspace/.fiber/config.json");
+    for name in ["fast", "odd"] {
+        assert!(
+            notices.iter().any(|notice| notice
+                .message
+                .contains(&format!("roles.\"{name}\".credential"))
+                && notice.message.contains(&file.display().to_string())),
+            "{notices:?}"
+        );
+    }
     assert_eq!((resolve.credential)("fast"), Ok(None));
     assert_eq!((resolve.credential)("odd"), Ok(None));
     // The launch then passes no `-c`: the child reads the provider's
@@ -1094,7 +1102,11 @@ fn a_label_that_parses_as_json_is_still_a_string() {
 
 #[test]
 fn a_resume_launch_passes_no_credential_override() {
-    let command = launcher(std::path::Path::new("/bin/fiber"))(&resumed());
+    let mut launch = resumed();
+    // A label the resume carries anyway: the recorded session keeps
+    // it, so no `-c` may travel.
+    launch.credential = Some("work".to_owned());
+    let command = launcher(std::path::Path::new("/bin/fiber"))(&launch);
     let argv: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_string_lossy().into_owned())

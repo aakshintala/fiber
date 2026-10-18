@@ -456,6 +456,27 @@ fn walk(
                     | WriteScope::GlobalOnly
                     | WriteScope::PersonFiles => {
                         if key.kind.accepts(&value) {
+                            // A repository's role cannot name a credential:
+                            // the model still applies, but the credential is
+                            // ignored with a notice.
+                            if matches!(source, Source::Repository(_))
+                                && matches!(key.kind, Kind::Role)
+                                && let Value::Object(object) = &value
+                                && object.contains_key("credential")
+                            {
+                                // The acceptance names `roles."<name>".credential`,
+                                // but `path::display` quotes a segment only when it
+                                // holds a dot, so the shared `ignored` closure would
+                                // print `roles.<name>.credential`: this one notice
+                                // hand-formats the key.
+                                notices.push(Notice {
+                                    code: ErrorCode::ConfigKeyIgnored,
+                                    message: format!(
+                                        "{source}: ignored `roles.\"{name}\".credential`, which a repository's role may not set."
+                                    ),
+                                    extension: None,
+                                });
+                            }
                             kept.insert(name, value);
                         } else {
                             return Err(wrong(path, key.kind.expected()));

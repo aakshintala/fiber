@@ -320,8 +320,15 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   where `{id}` is the calling session's own id, a fork's included, so it never
   shares the session's key or the reviewer's (`docs/prompt-cache.md`). The
   retry policy applies within the callback's timeout. At `budget.usd` it
-  raises `budget_exceeded` and does not fail the turn. Any callback may call
-  it, bounded by that callback's timeout.
+  raises `budget_exceeded` and does not fail the turn. Wrong arguments are
+  an error in the calling code, as `host.tool` documents for its own:
+  `opts` must be a table; `model` a `provider/model` reference, never a
+  role; `system` a string when present; `messages` a non-empty list of
+  `{ role, content }` with `role` `user` or `assistant` and `content` a
+  string or a list of `text`, `image` or `pdf` parts; `max_tokens` a
+  positive integer. `usage.cost` is null when the provider knew no cost
+  for the call. Any callback may call it, bounded by that callback's
+  timeout.
 - **`host.exec`** runs a program in its own process group, which is stopped on
   cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). Inside a
   tool call, the tool's declared `executes` effect is what the permission

@@ -607,6 +607,7 @@ fn settle(
         host::Request::Ask(_)
         | host::Request::Tool(_)
         | host::Request::Drive(_)
+        | host::Request::Model(_)
         | host::Request::Exec(_)
         | host::Request::Callback { .. }
         | host::Request::Lock
@@ -614,6 +615,7 @@ fn settle(
     };
     // Read before the admission lock below takes it.
     let driver = hub.driver();
+    let model = hub.model();
     // Every host call is admitted here: a stopped extension, whose callback
     // may still run on an abandoned thread, or a cancelled call starts
     // nothing. Work that spawns starts under this lock hold; the rest drops
@@ -643,7 +645,7 @@ fn settle(
     } else {
         Run::Parked
     };
-    let admitted = admit(start, hub, shared, call, request, driver, &deliver);
+    let admitted = admit(start, hub, shared, call, request, driver, model, &deliver);
     let (mut shared, wake, cancel, ask, unsent, spawn) = match admitted {
         Admitted::Asked {
             shared,

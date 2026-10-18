@@ -325,8 +325,9 @@ pub struct JobInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HistoryArgs {
-    /// The first `seq` to return, inclusive.
-    pub from_seq: Seq,
+    /// The first `seq` to return, inclusive; absent means the last lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_seq: Option<Seq>,
     /// The last `seq` to return, inclusive; absent means the latest line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_seq: Option<Seq>,

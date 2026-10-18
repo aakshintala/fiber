@@ -113,7 +113,7 @@ pub(crate) fn launch(
         // The viewer's copies live under Fiber home's cache, which is
         // always safe to delete (`docs/state.md`, `docs/tui.md`,
         // "Images").
-        images: home.join("cache").join("images"),
+        images: config::images_cache_dir(home),
         // `main` gives the seam once it holds Fiber home.
         configure: None,
     }

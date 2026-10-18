@@ -44,9 +44,22 @@ pub struct Providers {
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
-    /// The secrets the installed extensions declare, each once
+    /// The secrets the installed extensions declare, by extension:
+    /// two extensions sharing a secret each keep their row here, while
+    /// [`Providers::secrets`] still lists the name once
     /// (`docs/configuration.md`, "Secrets").
-    secrets: BTreeSet<String>,
+    secrets_by_extension: BTreeMap<String, BTreeSet<String>>,
+    /// The loaded extensions that need code to serve their providers: a
+    /// `process` program, an `init.lua`, or a `providers/*.lua` script.
+    /// Doctor checks only providers whose extension is not in here.
+    coded: BTreeSet<String>,
+    /// The providers an enabled, healthy, compatible extension declared
+    /// with Lua code that could register, by provider name: an `init.lua`
+    /// can register any of its extension's declared providers, and a
+    /// `providers/<name>.lua` script its own. Recorded during the load
+    /// without running code; a process-only package supplies no Lua, and
+    /// disabled, damaged or incompatible extensions record nothing.
+    code_candidates: BTreeSet<String>,
 }
 
 // `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
@@ -314,7 +327,20 @@ impl Providers {
             }
             // Secrets do not depend on the provider files, so they are kept
             // even when those files leave the extension's providers out.
-            providers.secrets.extend(manifest.secrets.iter().cloned());
+            providers
+                .secrets_by_extension
+                .entry(manifest.name.clone())
+                .or_default()
+                .extend(manifest.secrets.iter().cloned());
+            // A provider served with code in the loop cannot be checked
+            // without running it: a `process` program, an `init.lua`, or
+            // a `providers/*.lua` script names the extension coded.
+            if manifest.process.is_some()
+                || dir.join("init.lua").is_file()
+                || provider_scripts(&dir).is_ok_and(|scripts| !scripts.is_empty())
+            {
+                providers.coded.insert(manifest.name.clone());
+            }
             let mut datas = config::read_providers(&dir)?;
             // A provider the manifest does not declare under `providers`
             // is not loaded: none of the extension's providers is, with
@@ -339,6 +365,7 @@ impl Providers {
             providers
                 .declared
                 .insert(manifest.name.clone(), manifest.providers.clone());
+            providers.record_code_candidates(&dir, &manifest);
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
@@ -384,6 +411,27 @@ impl Providers {
             }
         }
         Ok((providers, notices))
+    }
+
+    /// Records the declared providers Lua code could register: every
+    /// declared provider when an `init.lua` is present — the
+    /// conservative criterion, an uncertain registration is never a
+    /// definite absence — else only the providers with their own
+    /// `providers/<name>.lua` script. A process-only package supplies
+    /// no Lua. Runs during the load, without running code.
+    fn record_code_candidates(&mut self, dir: &Path, manifest: &config::Manifest) {
+        let init = dir.join("init.lua").is_file();
+        let scripts = provider_scripts(dir).unwrap_or_default();
+        if !init && scripts.is_empty() {
+            return;
+        }
+        if let Some(declared) = self.declared.get(&manifest.name) {
+            for provider in declared.keys() {
+                if init || scripts.iter().any(|script| script == provider) {
+                    self.code_candidates.insert(provider.clone());
+                }
+            }
+        }
     }
 
     /// Leaves out the models `extension` may not serve: first the invalid
@@ -444,9 +492,45 @@ impl Providers {
         self.by_name.keys().map(String::as_str)
     }
 
+    /// Every installed extension's declared secret names, by extension
+    /// then name: two extensions sharing a secret each keep their row,
+    /// while [`Providers::secrets`] still lists the name once.
+    /// Incompatible and damaged packages contribute none, and a
+    /// provider-admission failure keeps the extension's secrets, which
+    /// do not depend on its providers.
+    pub fn declared_secrets(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.secrets_by_extension
+            .iter()
+            .flat_map(|(extension, secrets)| {
+                secrets
+                    .iter()
+                    .map(|secret| (extension.as_str(), secret.as_str()))
+            })
+    }
+
+    /// Whether the provider can be checked without running extension
+    /// code. A provider in data is checkable when its extension serves
+    /// it with no `process` program, `init.lua` or `providers/*.lua`
+    /// script. A provider absent from data is uncertain, never checked:
+    /// it could register when an enabled, healthy, compatible extension
+    /// declared it with Lua code that could register it. A disabled,
+    /// damaged or incompatible extension's providers are absent, and a
+    /// Lua-registered provider needs its code, so neither registers.
+    pub fn could_register(&self, provider: &str) -> bool {
+        if let Some(owner) = self.extension_of.get(provider) {
+            return !self.coded.contains(owner);
+        }
+        self.code_candidates.contains(provider)
+    }
+
     /// The secrets the installed extensions declare, sorted, each once.
     pub fn secrets(&self) -> impl Iterator<Item = &str> {
-        self.secrets.iter().map(String::as_str)
+        self.secrets_by_extension
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
     }
 
     /// Adds the models `provider`'s `models()` returns: with no data file
@@ -495,6 +579,9 @@ impl Providers {
             return vec![reserved_scripted(extension)];
         }
         self.lua.insert(name.clone(), Arc::clone(provider));
+        // Registering through Lua is code in the loop: the provider
+        // cannot be checked without running it.
+        self.coded.insert(extension.to_owned());
         // A provider that registers no `models`, such as one with only
         // `cost()`, keeps its data file's models. With a cached copy the
         // cache serves and `models()` never runs, so the argument stays

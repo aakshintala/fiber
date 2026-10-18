@@ -123,8 +123,8 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     use fakes::clock::FakeClock;
 
     use super::GIT_DEADLINE;
-    use crate::host::exec::{GRACE, GROUP_POLL};
     use contract::clock::Clock as _;
+    use support::group::{GRACE, GROUP_POLL};
 
     const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
     /// One sighting round's wait for the run's answer.

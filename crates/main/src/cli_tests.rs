@@ -377,6 +377,10 @@ fn parses_argv_into_its_invocation() {
             ),
         ),
         (
+            &["fiber", "doctor"],
+            Invocation::Run(Some(Commands::Doctor), TopLevel::default()),
+        ),
+        (
             &["fiber", "logout", "acme", "--as", "work"],
             Invocation::Run(
                 Some(Commands::Logout(LogoutArgs {
@@ -1245,6 +1249,20 @@ fn extension_test_rejects_extra_arguments() {
 }
 
 #[test]
+fn doctor_takes_no_arguments() {
+    let error = sentence(&["fiber", "doctor", "extra"]);
+    assert!(error.starts_with("Unexpected argument 'extra'"), "{error}");
+    assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
+    assert_eq!(error.lines().count(), 1, "{error}");
+    assert!(
+        MENU.contains(
+            "doctor                                    Says whether a session can start, and how to fix it when it cannot"
+        ),
+        "{MENU}"
+    );
+}
+
+#[test]
 fn approve_rejects_anything_else() {
     assert!(
         sentence(&["fiber", "approve", "extra"]).starts_with("Unexpected argument 'extra'"),
@@ -1894,6 +1912,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "login",
             "logout",
+            "doctor",
             "completion",
             "version",
             "help",
@@ -1962,6 +1981,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "login",
             "logout",
+            "doctor",
             "completion",
             "version",
             "help",
@@ -3061,7 +3081,7 @@ fn is_built_follows_the_parser() {
     assert!(is_built(&["hub", "add"]));
     assert!(is_built(&[]));
     assert!(!is_built(&["update"]));
-    assert!(!is_built(&["doctor"]));
+    assert!(is_built(&["doctor"]));
     assert!(!is_built(&["mcp", "serve"]));
     assert!(is_built(&["hub", "remove"]));
 }
@@ -3074,6 +3094,205 @@ fn menu_synopses_take_the_text_before_the_description_gap() {
     assert_eq!(fields, ["continue", "sessions [--all] [--json]"]);
     // A shorter doc synopsis is not a match: the menu field must equal it.
     assert!(!fields.contains(&"sessions [--all]"));
+}
+
+/// The `SessionArgs` a `to_argv` round-trip returns: `parse_from` of
+/// `fiber` plus the argv, which must be the session command with equal
+/// fields.
+#[track_caller]
+fn round_tripped(args: &SessionArgs) -> SessionArgs {
+    let mut argv = vec![OsString::from("fiber")];
+    argv.extend(args.to_argv());
+    let Invocation::Run(Some(Commands::Session(got)), _) = parse_from(argv) else {
+        panic!("to_argv does not parse back to a session: {args:?}");
+    };
+    got
+}
+
+/// Every field of two sessions is equal: the round-trip keeps all 13.
+#[track_caller]
+fn assert_same_session(got: &SessionArgs, want: &SessionArgs) {
+    assert_eq!(got.id, want.id, "id");
+    assert_eq!(got.workspace, want.workspace, "workspace");
+    assert_eq!(got.model, want.model, "model");
+    assert_eq!(got.overrides, want.overrides, "overrides");
+    assert_eq!(got.prompt, want.prompt, "prompt");
+    assert_eq!(got.resume, want.resume, "resume");
+    assert_eq!(got.credential, want.credential, "credential");
+    assert_eq!(got.worktree, want.worktree, "worktree");
+    assert_eq!(got.rewound_from, want.rewound_from, "rewound_from");
+    assert_eq!(got.parent, want.parent, "parent");
+    assert_eq!(got.delegate_id, want.delegate_id, "delegate_id");
+    assert_eq!(got.depth, want.depth, "depth");
+    assert_eq!(got.login_shell, want.login_shell, "login_shell");
+}
+
+fn minimal_session() -> SessionArgs {
+    SessionArgs {
+        id: "s_0123456789abcdef".to_owned(),
+        workspace: PathBuf::from("/w"),
+        model: None,
+        overrides: Vec::new(),
+        prompt: None,
+        resume: false,
+        credential: None,
+        worktree: false,
+        rewound_from: None,
+        parent: None,
+        delegate_id: None,
+        depth: None,
+        login_shell: false,
+    }
+}
+
+#[test]
+fn session_argv_round_trips_a_minimal_session() {
+    let args = minimal_session();
+    assert_eq!(
+        args.to_argv(),
+        ["session", "--id=s_0123456789abcdef", "--workspace=/w",]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_new_launch_with_overrides() {
+    let args = SessionArgs {
+        id: "s_0123456789abcdef".to_owned(),
+        workspace: PathBuf::from("/w with space"),
+        model: Some("-weird/model".to_owned()),
+        overrides: vec!["a=1".to_owned(), "-x=1".to_owned()],
+        prompt: Some("-go".to_owned()),
+        resume: false,
+        credential: None,
+        worktree: false,
+        rewound_from: None,
+        parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+        depth: Some(2),
+        login_shell: false,
+    };
+    let argv = args.to_argv();
+    // A plain override travels as two arguments; one starting with `-`
+    // travels attached, so clap never reads it as a flag.
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        rendered.contains(&"--model=-weird/model".to_owned()),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.contains(&"--prompt=-go".to_owned()),
+        "{rendered:?}"
+    );
+    let at = rendered
+        .iter()
+        .position(|arg| arg == "-c")
+        .expect("-c pair");
+    assert_eq!(rendered[at + 1], "a=1");
+    assert!(rendered.contains(&"-c-x=1".to_owned()), "{rendered:?}");
+    assert!(!rendered.iter().any(|arg| arg == "-x=1"), "{rendered:?}");
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_resume_with_a_credential() {
+    let args = SessionArgs {
+        resume: true,
+        credential: Some("-label".to_owned()),
+        prompt: Some("- also check Y".to_owned()),
+        parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+        depth: Some(1),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(rendered.contains(&"--resume".to_owned()), "{rendered:?}");
+    assert!(
+        rendered.contains(&"--credential=-label".to_owned()),
+        "{rendered:?}"
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_rewind() {
+    let args = SessionArgs {
+        rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        rendered.contains(&"--rewound-from=s_aaaaaaaaaaaaaaaa".to_owned()),
+        "{rendered:?}"
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_worktree_and_a_login_shell() {
+    let args = SessionArgs {
+        model: Some("fake/m".to_owned()),
+        worktree: true,
+        login_shell: true,
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert!(rendered.contains(&"--worktree".to_owned()), "{rendered:?}");
+    assert_eq!(rendered.last().map(String::as_str), Some("--login-shell"));
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_workspace_named_like_a_flag() {
+    let args = SessionArgs {
+        workspace: PathBuf::from("-w"),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One argument, so a workspace starting with `-` never reads as a
+    // flag.
+    assert!(
+        rendered.contains(&"--workspace=-w".to_owned()),
+        "{rendered:?}"
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_workspace_that_is_not_utf8() {
+    let args = SessionArgs {
+        // Built from bytes, never created on disk: only the argv and
+        // its parse ever see these bytes.
+        workspace: PathBuf::from(OsString::from_vec(b"/w/\xff".to_vec())),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    // The workspace travels byte for byte: a lossy render would fail
+    // the round-trip below.
+    assert_eq!(argv[2], OsString::from_vec(b"--workspace=/w/\xff".to_vec()),);
+    assert_same_session(&round_tripped(&args), &args);
 }
 
 /// The Command column of `docs/invocation.md` is the synopsis, so the
@@ -3099,5 +3318,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["doctor", "mcp serve", "update"]);
+    assert_eq!(unbuilt, ["mcp serve", "update"]);
 }

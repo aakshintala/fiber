@@ -98,6 +98,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "quota"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
+        json!({"id": "c", "command": "history", "args": {}}),
+        json!({"id": "c", "command": "history", "args": {"to_seq": 10}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 0}}),
         json!({"id": "c", "command": "artifact_page", "args": {"path": "artifacts/a_3.txt", "offset": 4096}}),
         json!({"id": "c", "command": "model",
@@ -216,6 +218,13 @@ fn a_missing_args_is_read_as_an_empty_object() {
     assert_eq!(
         parse(r#"{"id":"c","command":"cancel"}"#).unwrap().command,
         Command::Cancel
+    );
+    let line = parse(r#"{"id":"c","command":"history"}"#).unwrap();
+    assert_eq!(
+        line.command,
+        parse(r#"{"id":"c","command":"history","args":{}}"#)
+            .unwrap()
+            .command
     );
 }
 
@@ -339,7 +348,6 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
         "prompt",
         "steer",
         "steer_drop",
-        "history",
         "artifact_page",
         "offered_file",
         "model",
@@ -443,9 +451,18 @@ fn subscribe_credential_is_an_optional_label() {
 
 #[test]
 fn history_args_that_do_not_fit_are_invalid_arguments() {
-    assert!(parse(r#"{"id":"c","command":"history","args":{}}"#).is_err());
+    let line = parse(r#"{"id":"c","command":"history","args":{}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::History(HistoryArgs {
+            from_seq: None,
+            to_seq: None,
+        })
+    );
     assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":"0"}}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"extra":true}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"to_seq":"5"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"to_seq":5,"extra":true}}"#).is_err());
 }
 
 #[test]
@@ -453,6 +470,7 @@ fn an_optional_arg_set_to_null_is_invalid_arguments() {
     assert!(
         parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"to_seq":null}}"#).is_err()
     );
+    assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":null}}"#).is_err());
     assert!(
         parse(r#"{"id":"c","command":"model","args":{"model":"opus","thinking":null}}"#).is_err()
     );

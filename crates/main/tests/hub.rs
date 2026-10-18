@@ -21,6 +21,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use contract::clock::Clock;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::*;
@@ -552,4 +553,67 @@ fn read_file_answers_an_artifact_and_refuses_an_escape() {
     if let Some(running) = hub.lock().unwrap().take() {
         running.kill_and_wait();
     }
+}
+
+/// Starts `hub serve` without the provider's key in its environment and
+/// waits until it answers, so the connect below never starts a keyed hub.
+/// The hub's own `hub_hello` is the readiness signal: one blocking connect
+/// waits for it, bounded by what remains of the test's deadline as a hang
+/// guard, with no sleep pacing the wait.
+fn keyless_hub(setup: &Setup) -> HubProc {
+    let mut serve = setup.fiber(&["hub", "serve"]);
+    serve.env_remove("FIBER_TEST_FAKE_KEY");
+    let hub = HubProc::spawn_command(setup.deadline, &mut serve);
+    let deadline = SystemClock.now() + setup.deadline.left();
+    let mut start = || Ok(());
+    if let Err(error) = doors::hub::connect_until(
+        &setup.home(),
+        &mut start,
+        &SystemClock,
+        deadline,
+        &mut || {},
+    ) {
+        panic!("the keyless hub never answered: {error}");
+    }
+    hub
+}
+
+#[test]
+fn a_start_without_a_key_is_rejected_with_the_doctor_line_first() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let hub = keyless_hub(&setup);
+    let slot = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &slot);
+    assert!(slot.lock().unwrap().is_none(), "no keyed hub started");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    client.send(&format!(
+        "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{PROMPT}\"}}]}}}}"
+    ));
+    let rejected = recv(&client, "the start rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
+    assert_eq!(
+        rejected["payload"]["code"], "credential_missing",
+        "{rejected}"
+    );
+    assert_eq!(rejected["payload"]["command_id"], "c_start", "{rejected}");
+    let message = rejected["payload"]["message"].as_str().unwrap();
+    let mut lines = message.lines();
+    assert_eq!(
+        lines.next(),
+        Some("no key for fake: run `fiber login fake`"),
+        "{message}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(
+            "No credential for `fake`: nothing is stored in credentials/fake/default, \
+             and the environment variable FIBER_TEST_FAKE_KEY is not set. \
+             Run `fiber login fake`."
+        ),
+        "{message}"
+    );
+    drop(client);
+    hub.kill_and_wait();
 }

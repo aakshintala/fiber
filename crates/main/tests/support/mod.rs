@@ -11,6 +11,7 @@
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "test helpers; a failure is the test's"
 )]
 use std::fs;

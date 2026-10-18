@@ -55,6 +55,16 @@ pub enum Error {
     },
 }
 
+impl From<Error> for io::Error {
+    fn from(error: Error) -> io::Error {
+        match error {
+            Error::Spawn(error) => error,
+            Error::Refused(id) => io::Error::other(format!("refusing to list process group {id}")),
+            Error::Signal { source, .. } => source,
+        }
+    }
+}
+
 /// Whether the group still holds a process, through `kill(-pgid, 0)`. A
 /// refused id, or one past what a pid holds, reads empty: the probe sends
 /// nothing for it.
