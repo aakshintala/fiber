@@ -628,7 +628,7 @@ fn wait_for_start(
 
 /// A non-blocking, close-on-exec stream socket: Apple has no
 /// `SOCK_NONBLOCK`, so blocking is cleared after opening.
-fn nonblocking_socket() -> io::Result<OwnedFd> {
+pub(crate) fn nonblocking_socket() -> io::Result<OwnedFd> {
     let fd = net::socket(net::AddressFamily::UNIX, net::SocketType::STREAM, None)?;
     fcntl_setfl(&fd, fcntl_getfl(&fd)?.union(OFlags::NONBLOCK))?;
     fcntl_setfd(&fd, FdFlags::CLOEXEC)?;
