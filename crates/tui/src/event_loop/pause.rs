@@ -1,12 +1,14 @@
 //! The one test-only pause seam holding the fold while a test counts
 //! live hub events: `Loop::run` waits in [`before_fold`] before it folds
-//! a hub chunk, and the test releases it chunk by chunk.
+//! a hub chunk, and the test releases it chunk by chunk. A second seam,
+//! [`batch_ended`], reports each held batch's end with its taken count.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender};
 
 thread_local! {
     static PAUSE: RefCell<Option<(Sender<()>, Receiver<()>)>> = const { RefCell::new(None) };
+    static ENDS: RefCell<Option<Sender<usize>>> = const { RefCell::new(None) };
 }
 
 /// Holds the loop at its next fold on this thread: each [`before_fold`]
@@ -29,5 +31,23 @@ pub(super) fn before_fold() {
         };
         reached.send(()).unwrap_or(());
         release.recv().unwrap_or(());
+    });
+}
+
+/// Reports each held batch's end on this thread: every later
+/// [`batch_ended`] sends its taken count on `ended`. It never waits.
+pub(super) fn report_ends(ended: Sender<usize>) {
+    ENDS.with(|ends| *ends.borrow_mut() = Some(ended));
+}
+
+/// Sends `taken`, the held batch's input count, as [`report_ends`]
+/// says: [`HUB_BATCH`](super::batch::HUB_BATCH) for a full batch, fewer
+/// when the channel emptied. With nothing installed, or the receiver
+/// gone, it does nothing.
+pub(super) fn batch_ended(taken: usize) {
+    ENDS.with(|ends| {
+        if let Some(ended) = ends.borrow().as_ref() {
+            ended.send(taken).unwrap_or(());
+        }
     });
 }

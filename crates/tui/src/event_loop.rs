@@ -420,6 +420,8 @@ impl<B: Backend> Loop<B> {
             // leaves the hold set.
             if held {
                 self.app.end_batch();
+                #[cfg(test)]
+                pause::batch_ended(taken);
             }
             if let Some(code) = code {
                 return code;
