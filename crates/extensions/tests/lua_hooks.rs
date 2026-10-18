@@ -706,16 +706,12 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
     );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
-    fakes::within(
-        "releasing the program",
-        fakes::MUST_SUCCEED_WITHIN,
-        move || {
-            use std::io::Write as _;
-            std::fs::File::create(&release)
-                .and_then(|mut released| released.write_all(b"x\n"))
-                .is_ok()
-        },
-    );
+    fakes::within("File::create", fakes::MUST_SUCCEED_WITHIN, move || {
+        use std::io::Write as _;
+        std::fs::File::create(&release)
+            .and_then(|mut released| released.write_all(b"x\n"))
+            .is_ok()
+    });
     match Deadline::after(WAIT).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),

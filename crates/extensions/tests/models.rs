@@ -20,7 +20,7 @@ use serde_json::json;
 #[test]
 fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complete() {
     fakes::within(
-        "configuration-filtered provider loading",
+        "Providers::load_enabled",
         fakes::MUST_SUCCEED_WITHIN,
         || {
             let setup = Setup::new();
@@ -87,7 +87,7 @@ fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complet
 #[test]
 fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models() {
     fakes::within(
-        "disabled provider assets",
+        "Providers::load_enabled",
         fakes::MUST_SUCCEED_WITHIN,
         || {
             let setup = Setup::new();

@@ -407,11 +407,15 @@ fn a_provider_runs_while_a_driven_command_is_held() {
         .expect("the drive reached the door");
     // A provider callback runs while the driven command is still held.
     let caller = Arc::clone(&ext);
-    fakes::within("release_tx.send", fakes::MUST_SUCCEED_WITHIN, move || {
-        caller
-            .provider_call("p", "sign", Value::Null)
-            .expect("the provider ran while the drive was held")
-    });
+    fakes::within(
+        "caller.provider_call",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            caller
+                .provider_call("p", "sign", Value::Null)
+                .expect("the provider ran while the drive was held")
+        },
+    );
     lock(&order).push("provider_done");
     release_tx.send(()).expect("the test releases the drive");
     assert_eq!(

@@ -222,7 +222,7 @@ fn a_fifo_or_link_in_the_stored_directory_is_no_label() {
     symlink(dir.join("work"), dir.join("alias")).unwrap();
     let (home, workspace) = (setup.home(), setup.workspace());
     let found = fakes::within(
-        "credential_origins with a FIFO and a link",
+        "credential_origins",
         fakes::MUST_SUCCEED_WITHIN,
         move || {
             let config = Config::load(Sources {
@@ -271,23 +271,19 @@ fn credential_with_never_reads_another_labels_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = fakes::within(
-        "credential_with with another label's FIFO",
-        fakes::MUST_SUCCEED_WITHIN,
-        move || {
-            let config = Config::load(Sources {
-                home,
-                workspace,
-                project: common::key(),
-                overrides: Vec::new(),
-            })
-            .unwrap();
-            config
-                .credentials()
-                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-                .unwrap_err()
-        },
-    );
+    let missing = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
+        let config = Config::load(Sources {
+            home,
+            workspace,
+            project: common::key(),
+            overrides: Vec::new(),
+        })
+        .unwrap();
+        config
+            .credentials()
+            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+            .unwrap_err()
+    });
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(
@@ -308,23 +304,19 @@ fn credential_with_lists_labels_by_name_even_past_a_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = fakes::within(
-        "credential_with listing past a FIFO",
-        fakes::MUST_SUCCEED_WITHIN,
-        move || {
-            let config = Config::load(Sources {
-                home,
-                workspace,
-                project: common::key(),
-                overrides: Vec::new(),
-            })
-            .unwrap();
-            config
-                .credentials()
-                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-                .unwrap_err()
-        },
-    );
+    let missing = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
+        let config = Config::load(Sources {
+            home,
+            workspace,
+            project: common::key(),
+            overrides: Vec::new(),
+        })
+        .unwrap();
+        config
+            .credentials()
+            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+            .unwrap_err()
+    });
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(
