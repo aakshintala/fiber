@@ -640,13 +640,12 @@ fn eof_before_exit_reports_without_a_clock_move() {
 fn depth_edges_refuse_by_tool_name() {
     assert!(super::depth_refusal(1, "delegate_spawn").is_none());
     for depth in [2, 3] {
-        let output = super::depth_refusal(depth, "delegate_fork").unwrap();
-        let error = output.error.unwrap();
-        assert_eq!(error.code, contract::ErrorCode::DepthExceeded);
-        assert_eq!(
-            error.message,
-            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_fork`; do the work in this session."
+        let error = super::depth_refusal(depth, "delegate_fork").unwrap();
+        assert!(
+            matches!(&error, crate::JobsError::DepthExceeded { tool } if tool == "delegate_fork"),
+            "depth {depth}"
         );
+        assert_eq!(error.code(), contract::ErrorCode::DepthExceeded);
     }
 }
 
@@ -696,25 +695,10 @@ fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
 
 #[test]
 fn extension_starts_validate_depth_and_keys_before_binding_or_launching() {
-    for (depth, extra, code, message) in [
-        (
-            2,
-            true,
-            contract::ErrorCode::DepthExceeded,
-            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_spawn`; do the work in this session.",
-        ),
-        (
-            3,
-            false,
-            contract::ErrorCode::DepthExceeded,
-            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_spawn`; do the work in this session.",
-        ),
-        (
-            1,
-            true,
-            contract::ErrorCode::InvalidArguments,
-            "`/isolation`: not allowed",
-        ),
+    for (depth, extra, code) in [
+        (2, true, contract::ErrorCode::DepthExceeded),
+        (3, false, contract::ErrorCode::DepthExceeded),
+        (1, true, contract::ErrorCode::InvalidArguments),
     ] {
         let rig = rig();
         let mut spawned = tool(&rig);
@@ -727,8 +711,18 @@ fn extension_starts_validate_depth_and_keys_before_binding_or_launching() {
         let error = spawned
             .start_extension("a", &args, &mut |id| bound.push(id.clone()))
             .unwrap_err();
-        assert_eq!(error.code, code);
-        assert_eq!(error.message, message);
+        if depth >= 2 {
+            assert!(
+                matches!(&error, crate::JobsError::DepthExceeded { tool } if tool == "delegate_spawn"),
+                "depth {depth}"
+            );
+        } else {
+            assert!(
+                matches!(&error, crate::JobsError::ArgumentsNotAllowed { keys } if keys == &["isolation".to_owned()]),
+                "depth {depth}"
+            );
+        }
+        assert_eq!(error.code(), code);
         assert!(bound.is_empty());
         assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
         assert!(contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty());
@@ -751,11 +745,8 @@ fn start_extension_refuses_with_no_inbox() {
             bound.push(id.clone())
         })
         .unwrap_err();
-    assert_eq!(error.code, contract::ErrorCode::ToolError);
-    assert_eq!(
-        error.message,
-        "No session is listening for this delegate's end, so nothing was started."
-    );
+    assert!(matches!(&error, crate::JobsError::NoInbox));
+    assert_eq!(error.code(), contract::ErrorCode::ToolError);
     assert!(bound.is_empty());
     assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
     assert!(contract::jobs::Jobs::running(spawned.registry.as_ref()).is_empty());
@@ -794,8 +785,14 @@ fn extension_spawn_failure_binds_once_but_records_nothing() {
             bound.push(id.clone())
         })
         .unwrap_err();
-    assert_eq!(error.code, contract::ErrorCode::ToolError);
-    assert!(error.message.starts_with("Starting the delegate failed: "));
+    assert!(matches!(&error, crate::JobsError::SpawnFailed { .. }));
+    assert_eq!(error.code(), contract::ErrorCode::ToolError);
+    assert!(
+        error
+            .to_string()
+            .starts_with("Starting the delegate failed: "),
+        "the spawn's own reason follows the case's sentence"
+    );
     assert_eq!(bound.len(), 1);
     assert!(contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty());
     assert_eq!(rig.registry.list_text(), "No jobs.\n");
@@ -944,13 +941,16 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
                 spawned
                     .start_extension("a", &arguments("fiber:fake/m"), &mut |_| {})
                     .map(|_| ())
+                    .map_err(|error| (error.code(), error.to_string()))
             } else {
                 let output = spawned.run(
                     &arguments("fiber:fake/m"),
                     &fakes::CancelToken::new(),
                     &Recorder::default(),
                 );
-                output.error.map_or(Ok(()), Err)
+                output
+                    .error
+                    .map_or(Ok(()), |error| Err((error.code, error.message)))
             }
         };
         start(extension_tenth).unwrap();
@@ -960,8 +960,8 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
             11
         );
         let error = start(!extension_tenth).unwrap_err();
-        assert_eq!(error.code, contract::ErrorCode::ToolError);
-        assert_eq!(error.message, crate::registry::runs::cap_message());
+        assert_eq!(error.0, contract::ErrorCode::ToolError);
+        assert_eq!(error.1, crate::JobsError::DelegatesFull.to_string());
         assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
         held.pop()
             .unwrap()

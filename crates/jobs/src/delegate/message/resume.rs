@@ -12,14 +12,13 @@ use std::time::Instant;
 
 use contract::diag::{Op, Timing};
 
+use super::{Attempt, DelegateMessage, nothing_delivered};
+use crate::delegate::run::{Launched, Runner};
+use crate::error::JobsError;
+use crate::registry::runs::{Resume, Resumed};
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
-use contract::{ActionId, ErrorCode, JobId, SessionId};
-
-use super::{Attempt, DelegateMessage, fail, nothing_delivered};
-use crate::delegate::run::{Launched, Runner};
-use crate::registry::runs::{Resume, Resumed};
-use crate::tool::unknown_message;
+use contract::{ActionId, JobId, SessionId};
 use support::group::Listing;
 
 /// Reads the `seq` of a delegate log's last complete line, or the reason
@@ -70,33 +69,36 @@ impl DelegateMessage {
         }
         match self.resume(id, message, action.clone()) {
             Ok(resumed) => Attempt::Done(resumed_receipt(id, resumed)),
-            Err(Resume::Full) => Attempt::Done(fail(
-                ErrorCode::ToolError,
-                crate::registry::runs::cap_message(),
-            )),
-            Err(Resume::Unknown) => {
-                let message = unknown_message(id);
-                Attempt::Done(fail(ErrorCode::InvalidArguments, message))
-            }
-            Err(Resume::NotDelegate) => Attempt::Done(fail(
-                ErrorCode::InvalidArguments,
-                format!("Job `{id}` is not a delegate."),
-            )),
+            Err(Resume::Full) => Attempt::Done(JobsError::DelegatesFull.output(true)),
+            Err(Resume::Unknown) => Attempt::Done(
+                JobsError::UnknownJob {
+                    id: JobId(id.to_owned()),
+                }
+                .output(true),
+            ),
+            Err(Resume::NotDelegate) => Attempt::Done(
+                JobsError::NotDelegate {
+                    id: JobId(id.to_owned()),
+                }
+                .output(true),
+            ),
             Err(Resume::Live(session, run)) => Attempt::Found(session, run),
-            Err(Resume::Exhausted) => Attempt::Done(fail(
-                ErrorCode::ToolError,
-                format!("Delegate {id} cannot run again: its run count is exhausted."),
-            )),
-            Err(Resume::Start(StartFailed::Boundary(reason))) => Attempt::Done(fail(
-                ErrorCode::ToolError,
-                format!(
-                    "Resuming delegate {id} failed: its log could not be read: {reason}. Nothing was started."
-                ),
-            )),
-            Err(Resume::Start(StartFailed::Spawn(source))) => Attempt::Done(fail(
-                ErrorCode::ToolError,
-                format!("Resuming the delegate failed: {source}."),
-            )),
+            Err(Resume::Exhausted) => Attempt::Done(
+                JobsError::ResumeExhausted {
+                    id: JobId(id.to_owned()),
+                }
+                .output(true),
+            ),
+            Err(Resume::Start(StartFailed::Boundary(reason))) => Attempt::Done(
+                JobsError::ResumeBoundary {
+                    id: JobId(id.to_owned()),
+                    reason,
+                }
+                .output(true),
+            ),
+            Err(Resume::Start(StartFailed::Spawn(source))) => {
+                Attempt::Done(JobsError::ResumeSpawn { source }.output(true))
+            }
         }
     }
 

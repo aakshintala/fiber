@@ -12,9 +12,8 @@ use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ErrorCode, JobId, SessionId};
+use contract::{JobId, SessionId};
 use serde_json::{Map, Value, json};
-
 pub(crate) mod group;
 pub(crate) mod models;
 pub(crate) mod outcome;
@@ -28,6 +27,7 @@ pub use run::{Launch, Launched, Watch, Watched};
 
 use run::Runner;
 
+use crate::error::JobsError;
 use crate::registry::{Registry, mint_job_id};
 
 /// Starts a Fiber delegate: a child `fiber session` that runs the prompt
@@ -66,16 +66,11 @@ pub struct DelegateSpawn {
 
 pub(crate) const DEPTH_CAP: u32 = 2;
 
-pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
+pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<JobsError> {
     if depth >= DEPTH_CAP {
-        let message = format!(
-            "This delegate is at depth {DEPTH_CAP}, the deepest a delegate can be, so it cannot use `{tool}`; do the work in this session."
-        );
-        Some(crate::registry::failed(
-            ErrorCode::DepthExceeded,
-            message.clone(),
-            message,
-        ))
+        Some(JobsError::DepthExceeded {
+            tool: tool.to_owned(),
+        })
     } else {
         None
     }
@@ -87,7 +82,7 @@ pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<Output> {
 /// roles and references (`docs/delegates.md`, "Choosing a model").
 fn check_effects_arguments(
     arguments: &Map<String, Value>,
-) -> Result<(String, String, Option<Duration>), String> {
+) -> Result<(String, String, Option<Duration>), JobsError> {
     let (description, prompt) = check_pair(arguments, "description", "prompt")?;
     let timeout = match arguments.get("timeout_ms") {
         None => None,
@@ -95,7 +90,7 @@ fn check_effects_arguments(
             let milliseconds = value
                 .as_u64()
                 .filter(|milliseconds| *milliseconds >= 1)
-                .ok_or_else(|| "`timeout_ms` must be an integer of 1 or more.".to_owned())?;
+                .ok_or(JobsError::TimeoutNotPositive)?;
             Some(Duration::from_millis(milliseconds))
         }
     };
@@ -108,40 +103,24 @@ pub(crate) fn check_pair(
     arguments: &Map<String, Value>,
     first: &str,
     second: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String), JobsError> {
     let mut missing = Vec::new();
     for name in [first, second] {
         if !arguments.contains_key(name) {
-            missing.push(name);
+            missing.push(name.to_owned());
         }
     }
     if !missing.is_empty() {
-        return Err(format!(
-            "Give {} as {}.",
-            missing.join(", "),
-            if missing.len() == 1 {
-                "a string"
-            } else {
-                "strings"
-            }
-        ));
+        return Err(JobsError::ArgumentsMissing { names: missing });
     }
     let mut wrong = Vec::new();
     for name in [first, second] {
         if !arguments[name].is_string() {
-            wrong.push(name);
+            wrong.push(name.to_owned());
         }
     }
     if !wrong.is_empty() {
-        return Err(format!(
-            "{} must be {}.",
-            wrong.join(", "),
-            if wrong.len() == 1 {
-                "a string"
-            } else {
-                "strings"
-            }
-        ));
+        return Err(JobsError::ArgumentsNotStrings { names: wrong });
     }
     Ok((string(arguments, first), string(arguments, second)))
 }
@@ -202,7 +181,8 @@ impl Tool for DelegateSpawn {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        check_effects_arguments(arguments).map_err(EffectsError::Arguments)?;
+        check_effects_arguments(arguments)
+            .map_err(|error| EffectsError::Arguments(error.to_string()))?;
         Ok(Effects {
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -241,7 +221,7 @@ impl Tool for DelegateSpawn {
                 ],
                 ..Output::default()
             },
-            Err(output) => *output,
+            Err(error) => error.output(false),
         }
     }
 }
@@ -255,26 +235,18 @@ impl DelegateSpawn {
         extension: &str,
         arguments: &Map<String, Value>,
         bind: &mut dyn FnMut(&JobId),
-    ) -> Result<JobId, contract::shapes::Failure> {
+    ) -> Result<JobId, JobsError> {
         self.start(arguments, Some((extension, bind)))
             .map(|start| start.job_id)
-            .map_err(|output| {
-                output.error.unwrap_or_else(|| contract::shapes::Failure {
-                    code: ErrorCode::ToolError,
-                    message: "Starting the delegate failed.".into(),
-                    retry_after_ms: None,
-                    provider: None,
-                })
-            })
     }
 
     fn start(
         &self,
         arguments: &Map<String, Value>,
         mut extension: Option<ExtensionStart<'_>>,
-    ) -> Result<Started, Box<Output>> {
-        if let Some(output) = depth_refusal(self.depth, "delegate_spawn") {
-            return Err(Box::new(output));
+    ) -> Result<Started, JobsError> {
+        if let Some(error) = depth_refusal(self.depth, "delegate_spawn") {
+            return Err(error);
         }
         if extension.is_some() {
             let unknown: Vec<_> = arguments
@@ -285,50 +257,27 @@ impl DelegateSpawn {
                         "description" | "prompt" | "model" | "timeout_ms"
                     )
                 })
-                .map(|key| format!("`/{key}`: not allowed"))
+                .map(|key| key.clone())
                 .collect();
             if !unknown.is_empty() {
-                let message = unknown.join("\n");
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::ArgumentsNotAllowed { keys: unknown });
             }
         }
-        let (description, prompt, timeout) = match check_effects_arguments(arguments) {
-            Ok(call) => call,
-            Err(message) => {
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                )));
-            }
-        };
+        let (description, prompt, timeout) = check_effects_arguments(arguments)?;
         // The schema leaves `model` optional and untyped, so a missing or
         // wrongly typed value reaches this check, which lists the valid
         // roles and references (`docs/delegates.md`, "Choosing a model").
         let model = match arguments.get("model") {
             Some(Value::String(model)) => model.clone(),
             None => {
-                let message = format!(
-                    "Give model: a role or a full reference.\n{}",
-                    self.resolve.catalogue
-                );
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::ModelMissing {
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
             Some(_) => {
-                let message = format!("model must be a string.\n{}", self.resolve.catalogue);
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::ModelNotString {
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
         };
         // Checked when the call is made, before any process starts: an
@@ -336,12 +285,10 @@ impl DelegateSpawn {
         let resolved = match (self.resolve.lookup)(&model) {
             Ok(resolved) => resolved,
             Err(reason) => {
-                let message = format!("{reason}\n{}", self.resolve.catalogue);
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::InvalidArguments,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::ModelUnresolved {
+                    reason,
+                    catalogue: self.resolve.catalogue.to_string(),
+                });
             }
         };
         // Checked after the model resolved and before anything starts:
@@ -351,23 +298,12 @@ impl DelegateSpawn {
         let credential = match (self.resolve.credential)(&model) {
             Ok(credential) => credential,
             Err(message) => {
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::CredentialMissing,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::CredentialUnavailable { message });
             }
         };
         let admitted = self.registry.admit(|| {
             if extension.is_some() && !self.registry.has_inbox() {
-                let message =
-                    "No session is listening for this delegate's end, so nothing was started."
-                        .to_owned();
-                return Err(Box::new(crate::registry::failed(
-                    ErrorCode::ToolError,
-                    message.clone(),
-                    message,
-                )));
+                return Err(JobsError::NoInbox);
             }
             let job_id = mint_job_id();
             if let Some((_, bind)) = extension.as_mut() {
@@ -409,10 +345,9 @@ impl DelegateSpawn {
                 None,
                 timeout,
             );
-            let (child, listing) = runner.spawn(&self.launch, &launched).map_err(|source| {
-                let message = format!("Starting the delegate failed: {source}.");
-                crate::registry::failed(ErrorCode::ToolError, message.clone(), message)
-            })?;
+            let (child, listing) = runner
+                .spawn(&self.launch, &launched)
+                .map_err(|source| JobsError::SpawnFailed { source })?;
             let delegate = DelegateStarted {
                 job_id: job_id.clone(),
                 delegate_session_id: session_id.clone(),
@@ -471,15 +406,8 @@ impl DelegateSpawn {
                 }
                 Ok(output)
             }
-            Err(crate::registry::runs::Admit::Full) => {
-                let message = crate::registry::runs::cap_message();
-                Err(Box::new(crate::registry::failed(
-                    ErrorCode::ToolError,
-                    message.clone(),
-                    message,
-                )))
-            }
-            Err(crate::registry::runs::Admit::Start(output)) => Err(output),
+            Err(crate::registry::runs::Admit::Full) => Err(JobsError::DelegatesFull),
+            Err(crate::registry::runs::Admit::Start(error)) => Err(error),
         }
     }
 }
