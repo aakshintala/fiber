@@ -14,15 +14,13 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
 use serde_json::json;
-use support::{Deadline, Setup};
+use support::{Deadline, Setup, spawn_watched};
 
 /// The version the binary under test was built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -72,14 +70,6 @@ impl Setup {
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
-}
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let watchdog = Watchdog::group(child.id());
-    (child, watchdog)
 }
 
 struct Run {

@@ -24,7 +24,8 @@ use std::thread;
 use fakes::{Deadline, ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    HELLO_KINDS, Run, Setup, Socket, hello, is_status, run_to_exit, until, until_close, write_json,
+    HELLO_KINDS, KillGroup, Run, Setup, Socket, hello, is_status, run_to_exit, until, until_close,
+    write_json,
 };
 
 /// Installs the Lua extension `test-ext` with hooks on every reachable
@@ -448,15 +449,6 @@ fn start_session(setup: &Setup, id: &str) -> Running {
         lines,
         stderr: stderr_rx,
         deadline: setup.deadline,
-    }
-}
-
-/// Kills process group `group` on drop, without waiting on the kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
     }
 }
 

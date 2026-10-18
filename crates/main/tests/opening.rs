@@ -174,10 +174,6 @@ fn write(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
-// debt: the runner, `spawn_watched` and `KillGroup` copy `tools.rs`'s, as
-// the six other binary test files in this crate each do; move all seven
-// copies into `fakes` together when a change to one has to be made in all.
-
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let lines = String::from_utf8(output.stdout)

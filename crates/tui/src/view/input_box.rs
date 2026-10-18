@@ -3,7 +3,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 
 use super::to_u16;
 use crate::app::App;
@@ -32,6 +32,10 @@ pub(super) fn draw(
 ) -> u16 {
     let (rows, top, cursor_row, cursor_col) = rows(app, area.width);
     let fits = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
+    // While the rail holds focus the box steps back: its stripe in
+    // muted and its text dim, so the lifted card leads. An editing
+    // stripe still wins.
+    let focused = app.rail_state().focused().is_some();
     let mut bottom_edge = false;
     if fits && let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) {
         *bottom = y;
@@ -42,7 +46,7 @@ pub(super) fn draw(
     for (at, row) in rows.iter().enumerate().rev() {
         // The first draft row opens with the prompt in `info`
         // (`docs/tui.md`, "The input box").
-        put_row(buf, area, text, bottom, row, top == 0 && at == 0);
+        put_row(buf, area, text, bottom, row, top == 0 && at == 0, focused);
     }
     let slab = Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom));
     let mut top_edge = false;
@@ -70,6 +74,8 @@ pub(super) fn draw(
         // (`docs/tui.md`, "Steering").
         let stripe = if app.steering_selected().is_some() {
             Role::Attention
+        } else if focused {
+            Role::Muted
         } else {
             Role::Accent
         };
@@ -130,19 +136,38 @@ fn text_area(area: Rect) -> Rect {
 /// `area`. The prompt opens the first draft row in `info`, and the rest
 /// of every row is the default foreground (`docs/tui.md`, "The input
 /// box").
-fn put_row(buf: &mut Buffer, area: Rect, text: Rect, bottom: &mut u16, row: &str, prompt: bool) {
+fn put_row(
+    buf: &mut Buffer,
+    area: Rect,
+    text: Rect,
+    bottom: &mut u16,
+    row: &str,
+    prompt: bool,
+    dim: bool,
+) {
     let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
         return;
+    };
+    // While the rail holds focus the text carries DIM, in every mode.
+    let text_style = if dim {
+        Style::new().add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
     };
     if prompt {
         // The prompt is the row's first two cells (`Draft::rows`).
         let cut: String = row.chars().take(2).collect();
         let rest: String = row.chars().skip(2).collect();
-        let (end, _) = buf.set_stringn(text.x, y, &cut, usize::from(text.width), style(Role::Info));
+        let prompt_style = if dim {
+            style(Role::Info).add_modifier(Modifier::DIM)
+        } else {
+            style(Role::Info)
+        };
+        let (end, _) = buf.set_stringn(text.x, y, &cut, usize::from(text.width), prompt_style);
         let room = text.width.saturating_sub(end.saturating_sub(text.x));
-        buf.set_stringn(end, y, &rest, usize::from(room), Style::default());
+        buf.set_stringn(end, y, &rest, usize::from(room), text_style);
     } else {
-        buf.set_stringn(text.x, y, row, usize::from(text.width), Style::default());
+        buf.set_stringn(text.x, y, row, usize::from(text.width), text_style);
     }
     *bottom = y;
 }
