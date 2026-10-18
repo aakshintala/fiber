@@ -615,7 +615,13 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
 }
 
 #[test]
-fn startup_waits_for_extensions_loaded_and_clients_in_any_order() {
+fn startup_holds_extensions_loaded_behind_a_fifo_and_counts_clients_once() {
+    // `clients`-first cannot be forced from the test side: the socket
+    // binds in `Session::open` after `parts_with` loads the extensions,
+    // so a blocked startup init leaves no socket to subscribe to, and no
+    // pause point lies between the bind and `extensions_loaded`. This
+    // pins the reachable half instead: `extensions_loaded` held behind
+    // the fifo while the wait still collects both events.
     let (setup, _server) = fixture();
     let fifo = setup.root.path().join("startup.fifo");
     let mut command = Command::new("mkfifo");
