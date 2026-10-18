@@ -3,7 +3,10 @@
 
 use contract::ErrorCode;
 
-use super::{ArgumentsError, AskUserError, FileError, SkillError, ToolError, WebSearchError};
+use super::{
+    ArgumentsError, AskUserError, FileError, ImageReadError, PdfError, ReadError, SkillError,
+    ToolError, WebSearchError,
+};
 use crate::error::{SessionListError, SessionMessageError};
 
 #[test]
@@ -284,6 +287,162 @@ fn an_invalid_skill_header_names_the_listing() {
         error.to_string(),
         "Skill `nope` at /skills/nope/SKILL.md cannot be loaded: its header no longer \
          parses, names another skill, or turns off model invocation."
+    );
+}
+
+#[test]
+fn pages_too_many_names_the_count() {
+    let error = PdfError::PagesTooMany {
+        text: "1-21".to_owned(),
+        count: 21,
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`pages` 1-21 names 21 pages; a request takes at most 20."
+    );
+}
+
+#[test]
+fn a_malformed_pages_argument_shows_the_grammar() {
+    let error = PdfError::PagesMalformed;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`pages` must be a page or a range such as `3` or `1-5`, counted from 1."
+    );
+}
+
+#[test]
+fn an_unconfigured_pdf_reader_is_a_tool_error() {
+    let error = PdfError::NotConfigured;
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "PDF reading is not configured.");
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn a_pdf_child_that_will_not_start_names_the_cause() {
+    let error = PdfError::ChildStart {
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "the image child could not start: gone.");
+}
+
+#[test]
+fn a_pdf_child_bad_answer_names_what_it_printed() {
+    let error = PdfError::ChildAnswer {
+        why: "printed more than one line",
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "the image child printed more than one line."
+    );
+    let error = PdfError::NoPageCount;
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "the image child named no page count.");
+}
+
+#[test]
+fn an_unreadable_pdf_names_the_file() {
+    let error = PdfError::Unreadable {
+        path: std::path::PathBuf::from("/a.pdf"),
+        message: "exit 1".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        "`/a.pdf` cannot be read as a PDF: exit 1"
+    );
+}
+
+#[test]
+fn a_pdf_child_exit_names_the_status() {
+    let error = PdfError::ChildExited {
+        status: 2,
+        message: "boom".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "the image child exited with status 2: boom"
+    );
+    let error = PdfError::ChildSignalled {
+        message: "boom".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "the image child was killed by a signal: boom"
+    );
+}
+
+#[test]
+fn a_range_past_the_end_names_the_pages() {
+    let error = PdfError::PastTheEnd {
+        path: std::path::PathBuf::from("/a.pdf"),
+        first: 2,
+        last: 5,
+        total: 3,
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`pages` 2-5 is past the end: `/a.pdf` has 3 pages."
+    );
+    let error = PdfError::NeedsPages {
+        path: std::path::PathBuf::from("/a.pdf"),
+        total: 11,
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`/a.pdf` has 11 pages. A PDF of more than 10 pages needs `pages`, such as `1-5`; \
+         a request takes at most 20 pages."
+    );
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+}
+
+#[test]
+fn an_unconfigured_image_reader_is_a_tool_error() {
+    let error = ImageReadError::NotConfigured;
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "image reading is not configured.");
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn an_unreadable_image_names_the_file() {
+    let error = ImageReadError::Unreadable {
+        path: std::path::PathBuf::from("/a.png"),
+        message: "exit 1".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        "`/a.png` cannot be read as an image: exit 1"
+    );
+    let error = ImageReadError::ChildFailed {
+        message: "gone".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "gone");
+}
+
+#[test]
+fn a_read_pdf_failure_reaches_the_root() {
+    let error = ReadError::Pdf(PdfError::PagesMalformed);
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        root.to_string(),
+        "`pages` must be a page or a range such as `3` or `1-5`, counted from 1."
     );
 }
 

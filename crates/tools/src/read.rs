@@ -11,6 +11,7 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::error::ReadError;
 use crate::files::{
     InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes, inspect,
     resolve, unsupported_message,
@@ -113,7 +114,7 @@ impl Tool for Read {
         };
         let pages = match page_range(args.pages.as_deref()) {
             Ok(pages) => pages,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return crate::tool_util::errored(ReadError::Pdf(error)),
         };
         let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,

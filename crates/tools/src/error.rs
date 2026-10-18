@@ -7,9 +7,13 @@
 use contract::ErrorCode;
 use contract::shapes::Failure;
 
+mod file_tools;
+mod media;
 mod misc;
 mod session;
 
+pub(crate) use file_tools::ReadError;
+pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
 
@@ -36,6 +40,15 @@ pub(crate) enum ToolError {
     /// `skill` names no loadable skill.
     #[error(transparent)]
     Skill(#[from] SkillError),
+    /// Reading a PDF failed.
+    #[error(transparent)]
+    Pdf(#[from] PdfError),
+    /// Reading an image failed.
+    #[error(transparent)]
+    Image(#[from] ImageReadError),
+    /// `read` failed.
+    #[error(transparent)]
+    Read(#[from] ReadError),
     /// `web_search` has nothing to run or the backend failed.
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
@@ -52,6 +65,9 @@ impl ToolError {
             Self::SessionMessage(error) => error.code(),
             Self::AskUser(error) => error.code(),
             Self::Skill(error) => error.code(),
+            Self::Pdf(error) => error.code(),
+            Self::Image(error) => error.code(),
+            Self::Read(error) => error.code(),
             Self::WebSearch(error) => error.code(),
         }
     }
