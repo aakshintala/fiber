@@ -127,7 +127,7 @@ fn enter_starts_a_capture_naming_the_action() {
 fn a_variant_capture_names_each_variant_in_order() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 10);
+    select(&mut screen, 11);
     press(&mut screen, &keys, &["enter"]);
     assert_eq!(
         footer(&screen, &keys),
@@ -181,7 +181,7 @@ fn a_free_key_applies_with_its_edit() {
 fn a_variant_action_takes_one_key_per_variant() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 10);
+    select(&mut screen, 11);
     press(&mut screen, &keys, &["enter"]);
     assert!(matches!(
         press(&mut screen, &keys, &["ctrl+b"]),
@@ -199,7 +199,7 @@ fn a_variant_action_takes_one_key_per_variant() {
 fn a_repeated_key_is_refused_and_capture_waits() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 10);
+    select(&mut screen, 11);
     press(&mut screen, &keys, &["enter", "ctrl+b"]);
     assert!(matches!(
         press(&mut screen, &keys, &["ctrl+b"]),
@@ -305,7 +305,7 @@ fn esc_at_a_prompt_cancels_everything() {
 fn clashing_with_two_actions_prompts_twice_then_applies() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 10);
+    select(&mut screen, 11);
     press(&mut screen, &keys, &["enter", "ctrl+o", "ctrl+r"]);
     assert_eq!(
         below(&screen, &keys),
@@ -348,7 +348,7 @@ fn clashing_with_two_actions_prompts_twice_then_applies() {
 fn reset_applies_the_defaults_removing_the_entry() {
     let keys = person(&[("copy_focused", json!(["c"]))]);
     let mut screen = keys_screen();
-    select(&mut screen, 19);
+    select(&mut screen, 20);
     match press(&mut screen, &keys, &["r"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -378,7 +378,7 @@ fn reset_through_a_clash_prompts_and_swaps() {
         ),
     ]);
     let mut screen = keys_screen();
-    select(&mut screen, 9);
+    select(&mut screen, 10);
     press(&mut screen, &keys, &["r"]);
     assert_eq!(below(&screen, &keys), ["Ctrl+R is bound to Move by word"]);
     match press(&mut screen, &keys, &["enter"]) {
@@ -413,7 +413,7 @@ fn reset_through_a_clash_prompts_and_swaps() {
 fn delete_and_backspace_unbind() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 15);
+    select(&mut screen, 16);
     match press(&mut screen, &keys, &["delete"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -442,7 +442,7 @@ fn delete_and_backspace_unbind() {
 fn delete_on_an_unbound_action_saves_nothing() {
     let keys = person(&[("delete_word", json!([]))]);
     let mut screen = keys_screen();
-    select(&mut screen, 11);
+    select(&mut screen, 12);
     assert!(matches!(
         press(&mut screen, &keys, &["delete"]),
         Outcome::Nothing
