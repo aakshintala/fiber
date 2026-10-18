@@ -687,3 +687,166 @@ fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
         prepared.notices
     );
 }
+
+/// A startup notice of the kind `mcp_servers_started` writes.
+fn startup_notice(text: &str) -> contract::events::Notice {
+    contract::events::Notice {
+        code: contract::ErrorCode::ExtensionFailed,
+        message: text.to_owned(),
+        extension: None,
+    }
+}
+
+#[test]
+fn a_rejected_required_package_quotes_its_own_notice() {
+    let fixture = Fixture::new();
+    // The other package fails too, and its notice comes first in the
+    // set: the rejection must quote the missing package's own notice.
+    declare_pkgs(
+        &fixture.rig,
+        &[
+            (
+                "other",
+                manifest("fiber.test/other"),
+                "error(\"other boom\")\n",
+                false,
+            ),
+            (
+                "need",
+                manifest("fiber.test/need"),
+                "error(\"need boom\")\n",
+                true,
+            ),
+        ],
+    );
+    approve(&fixture, "fiber.test/other");
+    approve(&fixture, "fiber.test/need");
+    let state = fixture.state.clone();
+    let rejected = fakes::within("required detail", fakes::MUST_SUCCEED_WITHIN, move || {
+        state
+            .prepare(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .err()
+            .unwrap()
+    });
+    assert_eq!(rejected.code, contract::ErrorCode::ExtensionRequiredFailed);
+    assert!(
+        rejected.message.contains("need boom"),
+        "the rejection quotes the missing package's notice: {}",
+        rejected.message
+    );
+    assert!(
+        !rejected.message.contains("other boom"),
+        "another package's notice is not quoted: {}",
+        rejected.message
+    );
+}
+
+#[test]
+fn a_late_install_does_not_repeat_the_startup_notices() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    // The startup installs the old package: its notice is the one the
+    // session already wrote.
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let written = crate::session_extensions::startup_written(&fixture.state.current.get(), &[]);
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert!(written[0].message.contains("old boom"), "{written:?}");
+    declare_pkgs(
+        &fixture.rig,
+        &[
+            (
+                "old",
+                manifest("fiber.test/old"),
+                "error(\"old boom\")\n",
+                false,
+            ),
+            (
+                "new",
+                manifest("fiber.test/new"),
+                "error(\"new boom\")\n",
+                false,
+            ),
+        ],
+    );
+    approve(&fixture, "fiber.test/new");
+    let state =
+        Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
+    let (_reload, late) = state.preparers(written);
+    let prepared = fakes::within("late install", fakes::MUST_SUCCEED_WITHIN, move || {
+        late(&r#loop::ReloadRoute {
+            model: "scripted/s.json".into(),
+            credential: None,
+        })
+        .unwrap()
+    });
+    assert_eq!(prepared.notices.len(), 1, "{:?}", prepared.notices);
+    assert!(
+        prepared.notices[0].message.contains("new boom"),
+        "only the new notice is written: {:?}",
+        prepared.notices
+    );
+}
+
+#[test]
+fn startup_written_is_the_session_notices_then_the_startup_notices() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let current = fixture.state.current.get();
+    let session = current.notices();
+    assert_eq!(session.len(), 1, "{session:?}");
+    let startup = startup_notice("a startup note");
+    assert_eq!(
+        crate::session_extensions::startup_written(&current, std::slice::from_ref(&startup)),
+        vec![session[0].clone(), startup],
+    );
+}
+
+#[test]
+fn unwritten_keeps_only_the_startup_notices_the_session_did_not_write() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let current = fixture.state.current.get();
+    let written = current.notices()[0].clone();
+    let first = startup_notice("first new");
+    let second = startup_notice("second new");
+    let kept = crate::session_extensions::unwritten(
+        vec![first.clone(), written, second.clone()],
+        &current,
+    );
+    assert_eq!(kept, vec![first, second]);
+}
