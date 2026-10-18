@@ -28,18 +28,24 @@ use super::{LuaExtension, Next, Phase, Shared, Target};
 /// their names").
 const NAME_MAX: usize = 128;
 
+/// A tool's static effects: what its `effects` table declares, read once
+/// at registration. Absent hosts leave them unknown; an empty list says
+/// the call contacts no host the model chose.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StaticEffects {
+    pub(crate) declared: DeclaredEffects,
+    pub(crate) hosts: Option<Vec<String>>,
+}
+
 /// One tool the entry script registered.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DeclaredTool {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) input_schema: Value,
-    /// The declared effects, or `None` when a function of the call's
-    /// arguments returns them.
-    pub(crate) effects: Option<DeclaredEffects>,
-    /// The declared hosts, or `None` when the tool declares none or when
-    /// a function of the call's arguments returns them beside the effects.
-    pub(crate) hosts: Option<Vec<String>>,
+    /// The static effects, or `None` when a function of the call's
+    /// arguments returns them beside the hosts.
+    pub(crate) effects: Option<StaticEffects>,
     pub(crate) timeout: Duration,
     /// How many bytes of the start and of the end of a long result the
     /// model is sent (`docs/tools.md`, "Bounded results").
@@ -154,12 +160,12 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
     if effects.is_nil() {
         return Err("missing `effects`".to_owned());
     }
-    let (effects, hosts, effects_fn) = if let LuaValue::Function(f) = effects {
-        (None, None, Some(f))
+    let (effects, effects_fn) = if let LuaValue::Function(f) = effects {
+        (None, Some(f))
     } else if effects.is_table() {
         let value = host::to_json(&effects).map_err(|e| format!("`effects`: {e}"))?;
         let (declared, hosts) = effects_from(&value).map_err(|why| format!("`effects`: {why}"))?;
-        (Some(declared), hosts, None)
+        (Some(StaticEffects { declared, hosts }), None)
     } else {
         return Err("`effects` must be a table or a function".to_owned());
     };
@@ -183,7 +189,6 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
             description,
             input_schema,
             effects,
-            hosts,
             timeout,
             keep,
         },

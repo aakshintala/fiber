@@ -75,7 +75,7 @@ impl Tool for LuaTool {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let name = &self.declared.name;
         let (declared, hosts) = match &self.declared.effects {
-            Some(declared) => (declared.clone(), self.declared.hosts.clone()),
+            Some(fixed) => (fixed.declared.clone(), fixed.hosts.clone()),
             None => {
                 let value = self
                     .extension

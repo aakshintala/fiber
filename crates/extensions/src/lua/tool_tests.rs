@@ -110,12 +110,14 @@ fn a_tool_registers_its_description_schema_effects_and_timeout() {
                 "required": ["path"],
                 "properties": { "path": { "type": "string" } }
             }),
-            effects: Some(DeclaredEffects {
-                effects: vec![Effect::Reads, Effect::Network],
-                reversible: true,
-                paths: Some(vec!["note.txt".to_owned()]),
+            effects: Some(StaticEffects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads, Effect::Network],
+                    reversible: true,
+                    paths: Some(vec!["note.txt".to_owned()]),
+                },
+                hosts: None,
             }),
-            hosts: None,
             timeout: Duration::from_millis(2000),
             keep: Bound::DEFAULT,
         }
@@ -830,7 +832,13 @@ fn a_static_hosts_list_registers_beside_the_effects() {
            timeout = 100, run = function() return \"\" end })\n",
     );
     assert_eq!(
-        tools(&ext).get("x").unwrap().hosts,
+        tools(&ext)
+            .get("x")
+            .unwrap()
+            .effects
+            .as_ref()
+            .unwrap()
+            .hosts,
         Some(vec!["https://a.test/x".to_owned()])
     );
     assert!(problems(&ext).is_empty());
@@ -843,7 +851,16 @@ fn an_empty_hosts_table_registers_no_host_rather_than_unknown() {
            effects = { effects = { \"network\" }, hosts = {}, reversible = true },\n\
            timeout = 100, run = function() return \"\" end })\n",
     );
-    assert_eq!(tools(&ext).get("x").unwrap().hosts, Some(Vec::new()));
+    assert_eq!(
+        tools(&ext)
+            .get("x")
+            .unwrap()
+            .effects
+            .as_ref()
+            .unwrap()
+            .hosts,
+        Some(Vec::new())
+    );
     assert!(problems(&ext).is_empty());
 }
 
@@ -853,7 +870,7 @@ fn an_effects_function_registers_no_static_hosts() {
         "fiber.tool(\"x\", {})\n",
         spec_with("effects", "function() return {} end")
     ));
-    assert_eq!(tools(&ext).get("x").unwrap().hosts, None);
+    assert_eq!(tools(&ext).get("x").unwrap().effects, None);
 }
 
 #[test]
