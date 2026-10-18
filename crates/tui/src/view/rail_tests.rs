@@ -8,8 +8,10 @@ use crate::home::{Launch, Left, Row, State};
 use crate::link::Line;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::stroke::{Code, Mods, Stroke};
 use crate::view::{render, text};
 use contract::SessionId;
+use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -1009,4 +1011,221 @@ fn rail_draws_at_tiny_widths_without_colour() {
             }
         }
     }
+}
+
+/// Presses ← through the bindings.
+fn press_left(app: &mut App) {
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_press(
+        Stroke {
+            code: Code::Left,
+            mods: Mods::NONE,
+        },
+        now,
+    );
+}
+
+/// The rail drawn with colour, and its targets.
+fn drawn(app: &App) -> (Buffer, Vec<Target>) {
+    let rect = app
+        .chrome()
+        .layout()
+        .and_then(|layout| layout.rail)
+        .unwrap_or_else(|| panic!("a rail"));
+    let area = Rect::new(0, 0, rect.width, rect.height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(app, area, &mut buf, None, &mut targets);
+    (buf, targets)
+}
+
+/// The drawn text rect of the focused card `focus`.
+fn focused_rect(targets: &[Target], focus: u64) -> Rect {
+    targets
+        .iter()
+        .find_map(|target| match target.id {
+            TargetId::Rail(Spot::Card(key)) if key == focus => Some(target.rect),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a focused card target"))
+}
+
+#[test]
+fn a_focused_card_lifts_with_the_hover_tint() {
+    use crate::theme::hover_bg;
+    let mut app = two(15.0, json!({}));
+    let (plain, _) = drawn(&app);
+    press_left(&mut app);
+    let focus = app.rail_state().focused().expect("focus");
+    let (buf, targets) = drawn(&app);
+    let rect = focused_rect(&targets, focus);
+    let cell = (rect.x.saturating_add(2), rect.y);
+    assert_eq!(
+        buf[cell].bg,
+        hover_bg(plain[cell].bg),
+        "the focused card's cell"
+    );
+    // Its blank top edge stays untinted...
+    let edge = (rect.x.saturating_add(2), rect.y.saturating_sub(1));
+    assert_eq!(buf[edge].bg, plain[edge].bg, "the top edge");
+    // ...and so does the header above and the next card's text row.
+    let header = (rect.x.saturating_add(2), rect.y.saturating_sub(2));
+    assert_eq!(buf[header].bg, plain[header].bg, "the header");
+    let other = targets
+        .iter()
+        .find_map(|target| match target.id {
+            TargetId::Rail(Spot::Card(key)) if key != focus => Some(target.rect),
+            _ => None,
+        })
+        .expect("a second card");
+    let neighbour = (other.x.saturating_add(2), other.y);
+    assert_eq!(buf[neighbour].bg, plain[neighbour].bg, "the next card");
+}
+
+#[test]
+fn shift_tab_from_a_focused_rail_lifts_no_card() {
+    let mut app = two(15.0, json!({}));
+    let (plain, plain_targets) = drawn(&app);
+    let card = key(&app, A);
+    let before = focused_rect(&plain_targets, card);
+    let cell = (before.x.saturating_add(2), before.y);
+    press_left(&mut app);
+    assert_eq!(app.rail_state().focused(), Some(card));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_press(Stroke::parse("shift+tab").unwrap(), now);
+    assert_eq!(app.rail_state().focused(), None);
+    let (buf, targets) = drawn(&app);
+    let rect = focused_rect(&targets, card);
+    let at = (rect.x.saturating_add(2), rect.y);
+    assert_eq!(buf[at].bg, plain[cell].bg, "no card stays lifted");
+}
+
+#[test]
+fn a_focused_card_stays_lifted_while_disconnected() {
+    use crate::theme::hover_bg;
+    let mut app = two(15.0, json!({}));
+    let (plain, _) = drawn(&app);
+    press_left(&mut app);
+    let focus = app.rail_state().focused().expect("focus");
+    app.disconnected();
+    let (buf, targets) = drawn(&app);
+    let rect = focused_rect(&targets, focus);
+    let cell = (rect.x.saturating_add(2), rect.y);
+    assert_eq!(
+        buf[cell].bg,
+        hover_bg(plain[cell].bg),
+        "the focused card's cell"
+    );
+}
+
+#[test]
+fn no_color_a_focused_cards_rows_are_bold_and_its_box_loses_dim() {
+    use ratatui::style::Modifier;
+    let mut app = two(15.0, json!({}));
+    press_left(&mut app);
+    let focus = app.rail_state().focused().expect("focus");
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = focused_rect(&targets, focus);
+    let card_w = rect.width;
+    let right = rect.x.saturating_add(card_w).saturating_sub(1);
+    for y in rect.y.saturating_sub(1)..rect.y.saturating_add(5) {
+        for x in rect.x..rect.x.saturating_add(card_w) {
+            assert!(
+                buf[(x, y)].modifier.contains(Modifier::BOLD),
+                "bold at ({x}, {y})"
+            );
+            // The │ sides and the ┌─┐/└─┘ edge rows lose their dim;
+            // the text between the sides keeps whatever dim its role
+            // paints.
+            let edge = y == rect.y.saturating_sub(1) || y == rect.y.saturating_add(4);
+            if edge || x == rect.x || x == right {
+                assert!(
+                    !buf[(x, y)].modifier.contains(Modifier::DIM),
+                    "no dim at ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn no_color_an_unfocused_card_keeps_its_dim_box() {
+    use ratatui::style::Modifier;
+    let mut app = two(15.0, json!({}));
+    press_left(&mut app);
+    let focus = app.rail_state().focused().expect("focus");
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = targets
+        .iter()
+        .find_map(|target| match target.id {
+            TargetId::Rail(Spot::Card(key)) if key != focus => Some(target.rect),
+            _ => None,
+        })
+        .expect("a second card");
+    let card_w = rect.width;
+    let right = rect.x.saturating_add(card_w).saturating_sub(1);
+    for y in [rect.y.saturating_sub(1), rect.y.saturating_add(4)] {
+        assert!(
+            buf[(rect.x, y)].modifier.contains(Modifier::DIM),
+            "dim edge at ({}, {y})",
+            rect.x
+        );
+    }
+    for y in rect.y..rect.y.saturating_add(4) {
+        for x in [rect.x, right] {
+            assert!(
+                buf[(x, y)].modifier.contains(Modifier::DIM),
+                "dim side at ({x}, {y})"
+            );
+            assert!(
+                !buf[(x, y)].modifier.contains(Modifier::BOLD),
+                "no bold at ({x}, {y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_color_no_cell_carries_reversed() {
+    use ratatui::style::Modifier;
+    let mut app = two(15.0, json!({}));
+    press_left(&mut app);
+    let (buf, _) = no_color_drawn(&app);
+    assert!(
+        buf.content
+            .iter()
+            .all(|cell| !cell.modifier.contains(Modifier::REVERSED)),
+        "no cell reversed"
+    );
+}
+
+#[test]
+fn no_color_the_dim_branch_and_usage_text_stays_dim() {
+    use ratatui::style::Modifier;
+    let mut app = app(15.0);
+    app.on_line(status(
+        A,
+        json!({"git": {"branch": "main"}, "context": {"tokens": 50, "window": 100}}),
+    ));
+    app.on_line(status(B, json!({})));
+    let (plain, _) = no_color_drawn(&app);
+    press_left(&mut app);
+    let focus = app.rail_state().focused().expect("focus");
+    assert_eq!(focus, key(&app, A));
+    let (buf, targets) = no_color_drawn(&app);
+    let rect = focused_rect(&targets, focus);
+    let right = rect.x.saturating_add(rect.width).saturating_sub(1);
+    let mut dim = 0;
+    for y in rect.y..rect.y.saturating_add(4) {
+        for x in rect.x.saturating_add(1)..right {
+            if plain[(x, y)].modifier.contains(Modifier::DIM) {
+                assert!(
+                    buf[(x, y)].modifier.contains(Modifier::DIM),
+                    "the text at ({x}, {y}) stays dim"
+                );
+                dim += 1;
+            }
+        }
+    }
+    assert!(dim > 0, "dim text in the focused card");
 }

@@ -2173,3 +2173,107 @@ fn focusing_a_card_past_the_rail_height_scrolls_it_into_view() {
     app.on_line(live(A, json!({})));
     assert!(app.rail_state().scroll() > 0);
 }
+
+#[test]
+fn clicking_a_conversation_target_clears_a_focused_rail() {
+    let mut app = opened_in_conversation();
+    let targets = framed(&mut app);
+    let turn = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Turn(_)))
+        .expect("a conversation stop")
+        .id;
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(app.on_click(turn), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+}
+
+/// The full frame's background colours on a `width` by `height` screen.
+fn frame_bgs(app: &App, width: u16, height: u16) -> Vec<ratatui::style::Color> {
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    buf.content.iter().map(|cell| cell.bg).collect()
+}
+
+/// The full frame's trimmed text rows on a `width` by `height` screen.
+fn frame_rows(app: &App, width: u16, height: u16) -> Vec<String> {
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    // The hint row sits in the conversation's column, indented past
+    // the rail: the check reads its content exactly.
+    crate::view::text(&buf)
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_foot_row_reads_the_rail_hint_while_focused() {
+    use crate::app::rail::RAIL_HINT;
+    let mut app = opened(&[A, B], A);
+    assert!(
+        !frame_rows(&app, 200, 40).contains(&RAIL_HINT.to_owned()),
+        "no hint without focus"
+    );
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert!(rail_focus(&app).is_some());
+    assert!(
+        frame_rows(&app, 200, 40).contains(&RAIL_HINT.to_owned()),
+        "the hint row"
+    );
+    assert_eq!(stroke_press(&mut app, plain(Code::Right)), Effect::None);
+    assert!(
+        !frame_rows(&app, 200, 40).contains(&RAIL_HINT.to_owned()),
+        "no hint after"
+    );
+}
+
+#[test]
+fn the_armed_quit_hint_wins_over_the_rail_hint() {
+    use crate::app::rail::RAIL_HINT;
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(press(&mut app, Key::CtrlC), Effect::None);
+    assert!(app.hint());
+    let rows = frame_rows(&app, 200, 40);
+    assert!(
+        rows.contains(&crate::app::QUIT_HINT.to_owned()),
+        "the quit hint"
+    );
+    assert!(!rows.contains(&RAIL_HINT.to_owned()), "no rail hint");
+}
+
+#[test]
+fn below_rows_grows_by_one_while_the_rail_is_focused() {
+    let mut app = opened(&[A, B], A);
+    let room = app.below_rows();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(app.below_rows(), room.saturating_add(1));
+    assert_eq!(stroke_press(&mut app, plain(Code::Right)), Effect::None);
+    assert_eq!(app.below_rows(), room);
+}
+
+#[test]
+fn a_shed_rail_frame_shows_no_lift_and_no_hint() {
+    use crate::app::rail::RAIL_HINT;
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    app.set_size(60, 24);
+    app.on_line(live(B, json!({})));
+    assert!(rail_rect(&app).is_none());
+    let mut control = opened(&[A, B], A);
+    control.set_size(60, 24);
+    control.on_line(live(B, json!({})));
+    // The shed frame matches one never focused: no lifted card, and
+    // the hint row is gone with the rail.
+    assert_eq!(frame_bgs(&app, 60, 24), frame_bgs(&control, 60, 24));
+    assert!(
+        !frame_rows(&app, 60, 24).contains(&RAIL_HINT.to_owned()),
+        "no hint without the rail"
+    );
+}

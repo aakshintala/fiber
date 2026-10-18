@@ -499,6 +499,40 @@ pub(crate) fn draw(
             });
         }
     }
+    // The focused card reads as one lifted card (`docs/tui.md`, "The
+    // rail"): with colour its text rows take the hover tint, leaving
+    // its blank edges untinted; without colour its drawn rows go bold
+    // and its box loses its dim, the text between the sides keeping
+    // whatever dim its role paints. Only a drawn card lifts: a focus
+    // whose rail shed, or whose card scrolled out of view, draws no
+    // rows, so `sync_rail`'s clear is never the only guard.
+    if let Some(focus) = app.rail_state().focused()
+        && let Some(at) = rows.iter().position(|row| row.start == Some(focus))
+    {
+        if crate::surface::box_fit(area.width) {
+            for i in at..at.saturating_add(CARD_ROWS) {
+                let Some(y) = (skip..end).contains(&i).then(|| {
+                    area.y
+                        .saturating_add(u16::try_from(i - skip).unwrap_or(u16::MAX))
+                }) else {
+                    continue;
+                };
+                let edge = i == at || i == at.saturating_add(CARD_ROWS).saturating_sub(1);
+                let right = area.x.saturating_add(card_w).saturating_sub(1);
+                for x in area.x..area.x.saturating_add(card_w) {
+                    let cell = &mut buf[(x, y)];
+                    cell.modifier.insert(Modifier::BOLD);
+                    if edge || x == area.x || x == right {
+                        cell.modifier.remove(Modifier::DIM);
+                    }
+                }
+            }
+        } else if let Some((_, card_y, card_h, _)) =
+            visible.iter().find(|(_, _, _, key)| *key == focus)
+        {
+            crate::view::lift_hover(buf, Rect::new(area.x, *card_y, card_w, *card_h));
+        }
+    }
     if let Some(row) = hovered.and_then(|key| {
         app.rail_cards()
             .and_then(|(cards, _)| cards.into_iter().find(|card| card.key == key))

@@ -19,6 +19,7 @@ impl App {
     /// notices, and a paste token opens in the editor as Ctrl+G on it does.
     /// A recall waiting for a page waits no more. A click clears "Copied".
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
+        self.clear_rail_focus();
         self.history.cancel();
         self.copied = false;
         let effect = match target {

@@ -16,6 +16,10 @@ use crate::keyset::Context;
 use crate::stroke::{Code, Mods, Stroke};
 use crate::view::rail::{CARD_ROWS, rows};
 
+/// The foot row while the rail holds focus (`docs/tui.md`, "The rail").
+pub(crate) const RAIL_HINT: &str =
+    "← full screen · ↑↓ move · Enter switch · → or Esc back to the session · ⌥1–9 jump";
+
 /// A rail item that does something when clicked (`docs/tui.md`, "The
 /// rail").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +86,12 @@ impl RailState {
             .iter()
             .find(|(card, _)| *card == key)
             .map(|(_, number)| *number)
+    }
+
+    /// The focused card's key, if the rail holds focus. The view
+    /// reads this; only `set_rail_focus` sets it.
+    pub(crate) fn focused(&self) -> Option<u64> {
+        self.focus
     }
 
     /// The wall time the loop last set, in milliseconds since the epoch.

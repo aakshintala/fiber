@@ -39,8 +39,14 @@ impl App {
 
     /// The quit hint: shown while a first Ctrl+C waits for its second.
     /// The quit question draws as an overlay, not through the hint.
+    /// While the rail holds focus and no quit waits, the rail hint
+    /// shows instead: an armed quit still wins when both hold.
     pub(crate) fn hint_text(&self) -> String {
-        super::super::super::QUIT_HINT.to_owned()
+        if self.rail_state.focused().is_some() && self.armed_at.is_none() {
+            crate::app::rail::RAIL_HINT.to_owned()
+        } else {
+            super::super::super::QUIT_HINT.to_owned()
+        }
     }
 
     /// The quit question's keys, on home or not: Enter leaves working
