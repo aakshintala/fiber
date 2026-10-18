@@ -17,7 +17,8 @@ use contract::files::PathLock;
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
     BeforeMessage, BeforeMessageAnswer, BeforeModelCall, BeforeToolAnswer, BeforeToolCall,
-    CheckAnswer, ContextAnswer, Hooks, SessionStart, StateLine, StateSeed, TurnEnd, TurnStart,
+    CheckAnswer, ContextAnswer, Hooks, JobDelivery, SessionStart, StateLine, StateSeed, TurnEnd,
+    TurnStart,
 };
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
@@ -927,17 +928,29 @@ fn keep_listed(config: &Config, name: &str, tools: Vec<LuaTool>) -> Vec<LuaTool>
 }
 
 /// What an `after_tool` hook is given: the call, with `content` and
-/// `details` as the hook before it left them, and the spilled file's
-/// `path` and `size` when the tool already wrote it.
+/// `details` as the hook before it left them, the delivery word when this
+/// is a job delivery, and the spilled file's `path` and `size` when the
+/// tool already wrote it. A delivery from no tool leaves `tool` out; a
+/// large output file leaves `content` out, since the file is the input.
 fn shown(call: &AfterToolCall<'_>, content: &str, details: Option<&Value>) -> Value {
     let mut shown = Map::new();
-    shown.insert("tool".into(), Value::String(call.tool.to_owned()));
+    if call.delivery.is_none() || !call.tool.is_empty() {
+        shown.insert("tool".into(), Value::String(call.tool.to_owned()));
+    }
     shown.insert("arguments".into(), Value::Object(call.arguments.clone()));
     shown.insert(
         "status".into(),
         serde_json::to_value(call.status).unwrap_or(Value::Null),
     );
-    shown.insert("content".into(), Value::String(content.to_owned()));
+    if call.delivery != Some(JobDelivery::OutputFile) || call.spilled.is_none() {
+        shown.insert("content".into(), Value::String(content.to_owned()));
+    }
+    if let Some(delivery) = call.delivery {
+        shown.insert(
+            "delivery".into(),
+            Value::String(delivery.as_str().to_owned()),
+        );
+    }
     if let Some(details) = details {
         shown.insert("details".into(), details.clone());
     }

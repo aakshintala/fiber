@@ -17,7 +17,7 @@ use std::time::Duration;
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::events::CallStatus;
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
 use contract::shapes::Process;
 use contract::tool::SpillFile;
 use fakes::Deadline;
@@ -631,6 +631,164 @@ fn the_hook_is_shown_the_call_and_its_output() {
         changed_content(&answer),
         Some("shell cancelled a.txt out 3 2 false")
     );
+}
+
+#[test]
+fn the_hook_is_shown_each_delivery_word_with_the_starting_tool() {
+    let home = Home::new();
+    home.install(
+        "seen",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.delivery) .. \"|\" .. tostring(call.tool) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    for (delivery, word) in [
+        (JobDelivery::Completion, "completion"),
+        (JobDelivery::Monitor, "monitor"),
+        (JobDelivery::Delegate, "delegate"),
+        (JobDelivery::OutputFile, "output_file"),
+    ] {
+        let answer = bounded({
+            let session = Arc::clone(&session);
+            move || {
+                let arguments = Map::new();
+                session.after_tool(&AfterToolCall {
+                    tool: "shell",
+                    arguments: &arguments,
+                    status: CallStatus::Completed,
+                    content: "out",
+                    details: None,
+                    process: None,
+                    spilled: None,
+                    delivery: Some(delivery),
+                })
+            }
+        });
+        assert_eq!(
+            changed_content(&answer),
+            Some(format!("{word}|shell").as_str())
+        );
+    }
+    // An ordinary call has no delivery: the tool is shown as called.
+    let answer = after_tool(&session, "x");
+    assert_eq!(changed_content(&answer), Some("nil|read"));
+    // A delivery from no tool leaves the tool out, so the hook sees nil.
+    let answer = bounded({
+        let session = Arc::clone(&session);
+        move || {
+            let arguments = Map::new();
+            session.after_tool(&AfterToolCall {
+                tool: "",
+                arguments: &arguments,
+                status: CallStatus::Completed,
+                content: "out",
+                details: None,
+                process: None,
+                spilled: None,
+                delivery: Some(JobDelivery::Completion),
+            })
+        }
+    });
+    assert_eq!(changed_content(&answer), Some("completion|nil"));
+}
+
+#[test]
+fn the_hook_is_shown_a_spilled_output_file_as_path_and_size_without_content() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.content) .. \"|\" .. tostring(call.path) .. \
+             \"|\" .. tostring(call.size) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let file = SpillFile {
+        path: "/s/s_1/artifacts/s_x.txt".into(),
+        size: 1_048_591,
+    };
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "",
+            details: None,
+            process: None,
+            spilled: Some(&file),
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    assert_eq!(
+        changed_content(&answer),
+        Some("nil|/s/s_1/artifacts/s_x.txt|1048591")
+    );
+}
+
+#[test]
+fn the_hook_is_shown_a_small_output_file_as_content_without_path() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.content) .. \"|\" .. tostring(call.path) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "small",
+            details: None,
+            process: None,
+            spilled: None,
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    assert_eq!(changed_content(&answer), Some("small|nil"));
+}
+
+#[test]
+fn a_hook_returning_artifact_on_an_output_file_changes_only_the_artifact() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook("blocking", "return { artifact = \"replaced\" }")),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "small",
+            details: None,
+            process: None,
+            spilled: None,
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    let AfterToolOutcome::Changed {
+        content, artifact, ..
+    } = answer.outcome
+    else {
+        panic!("expected a change, got {:?}", answer.outcome);
+    };
+    assert_eq!(content, None);
+    assert_eq!(artifact.as_deref(), Some("replaced"));
 }
 
 #[test]
