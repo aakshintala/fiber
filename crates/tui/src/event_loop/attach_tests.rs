@@ -2632,14 +2632,12 @@ fn the_raise_is_written_after_the_frame_draws() {
     let (open_tx, open_rx) = mpsc::channel();
     let mut seen = Vec::new();
     std::thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                for _ in 0..4 {
-                    let line =
-                        socket_line(&mut reader).unwrap_or_else(|| panic!("an open line"));
-                    open_tx.send(line).unwrap_or(());
-                }
-            });
+        scope.spawn(|| {
+            for _ in 0..4 {
+                let line = socket_line(&mut reader).unwrap_or_else(|| panic!("an open line"));
+                open_tx.send(line).unwrap_or(());
+            }
+        });
         let open = Deadline::after(DEADLINE);
         for _ in 0..4 {
             seen.push(open.recv_or_fail(&open_rx, "an open line"));
