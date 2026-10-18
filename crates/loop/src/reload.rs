@@ -86,6 +86,14 @@ pub struct ReloadPrepared {
     pub installed: Box<dyn FnOnce() + Send>,
 }
 
+/// What an installation leaves for its caller to write: the prepared
+/// extensions, notices and servers.
+struct Installed {
+    extensions: Vec<LoadedExtension>,
+    notices: Vec<Notice>,
+    servers: Vec<String>,
+}
+
 impl Loop {
     /// Prepares reloads with `prepare`; absent this, reload is unsupported.
     pub fn reloader(mut self, prepare: PrepareReload) -> Self {
@@ -120,10 +128,10 @@ impl Loop {
         }
     }
 
-    fn apply_reload(&mut self, prepared: ReloadPrepared, ack: Ack) -> Result<(), Error> {
-        use contract::events::{
-            Event, ExtensionsLoaded, PreambleReason, Reloaded, ReloadedServers,
-        };
+    /// Installs a preparation's field swaps and runs its `installed`
+    /// hook: the step `apply_reload` and `apply_late` share. Each caller
+    /// writes its own lines from what this returns.
+    fn install(&mut self, prepared: ReloadPrepared) -> Installed {
         let patch = prepared.prompt;
         self.prompt.system = patch.system;
         self.prompt.append = patch.append;
@@ -148,6 +156,18 @@ impl Loop {
         (self.tools, self.replaced) = crate::calls::register(prepared.tools);
         self.hooks = prepared.hooks;
         (prepared.installed)();
+        Installed {
+            extensions: prepared.extensions,
+            notices: prepared.notices,
+            servers: prepared.servers,
+        }
+    }
+
+    fn apply_reload(&mut self, prepared: ReloadPrepared, ack: Ack) -> Result<(), Error> {
+        use contract::events::{
+            Event, ExtensionsLoaded, PreambleReason, Reloaded, ReloadedServers,
+        };
+        let installed = self.install(prepared);
         #[cfg(test)]
         if tests::fail_reload_write() {
             return Err(crate::timing_tests::log_io_error());
@@ -155,12 +175,12 @@ impl Loop {
         self.write(
             &Event::Reloaded(Reloaded {
                 servers: ReloadedServers {
-                    kept: prepared.servers,
+                    kept: installed.servers,
                     restarted: Vec::new(),
                     started: Vec::new(),
                     stopped: Vec::new(),
                 },
-                extensions: prepared
+                extensions: installed
                     .extensions
                     .iter()
                     .map(|extension| extension.name.clone())
@@ -173,12 +193,12 @@ impl Loop {
         crate::inbox::accept(ack);
         self.write(
             &Event::ExtensionsLoaded(ExtensionsLoaded {
-                extensions: prepared.extensions,
+                extensions: installed.extensions,
             }),
             None,
             None,
         )?;
-        for notice in prepared.notices {
+        for notice in installed.notices {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {
@@ -197,6 +217,27 @@ impl Loop {
             if let Some(changed) = skills.changed {
                 self.write(&Event::SkillsChanged(changed), None, None)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Installs the late preparation before the first preamble: the
+    /// prepared tools and prompt stand for the first request, and the
+    /// prepared set is written as `extensions_loaded` with its notices.
+    /// No `reloaded` is written and no ack answered: nobody delivered a
+    /// reload. The caller drops the preamble the install replaced.
+    pub(crate) fn apply_late(&mut self, prepared: ReloadPrepared) -> Result<(), Error> {
+        use contract::events::{Event, ExtensionsLoaded};
+        let installed = self.install(prepared);
+        self.write(
+            &Event::ExtensionsLoaded(ExtensionsLoaded {
+                extensions: installed.extensions,
+            }),
+            None,
+            None,
+        )?;
+        for notice in installed.notices {
+            self.write(&Event::Notice(notice), None, None)?;
         }
         Ok(())
     }
