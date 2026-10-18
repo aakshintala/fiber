@@ -486,6 +486,7 @@ fn extensions(name: &str) -> Event {
         extensions: vec![LoadedExtension {
             name: name.to_owned(),
             version: "1".into(),
+            replaces: Vec::new(),
         }],
     })
 }

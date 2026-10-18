@@ -8,7 +8,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::{App, Effect, Kind, Link, mint};
-use crate::focus::{Area, order};
 use crate::home::{
     Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
     delete_line, from_status, line, recent_rows,
@@ -34,6 +33,7 @@ use workspace::Chooser;
 enum ListFocus {
     FirstStop,
     FirstExited,
+    Row(u64),
 }
 
 /// Home's state: the launch description, and whether a `start` went out in
@@ -663,30 +663,42 @@ impl App {
     /// Focuses the requested list stop after the next home frame. `/resume`
     /// asks for the first exited row; `OpenAt::List` asks for the first row.
     /// True when it ran, so the frame draws again with the focus shown.
-    pub(super) fn home_drawn(&mut self, targets: &[Target]) -> bool {
-        let Some(home) = self.home.as_mut() else {
+    pub(super) fn home_drawn(&mut self, _targets: &[Target]) -> bool {
+        let Some(focus_list) = self.home.as_mut().and_then(|home| home.focus_list.take()) else {
             return false;
         };
-        let Some(focus_list) = home.focus_list.take() else {
-            return false;
-        };
-        self.focus = order(targets, &self.regions, Area::Conversation)
-            .into_iter()
-            .find_map(|id| {
-                let TargetId::Home(spot) = id else {
-                    return None;
-                };
-                let Some(Spot::Entry(key)) = spot.list_stop() else {
-                    return None;
-                };
-                let row = home.sessions.by_key(key)?;
-                let should_focus = match focus_list {
-                    ListFocus::FirstStop => true,
-                    ListFocus::FirstExited => row.left.is_some(),
-                };
-                should_focus.then_some(TargetId::Home(Spot::Entry(key)))
-            });
+        let stops = self.all_list_stops();
+        self.focus = stops.into_iter().find_map(|spot| {
+            let Spot::Entry(key) = spot else {
+                return None;
+            };
+            let row = self.home.as_ref()?.sessions.by_key(key)?;
+            let should_focus = match focus_list {
+                ListFocus::FirstStop => true,
+                ListFocus::FirstExited => row.left.is_some(),
+                ListFocus::Row(want) => key == want,
+            };
+            should_focus.then_some(TargetId::Home(Spot::Entry(key)))
+        });
         true
+    }
+
+    /// Focuses the row `key` names after the next home frame: expands the
+    /// row's project when the row is an exited one hidden behind more, so
+    /// the row is a list stop. An unknown key focuses nothing.
+    pub(super) fn focus_row(&mut self, key: u64) {
+        let Some(home) = self.home.as_mut() else {
+            return;
+        };
+        let Some(row) = home.sessions.by_key(key) else {
+            return;
+        };
+        let exited = row.left.is_some();
+        let project = row.project.clone();
+        if exited {
+            home.sessions.expand(&project);
+        }
+        home.focus_list = Some(ListFocus::Row(key));
     }
 
     /// A key for home, ahead of the key map and focus: the picker's keys

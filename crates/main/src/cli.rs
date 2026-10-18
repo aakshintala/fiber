@@ -107,12 +107,14 @@ pub(crate) enum Invocation {
     },
 }
 
-/// Bare `fiber`'s `--model` and `-c`: the terminal's per-run layer,
+/// Bare `fiber`'s `--model`, `--hub` and `-c`: the terminal's per-run layer,
 /// as `-c` reads it (`docs/configuration.md`, "Layers").
 #[derive(Debug, Default)]
 pub(crate) struct TopLevel {
     /// `--model <model>`, as `-c model=<model>` reads it.
     pub(crate) model: Option<String>,
+    /// `--hub <name>`: the listed hub the terminal opens on.
+    pub(crate) hub: Option<String>,
     /// Each `-c <key>=<value>`, in order.
     pub(crate) overrides: Vec<String>,
 }
@@ -131,6 +133,11 @@ struct Cli {
     /// (`docs/invocation.md`, "Sessions").
     #[arg(long, value_name = "model")]
     model: Option<String>,
+
+    /// Use a hub from this client's list: bare `fiber` only, like
+    /// `--model`.
+    #[arg(long, value_name = "name")]
+    hub: Option<String>,
 
     /// One configuration key for this terminal run, `<key>=<value>`:
     /// bare `fiber` only, carried on each `start` in `overrides`. May
@@ -157,6 +164,9 @@ pub(crate) enum Commands {
         /// (`docs/model-routing.md`, "Which credential a session uses").
         #[arg(long, value_name = "label", requires = "id")]
         credential: Option<String>,
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
     },
     /// Open the most recent session in this project
     Continue,
@@ -972,6 +982,7 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
                     command,
                     TopLevel {
                         model: cli.model,
+                        hub: cli.hub,
                         overrides: cli.overrides,
                     },
                 ),

@@ -444,6 +444,7 @@ impl Keyset {
         }
         let moved = BINDINGS.iter().zip(self.rows.iter()).any(|(binding, row)| {
             binding.contexts.contains(context)
+                && binding.id != "focus_rail"
                 && row.defaults.contains(stroke)
                 && !row.keys.contains(stroke)
         });

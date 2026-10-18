@@ -201,6 +201,7 @@ fn shown_start(start: &SessionStart<'_>) -> Value {
     let reason = match start.reason {
         StartReason::Start => "start",
         StartReason::Resume => "resume",
+        StartReason::Fork => "fork",
         StartReason::Rewind => "rewind",
         StartReason::Handoff => "handoff",
     };

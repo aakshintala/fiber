@@ -163,6 +163,28 @@ fn share(config: &Config, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+/// A terminal on a listed hub: the location names the hub and holds no
+/// launch workspace, project or git row to empty, and no value from the
+/// client's file reaches the chips: `model` stands only when the run's
+/// own layer names it, while `thinking` and `scoped_models` are always
+/// cleared. Every other field rides untouched.
+pub(crate) fn remote(launch: tui::Launch, hub: &str) -> tui::Launch {
+    let flag_names_model = launch
+        .overrides
+        .iter()
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(key, _)| key == "model");
+    tui::Launch {
+        location: tui::LaunchLocation::Remote {
+            hub: hub.to_owned(),
+        },
+        model: flag_names_model.then_some(()).and(launch.model),
+        thinking: None,
+        scoped_models: Vec::new(),
+        ..launch
+    }
+}
+
 #[cfg(test)]
 #[path = "launch_tests.rs"]
 mod tests;

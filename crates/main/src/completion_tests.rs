@@ -206,6 +206,7 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
         flags,
         [
             (None, Some("model")),
+            (None, Some("hub")),
             (Some('c'), None),
             (Some('v'), Some("version")),
             (Some('h'), Some("help"))

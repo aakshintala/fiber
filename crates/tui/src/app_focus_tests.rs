@@ -2,6 +2,7 @@
 //! Esc and Enter.
 
 use super::super::{App, Effect, Target};
+use crate::app::rail::Spot as RailSpot;
 use crate::focus::Regions;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -188,7 +189,7 @@ fn screened() -> (Regions, Vec<Hit>) {
             rect: Rect::new(60, 6, 20, 4),
         },
         Hit {
-            id: TargetId::Line(Target::Note(0)),
+            id: TargetId::Rail(RailSpot::Card(7)),
             rect: Rect::new(0, 1, 12, 2),
         },
     ];
@@ -597,7 +598,7 @@ fn global_keys_still_work_while_navigating() {
 }
 
 #[test]
-fn tab_moves_to_the_panel_then_the_rail_then_back() {
+fn tab_moves_to_the_panel_then_the_rail() {
     let mut app = attached(60, 20);
     let (regions, targets) = screened();
     app.set_regions(regions);
@@ -614,18 +615,12 @@ fn tab_moves_to_the_panel_then_the_rail_then_back() {
     assert_eq!(app.focused(), Some(TargetId::Notice(5)));
     app.on_key(Key::Tab, now());
     app.drawn(&targets);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Line(Target::Note(0))),
-        "the rail's first stop"
-    );
+    // Tab onto the rail focuses the card, not an App target; with no
+    // home the settle drops rail focus, so the next Tab rests.
+    assert_eq!(app.focused(), None);
     app.on_key(Key::Tab, now());
     app.drawn(&targets);
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Line(Target::Call(1))),
-        "back to the conversation's newest stop"
-    );
+    assert_eq!(app.focused(), None);
 }
 
 #[test]
@@ -647,10 +642,12 @@ fn tab_skips_a_hidden_panel() {
     assert_eq!(app.focused(), Some(TargetId::Line(Target::Call(1))));
     app.on_key(Key::Tab, now());
     app.drawn(&targets);
-    assert_eq!(app.focused(), Some(TargetId::Line(Target::Note(0))));
+    // Tab onto the rail focuses the card, not an App target; with no
+    // home the settle drops rail focus, so the next Tab rests.
+    assert_eq!(app.focused(), None);
     app.on_key(Key::Tab, now());
     app.drawn(&targets);
-    assert_eq!(app.focused(), Some(TargetId::Line(Target::Call(1))));
+    assert_eq!(app.focused(), None);
 }
 
 #[test]

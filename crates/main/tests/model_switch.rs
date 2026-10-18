@@ -150,17 +150,6 @@ fn start_session(setup: &Setup, id: &str, extra: &[&str]) -> Running {
     }
 }
 
-/// Kills process group `group` on drop, without waiting on the kill. After
-/// the child is reaped and the group is empty, [`std::mem::forget`] skips
-/// that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// A running `fiber session`: its stdout drained line by line, its stderr
 /// kept for a failure.
 struct Running {

@@ -146,10 +146,6 @@ fn write_text(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
-// debt: the runner, `spawn_watched` and `KillGroup` copy `opening.rs`'s, as
-// the six other binary test files in this crate each do; move all seven
-// copies into `fakes` together when a change to one has to be made in all.
-
 /// One finished run: its exit code, stdout as text and parsed lines, and
 /// stderr.
 struct Run {

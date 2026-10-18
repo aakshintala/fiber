@@ -6,9 +6,10 @@ use crate::stroke::Stroke;
 /// The ids of actions that edit the draft in the input box, and search: the rule in
 /// `docs/tui.md`, "Rules" exempts them from having a mouse target or a
 /// slash command.
-const EDITING: [&str; 10] = [
+const EDITING: [&str; 11] = [
     "send",
     "line_break",
+    "focus_rail",
     "recall_prompt",
     "search_prompts",
     "move_word",
@@ -89,6 +90,7 @@ fn only_the_conditional_rows_carry_a_condition() {
         [
             "clear_then_quit",
             "delete_session",
+            "focus_rail",
             "line_start_end",
             "recall_prompt",
             "search",
