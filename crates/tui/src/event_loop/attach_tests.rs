@@ -2679,7 +2679,24 @@ fn the_raise_is_written_after_the_frame_draws() {
         .name("raise-frame".to_owned())
         .spawn(move || lp.step(Input::Hub(ack), &rx))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    drop(tx);
+    // The tail read's `history` goes out before `draw`: answer it with
+    // no lines, as an empty log would, so the frame installs its
+    // preview and parks. No reader thread bridges the socket here, so
+    // the answer goes straight onto the worker's channel.
+    let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
+    assert_eq!(read["command"], "history");
+    let history = read["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a history id"))
+        .to_owned();
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": history, "result": {"lines": []}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
     let flushed = wait.recv_or_fail(&events, "the parked frame");
     assert!(flushed.starts_with("frame\n"), "{flushed:?}");
     assert_eq!(
