@@ -137,7 +137,7 @@ pub(crate) fn send(
     name: &str,
     args: Value,
 ) -> Result<(), Failure> {
-    let mut bytes = serde_json::to_vec(&serde_json::json!({
+    let bytes = serde_json::to_vec(&serde_json::json!({
         "id": command,
         "command": name,
         "args": args,
@@ -148,11 +148,7 @@ pub(crate) fn send(
             format!("a command could not be written as JSON: {e}"),
         )
     })?;
-    bytes.push(b'\n');
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.flush())
-        .map_err(|_| ended(id))
+    support::framing::write_line(writer, &bytes).map_err(|_| ended(id))
 }
 
 /// The next line from the session, with its bytes for printing. A line that
@@ -206,14 +202,12 @@ fn outcome(line: &Value) -> i32 {
 
 /// Prints one line of the turn.
 fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
-    out.write_all(raw)
-        .and_then(|()| out.write_all(b"\n"))
-        .map_err(|e| {
-            failure(
-                ErrorCode::IoFailed,
-                format!("stdout could not be written: {e}"),
-            )
-        })
+    support::framing::write_line(out, raw).map_err(|e| {
+        failure(
+            ErrorCode::IoFailed,
+            format!("stdout could not be written: {e}"),
+        )
+    })
 }
 
 pub(crate) fn rejection(line: &Value) -> Failure {

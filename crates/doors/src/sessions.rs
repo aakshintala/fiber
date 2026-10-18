@@ -324,7 +324,7 @@ impl SessionSockets {
             }))
             .map_err(|e| message_io(path, e))?,
         );
-        out.push(b'\n');
+        support::framing::write_line(&mut out, b"").map_err(|e| message_io(path, e))?;
         out.extend_from_slice(
             &serde_json::to_vec(&serde_json::json!({
                 "id": command,
@@ -333,7 +333,7 @@ impl SessionSockets {
             }))
             .map_err(|e| message_io(path, e))?,
         );
-        out.push(b'\n');
+        support::framing::write_line(&mut out, b"").map_err(|e| message_io(path, e))?;
         let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| message_io(path, e))?;
         wake_read
             .set_nonblocking(true)

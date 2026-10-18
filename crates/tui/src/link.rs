@@ -1,7 +1,7 @@
 //! Hub lines out and in: command lines written one per line, and the
 //! reader that splits hub lines from session envelopes.
 
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{SendError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -67,8 +67,7 @@ pub(crate) fn history_answer(line: &Envelope) -> Result<Vec<Envelope>, String> {
 pub(crate) fn write_line(mut stream: &UnixStream, line: &str) -> std::io::Result<()> {
     static WRITE: Mutex<()> = Mutex::new(());
     let _write = support::lock(&WRITE);
-    stream.write_all(format!("{line}\n").as_bytes())?;
-    stream.flush()
+    support::framing::write_line(&mut stream, line.as_bytes())
 }
 
 /// The parsed hub lines allowed in the channel: K counts

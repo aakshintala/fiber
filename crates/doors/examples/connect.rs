@@ -107,8 +107,7 @@ fn relay(
         match support::framing::read_line(&mut reader, support::framing::MAX_LINE) {
             Ok(None) | Err(_) => break,
             Ok(Some(line)) => {
-                stdout.write_all(&line)?;
-                stdout.write_all(b"\n")?;
+                support::framing::write_line(&mut *stdout, &line)?;
             }
         }
     }
@@ -121,10 +120,7 @@ fn copy_stdin(stdin: impl Read, writer: &mut UnixStream) {
         match support::framing::read_line(&mut stdin, support::framing::MAX_LINE) {
             Ok(None) | Err(_) => break,
             Ok(Some(buf)) => {
-                if writer.write_all(&buf).is_err()
-                    || writer.write_all(b"\n").is_err()
-                    || writer.flush().is_err()
-                {
+                if support::framing::write_line(&mut *writer, &buf).is_err() {
                     break;
                 }
             }

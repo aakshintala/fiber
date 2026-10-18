@@ -75,11 +75,8 @@ impl Client {
     /// session sees the line as the client typed it.
     pub fn send(&self, line: &str) -> std::io::Result<()> {
         let mut stream = lock(&self.write);
-        stream.write_all(line.as_bytes())?;
-        if !line.ends_with('\n') {
-            stream.write_all(b"\n")?;
-        }
-        stream.flush()
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        support::framing::write_line(&mut *stream, line.as_bytes())
     }
 
     /// Sends one command line as [`Client::send`] does, every blocking write
