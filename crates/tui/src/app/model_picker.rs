@@ -30,9 +30,17 @@ impl App {
         self.model_picker.store(result);
     }
 
-    /// The model-list read the loop owes, if one is owed.
+    /// The model-list read the loop owes, if one is owed. On a remote
+    /// terminal the hub's catalogue reads use the workspace in use, stored
+    /// just before the read is returned; with no read owed nothing is stored.
     pub(crate) fn take_reads(&mut self) -> Option<Refresh> {
-        self.model_picker.take_read()
+        let read = self.model_picker.take_read();
+        if read.is_some()
+            && let Some(remote) = self.remote()
+        {
+            remote.set_workspace(self.workspace());
+        }
+        read
     }
 
     /// Opens the model picker: each open starts fresh, on the on-screen

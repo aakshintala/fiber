@@ -3196,3 +3196,40 @@ fn reattaching_the_same_session_keeps_its_session_only_mark() {
         ))
     );
 }
+
+#[test]
+fn take_reads_records_the_workspace_in_use() {
+    use crate::catalogue::Refresh;
+    use crate::configure_fake::Fake;
+    use crate::model_picker::Mode;
+    use std::sync::Arc;
+    let mut app = home();
+    let router = crate::remote::Router::new();
+    let remote = Arc::new(crate::remote::Remote::new(
+        Arc::new(Fake::new(vec![])),
+        PathBuf::from("/client"),
+        router,
+    ));
+    app.set_remote(Arc::clone(&remote));
+    app.open_model_picker(Mode::Choose);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(remote.reading(), PathBuf::from("/w"));
+    // Without an owed read the recorded workspace is left alone.
+    assert_eq!(app.take_reads(), None);
+    assert_eq!(remote.reading(), PathBuf::from("/w"));
+    // After a workspace choice the next read uses it.
+    app.choose_workspace("/hub/p".to_owned());
+    app.open_model_picker(Mode::Choose);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(remote.reading(), PathBuf::from("/hub/p"));
+}
+
+#[test]
+fn take_reads_without_a_remote_is_unchanged() {
+    use crate::catalogue::Refresh;
+    use crate::model_picker::Mode;
+    let mut app = home();
+    app.open_model_picker(Mode::Choose);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(app.take_reads(), None);
+}

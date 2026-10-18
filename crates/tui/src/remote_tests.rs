@@ -61,6 +61,10 @@ impl Hub {
         let response=serde_json::from_value(json!({"kind":"command_accepted","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"result":result}})).unwrap();
         assert!(self.router.route(&crate::link::Line::Hub(response)));
     }
+    fn reject(&self, line: &Value, code: &str, message: &str) {
+        let response=serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":code,"message":message}})).unwrap();
+        assert!(self.router.route(&crate::link::Line::Hub(response)));
+    }
 }
 impl Drop for Hub {
     fn drop(&mut self) {
@@ -428,26 +432,32 @@ fn installation_preserves_local_seams_and_uses_the_clients_directory() {
     let installed = seams(
         &crate::LaunchLocation::Remote { hub: "box".into() },
         Some(Arc::clone(&local)),
+        None,
         &router,
     );
     let remote = installed.remote.unwrap();
     assert_eq!(remote.client_dir, std::env::current_dir().unwrap());
     assert!(installed.seam.is_some());
     assert!(Arc::ptr_eq(&remote.local, &local));
+    assert!(installed.models.is_some());
     let missing = seams(
         &crate::LaunchLocation::Remote { hub: "box".into() },
+        None,
         None,
         &router,
     );
     assert!(missing.remote.is_none());
     assert!(missing.seam.is_none());
+    assert!(missing.models.is_none());
     let installed = seams(
         &crate::LaunchLocation::default(),
         Some(Arc::clone(&local)),
+        None,
         &router,
     );
     assert!(installed.remote.is_none());
     assert!(Arc::ptr_eq(&installed.seam.unwrap(), &local));
+    assert!(installed.models.is_none());
 }
 
 #[test]
@@ -623,4 +633,514 @@ fn errors_preserve_rejections_and_name_bad_answers() {
             message: "connection lost".into()
         }
     );
+}
+
+#[test]
+fn catalogue_reads_send_the_refresh_word() {
+    use crate::catalogue::{Catalogue, Refresh};
+    for (refresh, word) in [
+        (Refresh::Cached, "cached"),
+        (Refresh::Stale, "stale"),
+        (Refresh::Every, "every"),
+    ] {
+        let hub = Hub::new(Arc::new(Fake::new(vec![])));
+        hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+        let catalogue = hub
+            .call(
+                "models",
+                json!({"workspace": "/remote/ws", "refresh": word}),
+                json!({"models": [], "notices": [], "lists": []}),
+                move |r| r.models(refresh),
+            )
+            .unwrap();
+        assert_eq!(catalogue, Catalogue::default());
+        assert!(
+            hub.lines.try_recv().is_err(),
+            "a {word} read writes more than one line"
+        );
+    }
+}
+
+#[test]
+fn catalogue_answers_decode_field_for_field() {
+    use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    let catalogue = hub
+        .call(
+            "models",
+            json!({"workspace": "/remote/ws", "refresh": "cached"}),
+            json!({
+                "models": [
+                    {"reference": "acme/m1", "provider": "acme", "id": "m1",
+                     "name": "Acme One", "levels": ["low", "high"],
+                     "default_level": "low", "configured": "high", "roles": ["main"],
+                     "price": {"micros_per_mtok": 3000000, "input": 3000000,
+                               "output": 15000000, "tiers": [
+                                {"input_tokens_above": 500000, "micros_per_mtok": 9000000,
+                                 "input": 9000000, "output": 45000000},
+                                {"input_tokens_above": 200000, "micros_per_mtok": 6000000,
+                                 "input": 6000000, "output": 30000000}]}},
+                    {"reference": "acme/m2", "provider": "acme", "id": "m2",
+                     "levels": [], "roles": []}
+                ],
+                "notices": ["acme is stale"],
+                "lists": [{"provider": "acme", "updated_ms": 1, "stale": false},
+                          {"provider": "other", "stale": true}]
+            }),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert_eq!(
+        catalogue,
+        Catalogue {
+            models: vec![
+                ModelEntry {
+                    reference: "acme/m1".to_owned(),
+                    provider: "acme".to_owned(),
+                    id: "m1".to_owned(),
+                    name: Some("Acme One".to_owned()),
+                    levels: vec!["low".to_owned(), "high".to_owned()],
+                    default_level: Some("low".to_owned()),
+                    configured: Some("high".to_owned()),
+                    roles: vec!["main".to_owned()],
+                    price: Some(Price {
+                        micros_per_mtok: 3000000,
+                        input: 3000000,
+                        output: 15000000,
+                        tiers: vec![
+                            PriceTier {
+                                input_tokens_above: 500000,
+                                micros_per_mtok: 9000000,
+                                input: 9000000,
+                                output: 45000000,
+                            },
+                            PriceTier {
+                                input_tokens_above: 200000,
+                                micros_per_mtok: 6000000,
+                                input: 6000000,
+                                output: 30000000,
+                            },
+                        ],
+                    }),
+                },
+                ModelEntry {
+                    reference: "acme/m2".to_owned(),
+                    provider: "acme".to_owned(),
+                    id: "m2".to_owned(),
+                    name: None,
+                    levels: Vec::new(),
+                    default_level: None,
+                    configured: None,
+                    roles: Vec::new(),
+                    price: None,
+                },
+            ],
+            notices: vec!["acme is stale".to_owned()],
+            lists: vec![
+                ListAge {
+                    provider: "acme".to_owned(),
+                    updated_ms: Some(1),
+                    stale: false,
+                },
+                ListAge {
+                    provider: "other".to_owned(),
+                    updated_ms: None,
+                    stale: true,
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn catalogue_answers_decode_their_edges_and_reject_the_rest() {
+    use crate::catalogue::Refresh;
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    let args = json!({"workspace": "/remote/ws", "refresh": "cached"});
+    // Empty lists are an empty catalogue, and one model with one level reads.
+    let catalogue = hub
+        .call(
+            "models",
+            args.clone(),
+            json!({"models": [], "notices": [], "lists": []}),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert!(catalogue.models.is_empty());
+    let catalogue = hub
+        .call(
+            "models",
+            args.clone(),
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "levels": ["low"], "roles": ["x"]}],
+                     "notices": [], "lists": []}),
+            |r| r.models(Refresh::Cached),
+        )
+        .unwrap();
+    assert_eq!(catalogue.models.len(), 1);
+    assert_eq!(catalogue.models[0].levels, vec!["low".to_owned()]);
+    // Each malformed answer is an io_failed naming models, with no partial catalogue.
+    for (what, answer) in [
+        (
+            "a model without reference",
+            json!({"models": [{"provider": "a", "id": "m", "levels": [], "roles": []}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "levels not an array",
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "levels": "low", "roles": []}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "a price with a string input",
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "levels": [], "roles": [],
+                               "price": {"micros_per_mtok": 1, "input": "3",
+                                         "output": 1, "tiers": []}}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "a null name",
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "name": null, "levels": [], "roles": []}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "a tier missing its threshold",
+            json!({"models": [{"reference": "a/m", "provider": "a", "id": "m",
+                               "levels": [], "roles": [],
+                               "price": {"micros_per_mtok": 1, "input": 1,
+                                         "output": 1, "tiers": [
+                                          {"micros_per_mtok": 1, "input": 1,
+                                           "output": 1}]}}],
+                   "notices": [], "lists": []}),
+        ),
+        (
+            "a list without stale",
+            json!({"models": [], "notices": [],
+                   "lists": [{"provider": "a"}]}),
+        ),
+        ("a result that is not an object", json!([])),
+    ] {
+        let error = hub
+            .call("models", args.clone(), answer, |r| {
+                r.models(Refresh::Cached)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed, "{what}");
+        assert!(
+            error.message.contains("models"),
+            "{what}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn catalogue_rejection_keeps_the_hub_message() {
+    use crate::catalogue::Refresh;
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    let deadline = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.catalogue_reader()(Refresh::Cached))
+            .unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "models line");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/remote/ws", "refresh": "cached"})
+    );
+    hub.reject(&line, "config_invalid", "bad config");
+    assert_eq!(
+        deadline.recv_or_fail(&rx, "rejected catalogue"),
+        Err("bad config".to_owned())
+    );
+}
+
+#[test]
+fn catalogue_reads_use_the_workspace_in_use() {
+    use crate::catalogue::Refresh;
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let deadline = Deadline::start();
+    // A relative global file answer is an io_failed naming global_file,
+    // with no models line, on the worker path.
+    for file in ["config.json", ""] {
+        let (tx, rx) = mpsc::channel();
+        let remote = Arc::clone(&hub.remote);
+        thread::spawn(move || {
+            tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+        });
+        let line = deadline.recv_or_fail(&hub.lines, "global file");
+        assert_eq!(line["args"], json!({"operation": "global_file"}));
+        hub.reply(&line, json!({"file": file}));
+        let error = deadline
+            .recv_or_fail(&rx, "relative global file")
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed, "file {file:?}");
+        assert!(
+            error.message.contains("global_file"),
+            "file {file:?}: {}",
+            error.message
+        );
+        assert!(
+            hub.lines.try_recv().is_err(),
+            "models sent after a bad global file {file:?}"
+        );
+        // The loop path, settings with an empty workspace, agrees.
+        let (tx, rx) = mpsc::channel();
+        let remote = Arc::clone(&hub.remote);
+        thread::spawn(move || {
+            tx.send(remote.settings(Path::new(""))).unwrap_or(());
+        });
+        let line = deadline.recv_or_fail(&hub.lines, "global file for settings");
+        assert_eq!(line["args"], json!({"operation": "global_file"}));
+        hub.reply(&line, json!({"file": file}));
+        let error = deadline
+            .recv_or_fail(&rx, "relative global file on settings")
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::IoFailed, "file {file:?}");
+        assert!(
+            error.message.contains("global_file"),
+            "file {file:?}: {}",
+            error.message
+        );
+        assert!(
+            hub.lines.try_recv().is_err(),
+            "settings sent after a bad global file {file:?}"
+        );
+    }
+    // A relative workspace never reaches the wire either.
+    hub.remote.set_workspace(PathBuf::from("rel/dir"));
+    let error = hub.remote.models(Refresh::Cached).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        error.message.contains("workspace"),
+        "relative workspace: {}",
+        error.message
+    );
+    assert!(
+        hub.lines.try_recv().is_err(),
+        "models sent for a relative workspace"
+    );
+    // A cold read asks global_file, then reads at its parent directory.
+    hub.remote.set_workspace(PathBuf::new());
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "cold global file");
+    assert_eq!(line["args"], json!({"operation": "global_file"}));
+    hub.reply(&line, json!({"file": "/hub/.fiber/config.json"}));
+    let line = deadline.recv_or_fail(&hub.lines, "cold models line");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/hub/.fiber", "refresh": "cached"})
+    );
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(
+        deadline
+            .recv_or_fail(&rx, "cold catalogue")
+            .unwrap()
+            .models
+            .is_empty()
+    );
+    // Once the loop path has cached the global file, a read sends only models.
+    assert_eq!(
+        hub.call(
+            "global_file",
+            json!({}),
+            json!({"file": "/hub/.fiber/config.json"}),
+            |r| r.global_file()
+        ),
+        PathBuf::from("/hub/.fiber/config.json")
+    );
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Stale)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "cached models line");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/hub/.fiber", "refresh": "stale"})
+    );
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(deadline.recv_or_fail(&rx, "cached catalogue").is_ok());
+    assert!(
+        hub.lines.try_recv().is_err(),
+        "a cached read asks global_file again"
+    );
+    // A set workspace wins over the cache, per read.
+    for workspace in ["/a", "/b"] {
+        hub.remote.set_workspace(PathBuf::from(workspace));
+        let (tx, rx) = mpsc::channel();
+        let remote = Arc::clone(&hub.remote);
+        thread::spawn(move || {
+            tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+        });
+        let line = deadline.recv_or_fail(&hub.lines, "models at a set workspace");
+        assert_eq!(
+            line["args"],
+            json!({"operation": "models", "workspace": workspace, "refresh": "cached"})
+        );
+        hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+        assert!(
+            deadline
+                .recv_or_fail(&rx, "catalogue at a set workspace")
+                .is_ok()
+        );
+    }
+    // The workspace is copied at the read's start: storing one while a
+    // read waits changes only the next read.
+    hub.remote.set_workspace(PathBuf::from("/wait"));
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "waiting models line");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/wait", "refresh": "cached"})
+    );
+    hub.remote.set_workspace(PathBuf::from("/later"));
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(deadline.recv_or_fail(&rx, "waiting catalogue").is_ok());
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "later models line");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/later", "refresh": "cached"})
+    );
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(deadline.recv_or_fail(&rx, "later catalogue").is_ok());
+}
+
+#[test]
+fn catalogue_reads_wait_for_the_link_and_end_on_reconnect() {
+    use crate::catalogue::Refresh;
+    use std::time::Duration;
+    let mut hub = Hub::new(Arc::new(Fake::new(vec![])));
+    hub.router.detach();
+    hub.remote.set_workspace(PathBuf::from("/remote/ws"));
+    let deadline = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    // Nothing is written while detached.
+    assert!(
+        Deadline::after(Duration::from_millis(200))
+            .recv(&hub.lines)
+            .is_err(),
+        "a catalogue read wrote while detached"
+    );
+    // After attach the hub reads the models line and the read answers.
+    let (client, stream) = UnixStream::pair().unwrap();
+    let (ltx, lrx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            if ltx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    hub.router.attach(client);
+    hub.lines = lrx;
+    let line = deadline.recv_or_fail(&hub.lines, "models after attach");
+    assert_eq!(
+        line["args"],
+        json!({"operation": "models", "workspace": "/remote/ws", "refresh": "cached"})
+    );
+    hub.reply(&line, json!({"models": [], "notices": [], "lists": []}));
+    assert!(
+        deadline
+            .recv_or_fail(&rx, "catalogue after attach")
+            .unwrap()
+            .models
+            .is_empty()
+    );
+    // A reconnect while a read waits ends it with connection lost.
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.models(Refresh::Cached)).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "models before the drop");
+    assert_eq!(line["command"], "configure");
+    hub.router.detach();
+    let error = deadline
+        .recv_or_fail(&rx, "catalogue after the drop")
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.message, "connection lost");
+}
+
+#[test]
+fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
+    use crate::catalogue::{Catalogue, ReadModels};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let router = Router::new();
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&calls);
+    let client: ReadModels = Arc::new(move |_| {
+        counting.fetch_add(1, Ordering::SeqCst);
+        Ok(Catalogue::default())
+    });
+    // With a seam the reader is the remote's, whatever the client reads.
+    let installed = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        Some(local),
+        Some(Arc::clone(&client)),
+        &router,
+    );
+    let reader = installed.models.as_ref().unwrap();
+    assert!(!Arc::ptr_eq(reader, &client));
+    drop(installed);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    // Without a seam the client reader is dropped unread.
+    let missing = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        None,
+        Some(client),
+        &router,
+    );
+    assert!(missing.models.is_none());
+    drop(missing);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    // A local launch keeps the client's reader.
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let client: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let kept = seams(
+        &crate::LaunchLocation::default(),
+        Some(local),
+        Some(Arc::clone(&client)),
+        &router,
+    );
+    assert!(Arc::ptr_eq(kept.models.as_ref().unwrap(), &client));
+    // A remote seam with no client reader still reads from the hub.
+    let local: Arc<dyn Configure> = Arc::new(Fake::new(vec![]));
+    let hubbed = seams(
+        &crate::LaunchLocation::Remote { hub: "box".into() },
+        Some(local),
+        None,
+        &router,
+    );
+    assert!(hubbed.models.is_some());
 }

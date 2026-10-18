@@ -126,7 +126,8 @@ pub(crate) fn run_with(
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
     let router = crate::remote::Router::new();
-    let seams = crate::remote::seams(&launch.location, launch.configure.take(), &router);
+    let seams = crate::remote::seams(&launch.location, launch.configure.take(), models, &router);
+    let models = seams.models;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
     } else {
