@@ -421,9 +421,8 @@ fn a_switch_to_a_session_held_at_full_sends_summary_then_full() {
         let id = line["id"].as_str().unwrap_or_default();
         app.on_line(accepted(target, id));
     }
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["session_id"], B);
     assert_eq!(raise["args"]["level"], "full");
 }
@@ -591,10 +590,21 @@ fn a_crashed_card_click_resumes_it() {
     let mut app = opened(&[A, B, C], A);
     app.on_line(left(B, "crashed"));
     let out = sent(click(&mut app, B));
+    let first = out
+        .iter()
+        .find(|line| line["command"] == "subscribe" && line["session_id"] == B)
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a first stage for {B}: {out:?}"))
+        .to_owned();
     assert!(
-        out.contains(&subscribe(&out[1]["id"], B, "full")),
-        "{out:?}"
+        app.on_line(accepted(B, &first)).is_empty(),
+        "the first stage keeps the gate"
     );
+    // The first frame releases the raise: the crashed session opens
+    // at `full` after it.
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    assert_eq!(raise, subscribe(&raise["id"], B, "full"));
     assert_eq!(on_screen(&app), Some(B));
 }
 
@@ -620,10 +630,7 @@ fn after_a_switch_only_the_new_session_is_held_at_full() {
         let raise: Value =
             serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
                 .unwrap_or_else(|err| panic!("{err}"));
-        let target = raise["session_id"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let target = raise["session_id"].as_str().unwrap_or_default().to_owned();
         let level = raise["args"]["level"]
             .as_str()
             .unwrap_or_default()

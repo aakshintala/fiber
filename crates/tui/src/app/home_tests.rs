@@ -979,9 +979,8 @@ fn opening_a_summary_session_sends_no_subscribe_then_raises() {
     let lines = open_first(&mut app);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "commands");
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(raise["args"]["level"], "full");
@@ -1011,9 +1010,8 @@ fn opening_a_full_session_sends_summary_then_full() {
     let lines = open_first(&mut app);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "commands");
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["args"]["level"], "full");
     assert_ne!(first[0]["id"], raise["id"]);
@@ -1346,9 +1344,8 @@ fn a_stale_refusal_for_an_earlier_open_is_ignored() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The raise still completes the second open.
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["args"]["level"], "full");
     let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
@@ -1419,9 +1416,8 @@ fn a_rejected_summary_step_alone_does_not_fail_the_open() {
         Some("s_aaaaaaaaaaaaaaaa")
     );
     // The raise completes the second open.
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["args"]["level"], "full");
     let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
@@ -1448,9 +1444,8 @@ fn a_refused_two_step_open_fails_the_open() {
     assert_eq!(lines[0]["command"], "commands");
     // The raise is the open's subscribe in flight: refusing it fails
     // the open.
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["args"]["level"], "full");
     let ack = raise["id"]
         .as_str()
@@ -1531,9 +1526,8 @@ fn after_a_refused_open_the_next_open_sends_summary_raises_and_attaches() {
             .is_empty()
     );
     // The raise ends the gate; the replay then folds.
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["args"]["level"], "full");
     let raised = raise["id"].as_str().unwrap_or_else(|| panic!("raised id"));
     assert!(
@@ -3830,9 +3824,8 @@ fn a_rejected_lower_while_home_sends_no_subscribe() {
         app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &first_stage))
             .is_empty()
     );
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["args"]["level"], "full");
     let raised = raise["id"].as_str().unwrap_or_else(|| panic!("raised id"));
     assert!(

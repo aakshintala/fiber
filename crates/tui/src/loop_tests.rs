@@ -1351,18 +1351,22 @@ fn resume_open_replays_the_log_to_the_tail() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
                     Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
                     Some("subscribe") => {
-                        // A command naming a session is relayed, never
-                        // answered by the hub itself: only the session's
-                        // accept arrives, carrying its id, then the log.
-                        // The hub parks here until the test releases it: held
-                        // past DRAIN, the drain wait fails every run.
+                        if command["args"]["level"] == "full" {
+                            // The raise, released by the first frame: its
+                            // ack ends the gate, so the replay folds
+                            // from its first line.
+                            write(session_ack(&id, json!({})));
+                            for envelope in &stream {
+                                write(serde_json::to_value(envelope).unwrap_or(Value::Null));
+                            }
+                            break;
+                        }
+                        // The first stage: park until the test releases
+                        // it, then answer only. The raise follows the
+                        // first frame.
                         subscribed_tx.send(()).unwrap_or(());
                         release.recv().unwrap_or(());
                         write(session_ack(&id, json!({})));
-                        for envelope in &stream {
-                            write(serde_json::to_value(envelope).unwrap_or(Value::Null));
-                        }
-                        break;
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));

@@ -2,9 +2,9 @@
 //! and `fiber continue` name, or the session list `fiber resume` with no
 //! id names.
 
-use super::super::App;
+use super::super::{App, Effect};
 use crate::OpenAt;
-use crate::home::Spot;
+use crate::home::{Level, Spot};
 use crate::link::Line;
 use contract::SessionId;
 use serde_json::{Value, json};
@@ -467,9 +467,8 @@ fn a_running_refusal_notice_between_acceptances_keeps_the_screen_attached() {
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
     // The first frame releases the raise; its acceptance ends the gate.
-    let raise: Value =
-        serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
-            .unwrap_or_else(|err| panic!("{err}"));
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["args"]["level"], "full");
     let last = raise["id"].as_str().unwrap_or_else(|| panic!("last id"));
@@ -502,4 +501,237 @@ fn a_gated_non_notice_line_is_dropped_without_a_notice() {
     );
     assert_eq!(app.notice(), None);
     assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+}
+
+#[test]
+fn an_open_sends_summary_and_commands_and_no_full() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines[0]["args"], json!({"level": "summary"}));
+    assert_eq!(lines[1]["command"], "commands");
+    assert_eq!(lines[1]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_ne!(lines[0]["id"], lines[1]["id"]);
+    // The first stage is in flight: no `full` goes out before its ack.
+    assert!(app.take_raise().is_none());
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+}
+
+#[test]
+fn an_open_with_summary_expected_sends_no_subscribe() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    // The raise is due at once: the first frame releases it.
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    assert!(app.take_raise().is_none(), "one raise only");
+}
+
+/// The raise a frame releases, parsed from its line.
+fn raise_line(app: &mut App) -> Value {
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"))
+}
+
+#[test]
+fn the_first_stage_ack_keeps_the_gate_and_makes_the_raise_due() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, Some("work".to_owned())));
+    assert_eq!(
+        lines[0]["args"],
+        json!({"level": "summary", "credential": "work"}),
+        "the credential rides on the first subscribe only"
+    );
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(
+        !app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
+        "the answered first stage leaves nothing in flight"
+    );
+    let raise = raise_line(&mut app);
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(
+        raise["args"],
+        json!({"level": "full"}),
+        "the raise never carries a credential"
+    );
+    assert!(
+        app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
+        "Subs shows the raise in flight"
+    );
+    assert!(app.take_raise().is_none(), "one raise only");
+}
+
+#[test]
+fn the_raise_ack_ends_the_gate_and_the_first_stage_ack_does_not() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    let raise = raise_line(&mut app);
+    let last = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("last id"))
+        .to_owned();
+    assert!(app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &last))
+            .is_empty()
+    );
+    assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
+    assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
+}
+
+/// Home showing one exited row, ready for a row open.
+fn home_with_row() -> App {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.on_line(hello()));
+    let feed = lines
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed id"));
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a recent id"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    assert!(
+        app.on_line(accepted(
+            recent,
+            json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]})
+        ))
+        .is_empty()
+    );
+    app
+}
+
+/// The home screen's text, so a failing open's row note is visible.
+fn home_text(app: &mut App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    app.drawn(&targets);
+    crate::view::text(&buf)
+}
+
+#[test]
+fn a_rejected_first_stage_or_raise_fails_the_open() {
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(refused(first, "held by another process"))
+            .is_empty()
+    );
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(app.notice(), Some("held by another process"));
+    assert!(
+        home_text(&mut app).contains("held by another process"),
+        "the refusal is the row's note"
+    );
+    let mut app = home_with_row();
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    let raise = raise_line(&mut app);
+    let last = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("last id"))
+        .to_owned();
+    assert!(app.on_line(refused(&last, "already held")).is_empty());
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(app.notice(), Some("already held"));
+    assert!(
+        home_text(&mut app).contains("already held"),
+        "the refusal is the row's note"
+    );
+}
+
+#[test]
+fn home_during_the_open_sends_no_raise() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    assert_eq!(app.leave(), Effect::None, "the level is `summary`");
+    assert!(app.on_home());
+    assert!(app.take_raise().is_none(), "leaving drops the open");
+    assert!(
+        !app.subscribe_pending(&id("s_aaaaaaaaaaaaaaaa")),
+        "no `full` in flight"
+    );
+}
+
+#[test]
+fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(
+        id("s_aaaaaaaaaaaaaaaa"),
+        Some(Level::Full),
+        Some("work".to_owned()),
+    ));
+    let subscribes: Vec<_> = lines
+        .iter()
+        .filter(|line| line["command"] == "subscribe")
+        .collect();
+    // The held-`full` open sends `summary` first; the `full` raise
+    // follows the first frame: two subscribes in total across the open.
+    assert_eq!(subscribes.len(), 1);
+    assert_eq!(
+        subscribes[0]["args"],
+        json!({"level": "summary", "credential": "work"})
+    );
+    let first = subscribes[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    let raise = raise_line(&mut app);
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    let last = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("last id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &last))
+            .is_empty()
+    );
+    assert!(!app.gated(&id("s_aaaaaaaaaaaaaaaa")));
 }

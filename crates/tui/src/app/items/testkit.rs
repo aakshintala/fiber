@@ -114,8 +114,7 @@ pub(crate) fn opened(app: &mut App) {
     // frame releases the `full` raise, whose ack ends the gate. One
     // ack would drop the parent's later lines.
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
-    let raise: Value =
-        serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
     let raise_id = raise["id"]
         .as_str()
         .unwrap_or_else(|| panic!("a raise id"))

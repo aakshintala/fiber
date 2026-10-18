@@ -386,11 +386,10 @@ fn ack_open(app: &mut App, out: &[Value]) {
         .rfind(|line| line["command"] == "subscribe")
         .and_then(|line| line["id"].as_str())
     {
-        app.on_line(session_accepted(SESSION, &id.to_owned()));
+        app.on_line(session_accepted(SESSION, id));
     }
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
-    let raise: Value =
-        serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
     let id = raise["id"]
         .as_str()
         .unwrap_or_else(|| panic!("a raise id"))

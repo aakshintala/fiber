@@ -117,8 +117,7 @@ fn opened(app: &mut App) {
     // The staged open holds the gate past the first ack: the first
     // frame releases the `full` raise, whose ack ends the gate.
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
-    let raise: Value =
-        serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
     let raise_id = raise["id"]
         .as_str()
         .unwrap_or_else(|| panic!("a raise id"))

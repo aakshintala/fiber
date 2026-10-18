@@ -340,8 +340,7 @@ fn id_of(line: &Value) -> String {
 /// staged open's second subscribe, whose answer ends the gate.
 fn raise_id(app: &mut App) -> String {
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
-    serde_json::from_str::<Value>(&line)
-        .unwrap_or_else(|err| panic!("{line}: {err}"))["id"]
+    serde_json::from_str::<Value>(&line).unwrap_or_else(|err| panic!("{line}: {err}"))["id"]
         .as_str()
         .unwrap_or_else(|| panic!("a raise id"))
         .to_owned()

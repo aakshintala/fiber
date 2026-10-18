@@ -2444,3 +2444,198 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         drop(wire);
     }
 }
+
+/// A backend sending each flush's buffer text to the test's channel, so
+/// the test orders the first frame against the hub's reads. Like
+/// `loop_tests` `CountingBackend`, but recording instead of counting.
+struct RecordBackend {
+    inner: ratatui::backend::TestBackend,
+    events: mpsc::Sender<String>,
+}
+
+impl crate::screen::SyncEmit for RecordBackend {
+    fn emit(&mut self, _begin: bool) -> std::result::Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl ratatui::backend::Backend for RecordBackend {
+    type Error = <ratatui::backend::TestBackend as ratatui::backend::Backend>::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::result::Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(
+        &mut self,
+    ) -> std::result::Result<ratatui::layout::Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(
+        &mut self,
+        clear_type: ratatui::backend::ClearType,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> std::result::Result<ratatui::layout::Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> std::result::Result<ratatui::backend::WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), Self::Error> {
+        let text = crate::view::text(self.inner.buffer());
+        self.events.send(format!("frame\n{text}")).unwrap_or(());
+        self.inner.flush()
+    }
+}
+
+/// The open's `full` raise is written after the first frame draws, never
+/// before it: the recording backend reports the flush and the fake hub
+/// reports the `subscribe full` it reads, on one channel, in order.
+#[test]
+fn the_raise_is_written_after_the_frame_draws() {
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx.clone(),
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: std::path::PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (ours, theirs) = pair();
+    let (cmds_tx, cmds) = mpsc::channel();
+    // The fake hub answers nothing: the test only orders the loop's
+    // writes. It reports the `full` raise it reads to the same channel
+    // that carries the frame, so program order is the channel's order,
+    // and hands each first-stage subscribe's id back for the test to ack.
+    std::thread::Builder::new()
+        .name("raise-hub".to_owned())
+        .spawn(move || {
+            let mut reader = std::io::BufReader::new(theirs);
+            let mut text = String::new();
+            loop {
+                text.clear();
+                match std::io::BufRead::read_line(&mut reader, &mut text) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                if command["command"] != "subscribe" {
+                    continue;
+                }
+                if command["args"]["level"] == "full" {
+                    events_tx
+                        .send("command(subscribe full)".to_owned())
+                        .unwrap_or(());
+                } else if let Some(id) = command["id"].as_str() {
+                    cmds_tx.send(id.to_owned()).unwrap_or(());
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (tx, rx) = mpsc::channel();
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    let wait = Deadline::after(DEADLINE);
+    let first = wait.recv_or_fail(&events, "the first frame");
+    assert!(first.starts_with("frame\n"), "{first:?}");
+    // The first frame drew with no raise: the `summary` subscribe went
+    // out, no `full`. Acking the summary makes the raise due, and the
+    // next frame writes it.
+    let summary = wait.recv_or_fail(&cmds, "the summary subscribe");
+    let ack = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), serde_json::Value::String(summary))]
+            .into_iter()
+            .collect(),
+    });
+    assert_eq!(lp.step(Input::Hub(ack), &rx), None);
+    drop(tx);
+    let mut frames = 1;
+    loop {
+        let event = wait.recv_or_fail(&events, "the raise after the frame");
+        if event == "command(subscribe full)" {
+            break;
+        }
+        assert!(event.starts_with("frame\n"), "{event:?}");
+        frames += 1;
+    }
+    assert!(frames >= 1);
+    drop(rx);
+}
