@@ -11,6 +11,7 @@
 use std::sync::mpsc;
 
 use contract::shapes::{DeclaredEffects, Effect};
+use contract::tool::Bound;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -69,6 +70,7 @@ fn spec_with(field: &str, value: &str) -> String {
         ("effects", "{ effects = {}, reversible = true }"),
         ("timeout", "100"),
         ("run", "function() return \"\" end"),
+        ("keep", ""),
     ];
     for slot in &mut fields {
         if slot.0 == field {
@@ -114,6 +116,7 @@ fn a_tool_registers_its_description_schema_effects_and_timeout() {
                 paths: Some(vec!["note.txt".to_owned()]),
             }),
             timeout: Duration::from_millis(2000),
+            keep: Bound::DEFAULT,
         }
     );
     assert_eq!(
@@ -227,10 +230,109 @@ fn a_spec_that_is_not_a_table_is_refused() {
     assert_eq!(
         problems(&ext),
         [
-            "`x` tool not registered: it takes a table of `description`, `input_schema`, `effects`, `timeout` and `run`"
+            "`x` tool not registered: it takes a table of `description`, `input_schema`, `effects`, `timeout`, `run` and optionally `keep`"
         ]
     );
     assert!(tools(&ext).is_empty());
+}
+
+#[test]
+fn keep_absent_or_nil_registers_the_default_bound() {
+    for spec in [spec_with("", ""), spec_with("keep", "nil")] {
+        let (_dir, ext) = extension(&format!("fiber.tool(\"x\", {spec})\n"));
+        assert_eq!(tools(&ext).get("x").unwrap().keep, Bound::DEFAULT, "{spec}");
+        assert!(problems(&ext).is_empty(), "{spec}");
+    }
+}
+
+#[test]
+fn keep_declares_how_many_bytes_of_each_end_the_model_is_sent() {
+    let cases = [
+        (
+            "{ head = 1024, tail = 1024 }",
+            Bound {
+                start: 1024,
+                end: 1024,
+            },
+        ),
+        ("{ tail = 8 }", Bound { start: 0, end: 8 }),
+        ("{ head = 5 }", Bound { start: 5, end: 0 }),
+        ("{ head = 0, tail = 1 }", Bound { start: 0, end: 1 }),
+        ("{ head = 1, tail = 0 }", Bound { start: 1, end: 0 }),
+    ];
+    for (keep, bound) in cases {
+        let (_dir, ext) = extension(&format!("fiber.tool(\"x\", {})\n", spec_with("keep", keep)));
+        assert_eq!(tools(&ext).get("x").unwrap().keep, bound, "{keep}");
+        assert!(problems(&ext).is_empty(), "{keep}");
+    }
+}
+
+#[test]
+fn each_bad_keep_leaves_one_problem_and_the_rest_stand() {
+    let cases = [
+        ("5", "`keep` must be a table of `head` and `tail`"),
+        ("\"a\"", "`keep` must be a table of `head` and `tail`"),
+        ("{}", "`keep`: `head` and `tail` cannot both be 0"),
+        (
+            "{ head = 0, tail = 0 }",
+            "`keep`: `head` and `tail` cannot both be 0",
+        ),
+        (
+            "{ head = -1 }",
+            "`keep`: `head` must be a whole number of bytes",
+        ),
+        (
+            "{ tail = -2 }",
+            "`keep`: `tail` must be a whole number of bytes",
+        ),
+        (
+            "{ head = 1.5 }",
+            "`keep`: `head` must be a whole number of bytes",
+        ),
+        (
+            "{ head = 1024.0 }",
+            "`keep`: `head` must be a whole number of bytes",
+        ),
+        (
+            "{ head = \"9\" }",
+            "`keep`: `head` must be a whole number of bytes",
+        ),
+        ("{ stop = 5 }", "`keep`: `stop` is not `head` or `tail`"),
+        ("{ start = 5 }", "`keep`: `start` is not `head` or `tail`"),
+        ("{ [\"end\"] = 5 }", "`keep`: `end` is not `head` or `tail`"),
+        ("{ 5 }", "`keep`: `1` is not `head` or `tail`"),
+    ];
+    for (keep, why) in cases {
+        let (_dir, ext) = extension(&format!(
+            "fiber.tool(\"bad\", {})\nfiber.tool(\"good\", {})\n",
+            spec_with("keep", keep),
+            spec_with("", ""),
+        ));
+        assert_eq!(
+            problems(&ext),
+            vec![format!("`bad` tool not registered: {why}")],
+            "{keep}"
+        );
+        let names: Vec<String> = tools(&ext).into_keys().collect();
+        assert_eq!(names, ["good"], "{keep}");
+    }
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn keep_of_two_maxintegers_registers_on_a_64_bit_target() {
+    let (_dir, ext) = extension(&format!(
+        "fiber.tool(\"x\", {})\n",
+        spec_with("keep", "{ head = math.maxinteger, tail = math.maxinteger }"),
+    ));
+    assert_eq!(
+        tools(&ext).get("x").unwrap().keep,
+        Bound {
+            start: usize::try_from(i64::MAX).unwrap(),
+            end: usize::try_from(i64::MAX).unwrap(),
+        }
+    );
+    assert!(problems(&ext).is_empty());
 }
 
 #[test]

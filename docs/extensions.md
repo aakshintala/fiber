@@ -237,7 +237,7 @@ extension sends the same calls as messages.
 ### Registering
 
 ```
-fiber.tool(name, { description, input_schema, effects, timeout, run })
+fiber.tool(name, { description, input_schema, effects, timeout, run, keep? })
 fiber.provider(name, { models, quota, credential, sign, cost })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
@@ -256,7 +256,12 @@ and an error fails the call `tool_error` before it runs. `run` returns a
 string, one text part, or `{ content, details?, error = { code, message }?,
 control?, hosts_surfaced? }`, where `control` and `hosts_surfaced` take what
 any tool may set (`docs/tools.md`, "What a result carries"). A raised error fails the call
-`tool_error` with its message. When two extensions register one tool name,
+`tool_error` with its message. `keep = { head, tail }` is the byte counts of the start and
+of the end of a long result the model is sent: `head` maps to `Bound.start` and `tail` to
+`Bound.end`. Either may be omitted (0), both are whole numbers, and at least one is above 0.
+Absent `keep` means the first 16 KiB. It is a value, not a function of the call. Any other key,
+including `start` and `end`, fails registration with a message naming it. A configured `tools."<name>".max_result_bytes` still wins
+(`docs/tools.md`, "Bounded results"). When two extensions register one tool name,
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
 
