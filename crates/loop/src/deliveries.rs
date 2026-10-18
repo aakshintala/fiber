@@ -6,7 +6,9 @@
 //! The loop thread alone reads and writes it, on the loop's `write` path.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::io::Read as _;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Path, PathBuf};
 
 use contract::JobId;
 use contract::TurnId;
@@ -486,4 +488,187 @@ pub(crate) fn bound_lines(replacement: &str, built: &str) -> String {
         total.saturating_sub(DELIVERY_LIMIT)
     ));
     cut
+}
+
+/// What the capped output-file read found: the whole file when it fits,
+/// else its length, taken from the open handle after the read.
+#[derive(Debug)]
+pub(crate) enum OutputRead {
+    Small(Vec<u8>),
+    Large { size: u64 },
+}
+
+/// Why the output-file read failed: the path is not a regular file, or
+/// the read itself failed. Both are the Ruling 9 failure.
+#[derive(Debug)]
+pub(crate) enum Unreadable {
+    NotRegular,
+    Io,
+}
+
+/// How much of the output file one read takes: 1 MiB, plus one byte to
+/// tell a file just over the bound from one exactly at it.
+const OUTPUT_LIMIT: u64 = 1_048_576;
+
+/// Reads at most [`OUTPUT_LIMIT`] + 1 bytes of the job's output file,
+/// without following a link at `path`. `between` runs between the stat
+/// and the open; it is empty in production and the pause point tests use
+/// to change the file between the two.
+pub(crate) fn read_output(path: &Path, between: impl FnOnce()) -> Result<OutputRead, Unreadable> {
+    let stat = std::fs::symlink_metadata(path).map_err(|_| Unreadable::Io)?;
+    if !stat.file_type().is_file() {
+        return Err(Unreadable::NotRegular);
+    }
+    between();
+    let file = std::fs::File::open(path).map_err(|_| Unreadable::Io)?;
+    let opened = file.metadata().map_err(|_| Unreadable::Io)?;
+    if !opened.file_type().is_file() || opened.dev() != stat.dev() || opened.ino() != stat.ino() {
+        return Err(Unreadable::NotRegular);
+    }
+    let mut capped = file.take(OUTPUT_LIMIT + 1);
+    let mut bytes = Vec::new();
+    capped.read_to_end(&mut bytes).map_err(|_| Unreadable::Io)?;
+    if bytes.len() as u64 > OUTPUT_LIMIT {
+        let size = capped
+            .get_ref()
+            .metadata()
+            .map_err(|_| Unreadable::Io)?
+            .len()
+            .max(bytes.len() as u64);
+        return Ok(OutputRead::Large { size });
+    }
+    Ok(OutputRead::Small(bytes))
+}
+
+/// The line replacing an output file the pass cannot read, plus newline.
+const UNREADABLE_LINE: &str = "Output withheld: the job's output file could not be read.\n";
+
+impl Loop {
+    /// Runs the session's `after_tool` hooks on the output file of
+    /// `completed`'s job, at intake: the whole file when it fits in
+    /// [`OUTPUT_LIMIT`] bytes, else its path and size. A Fiber delegate's
+    /// `events.jsonl` is another session's log and is skipped, as is a
+    /// job the log never started. With no hooks, or under a shutdown,
+    /// nothing is read.
+    pub(crate) fn redact_output(
+        &mut self,
+        completed: &JobCompleted,
+        turn: Option<&TurnId>,
+    ) -> Result<(), crate::Error> {
+        self.redact_output_with(completed, turn, || {})
+    }
+
+    /// [`Loop::redact_output`] with the pause point tests use to change
+    /// the file between the stat and the read.
+    pub(crate) fn redact_output_with(
+        &mut self,
+        completed: &JobCompleted,
+        turn: Option<&TurnId>,
+        between: impl FnOnce(),
+    ) -> Result<(), crate::Error> {
+        if self.hooks.is_none() || self.shutting_down() {
+            return Ok(());
+        }
+        let Some(started) = self.ending.starts.get(&completed.job_id) else {
+            return Ok(());
+        };
+        if started.fiber {
+            return Ok(());
+        }
+        let tool = started.tool.clone();
+        let path = self.log.dir().join(&started.output_path);
+        let read = match read_output(&path, between) {
+            Ok(read) => read,
+            Err(_) => {
+                replace_output(&path, UNREADABLE_LINE.as_bytes())?;
+                return Ok(());
+            }
+        };
+        let (content, spilled) = match &read {
+            OutputRead::Small(bytes) => (String::from_utf8_lossy(bytes).into_owned(), None),
+            OutputRead::Large { size } => (
+                String::new(),
+                Some(contract::tool::SpillFile {
+                    path: path.clone(),
+                    size: *size,
+                }),
+            ),
+        };
+        let arguments = Map::new();
+        let Some(AskedDelivery { outcome, .. }) = self.ask_delivery(
+            AfterToolCall {
+                tool: &tool,
+                arguments: &arguments,
+                status: call_status(completed.status),
+                content: &content,
+                details: None,
+                process: completed.process.as_ref(),
+                spilled: spilled.as_ref(),
+                delivery: Some(JobDelivery::OutputFile),
+            },
+            turn,
+        )?
+        else {
+            return Ok(());
+        };
+        // Small file: the answer's artifact text, else its content, else
+        // nothing changes. Large file: only artifact text replaces it; a
+        // returned content is ignored.
+        let replacement: Option<Vec<u8>> = match outcome {
+            AfterToolOutcome::Unchanged => None,
+            AfterToolOutcome::Changed {
+                content, artifact, ..
+            } => {
+                if let Some(artifact) = artifact {
+                    Some(artifact.into_bytes())
+                } else if let Some(content) = content
+                    && matches!(read, OutputRead::Small(_))
+                {
+                    Some(content.into_bytes())
+                } else {
+                    None
+                }
+            }
+            AfterToolOutcome::Withheld { extension } => {
+                Some(format!("{}\n", withheld_line(&extension)).into_bytes())
+            }
+            AfterToolOutcome::Failed(failure) => {
+                Some(format!("{}\n", failed_line(&failure)).into_bytes())
+            }
+        };
+        if let Some(replacement) = replacement {
+            replace_output(&path, &replacement)?;
+        }
+        Ok(())
+    }
+}
+
+/// Replaces the file at `path` with `bytes`, keeping the original's
+/// permission bits: the bytes go to a sibling file first, which is given
+/// those bits and `rename`d over the path (over a link, the link). The
+/// sibling is removed on every error path.
+fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_owned())
+        .unwrap_or_default();
+    name.push(".fiber-redact");
+    let sibling = path.with_file_name(name);
+    let permissions = std::fs::metadata(path).map(|stat| stat.permissions()).ok();
+    let replaced = (|| -> std::io::Result<()> {
+        std::fs::write(&sibling, bytes)?;
+        if let Some(permissions) = permissions {
+            std::fs::set_permissions(&sibling, permissions)?;
+        }
+        std::fs::rename(&sibling, path)?;
+        Ok(())
+    })();
+    if replaced.is_err() {
+        let _removed = std::fs::remove_file(&sibling);
+    }
+    replaced.map_err(|source| log::Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(())
 }

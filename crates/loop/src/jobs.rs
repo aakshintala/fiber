@@ -219,9 +219,12 @@ impl Loop {
 
     /// A notice taken while a turn runs or an approval waits: queued for
     /// the next step boundary, after anything already queued. The claim
-    /// is asked when the notice is written, not here.
-    pub(crate) fn admit_job(&mut self, notice: JobNotice) {
+    /// is asked when the notice is written, not here; the output file
+    /// pass runs now, at intake.
+    pub(crate) fn admit_job(&mut self, notice: JobNotice, turn: &TurnId) -> Result<(), Error> {
+        self.redact_output(&notice.completed, Some(turn))?;
         self.queued.push_back(Queued::Notice(notice));
+        Ok(())
     }
 
     /// `turn_started`'s input, from what the idle wait collected, in

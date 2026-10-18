@@ -583,10 +583,13 @@ impl Loop {
             // untaken. The claim is asked here, at admission: a refused
             // claim starts no turn.
             Delivery::Job(notice) => {
-                if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
-                    && let Some((ahead, completed, delegate)) = crate::jobs::claimed(notice)
-                {
-                    input.pieces.push(Queued::Job(ahead, completed, delegate));
+                if self.closing && input.pieces.is_empty() && !self.has_jobs() {
+                    // Left untaken: no pass, as the claim is never asked.
+                } else {
+                    self.redact_output(&notice.completed, None)?;
+                    if let Some((ahead, completed, delegate)) = crate::jobs::claimed(notice) {
+                        input.pieces.push(Queued::Job(ahead, completed, delegate));
+                    }
                 }
             }
             Delivery::JobLine(line) => {
@@ -747,7 +750,7 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
             Delivery::Cancelled => {}
-            Delivery::Job(notice) => self.admit_job(notice),
+            Delivery::Job(notice) => self.admit_job(notice, turn)?,
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,

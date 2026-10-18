@@ -146,12 +146,16 @@ impl Loop {
         Ok(())
     }
 
-    /// One delivery during the stop wait: a job's end is written under its
-    /// own shape, and everything else is refused as after `rewound`.
+    /// One delivery during the stop wait: a job's end is redacted and
+    /// hooked like any end, then written under its own shape, and
+    /// everything else is refused as after `rewound`.
     fn stop_one(&mut self, delivery: Delivery) -> Result<(), Error> {
         match delivery {
             Delivery::Job(notice) => {
+                self.redact_output(&notice.completed, None)?;
                 if let Some((ahead, completed, delegate)) = crate::jobs::claimed(notice) {
+                    let (ahead, completed, delegate) =
+                        self.deliver_end(None, ahead, completed, delegate)?;
                     self.write_job_end(ahead, completed, delegate)?;
                 }
                 Ok(())
