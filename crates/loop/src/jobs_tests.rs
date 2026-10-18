@@ -778,6 +778,7 @@ fn extension_start_racing_a_running_read_neither_holds_idle_nor_notifies_on_clos
                     .await_parked(origin + Duration::from_secs(60), DEADLINE)
             );
             world.clock.advance(Duration::from_secs(60));
+            world.send(Delivery::Cancelled);
         }
         let wait = Deadline::after(DEADLINE);
         assert_eq!(wait.recv(&stopped).unwrap(), JobId(DELEGATE.into()));
