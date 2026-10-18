@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::{failed, finish_code, write_line};
 use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
 use extensions::{Origin, Request};
-use rustix::process::{Pid, Signal};
+use rustix::process::Signal;
 
 const CASE_DEADLINE: Duration = Duration::from_secs(60);
 const SECOND_SIGTERM_GAP: Duration = Duration::from_secs(1);
@@ -61,8 +61,8 @@ impl RunTimeouts {
     }
 }
 
-type GroupSignal = dyn Fn(u32, Signal) -> io::Result<()> + Send + Sync;
-type GroupProbe = fn(u32) -> io::Result<bool>;
+type GroupSignal = dyn Fn(u32, Signal) -> Result<(), support::group::Error> + Send + Sync;
+type GroupProbe = fn(u32) -> bool;
 
 /// Dependencies for one runner invocation. Tests supply the clock,
 /// environment and child command prefix instead of mutating process state.
@@ -78,20 +78,24 @@ struct RunOptions {
 }
 
 /// `fiber extension test [<path>]`: run every case in a package directory.
-pub fn extension_test(path: Option<&Path>, fiber: Result<PathBuf, String>) -> i32 {
+pub fn extension_test(
+    path: Option<&Path>,
+    fiber: Result<PathBuf, String>,
+    clock: Arc<dyn Clock>,
+) -> i32 {
     let fiber = match fiber {
         Ok(fiber) => fiber,
         // The shared error branch prints the failure and gives code 1.
         Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
     };
     let options = RunOptions {
-        clock: Arc::new(ProcessClock),
+        clock,
         timeouts: RunTimeouts::process(),
         environment: ChildEnvironment::from_process(),
         temp_root: std::env::temp_dir(),
         fiber_prefix: Vec::new(),
-        group_signal: Arc::new(signal_group),
-        group_probe: group_alive,
+        group_signal: Arc::new(support::group::signal),
+        group_probe: support::group::alive,
     };
     extension_test_with(
         path,
@@ -458,8 +462,7 @@ fn run_child(
         grace_deadline,
         signal.as_ref(),
     )?;
-    let group_remains = (options.group_probe)(group)
-        .map_err(|error| format!("checking the case process group: {error}"))?;
+    let group_remains = (options.group_probe)(group);
     if status.is_none() || group_remains {
         (options.group_signal)(group, Signal::KILL)
             .map_err(|error| format!("sending SIGKILL to case group: {error}"))?;
@@ -556,34 +559,6 @@ fn after(clock: &dyn Clock, duration: Duration) -> Instant {
         .unwrap_or_else(|| clock.now())
 }
 
-fn signal_group(group: u32, signal: Signal) -> io::Result<()> {
-    let id = process_group_id(group)?;
-    match rustix::process::kill_process_group(id, signal) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-        Err(error) => Err(io::Error::from_raw_os_error(error.raw_os_error())),
-    }
-}
-
-fn group_alive(group: u32) -> io::Result<bool> {
-    let id = process_group_id(group)?;
-    Ok(rustix::process::test_kill_process_group(id).is_ok())
-}
-
-/// Refuses a process-group id that could reach processes outside this case
-/// (`docs/testing.md`, "Running tests").
-fn process_group_id(group: u32) -> io::Result<Pid> {
-    if group <= 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to signal process group {group}"),
-        ));
-    }
-    i32::try_from(group)
-        .ok()
-        .and_then(Pid::from_raw)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "process group id overflow"))
-}
-
 #[derive(Default)]
 struct WaitSignal {
     notified: Mutex<bool>,
@@ -652,41 +627,6 @@ impl Drop for RunDirectory {
     fn drop(&mut self) {
         let _removed = fs::remove_dir_all(&self.path);
     }
-}
-
-/// The injected source of the process clock used for child deadlines.
-struct ProcessClock;
-
-impl Clock for ProcessClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case deadlines (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case timestamps (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn wall(&self) -> SystemTime {
-        SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind extension-case waits (`docs/testing.md`, \"Waits and timeouts\")"
-    )]
-    fn sleep(&self, duration: Duration) {
-        thread::sleep(duration);
-    }
-
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        wait(until.map(|until| until.saturating_duration_since(self.now())));
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn Wake>) {}
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
