@@ -2889,6 +2889,9 @@ fn job_stop_for_an_unknown_or_ended_job_is_rejected_stale() {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     });
     let opened = Opened::open(vec![]);
     opened.session.jobs(jobs.clone());
@@ -3172,6 +3175,9 @@ fn job_input_for_an_unknown_or_ended_job_is_rejected_stale() {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     });
     let opened = Opened::open(vec![]);
     opened

@@ -180,8 +180,38 @@ impl Loop {
     /// queuing call's action is written under that action and that
     /// action's turn, whichever taker writes it; one without is written
     /// under the writer's own. A queued action the loop never started
-    /// falls back to the writer's turn.
+    /// falls back to the writer's turn. A claimed end runs through the
+    /// `completion` hook first, so the log holds what the hook returned
+    /// (`docs/extensions.md`, "Recording a change"); the `output_file`
+    /// pass already ran at intake. Records [`Loop::write_end`] already
+    /// hooked go through [`Loop::write_taken_raw`] instead.
     pub(crate) fn write_taken(
+        &mut self,
+        taken: Taken,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), Error> {
+        // A `blocking` failure withholds the end with the documented
+        // line; a hook that changed the notice replaces `output_tail`.
+        let record = taken.record;
+        let record = if let contract::jobs::JobRecord::Completed(completed) = record {
+            contract::jobs::JobRecord::Completed(self.deliver_completion(completed, turn)?)
+        } else {
+            record
+        };
+        self.write_taken_raw(
+            Taken {
+                record,
+                action: taken.action,
+            },
+            turn,
+            action,
+        )
+    }
+
+    /// [`Loop::write_taken`] without the `completion` hook: records
+    /// `write_end` already ran through `deliver_end`.
+    pub(crate) fn write_taken_raw(
         &mut self,
         taken: Taken,
         turn: Option<&TurnId>,

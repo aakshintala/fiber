@@ -342,6 +342,9 @@ end, { timeout = 1000 })
         details: None,
         process: None,
         spilled: None,
+
+        not_regular: false,
+        delivery: None,
     });
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);
     assert_eq!(

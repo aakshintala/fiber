@@ -256,6 +256,8 @@ impl Feed {
             job_id: self.job_id.clone(),
             lines,
             suppressed,
+
+            changed_by: None,
         });
     }
 }

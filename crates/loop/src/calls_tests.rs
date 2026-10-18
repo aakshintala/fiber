@@ -769,6 +769,8 @@ fn delegate_finished_line(id: &str) -> contract::jobs::JobRecord {
             subscription_cost: 0.0,
         },
         worktree: None,
+
+        changed_by: None,
     })
 }
 
@@ -788,6 +790,9 @@ fn failed_line(id: &str) -> contract::jobs::JobRecord {
             timed_out: false,
         }),
         output_tail: Some("1 failing\n".into()),
+
+        notice: None,
+        changed_by: None,
     })
 }
 

@@ -81,6 +81,8 @@ impl Listed {
                     subscription_cost: 0.0,
                 },
                 worktree: None,
+
+                changed_by: None,
             }),
         );
     }
@@ -96,6 +98,9 @@ impl Listed {
                     error: None,
                     process: None,
                     output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate,
@@ -154,6 +159,9 @@ fn notice(id: &str) -> Delivery {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
@@ -377,6 +385,9 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         Some(DelegateFinished {
             job_id: JobId("j_1".into()),
@@ -394,6 +405,8 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     ));
     world.cancel.shutdown(143);
@@ -518,6 +531,8 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
             job_id: JobId("j_1".into()),
             lines: "tick\n".into(),
             suppressed: None,
+
+            changed_by: None,
         }))
         .unwrap();
     jobs.end("j_1", &inbox);
@@ -963,6 +978,9 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -987,6 +1005,8 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     };
     crate::jobs::Queued::Notice(notice)
@@ -1070,6 +1090,9 @@ fn queued_ahead_notice(
             error: None,
             process: None,
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         claim: Claim(Box::new({
             let asked = Arc::clone(asked);
@@ -1094,6 +1117,8 @@ fn queued_ahead_notice(
                 subscription_cost: 0.0,
             },
             worktree: None,
+
+            changed_by: None,
         }),
     };
     crate::jobs::Queued::Notice(notice)
@@ -1169,6 +1194,9 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: Claim(Box::new({
                 let asked = Arc::clone(&asked);
@@ -1193,6 +1221,8 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                     subscription_cost: 0.0,
                 },
                 worktree: None,
+
+                changed_by: None,
             }),
         },
     );
@@ -1209,4 +1239,199 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
     );
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
     assert_settled_ahead(&held.durable(), &action);
+}
+
+// Shutdowns: no after_tool hook runs while jobs settle or orphans land.
+
+/// Counts the `after_tool` dispatches a shutdown would run: none.
+#[derive(Default)]
+struct CountingHooks {
+    calls: AtomicUsize,
+}
+
+impl CountingHooks {
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl contract::hook::Hooks for CountingHooks {
+    fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn deliver_to(&self, _: Sender<Delivery>) {}
+
+    fn before_tool(
+        &self,
+        _: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> contract::hook::CheckAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(&self, _: &contract::hook::SessionStart<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        // Never consulted: a shutdown runs no hook.
+        contract::hook::BeforeHandoffAnswer {
+            outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+            notices: Vec::new(),
+        }
+    }
+}
+
+impl World {
+    /// Installs `hooks` on the loop; the test reads their count after.
+    fn hooked(mut self, hooks: Arc<CountingHooks>) -> Self {
+        let dyned: Arc<dyn contract::hook::Hooks> = hooks;
+        self.looped = self.looped.hooks(dyned);
+        self
+    }
+}
+
+#[test]
+fn settle_under_shutdown_runs_no_hook_and_writes_its_end_raw() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let hooks = Arc::new(CountingHooks::default());
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>).hooked(Arc::clone(&hooks));
+    world.looped.queued.push_back(crate::jobs::Queued::Job(
+        Vec::new(),
+        JobCompleted {
+            job_id: JobId("j_1".into()),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: None,
+
+            notice: None,
+            changed_by: None,
+        },
+        Some(DelegateFinished {
+            job_id: JobId("j_1".into()),
+            text: "Done.".into(),
+            artifact: None,
+            questions: None,
+            usage: Usage {
+                tokens: Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            worktree: None,
+
+            changed_by: None,
+        }),
+    ));
+    world.cancel.shutdown(143);
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert_eq!(hooks.calls(), 0);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "delegate_finished", "job_completed"]
+    );
+    let lines = held.durable();
+    assert_eq!(lines[1].payload["text"], "Done.");
+    assert_eq!(lines[2].payload["status"], "cancelled");
+}
+
+#[test]
+fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let hooks = Arc::new(CountingHooks::default());
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>).hooked(Arc::clone(&hooks));
+    world
+        .looped
+        .mark_orphans(vec![JobCompleted {
+            job_id: JobId("j_1".into()),
+            status: Outcome::Failed,
+            error: None,
+            process: None,
+            output_tail: Some("1 failing\n".into()),
+
+            notice: None,
+            changed_by: None,
+        }])
+        .unwrap();
+    assert_eq!(hooks.calls(), 0);
+    let lines = held_of(&world);
+    assert_eq!(lines[lines.len() - 1].kind, "job_completed");
+    assert_eq!(lines[lines.len() - 1].payload["output_tail"], "1 failing\n");
+    assert!(lines[lines.len() - 1].payload.get("notice").is_none());
+}
+
+/// The session file's lines for a loop that never ran.
+fn held_of(world: &World) -> Vec<Envelope> {
+    log::read(&world.held.dir).unwrap()
 }

@@ -135,6 +135,18 @@ fn log_bytes(dir: &std::path::Path) -> Vec<u8> {
     std::fs::read(dir.join("events.jsonl")).unwrap()
 }
 
+/// Asserts two large strings equal by length and first differing offset,
+/// without printing either whole on failure.
+#[track_caller]
+fn assert_large_str_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "large string length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
 /// Sends `delivery` to an idle `looped` and runs its turn on a thread,
 /// failing at one named deadline instead of hanging.
 fn drive(
@@ -283,6 +295,19 @@ impl FakeJobs {
         status: Outcome,
         error: Option<Failure>,
     ) {
+        self.end_with_tail(inbox, id, status, error, None);
+    }
+
+    /// Ends `id` as `status` with `tail` as the end's output tail: its
+    /// notice reaches `inbox`, then `running` drops it.
+    fn end_with_tail(
+        &self,
+        inbox: &mpsc::Sender<Delivery>,
+        id: &str,
+        status: Outcome,
+        error: Option<Failure>,
+        tail: Option<String>,
+    ) {
         let mut ids = self.ids.lock().unwrap();
         inbox
             .send(Delivery::Job(JobNotice {
@@ -291,10 +316,41 @@ impl FakeJobs {
                     status,
                     error,
                     process: None,
-                    output_tail: None,
+                    output_tail: tail,
+
+                    notice: None,
+                    changed_by: None,
                 },
                 claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate: None,
+            }))
+            .unwrap();
+        ids.retain(|listed| listed.0 != id);
+    }
+
+    /// Ends `id` with `delegate` riding its completion: its notice
+    /// reaches `inbox`, then `running` drops it.
+    fn end_delegate(&self, inbox: &mpsc::Sender<Delivery>, id: &str, delegate: DelegateFinished) {
+        let mut ids = self.ids.lock().unwrap();
+        inbox
+            .send(Delivery::Job(JobNotice {
+                completed: JobCompleted {
+                    job_id: JobId(id.into()),
+                    status: Outcome::Failed,
+                    error: Some(Failure {
+                        code: ErrorCode::NonzeroExit,
+                        message: "Exit code 1.".into(),
+                        retry_after_ms: None,
+                        provider: None,
+                    }),
+                    process: None,
+                    output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
+                },
+                claim: Claim(Box::new(|| Some(Vec::new()))),
+                delegate: Some(delegate),
             }))
             .unwrap();
         ids.retain(|listed| listed.0 != id);
@@ -590,6 +646,9 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: Claim(Box::new(|| None)),
             delegate: None,
@@ -642,6 +701,8 @@ fn a_monitor_batch_during_the_stop_wait_is_dropped() {
             job_id: JobId("j_1".into()),
             lines: "still running\n".into(),
             suppressed: None,
+
+            changed_by: None,
         }))
         .unwrap();
     jobs.end(&inbox, "j_1", Outcome::Cancelled, None);
@@ -896,4 +957,410 @@ fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
     let note = rewind_note_with_jobs(&dir, &dir, Seq(0)).unwrap();
     assert!(note.contains("- j_1: npm run dev"), "{note}");
     assert!(note.contains("- j_2: lint"), "{note}");
+}
+
+// The rewind stop wait hooks a job's end like any other end: the
+// output_file pass runs on its output file, then the delegate finish and
+// completion dispatches, before `write_job_end` writes the lines.
+
+use contract::events::DelegateFinished;
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Hooks, JobDelivery,
+};
+use contract::shapes::{Tokens, Usage};
+
+/// Redacts `TOKEN-1234` from every delivery the stop wait hooks, or in
+/// `withhold` mode replaces each with the withheld line. Records every
+/// delivery it saw, with the content it saw.
+struct StopHooks {
+    seen: Mutex<Vec<(Option<JobDelivery>, String)>>,
+    withhold: bool,
+}
+
+impl StopHooks {
+    fn redacting() -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::new(Vec::new()),
+            withhold: false,
+        })
+    }
+
+    fn withholding() -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::new(Vec::new()),
+            withhold: true,
+        })
+    }
+
+    fn deliveries(&self) -> Vec<Option<JobDelivery>> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(delivery, _)| *delivery)
+            .collect()
+    }
+}
+
+impl Hooks for StopHooks {
+    fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((call.delivery, call.content.to_owned()));
+        if self.withhold {
+            return AfterToolAnswer {
+                outcome: AfterToolOutcome::Withheld {
+                    extension: "redactor".into(),
+                },
+                changed_by: Vec::new(),
+                notices: Vec::new(),
+            };
+        }
+        AfterToolAnswer {
+            outcome: AfterToolOutcome::Changed {
+                content: Some(call.content.replace("TOKEN-1234", "[redacted]")),
+                details: None,
+                artifact: None,
+            },
+            changed_by: vec!["redactor".into()],
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(&self, _call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        BeforeToolAnswer {
+            outcome: BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _call: &BeforeToolCall<'_>) -> CheckAnswer {
+        CheckAnswer {
+            outcome: CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, _message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        BeforeMessageAnswer {
+            outcome: BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(
+        &self,
+        _start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+
+    fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
+        drop(inbox);
+    }
+}
+
+/// A zeroed usage for a delegate finish a test builds by hand.
+fn no_usage() -> Usage {
+    Usage {
+        tokens: Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 0,
+        },
+        cost: Some(0.0),
+        subscription_cost: 0.0,
+    }
+}
+
+#[test]
+fn a_job_ending_during_the_rewind_stop_wait_is_redacted_in_its_end_and_its_file() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    // The output file lives outside the session, named by an absolute path.
+    let outputs = fakes::TempDir::new("fiber-rewind-output");
+    let output = outputs.path().join("out.log");
+    std::fs::write(&output, "token TOKEN-1234 here\n").unwrap();
+    let hooks = StopHooks::redacting();
+    let mut looped = session.looped.take().unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "test job".into(),
+                output_path: output.display().to_string(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let looped = looped
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+        .hooks(hooks.clone());
+    let (rw, answered) = support::rewind(args(None, None, false));
+    let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&stops)
+        .expect("the job is stopped");
+    // The wait parks with no deadline of its own.
+    assert!(
+        session.clock.await_parked_unbounded(DEADLINE),
+        "the stop wait parked with no deadline"
+    );
+    jobs.end_with_tail(
+        &inbox,
+        "j_1",
+        Outcome::Failed,
+        Some(Failure {
+            code: ErrorCode::NonzeroExit,
+            message: "Exit code 1.".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        Some("token TOKEN-1234 here\n".into()),
+    );
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    accepted(answer_of(answered));
+    let lines = log::read(&dir).unwrap();
+    let tail: Vec<&str> = lines
+        .iter()
+        .rev()
+        .take(2)
+        .map(|line| line.kind.as_str())
+        .collect();
+    assert_eq!(tail, ["rewound", "job_completed"]);
+    let end = &lines[lines.len() - 2];
+    assert_eq!(end.payload["job_id"], json!("j_1"));
+    let notice = end.payload["notice"]
+        .as_str()
+        .expect("the hook set a notice");
+    assert!(notice.contains("[redacted]"), "{notice}");
+    assert!(!notice.contains("TOKEN-1234"), "{notice}");
+    assert_eq!(end.payload["changed_by"], json!(["redactor"]));
+    assert!(end.payload.get("output_tail").is_none());
+    assert_eq!(std::fs::read(&output).unwrap(), b"token [redacted] here\n");
+    // Neither the session log nor the output file names the token.
+    let raw = std::fs::read(dir.join("events.jsonl")).unwrap();
+    assert!(
+        !raw.windows(10).any(|window| window == b"TOKEN-1234"),
+        "the raw log holds no token"
+    );
+    // The output_file pass ran before the completion hook.
+    assert_eq!(
+        hooks.deliveries(),
+        [Some(JobDelivery::OutputFile), Some(JobDelivery::Completion)]
+    );
+}
+
+#[test]
+fn a_withheld_job_end_during_the_rewind_stop_wait_withholds_its_file_and_notice() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    let outputs = fakes::TempDir::new("fiber-rewind-output");
+    let output = outputs.path().join("out.log");
+    std::fs::write(&output, "token TOKEN-1234 here\n").unwrap();
+    let hooks = StopHooks::withholding();
+    let mut looped = session.looped.take().unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "test job".into(),
+                output_path: output.display().to_string(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let looped = looped
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+        .hooks(hooks.clone());
+    let (rw, answered) = support::rewind(args(None, None, false));
+    let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&stops)
+        .expect("the job is stopped");
+    assert!(
+        session.clock.await_parked_unbounded(DEADLINE),
+        "the stop wait parked with no deadline"
+    );
+    jobs.end_with_tail(
+        &inbox,
+        "j_1",
+        Outcome::Failed,
+        Some(Failure {
+            code: ErrorCode::NonzeroExit,
+            message: "Exit code 1.".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        Some("token TOKEN-1234 here\n".into()),
+    );
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    accepted(answer_of(answered));
+    let withheld = "Output withheld: the `after_tool` hook of extension redactor failed.\n";
+    assert_eq!(std::fs::read(&output).unwrap(), withheld.as_bytes());
+    let lines = log::read(&dir).unwrap();
+    let end = &lines[lines.len() - 2];
+    assert_eq!(end.payload["job_id"], json!("j_1"));
+    assert_eq!(end.payload["notice"], json!(withheld.trim_end()));
+    assert!(end.payload.get("changed_by").is_none());
+    assert!(end.payload.get("output_tail").is_none());
+    assert_eq!(
+        hooks.deliveries(),
+        [Some(JobDelivery::OutputFile), Some(JobDelivery::Completion)]
+    );
+}
+
+#[test]
+fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted() {
+    let mut session = run_a_with_id(A_ID);
+    let dir = session.dir.clone();
+    let outputs = fakes::TempDir::new("fiber-rewind-output");
+    let output = outputs.path().join("out.log");
+    std::fs::write(&output, "shell output\n").unwrap();
+    let hooks = StopHooks::redacting();
+    let mut looped = session.looped.take().unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("codex".into()),
+                extension: None,
+                description: "test delegate".into(),
+                output_path: output.display().to_string(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (jobs, stops) = FakeJobs::new(&["j_1"]);
+    let looped = looped
+        .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>)
+        .hooks(hooks.clone());
+    let (rw, answered) = support::rewind(args(None, None, false));
+    let inbox = session.inbox.clone();
+    inbox.send(rw).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut looped = looped;
+        let outcome = looped.turn().unwrap();
+        done.send(outcome).unwrap();
+    });
+    Deadline::after(DEADLINE)
+        .recv(&stops)
+        .expect("the job is stopped");
+    assert!(
+        session.clock.await_parked_unbounded(DEADLINE),
+        "the stop wait parked with no deadline"
+    );
+    let long = format!("token TOKEN-1234 {}\n", "x".repeat(20 * 1024));
+    jobs.end_delegate(
+        &inbox,
+        "j_1",
+        DelegateFinished {
+            job_id: JobId("j_1".into()),
+            text: long.clone(),
+            artifact: None,
+            questions: None,
+            usage: no_usage(),
+            worktree: None,
+
+            changed_by: None,
+        },
+    );
+    let outcome = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended in time");
+    assert_eq!(outcome, None);
+    accepted(answer_of(answered));
+    // The delegate hook saw the whole text, not the cut.
+    let seen = hooks.seen.lock().unwrap().clone();
+    let delegate = seen
+        .iter()
+        .find(|(delivery, _)| *delivery == Some(JobDelivery::Delegate))
+        .expect("the delegate dispatch ran");
+    assert_large_str_eq(&delegate.1, &long);
+    // The finish is cut with the hook's text in the artifact.
+    let lines = log::read(&dir).unwrap();
+    let finish = lines
+        .iter()
+        .rev()
+        .find(|line| line.kind == "delegate_finished")
+        .expect("the delegate finish is written");
+    assert_eq!(finish.payload["changed_by"], json!(["redactor"]));
+    let artifact = finish.payload["artifact"]
+        .as_str()
+        .expect("a long finish writes an artifact");
+    let held = std::fs::read(dir.join(artifact)).unwrap();
+    let held = String::from_utf8_lossy(&held);
+    assert!(held.contains("[redacted]"));
+    assert!(!held.contains("TOKEN-1234"), "the artifact holds no token");
 }

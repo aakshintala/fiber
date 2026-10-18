@@ -85,6 +85,9 @@ fn completed(id: &str, status: Outcome) -> JobCompleted {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -273,6 +276,9 @@ fn failed_delegate(
                 timed_out: false,
             }),
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         Some(DelegateFinished {
             job_id: id.clone(),
@@ -281,6 +287,8 @@ fn failed_delegate(
             questions: None,
             usage: Usage::default(),
             worktree: None,
+
+            changed_by: None,
         }),
     );
     id.0.clone()
@@ -408,6 +416,9 @@ fn a_completed_fiber_delegate_with_its_log_lists_no_error() {
                 timed_out: false,
             }),
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         Some(DelegateFinished {
             job_id: id.clone(),
@@ -416,6 +427,8 @@ fn a_completed_fiber_delegate_with_its_log_lists_no_error() {
             questions: None,
             usage: Usage::default(),
             worktree: None,
+
+            changed_by: None,
         }),
     );
     let listed = run(&tool, json!({"action": "list"}), &cancel);
@@ -628,6 +641,9 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
             timed_out: false,
         }),
         output_tail: Some("1 failing\n".into()),
+
+        notice: None,
+        changed_by: None,
     });
     let cancel = CancelToken::new();
     let output = run(
@@ -669,6 +685,9 @@ fn a_completed_job_names_its_exit_code_and_nothing_else() {
             timed_out: true,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     });
     let output = run(
         &tool,
@@ -708,6 +727,9 @@ fn final_text_adds_a_newline_only_when_the_piece_has_none() {
             timed_out: true,
         }),
         output_tail: Some("tail".into()),
+
+        notice: None,
+        changed_by: None,
     });
     let output = run(
         &tool,
@@ -1064,6 +1086,9 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
                     error: None,
                     process: None,
                     output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
                 });
             }
         })),

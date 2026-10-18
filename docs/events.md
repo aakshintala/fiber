@@ -657,9 +657,11 @@ is listed in `docs/errors.md`. `changes` is the one tool-neutral account of a
 change: any tool may set it, so a client shows the counts without knowing
 which tool ran (`docs/tools.md`, "What a result carries").
 
-A line whose content a hook changed carries `changed_by`. It appears on
+A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
 `tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
-rewritten result, and on a `turn_started` message and `steering_applied` for
+rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
+for a changed final message, on `job_completed` for a changed completion notice,
+and on a `turn_started` message and `steering_applied` for
 a rewritten message. The line holds what the hook returned; the original is
 never logged (`docs/extensions.md`, "Hooks").
 
@@ -1258,6 +1260,7 @@ Durable. What a monitor delivered to the model.
 | `job_id` | string | yes | the monitor's job |
 | `lines` | string | yes | the batch of lines delivered, cut as `docs/tools.md`, "Background jobs", says |
 | `suppressed` | integer | no | deliveries suppressed since the last one, when any were |
+| `changed_by` | `changed_by` | no | when a hook changed the delivered lines, and named itself |
 
 #### `delegate_finished`
 
@@ -1270,6 +1273,7 @@ Durable. Written just before `job_completed`.
 | `artifact` | string | no | the full final message's path, when cut |
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
 | `usage` | `usage` | yes | the run's totals |
+| `changed_by` | `changed_by` | no | when a hook changed the final message, and named itself |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
 
 #### `job_completed`
@@ -1282,7 +1286,9 @@ Durable.
 | `status` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | for a job that ran a process |
-| `output_tail` | string | no | for a failed job, the tail of its output, capped |
+| `output_tail` | string | no | for a failed job, the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
+| `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
+| `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
 
 #### `jobs_pending_notified`
 
@@ -1309,7 +1315,7 @@ the model saw.
 `error.code` values defined here are `nonzero_exit` and `timeout` (as on
 `tool_call_completed`), `signal` (a process killed by a signal Fiber did not
 send), `indeterminate`, `orphaned`, `flooded`, and `output_cap`. The output
-tail is the first time those bytes enter the log.
+tail is the first time those bytes enter the log, unless a hook changed the notice.
 
 Only the loop thread writes durable events, and it drains its inbox at step
 boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and

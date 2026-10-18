@@ -31,6 +31,8 @@ fn finished(text: &str) -> DelegateFinished {
         questions: None,
         usage: usage(),
         worktree: None,
+
+        changed_by: None,
     }
 }
 

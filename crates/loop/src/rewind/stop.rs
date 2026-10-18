@@ -28,14 +28,22 @@ pub(crate) struct StoppedJob {
 /// between `write_last_settled` and `rewound`, so nothing else in the run
 /// is the stop's.
 ///
-/// debt: raw kind strings duplicating the `Event` variants, ceiling four
+/// debt: raw kind strings duplicating the `Event` variants, ceiling six
 /// kinds and two passes; decode each line once and match on the variants
-/// when this reader grows a third pass or a fifth kind.
+/// when this reader grows a third pass or a seventh kind.
 fn is_job_record(kind: &str) -> bool {
     matches!(
         kind,
         "job_started" | "delegate_started" | "delegate_finished" | "job_completed"
     )
+}
+
+/// Whether `kind` is a line a hook wrote beside a stop: extension state
+/// carried with a changed end. The scan reads past these without
+/// crossing the settlement boundary below. A hook's `notice` is
+/// ephemeral and never reaches the log, so it cannot interleave here.
+fn is_hook_line(kind: &str) -> bool {
+    matches!(kind, "extension_state_set" | "extension_state_unset")
 }
 
 /// Whether `completed` lists its job as stopped: `cancelled`, or `failed`
@@ -80,6 +88,9 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
     }
     let mut run = Vec::new();
     for line in lines.iter().rev().skip(1) {
+        if is_hook_line(&line.kind) {
+            continue;
+        }
         if !is_job_record(&line.kind) {
             break;
         }
@@ -146,12 +157,16 @@ impl Loop {
         Ok(())
     }
 
-    /// One delivery during the stop wait: a job's end is written under its
-    /// own shape, and everything else is refused as after `rewound`.
+    /// One delivery during the stop wait: a job's end is redacted and
+    /// hooked like any end, then written under its own shape, and
+    /// everything else is refused as after `rewound`.
     fn stop_one(&mut self, delivery: Delivery) -> Result<(), Error> {
         match delivery {
             Delivery::Job(notice) => {
+                self.redact_output(&notice.completed, None)?;
                 if let Some((ahead, completed, delegate)) = crate::jobs::claimed(notice) {
+                    let (ahead, completed, delegate) =
+                        self.deliver_end(None, ahead, completed, delegate)?;
                     self.write_job_end(ahead, completed, delegate)?;
                 }
                 Ok(())

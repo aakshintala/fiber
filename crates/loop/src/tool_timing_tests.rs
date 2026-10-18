@@ -4351,6 +4351,9 @@ fn a_job_bearing_result_reaches_one_after_dispatch() {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     })]);
     let hooks = Arc::new(ProbeHooks::passing());
     let mut setup = Setup::new(Arc::clone(&rules));
@@ -4399,6 +4402,9 @@ fn an_autonomous_job_end_writes_no_tool_timer() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             claim: Claim(Box::new(|| Some(Vec::new()))),
             delegate: None,

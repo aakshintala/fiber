@@ -47,6 +47,9 @@ impl Drop for Unreported {
                 }),
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             });
         }
     }

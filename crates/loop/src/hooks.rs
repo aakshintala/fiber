@@ -145,6 +145,9 @@ impl Loop {
                 details: ran.details.as_ref(),
                 process: ran.process,
                 spilled: None,
+
+                not_regular: false,
+                delivery: None,
             })
         };
         let state = hooks.take_change_state();
@@ -169,9 +172,7 @@ impl Loop {
             AfterToolOutcome::Withheld { extension } => Shaped {
                 state: Vec::new(),
                 content: vec![ContentPart::Text {
-                    text: format!(
-                        "Output withheld: the `after_tool` hook of extension {extension} failed."
-                    ),
+                    text: withheld_line(&extension),
                 }],
                 details: None,
                 artifact: None,
@@ -336,6 +337,9 @@ impl Loop {
                             path: path.clone(),
                             size,
                         }),
+
+                        not_regular: false,
+                        delivery: None,
                     })
                 };
                 state = hooks.take_change_state();
@@ -374,9 +378,7 @@ impl Loop {
             // Its only content is the line: images go too. The file holds
             // the same line, as an `output_file` does.
             AfterToolOutcome::Withheld { extension } => {
-                let withheld = format!(
-                    "Output withheld: the `after_tool` hook of extension {extension} failed."
-                );
+                let withheld = withheld_line(&extension);
                 replace_spilled(&self.log, &path, format!("{withheld}\n").as_bytes())?;
                 Shaped {
                     state: Vec::new(),
@@ -490,6 +492,9 @@ impl Loop {
                         details: details.as_ref(),
                         process,
                         spilled: None,
+
+                        not_regular: false,
+                        delivery: None,
                     })
                 };
                 state = hooks.take_change_state();
@@ -524,9 +529,7 @@ impl Loop {
             AfterToolOutcome::Withheld { extension } => Shaped {
                 state: Vec::new(),
                 content: vec![ContentPart::Text {
-                    text: format!(
-                        "Output withheld: the `after_tool` hook of extension {extension} failed."
-                    ),
+                    text: withheld_line(&extension),
                 }],
                 details: None,
                 artifact: None,
@@ -590,6 +593,22 @@ impl Loop {
         }
         Ok(shaped.with(images))
     }
+}
+
+/// The withheld line for a delivery whose `blocking` hook failed: the
+/// delivery's only content, naming the extension that failed, with no
+/// `changed_by` (`docs/extensions.md`, "When a hook fails").
+pub(crate) fn withheld_line(extension: &str) -> String {
+    format!("Output withheld: the `after_tool` hook of extension {extension} failed.")
+}
+
+/// The withheld line when a hook of the job's own extension could not
+/// run, with why.
+pub(crate) fn failed_line(failure: &contract::hook::HookFailure) -> String {
+    format!(
+        "Output withheld: the `after_tool` hook of extension {} could not run: {}.",
+        failure.extension, failure.message
+    )
 }
 
 /// The spilled file as the completion's artifact: its path relative to
@@ -703,10 +722,7 @@ fn joined(parts: Vec<ContentPart>) -> (Option<Vec<ContentPart>>, String) {
 
 impl Shaped {
     fn failed(failure: contract::hook::HookFailure) -> Self {
-        let message = format!(
-            "Output withheld: the `after_tool` hook of extension {} could not run: {}.",
-            failure.extension, failure.message
-        );
+        let message = failed_line(&failure);
         Self {
             state: Vec::new(),
             content: vec![ContentPart::Text {

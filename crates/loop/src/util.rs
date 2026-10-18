@@ -128,6 +128,9 @@ impl crate::Loop {
             known: &mut self.known_hosts,
         }
         .write(&self.log, &self.model.reference, event, turn, action)?;
+        if event.class() == Class::Durable {
+            self.ending.starts.fold(event);
+        }
         // A completed handoff restarts the reviewer's input from the kept
         // person's messages (`docs/permissions.md`, "At a handoff"), so
         // the selection that follows re-sends from the start instead of

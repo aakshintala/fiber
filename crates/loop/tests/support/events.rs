@@ -163,6 +163,9 @@ pub(crate) fn job_completed(id: &str) -> Event {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     })
 }
 

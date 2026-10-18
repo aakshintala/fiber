@@ -615,6 +615,9 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
         },
         error: output.error,
         process: output.process,
+
+        notice: None,
+        changed_by: None,
     }
 }
 

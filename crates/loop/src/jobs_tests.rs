@@ -9,6 +9,7 @@
 )]
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -19,11 +20,15 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Decision, DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome, Parent,
-    ShellCommand, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    CallStatus, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted, JobStarted,
+    Notice, OnFork, Outcome, Parent, ShellCommand, ToolCallArgumentsDelta, ToolCallRequested,
+    TurnOutcome,
+};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, HookFailure, Hooks, JobDelivery, StateLine,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
-use contract::jobs::{Jobs, OpenError, Taken};
+use contract::jobs::{JobRecord, Jobs, OpenError, Taken};
 use contract::provider::{
     Delta, Input, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition,
 };
@@ -31,8 +36,10 @@ use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
+use contract::tool::{Cancel, Effects, EffectsError, Output, Settle, Tool};
+use contract::{
+    ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId, TurnId,
+};
 use fakes::Deadline;
 use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
@@ -93,6 +100,9 @@ fn failed(id: &str) -> JobCompleted {
             timed_out: false,
         }),
         output_tail: Some("1 failing\n".into()),
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -141,6 +151,8 @@ fn delegate_finished(id: &str, text: String) -> DelegateFinished {
             subscription_cost: 0.0,
         },
         worktree: None,
+
+        changed_by: None,
     }
 }
 
@@ -300,6 +312,50 @@ impl Tool for Sends {
             content: vec![ContentPart::Text {
                 text: "ok\n".into(),
             }],
+            ..Output::default()
+        }
+    }
+}
+
+/// A tool whose result settles a job's end, as `jobs wait` does when it
+/// claims one: the taken records are written under the call before its
+/// completion.
+struct Settles {
+    taken: Vec<Taken>,
+}
+
+impl Tool for Settles {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "settles".into(),
+            description: "Settles a claimed job end.".into(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        let taken = self.taken.clone();
+        Output {
+            content: vec![ContentPart::Text {
+                text: "claimed\n".into(),
+            }],
+            settle: Some(Settle(Arc::new(move || taken.clone()))),
             ..Output::default()
         }
     }
@@ -1014,11 +1070,23 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
             timed_out: false,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     };
     assert_eq!(
         notice_text(&done),
         format!("Fiber: background job {JOB} ended: completed.\nExit code 0.")
     );
+    let mut hooked = failed(JOB);
+    hooked.notice = Some("redacted".into());
+    hooked.changed_by = Some(vec!["redactor".into()]);
+    assert_eq!(notice_text(&hooked), "redacted");
+    let mut withheld = failed(JOB);
+    withheld.output_tail = None;
+    withheld.notice = Some(String::new());
+    withheld.changed_by = Some(vec!["redactor".into()]);
+    assert_eq!(notice_text(&withheld), "");
     let stopped = JobCompleted {
         status: Outcome::Cancelled,
         process: None,
@@ -2589,6 +2657,8 @@ fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::Job
         job_id: JobId(id.into()),
         lines: lines.into(),
         suppressed,
+
+        changed_by: None,
     }
 }
 
@@ -2796,7 +2866,11 @@ fn admit_job_queues_the_notice_without_asking_its_claim() {
         .looped
         .as_mut()
         .unwrap()
-        .admit_job(counted_job(DELEGATE, true, &asked));
+        .admit_job(
+            counted_job(DELEGATE, true, &asked),
+            &TurnId("t_test".into()),
+        )
+        .unwrap();
     assert_eq!(asked.count(), 0, "admission asks nothing");
 }
 
@@ -3173,12 +3247,15 @@ fn a_notice_kept_for_the_next_turn_writes_what_its_claim_took_ahead() {
     let action = ActionId("a_aaaaaaaaaaaaaaaa".into());
     // Taken while no turn runs: the next turn moves it into its input
     // through `take_queued`, which claims it at the move.
-    world.looped.as_mut().unwrap().admit_job(ahead_notice(
-        DELEGATE,
-        "Done.",
-        resumed_ahead(DELEGATE, &action),
-        &asked,
-    ));
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .admit_job(
+            ahead_notice(DELEGATE, "Done.", resumed_ahead(DELEGATE, &action), &asked),
+            &TurnId("t_test".into()),
+        )
+        .unwrap();
     world.send(prompt("go"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     assert_eq!(asked.count(), 1, "the claim is asked once, at the move");
@@ -3346,4 +3423,2033 @@ fn a_shell_sent_during_a_turn_joins_the_next_turn_only() {
         users(&world.requests()[2]).contains(&"! echo hi\nhi".to_owned()),
         "the next turn reads the shell"
     );
+}
+
+#[test]
+fn loop_write_folds_started_jobs_and_fiber_delegates_into_the_cache() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let looped = world.looped.as_mut().unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "sleep 1".into(),
+                output_path: "artifacts/j_1.log".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_2".into()),
+                tool: None,
+                extension: Some("e".into()),
+                description: "delegated".into(),
+                output_path: "artifacts/j_2.log".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::DelegateStarted(DelegateStarted {
+                job_id: JobId("j_2".into()),
+                delegate_session_id: SessionId("s_d".into()),
+                harness: "fiber".into(),
+                model: "fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::DelegateStarted(DelegateStarted {
+                job_id: JobId("j_1".into()),
+                delegate_session_id: SessionId("s_o".into()),
+                harness: "codex".into(),
+                model: "fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let shell = looped.ending.starts.get(&JobId("j_1".into())).unwrap();
+    assert_eq!(shell.tool, "shell");
+    assert_eq!(
+        shell.output_path,
+        std::path::PathBuf::from("artifacts/j_1.log")
+    );
+    assert!(!shell.fiber);
+    let delegated = looped.ending.starts.get(&JobId("j_2".into())).unwrap();
+    assert_eq!(delegated.tool, "");
+    assert!(delegated.fiber);
+}
+
+// Deliveries: every after_tool hook sees a job's end before it is logged.
+
+/// One `after_tool` call a delivery dispatch made, as the hook saw it.
+#[derive(Debug, Clone)]
+struct SeenCall {
+    delivery: Option<JobDelivery>,
+    tool: String,
+    status: CallStatus,
+    content: String,
+    process: Option<Process>,
+    spilled: Option<(PathBuf, u64)>,
+}
+
+/// What the recording hook answers one call with.
+type AnswerFn = Box<dyn Fn(&SeenCall) -> AfterToolAnswer + Send>;
+
+/// The `Hooks` fake deliveries dispatch to: it records each call and
+/// answers as the test scripts, defaulting to [`Unchanged`].
+#[derive(Default)]
+struct RecordingHooks {
+    seen: Mutex<Vec<SeenCall>>,
+    answer: Mutex<Option<AnswerFn>>,
+    staged: Mutex<Vec<StateLine>>,
+    /// The registered `after_tool` chain the `output_file` pass sees:
+    /// each hook's extension and whether it is `blocking`. A probe over
+    /// a path that is not a regular file synthesizes its answer from
+    /// this chain, as the session's own hooks do, without running hooks.
+    chain: Mutex<Vec<(String, bool)>>,
+    /// An answer the next probe over a non-regular path returns instead
+    /// of the chain's synthesis: covers answers no chain produces.
+    probe_override: Mutex<Option<AfterToolAnswer>>,
+}
+
+impl RecordingHooks {
+    /// Answers every call with `answer`.
+    fn answer_with(&self, answer: impl Fn(&SeenCall) -> AfterToolAnswer + Send + 'static) {
+        *self.answer.lock().unwrap() = Some(Box::new(answer));
+    }
+
+    /// Registers the `after_tool` chain the non-regular probe
+    /// synthesizes from: each hook's extension and its `blocking` flag.
+    fn set_chain(&self, chain: &[(&str, bool)]) {
+        *self.chain.lock().unwrap() = chain
+            .iter()
+            .map(|(name, blocking)| ((*name).to_owned(), *blocking))
+            .collect();
+    }
+
+    /// Makes the next non-regular probe return `answer`.
+    fn override_probe(&self, answer: AfterToolAnswer) {
+        *self.probe_override.lock().unwrap() = Some(answer);
+    }
+
+    /// Stages carried state lines for the next `take_change_state`.
+    fn stage_state(&self, lines: Vec<StateLine>) {
+        *self.staged.lock().unwrap() = lines;
+    }
+
+    fn calls(&self) -> Vec<SeenCall> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// No change, no attribution, no notices: the delivery passes through.
+fn unchanged() -> AfterToolAnswer {
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Unchanged,
+        changed_by: Vec::new(),
+        notices: Vec::new(),
+    }
+}
+
+/// A redaction of `content`, attributed to the redactor.
+fn changed(content: &str) -> AfterToolAnswer {
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: Some(content.into()),
+            details: None,
+            artifact: None,
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    }
+}
+
+const WITHHOLD_EXTENSIONS: [&str; 2] = ["a", "b"];
+
+/// The chain's block, naming `redactor` with bogus attribution the loop
+/// must drop.
+fn withheld() -> AfterToolAnswer {
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Withheld {
+            extension: "redactor".into(),
+        },
+        changed_by: WITHHOLD_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect(),
+        notices: Vec::new(),
+    }
+}
+
+/// A hook of the delivery extension's own that could not run.
+fn failed_hook() -> AfterToolAnswer {
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Failed(HookFailure {
+            extension: "redactor".into(),
+            message: "boom".into(),
+        }),
+        changed_by: Vec::new(),
+        notices: Vec::new(),
+    }
+}
+
+/// The withheld line a `withheld` answer writes.
+fn withheld_line() -> String {
+    "Output withheld: the `after_tool` hook of extension redactor failed.".into()
+}
+
+/// The withheld line a `failed_hook` answer writes.
+fn failed_line() -> String {
+    "Output withheld: the `after_tool` hook of extension redactor could not run: boom.".into()
+}
+
+impl Hooks for RecordingHooks {
+    fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer {
+        let seen = SeenCall {
+            delivery: call.delivery,
+            tool: call.tool.to_owned(),
+            status: call.status,
+            content: call.content.to_owned(),
+            process: call.process.cloned(),
+            spilled: call
+                .spilled
+                .as_ref()
+                .map(|spilled| (spilled.path.clone(), spilled.size)),
+        };
+        self.seen.lock().unwrap().push(seen.clone());
+        // A probe over a path that is not a regular file synthesizes
+        // the chain's failure without running hooks: the scripted answer
+        // covers ordinary calls only.
+        if call.not_regular {
+            if let Some(answer) = self.probe_override.lock().unwrap().take() {
+                return answer;
+            }
+            return contract::hook::not_regular_answer(&self.chain.lock().unwrap());
+        }
+        match self.answer.lock().unwrap().as_ref() {
+            Some(answer) => answer(&seen),
+            None => unchanged(),
+        }
+    }
+
+    fn take_change_state(&self) -> Vec<StateLine> {
+        std::mem::take(&mut *self.staged.lock().unwrap())
+    }
+
+    fn deliver_to(&self, _: Sender<Delivery>) {}
+
+    fn before_tool(
+        &self,
+        _: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _: &contract::hook::BeforeToolCall<'_>) -> contract::hook::CheckAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
+    fn session_start(&self, _: &contract::hook::SessionStart<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_start(&self, _: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_model_call(
+        &self,
+        _: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn turn_end(&self, _: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_handoff(
+        &self,
+        _: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        // Never consulted on the delivery path: the neutral answer.
+        contract::hook::BeforeHandoffAnswer {
+            outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+            notices: Vec::new(),
+        }
+    }
+}
+
+impl World {
+    /// Gives the loop a recording `after_tool` fake; the test scripts its
+    /// answers and reads its calls through the returned hooks.
+    fn hooked(mut self, hooks: Arc<RecordingHooks>) -> Self {
+        let dyned: Arc<dyn Hooks> = hooks;
+        let looped = self.looped.take().unwrap().hooks(dyned);
+        self.looped = Some(looped);
+        self
+    }
+}
+
+/// Writes a `job_started` for `job` straight to the loop's log, as the
+/// transcript's own line would.
+fn write_started(world: &mut World, job: &str, tool: Option<&str>) {
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId(job.into()),
+                tool: tool.map(str::to_owned),
+                extension: None,
+                description: "test job".into(),
+                output_path: "artifacts/test.log".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+/// `id`'s end with an earlier run's end taken ahead of it.
+fn superseded(id: &str) -> Delivery {
+    Delivery::Job(JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(move || {
+            Some(vec![Taken {
+                record: JobRecord::Completed(failed("j_earlier")),
+                action: None,
+            }])
+        })),
+        delegate: None,
+    })
+}
+
+#[test]
+fn a_completion_dispatch_names_its_delivery_tool_status_process_and_built_content() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    write_started(&mut world, "j_earlier", Some("watch"));
+    world.send(superseded(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert_eq!(calls[0].tool, "watch");
+    assert_eq!(calls[0].status, CallStatus::Failed);
+    assert_eq!(calls[0].content, notice_text(&failed("j_earlier")));
+    assert_eq!(calls[0].process, failed("j_earlier").process);
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert_eq!(calls[1].tool, "shell");
+    assert_eq!(calls[1].status, CallStatus::Failed);
+    assert_eq!(calls[1].content, notice_text(&failed(JOB)));
+    assert_eq!(calls[1].process, failed(JOB).process);
+}
+
+#[test]
+fn a_monitor_dispatch_names_its_delivery_and_has_no_process() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(batch(JOB, "build ok", None));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Monitor));
+    assert_eq!(calls[0].tool, "shell");
+    assert_eq!(calls[0].status, CallStatus::Completed);
+    assert_eq!(calls[0].content, "build ok");
+    assert_eq!(calls[0].process, None);
+}
+
+#[test]
+fn a_delegate_dispatch_hands_the_hook_the_full_text() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, "Done.".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Delegate));
+    assert_eq!(calls[0].tool, "shell");
+    assert_eq!(calls[0].status, CallStatus::Failed);
+    assert_eq!(calls[0].content, "Done.");
+    assert_eq!(calls[0].process, failed(DELEGATE).process);
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+}
+
+#[test]
+fn a_delivery_without_a_started_job_names_no_tool() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert_eq!(calls[0].tool, "");
+}
+
+#[test]
+fn a_redacted_completion_names_the_redactor_and_keeps_the_token_out_of_the_log() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    world.send(notice_with(end));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].content.contains("TOKEN-1234"));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_completed"]));
+    assert_eq!(
+        lines[2].payload["notice"],
+        format!(
+            "Fiber: background job {JOB} ended: failed.\nExit code 1.\nLast output:\ntoken [redacted] here"
+        )
+    );
+    assert!(lines[2].payload.get("output_tail").is_none());
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    let raw = std::fs::read(world.dir.join("events.jsonl")).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"TOKEN-1234"));
+    let seen = users(&world.requests()[0]);
+    assert_eq!(
+        seen[seen.len() - 1],
+        format!(
+            "Fiber: background job {JOB} ended: failed.\nExit code 1.\nLast output:\ntoken [redacted] here"
+        )
+    );
+}
+
+/// `id`'s end with `completed`, so a test can vary what the job printed.
+fn notice_with(completed: JobCompleted) -> Delivery {
+    Delivery::Job(JobNotice {
+        completed,
+        claim: Claim(Box::new(|| Some(Vec::new()))),
+        delegate: None,
+    })
+}
+
+#[test]
+fn a_redacted_monitor_batch_keeps_its_suppressed_count() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(batch(JOB, "token TOKEN-1234 here", Some(3)));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_line"]));
+    assert_eq!(lines[2].payload["lines"], "token [redacted] here");
+    assert_eq!(lines[2].payload["suppressed"], 3);
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+}
+
+#[test]
+fn a_redacted_delegate_text_reaches_the_log_and_artifact_without_the_token() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, "token TOKEN-1234 here".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].content.contains("TOKEN-1234"));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["text"], "token [redacted] here");
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    // A short text writes no artifact: the redaction rides the line.
+    assert!(lines[2].payload.get("artifact").is_none());
+    let raw = std::fs::read(world.dir.join("events.jsonl")).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"TOKEN-1234"));
+}
+
+#[test]
+fn a_redacted_ahead_completion_is_logged_redacted() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    let mut earlier = failed("j_earlier");
+    earlier.output_tail = Some("token TOKEN-1234 here\n".into());
+    world.send(Delivery::Job(JobNotice {
+        completed: failed(JOB),
+        claim: Claim(Box::new(move || {
+            Some(vec![Taken {
+                record: JobRecord::Completed(earlier.clone()),
+                action: None,
+            }])
+        })),
+        delegate: None,
+    }));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.calls().len(), 2);
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&["job_completed", "job_completed"])
+    );
+    assert_eq!(lines[2].payload["job_id"], "j_earlier");
+    assert!(
+        lines[2].payload["notice"]
+            .as_str()
+            .unwrap()
+            .contains("[redacted]")
+    );
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    let raw = std::fs::read(world.dir.join("events.jsonl")).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"TOKEN-1234"));
+}
+
+#[test]
+fn a_claimed_end_is_logged_as_the_completion_hook_left_it() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    let taken = vec![Taken {
+        record: JobRecord::Completed(end),
+        action: None,
+    }];
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken })],
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The claim's end ran through the completion hook before it was
+    // logged: the hook saw the raw tail, and the call's own dispatch
+    // followed it.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert!(calls[0].content.contains("TOKEN-1234"));
+    assert_eq!(calls[1].delivery, None);
+    let completed = world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the claimed end is logged");
+    assert_eq!(
+        completed.payload["notice"],
+        format!(
+            "Fiber: background job {JOB} ended: failed.\nExit code 1.\nLast output:\ntoken [redacted] here"
+        )
+    );
+    assert!(completed.payload.get("output_tail").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["redactor"]));
+    let raw = std::fs::read(world.dir.join("events.jsonl")).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"TOKEN-1234"));
+}
+
+#[test]
+fn an_unchanged_answer_keeps_the_completed_as_built() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.calls().len(), 1);
+    let lines = world.turn_lines();
+    assert_notice(&lines[2], JOB);
+    assert!(lines[2].payload.get("notice").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn a_details_only_answer_keeps_the_completed_as_built() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: None,
+            details: Some(json!({"matches": ["TOKEN-1234"]})),
+            artifact: None,
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_notice(&lines[2], JOB);
+    assert!(lines[2].payload.get("notice").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn a_content_none_answer_keeps_the_completed_as_built() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: None,
+            details: None,
+            artifact: None,
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_notice(&lines[2], JOB);
+    assert!(lines[2].payload.get("notice").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn an_answer_returning_the_same_content_counts_as_changed() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: Some(seen.content.clone()),
+            details: None,
+            artifact: None,
+        },
+        changed_by: Vec::new(),
+        notices: Vec::new(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    // Changed, though nothing differs: the notice replaces the tail, and
+    // the empty attribution writes no key.
+    assert_eq!(lines[2].payload["notice"], notice_text(&failed(JOB)));
+    assert!(lines[2].payload.get("output_tail").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn an_empty_replacement_empties_the_notice_but_names_the_redactor() {
+    for delivery in ["completion", "monitor", "delegate"] {
+        let hooks = Arc::new(RecordingHooks::default());
+        hooks.answer_with(|_| changed(""));
+        let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+            .hooked(Arc::clone(&hooks));
+        write_started(&mut world, JOB, Some("shell"));
+        match delivery {
+            "completion" => world.send(held(JOB)),
+            "monitor" => world.send(batch(JOB, "build ok", None)),
+            _ => world.send(delegate_held(DELEGATE, "Done.".into())),
+        }
+        assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+        let lines = world.turn_lines();
+        match delivery {
+            "completion" => {
+                assert_eq!(lines[2].payload["notice"], "");
+                assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+            }
+            "monitor" => {
+                assert_eq!(lines[2].payload["lines"], "");
+                assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+            }
+            _ => {
+                assert_eq!(lines[2].payload["text"], "");
+                assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_withheld_completion_names_no_one_and_keeps_no_tail() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| withheld());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["notice"], withheld_line());
+    assert!(lines[2].payload.get("output_tail").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+    let seen = users(&world.requests()[0]);
+    assert_eq!(seen[seen.len() - 1], withheld_line());
+}
+
+#[test]
+fn a_withheld_monitor_batch_keeps_its_suppressed_count() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| withheld());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(batch(JOB, "build ok", Some(3)));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["lines"], withheld_line());
+    assert_eq!(lines[2].payload["suppressed"], 3);
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn a_withheld_delegate_writes_the_line_twice_and_no_artifact() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| withheld());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, "Done.".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["text"], withheld_line());
+    assert!(lines[2].payload.get("artifact").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+    assert_eq!(lines[3].payload["notice"], withheld_line());
+    assert!(lines[3].payload.get("changed_by").is_none());
+    assert!(!world.dir.join(format!("artifacts/{DELEGATE}.txt")).exists());
+}
+
+#[test]
+fn an_artifact_only_delegate_change_writes_the_hook_artifact_leaving_text() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| artifacted("HOOK-ARTIFACT"));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, "Done.".into()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The delegate dispatch ran; the artifact-only answer changes the
+    // finish, so `changed_by` names the hook. Flipping the artifact
+    // write back to ignored leaves the text changed or the artifact
+    // missing and fails below.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Delegate));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["text"], "Done.");
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    let artifact = lines[2].payload["artifact"]
+        .as_str()
+        .expect("an artifact-only delegate change writes its artifact");
+    assert_eq!(artifact, format!("artifacts/{DELEGATE}.txt"));
+    assert_eq!(
+        std::fs::read_to_string(world.dir.join(artifact)).unwrap(),
+        "HOOK-ARTIFACT"
+    );
+    // The completion dispatch saw the same artifact-only answer and
+    // passed through untouched: no notice, no attribution.
+    assert!(lines[3].payload.get("notice").is_none());
+    assert!(lines[3].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn a_failed_hook_names_its_extension_and_what_went_wrong() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| failed_hook());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(lines[2].payload["notice"], failed_line());
+    assert!(lines[2].payload.get("output_tail").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn a_non_blocking_failure_writes_its_notice_before_the_unchanged_end() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| AfterToolAnswer {
+        outcome: AfterToolOutcome::Unchanged,
+        changed_by: Vec::new(),
+        notices: vec![Notice {
+            code: ErrorCode::HookFailed,
+            message: "redactor blinked".into(),
+            extension: Some("redactor".into()),
+        }],
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_completed"]));
+    // The notice is ephemeral: it reaches watchers, never the log file.
+    let all = world.watched();
+    let notice = all
+        .iter()
+        .position(|line| line.kind == "notice")
+        .expect("the failure notice is emitted");
+    let end = all
+        .iter()
+        .position(|line| line.kind == "job_completed")
+        .expect("the unchanged end is emitted");
+    assert!(notice < end);
+    assert_eq!(all[notice].payload["message"], "redactor blinked");
+    assert_eq!(all[notice].turn_id, all[end].turn_id);
+    // The delivery passes through untouched.
+    assert_notice(&lines[2], JOB);
+}
+
+#[test]
+fn a_hooks_carried_state_is_written_before_the_changed_end() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let staged = Arc::clone(&hooks);
+    hooks.answer_with(move |seen| {
+        // Staged when the delivery answers: earlier hook points in the
+        // turn drain `take_change_state` first.
+        staged.stage_state(vec![StateLine {
+            extension: "redactor".into(),
+            key: "last_seen".into(),
+            value: Some((json!(JOB), OnFork::AtPoint)),
+            landing: 0,
+        }]);
+        changed(&seen.content.replace("TOKEN-1234", "[redacted]"))
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    world.send(notice_with(end));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&["extension_state_set", "job_completed"])
+    );
+    assert_eq!(lines[2].payload["extension"], "redactor");
+    assert_eq!(lines[2].payload["key"], "last_seen");
+    assert!(
+        lines[3].payload["notice"]
+            .as_str()
+            .unwrap()
+            .contains("[redacted]")
+    );
+}
+
+#[test]
+fn an_artifact_only_output_file_change_writes_its_carried_state() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| artifacted("ARTIFACT"));
+    hooks.stage_state(vec![StateLine {
+        extension: "redactor".into(),
+        key: "last_seen".into(),
+        value: Some((json!(JOB), OnFork::AtPoint)),
+        landing: 0,
+    }]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    // A real output file, so the `output_file` pass reads it and the
+    // artifact-only answer replaces it.
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The artifact-only change commits the carried state: without the
+    // fix the state line is never written. The `output_file` pass runs
+    // at intake, before `turn_started`, so the state line precedes the
+    // turn's lines and the test reads the whole log.
+    let all: Vec<String> = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(
+        all.contains(&"extension_state_set".to_owned()),
+        "an artifact-only output-file change writes its carried state: {all:?}"
+    );
+    let stated = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .find(|line| line.kind == "extension_state_set")
+        .expect("the carried state is written");
+    assert_eq!(stated.payload["extension"], "redactor");
+    assert_eq!(stated.payload["key"], "last_seen");
+    assert_eq!(output_bytes(&world, OUT), b"ARTIFACT");
+}
+
+#[test]
+fn an_artifact_only_completion_answer_writes_no_carried_state() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let staged = Arc::clone(&hooks);
+    hooks.answer_with(move |seen| {
+        if seen.delivery == Some(JobDelivery::OutputFile) {
+            return unchanged();
+        }
+        // Staged when the completion answers: the artifact-only answer
+        // must not commit it, since a completion ignores artifact text.
+        staged.stage_state(vec![StateLine {
+            extension: "redactor".into(),
+            key: "last_seen".into(),
+            value: Some((json!(JOB), OnFork::AtPoint)),
+            landing: 0,
+        }]);
+        artifacted("ARTIFACT")
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The completion ignores the artifact text, so the artifact-only
+    // answer commits no carried state: under the
+    // `artifact_counts || artifact.is_some()` mutant the state line is
+    // written. The output file is untouched, so only the completion
+    // pass stages state.
+    let all: Vec<String> = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(
+        !all.contains(&"extension_state_set".to_owned()),
+        "an artifact-only completion answer writes no carried state: {all:?}"
+    );
+    let end = world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the unchanged end is logged");
+    assert!(end.payload.get("notice").is_none());
+    assert!(end.payload.get("changed_by").is_none());
+    assert_eq!(output_bytes(&world, OUT), b"old\n");
+}
+
+#[test]
+fn a_monitor_replacement_is_cut_as_a_batch_is() {
+    let replacement = (0..50)
+        .map(|_| "x".repeat(99))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(replacement.len(), 4999);
+    // Exactly 3,000 characters across short lines: no line hits the
+    // per-line cut, and the whole is kept.
+    let three_k = (0..5)
+        .map(|_| "x".repeat(499))
+        .chain(std::iter::once("x".repeat(500)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(three_k.chars().count(), 3000);
+    let three_k_over = format!("{three_k}\ny");
+    let three_k_over_expected = format!("{three_k}\n[cut: 2 more characters]");
+    for (lines, expected) in [
+        (replacement.clone(), {
+            let mut cut: String = replacement.chars().take(3000).collect();
+            cut.push_str("\n[cut: 1999 more characters]");
+            cut
+        }),
+        (three_k.clone(), three_k.clone()),
+        (three_k_over.clone(), three_k_over_expected.clone()),
+        (
+            format!("{}\n{}", "x".repeat(501), "ok"),
+            format!("{} [cut]\nok", "x".repeat(500)),
+        ),
+        ("x".repeat(500), "x".repeat(500)),
+    ] {
+        let hooks = Arc::new(RecordingHooks::default());
+        hooks.answer_with(move |_| changed(&lines));
+        let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+            .hooked(Arc::clone(&hooks));
+        write_started(&mut world, JOB, Some("shell"));
+        world.send(batch(JOB, "build ok", None));
+        assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+        let seen = world.turn_lines();
+        assert_eq!(seen[2].payload["lines"], expected);
+        assert_eq!(seen[2].payload["changed_by"], json!(["redactor"]));
+    }
+}
+
+#[test]
+fn an_already_cut_batch_returned_as_is_is_kept() {
+    let lines = format!("{}\n[cut: 5 more characters]", "x".repeat(3000));
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(move |seen| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: Some(seen.content.clone()),
+            details: None,
+            artifact: None,
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(batch(JOB, &lines, None));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let seen = world.turn_lines();
+    assert_eq!(seen[2].payload["lines"], lines);
+}
+
+#[test]
+fn an_expanded_delegate_text_is_cut_with_its_full_text_in_an_artifact() {
+    let full = "z".repeat(20 * 1024);
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    let dir = world.dir.clone();
+    hooks.answer_with(move |seen| {
+        // The delegate dispatch sees the full text before any cut or
+        // artifact exists; the completion dispatch passes through.
+        if seen.delivery == Some(JobDelivery::Delegate) {
+            assert_eq!(seen.content.len(), 20 * 1024);
+            assert!(!dir.join(format!("artifacts/{DELEGATE}.txt")).exists());
+            return changed(&"y".repeat(40 * 1024));
+        }
+        unchanged()
+    });
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held(DELEGATE, full));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let text = lines[2].payload["text"].as_str().unwrap();
+    assert!(text.starts_with(&"y".repeat(16 * 1024)));
+    assert!(text.contains("bytes cut."));
+    assert_eq!(
+        lines[2].payload["artifact"],
+        format!("artifacts/{DELEGATE}.txt")
+    );
+    let kept =
+        std::fs::read_to_string(world.dir.join(format!("artifacts/{DELEGATE}.txt"))).unwrap();
+    assert_large_str_eq(&kept, &"y".repeat(40 * 1024));
+    let seen = users(&world.requests()[0]);
+    assert_eq!(seen[seen.len() - 2], delegate_rendered(DELEGATE, text));
+}
+
+#[test]
+fn an_expanded_completion_notice_is_cut_with_its_full_text_in_an_artifact() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| changed(&"y".repeat(20 * 1024)));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let notice = lines[2].payload["notice"].as_str().unwrap();
+    assert!(notice.starts_with(&"y".repeat(16 * 1024)));
+    assert!(notice.contains("bytes cut."));
+    assert!(lines[2].payload.get("output_tail").is_none());
+    assert_eq!(lines[2].payload["changed_by"], json!(["redactor"]));
+    let kept =
+        std::fs::read_to_string(world.dir.join(format!("artifacts/{JOB}-notice.txt"))).unwrap();
+    assert_large_str_eq(&kept, &"y".repeat(20 * 1024));
+}
+
+#[test]
+fn an_overlong_completion_returned_as_is_is_kept_whole() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: Some(seen.content.clone()),
+            details: None,
+            artifact: None,
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    let mut end = failed(JOB);
+    end.output_tail = Some(format!("{}\n", "x".repeat(20 * 1024)));
+    world.send(notice_with(end));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let notice = lines[2].payload["notice"].as_str().unwrap();
+    // The built notice is already over the cap; the equal replacement is
+    // kept whole rather than cut again.
+    assert!(notice.len() > 16 * 1024);
+    assert!(!notice.contains("bytes cut."));
+    assert!(lines[2].payload.get("output_tail").is_none());
+}
+
+#[test]
+fn without_hooks_nothing_runs_and_the_completed_stays_raw() {
+    let world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    let mut world = world;
+    write_started(&mut world, JOB, Some("shell"));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    world.send(notice_with(end));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_completed"]));
+    assert_eq!(lines[2].payload["output_tail"], "token TOKEN-1234 here\n");
+    assert!(lines[2].payload.get("notice").is_none());
+    assert!(lines[2].payload.get("changed_by").is_none());
+}
+
+#[test]
+fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .mark_orphans(vec![end])
+        .unwrap();
+    assert!(hooks.calls().is_empty());
+    let lines: Vec<Envelope> = log::read(&world.dir).unwrap();
+    assert_eq!(lines[lines.len() - 1].kind, "job_completed");
+    assert_eq!(
+        lines[lines.len() - 1].payload["output_tail"],
+        "token TOKEN-1234 here\n"
+    );
+}
+
+// The output_file pass: the job's whole output through after_tool at intake.
+
+/// Writes `job`'s start with `output_path`, relative to the log dir.
+fn write_started_at(world: &mut World, job: &str, tool: Option<&str>, output_path: &str) {
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId(job.into()),
+                tool: tool.map(str::to_owned),
+                extension: None,
+                description: "test job".into(),
+                output_path: output_path.into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+/// Writes `bytes` to `output_path` under the session directory.
+fn write_output(world: &World, output_path: &str, bytes: &[u8]) {
+    let path = world.dir.join(output_path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+}
+
+/// The bytes now at `output_path` under the session directory.
+fn output_bytes(world: &World, output_path: &str) -> Vec<u8> {
+    std::fs::read(world.dir.join(output_path)).unwrap()
+}
+
+/// Asserts two large strings equal by length and first differing offset,
+/// without printing either whole on failure.
+fn assert_large_str_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "large string length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
+/// Asserts two large byte strings equal by length and first differing
+/// offset, without printing either whole on failure.
+fn assert_large_bytes_eq(actual: &[u8], expected: &[u8]) {
+    assert_eq!(actual.len(), expected.len(), "large bytes length");
+    let offset = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
+/// A `delegate_started` for `job` with `harness`.
+fn write_delegate_started(world: &mut World, job: &str, harness: &str) {
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(
+            &Event::DelegateStarted(DelegateStarted {
+                job_id: JobId(job.into()),
+                delegate_session_id: SessionId("s_o".into()),
+                harness: harness.into(),
+                model: "fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+/// A replacing answer: the artifact text the hook returns.
+fn artifacted(text: &str) -> AfterToolAnswer {
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: None,
+            details: None,
+            artifact: Some(text.into()),
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    }
+}
+
+const OUT: &str = "artifacts/out.log";
+
+#[test]
+fn an_output_file_at_the_bound_is_handed_as_content_and_past_it_as_path() {
+    for (size, as_content) in [
+        (0, true),
+        (1_048_575, true),
+        (1_048_576, true),
+        (1_048_577, false),
+    ] {
+        let hooks = Arc::new(RecordingHooks::default());
+        let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+            .hooked(Arc::clone(&hooks));
+        write_started_at(&mut world, JOB, Some("shell"), OUT);
+        write_output(&world, OUT, &vec![b'x'; size]);
+        world.send(held(JOB));
+        assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+        let calls = hooks.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+        assert_eq!(calls[0].tool, "shell");
+        assert_eq!(calls[0].status, CallStatus::Failed);
+        assert!(calls[0].process.is_some());
+        if as_content {
+            assert_eq!(calls[0].content.len(), size);
+            assert_eq!(calls[0].spilled, None);
+        } else {
+            assert_eq!(calls[0].content, "");
+            assert_eq!(calls[0].spilled, Some((world.dir.join(OUT), 1_048_577)));
+        }
+        assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    }
+}
+
+/// The bytes at `OUT` after an end whose hook answers `how`.
+fn output_after(size: usize, how: &str) -> Vec<u8> {
+    let hooks = Arc::new(RecordingHooks::default());
+    let tag = how.to_owned();
+    hooks.answer_with(move |_| match tag.as_str() {
+        "artifact" => artifacted("ARTIFACT"),
+        "content" => changed("REPLACED"),
+        _ => unchanged(),
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, &vec![b'x'; size]);
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    output_bytes(&world, OUT)
+}
+
+#[test]
+fn an_artifact_answer_replaces_a_small_file_and_content_does_too() {
+    assert_eq!(output_after(100, "artifact"), b"ARTIFACT");
+    assert_eq!(output_after(100, "content"), b"REPLACED");
+}
+
+#[test]
+fn a_large_file_is_replaced_by_artifact_only() {
+    assert_eq!(output_after(1_048_577, "artifact"), b"ARTIFACT");
+    assert_large_bytes_eq(&output_after(1_048_577, "content"), &vec![b'x'; 1_048_577]);
+}
+
+#[test]
+fn an_unchanged_answer_leaves_the_bytes_and_the_inode() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"kept\n");
+    #[cfg(unix)]
+    let inode_before = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(world.dir.join(OUT)).unwrap().ino()
+    };
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(output_bytes(&world, OUT), b"kept\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::metadata(world.dir.join(OUT)).unwrap().ino(),
+            inode_before
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn a_replaced_file_keeps_its_bits_in_a_new_inode_with_no_sibling_left() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| changed("new\n"));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    std::fs::set_permissions(world.dir.join(OUT), std::fs::Permissions::from_mode(0o640)).unwrap();
+    let inode_before = std::fs::metadata(world.dir.join(OUT)).unwrap().ino();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let stat = std::fs::metadata(world.dir.join(OUT)).unwrap();
+    assert_eq!(stat.mode() & 0o777, 0o640);
+    assert_ne!(stat.ino(), inode_before);
+    assert_eq!(output_bytes(&world, OUT), b"new\n");
+    let siblings: Vec<_> = std::fs::read_dir(world.dir.join("artifacts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        !siblings
+            .iter()
+            .any(|name| name.to_string_lossy().ends_with(".fiber-redact")),
+        "{siblings:?}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_replacement_that_cannot_be_written_fails_the_turn_leaving_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| changed("new\n"));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    let dir = world.dir.join("artifacts");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    world.send(held(JOB));
+    let rx = world.spawn();
+    let (looped, outcome) = Deadline::after(DEADLINE).recv(&rx).expect("the turn ended");
+    assert!(outcome.is_err(), "{outcome:?}");
+    world.looped = Some(looped);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(output_bytes(&world, OUT), b"old\n");
+    let siblings: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        !siblings
+            .iter()
+            .any(|name| name.to_string_lossy().ends_with(".fiber-redact")),
+        "{siblings:?}"
+    );
+}
+
+#[test]
+fn a_withheld_or_failed_output_hook_replaces_the_file_with_its_line() {
+    for (answer, line) in [
+        (withheld(), withheld_line()),
+        (failed_hook(), failed_line()),
+    ] {
+        let hooks = Arc::new(RecordingHooks::default());
+        hooks.answer_with(move |_| answer.clone());
+        let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+            .hooked(Arc::clone(&hooks));
+        write_started_at(&mut world, JOB, Some("shell"), OUT);
+        write_output(&world, OUT, b"token TOKEN-1234\n");
+        world.send(held(JOB));
+        assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+        let calls = hooks.calls();
+        assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+        assert_eq!(output_bytes(&world, OUT), format!("{line}\n").into_bytes());
+    }
+}
+
+#[test]
+fn a_non_blocking_output_failure_keeps_the_file_and_gives_a_notice_with_no_turn() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| AfterToolAnswer {
+        outcome: AfterToolOutcome::Unchanged,
+        changed_by: Vec::new(),
+        notices: vec![Notice {
+            code: ErrorCode::HookFailed,
+            message: "redactor blinked".into(),
+            extension: Some("redactor".into()),
+        }],
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"kept\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(output_bytes(&world, OUT), b"kept\n");
+    // The notice is ephemeral: it reaches watchers, never the log file.
+    let all = world.watched();
+    let notice = all
+        .iter()
+        .find(|line| line.kind == "notice")
+        .expect("the failure notice is emitted");
+    assert_eq!(notice.payload["message"], "redactor blinked");
+    assert_eq!(notice.turn_id, None);
+}
+
+#[test]
+fn a_missing_output_file_calls_no_output_hook_and_is_replaced_with_the_unreadable_line() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The read failed before any dispatch: only the completion hook ran.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert_eq!(
+        output_bytes(&world, OUT),
+        b"Output withheld: the job's output file could not be read.\n"
+    );
+    // The completion itself is logged as the hook left it.
+    assert_notice(&world.turn_lines()[2], JOB);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // No hook ran on the link: the read never follows it, and the
+    // blocking chain withholds the path itself in the probe's place.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_path_swapped_for_a_link_before_open_is_refused() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    write_output(&world, "artifacts/target.log", b"target\n");
+    let out = world.dir.join(OUT);
+    let target = world.dir.join("artifacts/target.log");
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .redact_output_with(&failed(JOB), None, move || {
+            std::fs::remove_file(&out).unwrap();
+            std::os::unix::fs::symlink(&target, &out).unwrap();
+        })
+        .unwrap();
+    // The no-follow open refused the link: no hook ran on it, and the
+    // blocking chain withholds the path itself in the probe's place.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+    assert_eq!(output_bytes(&world, "artifacts/target.log"), b"target\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_pre_existing_sibling_symlink_never_redirects_the_redaction_write() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    write_output(&world, "artifacts/target.log", b"target\n");
+    // A job leaves the redaction sibling as a link to another file: an
+    // exclusive create must not follow it. Without `create_new` the
+    // write truncates the target and the rename leaves a link behind.
+    std::os::unix::fs::symlink(
+        world.dir.join("artifacts/target.log"),
+        world.dir.join("artifacts/out.log.fiber-redact"),
+    )
+    .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(output_bytes(&world, OUT), b"token [redacted]\n");
+    assert_eq!(output_bytes(&world, "artifacts/target.log"), b"target\n");
+    assert!(
+        !std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the redacted output file replaces any sibling link"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_socket_at_the_output_path_is_replaced_without_blocking() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(world.dir.join(OUT)).unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+}
+
+/// `path` as a FIFO, as a swapped-in job output.
+#[cfg(unix)]
+fn mkfifo(path: &std::path::Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "mkfifo {path:?} exited {status}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
+    mkfifo(&world.dir.join(OUT));
+    // The non-blocking open refuses to wait for a writer: the turn ends
+    // at the deadline below instead of hanging on the FIFO.
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+}
+
+#[test]
+fn a_directory_at_the_output_path_fails_the_turn() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    std::fs::create_dir_all(world.dir.join(OUT)).unwrap();
+    world.send(held(JOB));
+    let rx = world.spawn();
+    let (looped, outcome) = Deadline::after(DEADLINE).recv(&rx).expect("the turn ended");
+    assert!(outcome.is_err(), "{outcome:?}");
+    world.looped = Some(looped);
+    assert!(world.dir.join(OUT).is_dir());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_file_with_a_blocking_hook_is_withheld_naming_it() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("lint", false), ("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The probe handed no content over, and the first blocking hook in
+    // run order withholds the path itself: a failure fails closed.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_file_with_only_non_blocking_hooks_is_kept_with_a_notice_each() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("fmt", false), ("lint", false)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The probe handed no content over: every hook's failure is
+    // non-blocking, so the link stays and each hook is named in a notice.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+    let mut extensions: Vec<_> = world
+        .watched()
+        .iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| {
+            line.payload["extension"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    extensions.sort();
+    assert_eq!(extensions, vec!["fmt".to_owned(), "lint".to_owned()]);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_path_with_no_after_tool_hook_is_left_alone() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // No hook is registered: there is no pass to fail, so the link
+    // stays, the target is untouched, and no notice names anyone.
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+    assert!(world.watched().iter().all(|line| line.kind != "notice"));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_failed_probe_withholds_the_non_regular_path() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.override_probe(failed_hook());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", failed_line()).into_bytes()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+}
+
+#[test]
+fn a_file_grown_past_the_bound_between_stat_and_read_is_handed_as_path() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, &vec![b'x'; 1_048_000]);
+    let out = world.dir.join(OUT);
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .redact_output_with(&failed(JOB), None, move || {
+            let grown = std::fs::read(&out).unwrap();
+            std::fs::write(&out, [grown, vec![b'y'; 2_000]].concat()).unwrap();
+        })
+        .unwrap();
+    // The capped read saw 1,048,577 bytes of a 1,050,000-byte file: the
+    // hook is handed its path and size, and no content.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[0].spilled, Some((world.dir.join(OUT), 1_050_000)));
+    assert_eq!(output_bytes(&world, OUT).len(), 1_050_000);
+}
+
+#[test]
+fn a_capped_read_never_returns_more_than_the_bound_plus_one() {
+    let dir = fakes::TempDir::new("fiber-read");
+    let path = dir.path().join("big.log");
+    std::fs::write(&path, vec![b'y'; 4 * 1024 * 1024]).unwrap();
+    match crate::deliveries::read_output(&path, || {}) {
+        Ok(crate::deliveries::OutputRead::Large { size }) => assert_eq!(size, 4 * 1024 * 1024),
+        read => panic!("a 4 MiB file reads large, got {read:?}"),
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn invalid_utf8_is_handed_lossy_and_an_unchanged_answer_keeps_the_bytes() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"ok \xff\xfe end\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "ok \u{fffd}\u{fffd} end\n");
+    assert_eq!(output_bytes(&world, OUT), b"ok \xff\xfe end\n");
+}
+
+#[test]
+fn a_fiber_delegate_gets_no_output_pass_but_another_harness_does() {
+    for harness in ["fiber", "codex"] {
+        let hooks = Arc::new(RecordingHooks::default());
+        hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+        let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+            .hooked(Arc::clone(&hooks));
+        write_started_at(&mut world, DELEGATE, None, OUT);
+        write_delegate_started(&mut world, DELEGATE, harness);
+        write_output(&world, OUT, b"token TOKEN-1234\n");
+        world.send(delegate_held(DELEGATE, "Done.".into()));
+        assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+        let outputs: Vec<_> = hooks
+            .calls()
+            .into_iter()
+            .filter(|call| call.delivery == Some(JobDelivery::OutputFile))
+            .collect();
+        if harness == "fiber" {
+            // A Fiber delegate's events.jsonl is another session's log.
+            assert!(outputs.is_empty());
+            assert_eq!(output_bytes(&world, OUT), b"token TOKEN-1234\n");
+        } else {
+            assert_eq!(outputs.len(), 1);
+            assert_eq!(output_bytes(&world, OUT), b"token [redacted]\n");
+        }
+    }
+}
+
+#[test]
+fn a_job_the_log_never_started_gets_no_output_pass() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    // No job_started: the pass has no output path to read.
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert!(
+        hooks
+            .calls()
+            .iter()
+            .all(|call| call.delivery != Some(JobDelivery::OutputFile))
+    );
+    assert_eq!(output_bytes(&world, OUT), b"token TOKEN-1234\n");
+}
+
+#[test]
+fn a_claim_refused_notice_still_runs_the_pass_once_and_writes_no_end() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Hi.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    let asked = Asked::default();
+    world.send(notice(JOB, false, &asked));
+    let rx = world.spawn();
+    world.send(prompt("Hello."));
+    assert_eq!(
+        world.join(&rx, &Deadline::after(DEADLINE)),
+        Some(TurnOutcome::Completed)
+    );
+    assert_eq!(asked.count(), 1);
+    // The intake redacted the file even though the claim was refused.
+    assert_eq!(output_bytes(&world, OUT), b"token [redacted]\n");
+    assert!(
+        hooks
+            .calls()
+            .iter()
+            .any(|call| call.delivery == Some(JobDelivery::OutputFile))
+    );
+    let lines = world.turn_lines();
+    assert!(lines.iter().all(|line| line.kind != "job_completed"));
+}
+
+#[test]
+fn a_running_claim_refused_notice_still_runs_the_pass() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    let asked = Asked::default();
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .admit_job(counted_job(JOB, false, &asked), &TurnId("t_test".into()))
+        .unwrap();
+    // The pass ran at intake, under the running turn.
+    assert_eq!(output_bytes(&world, OUT), b"token [redacted]\n");
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
+    let lines = world.turn_lines();
+    assert!(lines.iter().all(|line| line.kind != "job_completed"));
+}
+
+#[test]
+fn an_end_after_close_with_nothing_waiting_runs_no_pass() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new()).hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    let asked = Asked::default();
+    world.send(Delivery::Close(ignore()));
+    world.send(notice(JOB, true, &asked));
+    assert_eq!(world.turn(), None);
+    assert_eq!(asked.count(), 0);
+    assert!(hooks.calls().is_empty());
+    assert_eq!(output_bytes(&world, OUT), b"token TOKEN-1234\n");
+}
+
+#[test]
+fn a_pass_under_shutdown_reads_nothing() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    world.looped.as_mut().unwrap().cancel.shutdown(143);
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .redact_output(&failed(JOB), None)
+        .unwrap();
+    assert!(hooks.calls().is_empty());
+    assert_eq!(output_bytes(&world, OUT), b"token TOKEN-1234\n");
+}
+
+#[test]
+fn without_hooks_a_missing_file_is_never_read() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert!(!world.dir.join(OUT).exists());
+    assert_notice(&world.turn_lines()[2], JOB);
+}
+
+#[test]
+fn the_output_pass_runs_before_the_completion_hook_and_the_file_is_already_replaced() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    let dir = world.dir.clone();
+    hooks.answer_with(move |seen| match seen.delivery {
+        Some(JobDelivery::OutputFile) => changed("redacted\n"),
+        _ => {
+            let at_completion = std::fs::read(dir.join(OUT)).unwrap();
+            assert_eq!(at_completion, b"redacted\n");
+            unchanged()
+        }
+    });
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"token TOKEN-1234\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(
+        calls.iter().map(|call| call.delivery).collect::<Vec<_>>(),
+        [Some(JobDelivery::OutputFile), Some(JobDelivery::Completion)]
+    );
+    assert_eq!(output_bytes(&world, OUT), b"redacted\n");
+    // The completion itself passed through: the raw tail is logged.
+    assert_notice(&world.turn_lines()[2], JOB);
 }
