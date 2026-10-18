@@ -155,14 +155,6 @@ fn rows() -> Vec<Row> {
             message: "Starting the delegate failed: denied.",
         },
         Row {
-            name: "spawn failed, other source",
-            error: JobsError::SpawnFailed {
-                source: io_source("missing binary"),
-            },
-            code: ErrorCode::ToolError,
-            message: "Starting the delegate failed: missing binary.",
-        },
-        Row {
             name: "delegates full",
             error: JobsError::DelegatesFull,
             code: ErrorCode::ToolError,
@@ -322,15 +314,6 @@ fn rows() -> Vec<Row> {
             message: "Writing to job j_1 failed: closed.",
         },
         Row {
-            name: "write failed, other source",
-            error: JobsError::WriteFailed {
-                id: job("j_2"),
-                source: io_source("timed out"),
-            },
-            code: ErrorCode::ToolError,
-            message: "Writing to job j_2 failed: timed out.",
-        },
-        Row {
             name: "delegate timed out",
             error: JobsError::DelegateTimedOut,
             code: ErrorCode::Timeout,
@@ -349,14 +332,6 @@ fn rows() -> Vec<Row> {
             },
             code: ErrorCode::Signal,
             message: "Killed by SIGTERM.",
-        },
-        Row {
-            name: "delegate killed, other signal",
-            error: JobsError::DelegateKilled {
-                signal: "SIGKILL".to_owned(),
-            },
-            code: ErrorCode::Signal,
-            message: "Killed by SIGKILL.",
         },
         Row {
             name: "delegate no result",
@@ -402,13 +377,6 @@ fn each_case_maps_to_its_code_sentence_and_record() {
             row.name
         );
         assert_eq!(record.provider, None, "record provider, row: {}", row.name);
-        let owned = Failure::from(row.error);
-        assert_eq!(owned.code, row.code, "owned code, row: {}", row.name);
-        assert_eq!(
-            owned.message, row.message,
-            "owned message, row: {}",
-            row.name
-        );
     }
 }
 

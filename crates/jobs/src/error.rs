@@ -334,12 +334,6 @@ impl JobsError {
     }
 }
 
-impl From<JobsError> for Failure {
-    fn from(error: JobsError) -> Self {
-        Failure::from(&error)
-    }
-}
-
 impl From<&JobsError> for Failure {
     fn from(error: &JobsError) -> Self {
         Failure {
