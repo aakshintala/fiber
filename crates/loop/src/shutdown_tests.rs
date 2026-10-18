@@ -354,6 +354,150 @@ fn answer(rx: &Receiver<Result<(), Rejection>>) -> Result<(), Rejection> {
 }
 
 #[test]
+fn a_normal_end_stops_only_extension_jobs_and_waits_for_their_ends() {
+    let (jobs, stops) = Listed::new(&["j_extension", "j_model"]);
+    let mut world = World::new(jobs.clone());
+    world
+        .looped
+        .write(
+            &contract::events::Event::JobStarted(contract::events::JobStarted {
+                job_id: JobId("j_extension".into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    let inbox = world.inbox.clone();
+    let held = world.held;
+    std::thread::spawn(move || {
+        done.send(world.looped.settled(Ok(()))).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_extension");
+    jobs.end_delegate("j_extension", &inbox, "PRIVATE SENTINEL");
+    ran(&finished);
+    assert!(
+        stops.try_recv().is_err(),
+        "the model-owned job is not stopped"
+    );
+    let lines = log::read(&held.dir).unwrap();
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| matches!(line.kind.as_str(), "delegate_finished" | "job_completed"))
+        .collect();
+    assert_eq!(ends.len(), 2);
+    assert_eq!(ends[1].payload["status"], "cancelled");
+    assert!(
+        ends.iter()
+            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
+    );
+}
+
+#[test]
+fn a_normal_end_hooks_a_model_jobs_end() {
+    let (jobs, stops) = Listed::new(&["j_extension", "j_model"]);
+    let hooks = Arc::new(CountingHooks {
+        redact: true,
+        ..Default::default()
+    });
+    let mut world = World::new(jobs.clone()).hooked(hooks.clone());
+    world
+        .looped
+        .write(
+            &contract::events::Event::JobStarted(contract::events::JobStarted {
+                job_id: JobId("j_extension".into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    world
+        .looped
+        .write(
+            &contract::events::Event::DelegateStarted(contract::events::DelegateStarted {
+                job_id: JobId("j_extension".into()),
+                delegate_session_id: SessionId("s_child".into()),
+                harness: "fiber".into(),
+                model: "fake/model".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    let inbox = world.inbox.clone();
+    let held = world.held;
+    std::thread::spawn(move || {
+        done.send(world.looped.settled(Err(crate::Error::NoSessionStarted)))
+            .unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_extension");
+    jobs.end_delegate("j_model", &inbox, "PRIVATE MODEL OUTPUT");
+    jobs.end_delegate("j_extension", &inbox, "PRIVATE EXTENSION OUTPUT");
+    assert!(matches!(
+        wait.recv(&finished).unwrap(),
+        Err(crate::Error::NoSessionStarted)
+    ));
+    let lines = held.durable();
+    let end = lines
+        .iter()
+        .find(|line| line.kind == "delegate_finished" && line.payload["job_id"] == "j_model")
+        .unwrap();
+    assert_eq!(end.payload["text"], "redacted");
+    assert_eq!(end.payload["changed_by"], serde_json::json!(["redactor"]));
+    assert_eq!(hooks.calls(), 4);
+}
+
+#[test]
+fn a_normal_end_with_no_jobs_drains_nothing() {
+    let (jobs, _) = Listed::new(&[]);
+    let mut world = World::new(jobs);
+    let (ack, answer) = answered();
+    world
+        .inbox
+        .send(Delivery::Shell(
+            contract::events::ShellCommand {
+                command: "late".into(),
+                output: "late".into(),
+                artifact: None,
+                process: contract::shapes::Process {
+                    exit_code: Some(0),
+                    signal: None,
+                    timed_out: false,
+                },
+            },
+            ack,
+        ))
+        .unwrap();
+    world.looped.settled(Ok(())).unwrap();
+    assert!(answer.try_recv().is_err());
+    assert!(
+        !log::read(&world.held.dir)
+            .unwrap()
+            .iter()
+            .any(|line| line.kind == "shell_command")
+    );
+}
+
+#[test]
 fn a_shutdown_stops_a_running_job_and_writes_its_end_before_run_returns() {
     let (jobs, stops) = Listed::new(&["j_1"]);
     let world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
@@ -1247,6 +1391,7 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
 #[derive(Default)]
 struct CountingHooks {
     calls: AtomicUsize,
+    redact: bool,
 }
 
 impl CountingHooks {
@@ -1259,8 +1404,20 @@ impl contract::hook::Hooks for CountingHooks {
     fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
         contract::hook::AfterToolAnswer {
-            outcome: contract::hook::AfterToolOutcome::Unchanged,
-            changed_by: Vec::new(),
+            outcome: if self.redact {
+                contract::hook::AfterToolOutcome::Changed {
+                    content: Some("redacted".into()),
+                    details: None,
+                    artifact: None,
+                }
+            } else {
+                contract::hook::AfterToolOutcome::Unchanged
+            },
+            changed_by: if self.redact {
+                vec!["redactor".into()]
+            } else {
+                Vec::new()
+            },
             notices: Vec::new(),
         }
     }

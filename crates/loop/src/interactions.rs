@@ -220,7 +220,18 @@ impl Loop {
             }
             // Waiting on a question is idle, and a running job is not
             // (`docs/invocation.md`, "Lifecycle").
-            let idle = self.idle_until(deadline);
+            let running = self.running();
+            match self.inbox.try_recv() {
+                Ok(delivery) => {
+                    return self.take_while_asked(delivery, calls, turn).map(|()| false);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    return self.inbox_closed(calls, turn).map(|()| false);
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            let model = self.model_running(running);
+            let idle = self.idle_until(deadline, &model);
             if idle.is_some_and(|at| clock.now() >= at) {
                 // Anything already queued is taken first, as the idle wait
                 // takes it.

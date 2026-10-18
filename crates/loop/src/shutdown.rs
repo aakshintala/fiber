@@ -13,14 +13,60 @@ use crate::jobs::{Queued, claimed};
 use crate::{Error, Loop};
 
 impl Loop {
-    /// `result` once the jobs have settled, when a shutdown started; else
-    /// `result` unchanged. The first error wins.
+    /// `result` once the jobs have settled. A normal end stops only
+    /// extension-owned jobs; a shutdown stops every job. The first error wins.
     pub(crate) fn settled(&mut self, result: Result<(), Error>) -> Result<(), Error> {
-        if !self.shutting_down() {
+        if self.shutting_down() {
+            let settled = self.settle();
+            return result.and(settled);
+        }
+        if self.rewound {
             return result;
         }
-        let settled = self.settle();
+        let mut running = self.running();
+        if running.is_empty() {
+            return result;
+        }
+        let settled = (|| {
+            loop {
+                for delivery in std::mem::take(&mut self.deferred) {
+                    self.settle_normal_one(delivery)?;
+                }
+                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                    self.settle_normal_one(delivery)?;
+                }
+                running.retain(|id| self.handoff.carry.owned(&id.0));
+                if running.is_empty() {
+                    return Ok(());
+                }
+                self.stop_jobs(&running);
+                match self.inbox.recv() {
+                    Ok(delivery) => self.settle_normal_one(delivery)?,
+                    Err(_) => return Ok(()),
+                }
+                running = self.running();
+            }
+        })();
         result.and(settled)
+    }
+
+    /// A normal end still runs delivery hooks on any job end it takes.
+    fn settle_normal_one(&mut self, delivery: Delivery) -> Result<(), Error> {
+        match delivery {
+            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+                self.end_extension_job(notice)
+            }
+            Delivery::Job(notice) => {
+                self.redact_output(&notice.completed, None)?;
+                if let Some((ahead, completed, delegate)) = claimed(notice) {
+                    let (ahead, completed, delegate) =
+                        self.deliver_end(None, ahead, completed, delegate)?;
+                    self.write_job_end(ahead, completed, delegate)?;
+                }
+                Ok(())
+            }
+            delivery => self.settle_one(delivery),
+        }
     }
 
     /// Stops every running job and writes each job end the loop holds or
@@ -117,6 +163,9 @@ impl Loop {
             return Ok(());
         }
         match delivery {
+            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+                self.end_extension_job(notice)?;
+            }
             Delivery::Job(notice) => {
                 if let Some((ahead, completed, delegate)) = claimed(notice) {
                     self.write_job_end(ahead, completed, delegate)?;

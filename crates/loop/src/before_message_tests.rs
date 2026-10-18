@@ -609,7 +609,7 @@ fn a_refused_prompt_leaves_the_jobs_check_unarmed() {
     let mut world = started(Vec::new(), Some(hooks));
     let mut looped = world.looped.take().unwrap();
     looped = looped.jobs(Arc::new(OneJob)).idle_exit(Some(IDLE));
-    assert_eq!(looped.check_deadline(), None);
+    assert_eq!(looped.check_deadline(&[JobId("j_1".into())]), None);
 
     let mut input = TurnInput::of(Vec::new());
     let (ack, _) = capture();
@@ -618,7 +618,7 @@ fn a_refused_prompt_leaves_the_jobs_check_unarmed() {
         .unwrap();
     assert!(input.pieces.is_empty());
     assert_eq!(
-        looped.check_deadline(),
+        looped.check_deadline(&[JobId("j_1".into())]),
         None,
         "a refused prompt never marks the session attended"
     );
@@ -630,7 +630,7 @@ fn a_refused_prompt_leaves_the_jobs_check_unarmed() {
         .unwrap();
     assert_eq!(input.pieces.len(), 1);
     assert!(
-        looped.check_deadline().is_some(),
+        looped.check_deadline(&[JobId("j_1".into())]).is_some(),
         "an admitted prompt arms the jobs check: the positive fact"
     );
     world.looped = Some(looped);

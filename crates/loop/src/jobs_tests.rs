@@ -626,6 +626,192 @@ fn one_step_with<'a>(between: &[&'a str]) -> Vec<&'a str> {
 
 // Idle: a notice starts a turn.
 
+fn write_extension_started(world: &mut World, id: &str) {
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId(id.into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "extension scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    write_delegate_started(world, id, "fiber");
+}
+
+#[test]
+fn an_extension_end_is_claimed_hooked_and_logged_without_turn_input() {
+    for running in [false, true] {
+        for hold in [false, true] {
+            for block in [false, true] {
+                let hooks = Arc::new(RecordingHooks::default());
+                hooks.answer_with(move |seen| {
+                    if block {
+                        withheld()
+                    } else {
+                        changed(&seen.content.replace("SECRET", "redacted"))
+                    }
+                });
+                let mut world =
+                    World::new(Vec::new(), Vec::new(), |_| Vec::new()).hooked(Arc::clone(&hooks));
+                write_extension_started(&mut world, DELEGATE);
+                let asked = Asked::default();
+                let delivery = counted_delegate(DELEGATE, "SECRET", hold, &asked);
+                let looped = world.looped.as_mut().unwrap();
+                let before = looped.conversation.clone();
+                if running {
+                    looped
+                        .admit_running(delivery, &TurnId("t_test".into()))
+                        .unwrap();
+                } else {
+                    let mut input = crate::inbox::TurnInput::of(Vec::new());
+                    looped.admit_idle(delivery, &mut input).unwrap();
+                    assert!(input.pieces.is_empty());
+                }
+                assert_eq!(asked.count(), 1);
+                assert!(looped.queued.is_empty());
+                assert_eq!(looped.conversation, before);
+                assert!(world.requests().is_empty());
+                let ends: Vec<_> = log::read(&world.dir)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|line| {
+                        matches!(line.kind.as_str(), "delegate_finished" | "job_completed")
+                    })
+                    .collect();
+                assert_eq!(ends.len(), if hold { 2 } else { 0 });
+                if hold {
+                    assert_eq!(kinds(&ends), ["delegate_finished", "job_completed"]);
+                    assert!(
+                        ends.iter()
+                            .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+                    );
+                    assert_eq!(
+                        ends[0].payload["text"],
+                        if block {
+                            withheld_line()
+                        } else {
+                            "redacted".into()
+                        }
+                    );
+                    let seen = hooks.calls();
+                    assert_eq!(seen[0].delivery, Some(JobDelivery::Delegate));
+                    assert_eq!(seen[0].tool, "");
+                    assert_eq!(seen[0].content, "SECRET");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn only_model_jobs_hold_idle_and_appear_in_the_jobs_check() {
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[JOB, DELEGATE]);
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new())
+        .with_jobs(jobs)
+        .idle(Duration::from_secs(60));
+    write_extension_started(&mut world, DELEGATE);
+    let looped = world.looped.as_mut().unwrap();
+    let model = looped.model_running(looped.running());
+    assert_eq!(model, [JobId(JOB.into())]);
+    looped.start_unattended();
+    assert!(looped.check_deadline(&model).is_some());
+    assert!(looped.check_deadline(&[]).is_none());
+    let until = looped.idle_deadline();
+    assert!(looped.idle_until(until, &model).is_none());
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped.check_jobs(&mut input).unwrap();
+    assert_eq!(input.pieces.len(), 1);
+    assert!(
+        matches!(looped.queued.back(), Some(super::Queued::Pending(ids, _)) if ids == &[JobId(JOB.into())])
+    );
+}
+
+fn extension_start(id: &str) -> Delivery {
+    Delivery::ExtensionJob(
+        JobStarted {
+            job_id: JobId(id.into()),
+            tool: None,
+            extension: Some("test/scan".into()),
+            description: "scan".into(),
+            output_path: "/child/events.jsonl".into(),
+        },
+        DelegateStarted {
+            job_id: JobId(id.into()),
+            delegate_session_id: SessionId("s_child".into()),
+            harness: "fiber".into(),
+            model: "fake/model".into(),
+            workspace: "/w".into(),
+            worktree: None,
+            forked_from: None,
+        },
+    )
+}
+
+#[test]
+fn extension_start_racing_a_running_read_neither_holds_idle_nor_notifies_on_close() {
+    for close in [false, true] {
+        let jobs = Arc::new(Listed::default());
+        jobs.set(&[DELEGATE]);
+        let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new())
+            .with_jobs(jobs.clone())
+            .idle(Duration::from_secs(60));
+        *jobs.arriving.lock().unwrap() =
+            Some((world.inbox.clone(), vec![extension_start(DELEGATE)]));
+        let (stops, stopped) = mpsc::channel();
+        *jobs.stops.lock().unwrap() = Some(stops);
+        world.looped.as_mut().unwrap().closing = close;
+        let origin = world.clock.now();
+        let finished = world.spawn_run();
+        if !close {
+            assert!(
+                world
+                    .clock
+                    .await_parked(origin + Duration::from_secs(60), DEADLINE)
+            );
+            world.clock.advance(Duration::from_secs(60));
+        }
+        let wait = Deadline::after(DEADLINE);
+        assert_eq!(wait.recv(&stopped).unwrap(), JobId(DELEGATE.into()));
+        {
+            let mut ids = jobs.ids.lock().unwrap();
+            world.send(delegate_held(DELEGATE, "PRIVATE SENTINEL".into()));
+            ids.clear();
+        }
+        ran(&finished, &wait);
+        let lines = log::read(&world.dir).unwrap();
+        assert!(
+            !lines
+                .iter()
+                .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
+        );
+        assert!(lines.iter().any(|line| line.kind == "delegate_finished"));
+        assert!(world.requests().is_empty());
+    }
+}
+
+#[test]
+fn jobs_check_drains_an_extension_start_after_reading_the_running_list() {
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[DELEGATE]);
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new()).with_jobs(jobs.clone());
+    *jobs.arriving.lock().unwrap() = Some((world.inbox.clone(), vec![extension_start(DELEGATE)]));
+    let looped = world.looped.as_mut().unwrap();
+    let mut input = crate::inbox::TurnInput::of(Vec::new());
+    looped.check_jobs(&mut input).unwrap();
+    assert!(input.pieces.is_empty());
+    assert!(looped.queued.is_empty());
+    assert!(looped.handoff.carry.owned(DELEGATE));
+}
+
 #[test]
 fn a_notice_while_idle_starts_a_turn_named_by_its_job() {
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
@@ -1448,6 +1634,7 @@ struct Listed {
     racing: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     arriving: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     reads: Mutex<Option<Sender<usize>>>,
+    stops: Mutex<Option<Sender<JobId>>>,
 }
 
 impl Listed {
@@ -1464,8 +1651,12 @@ impl Jobs for Listed {
         })
     }
 
-    fn stop(&self, _: &JobId) -> bool {
-        false
+    fn stop(&self, id: &JobId) -> bool {
+        self.stops
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|stops| stops.send(id.clone()).is_ok())
     }
 
     fn stop_delegates(&self) -> usize {
