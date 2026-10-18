@@ -449,15 +449,17 @@ enum Deferred {
 }
 
 /// Answers a connect the kernel queued instead of completing: waits for
-/// the handshake slot, then reads the deferred error — connected, absent,
-/// busy, or failed. Anything else comes back untouched for the usual
-/// answer. No test forces the kernel to queue a Unix-socket connect — the
-/// backlog tests connect synchronously on every platform — so this waits
-/// out its mutants; [`is_in_progress`] is pinned by unit tests instead.
+/// readiness, then reads the deferred error — connected or failed. Absent
+/// and busy come back untouched as [`Deferred::Direct`], for the one
+/// answer in [`attempt`], so every connect error is handled once and the
+/// bind wait runs a single time. No test forces the kernel to queue a
+/// Unix-socket connect — the backlog tests connect synchronously on every
+/// platform — so this waits out its mutants; [`is_in_progress`] is pinned
+/// by unit tests instead.
 #[cfg_attr(false, mutants::skip)]
 #[allow(
     clippy::too_many_arguments,
-    reason = "one deferred answer keeps the race loop flat: socket, error, clock, bounds, starter and three hooks"
+    reason = "one deferred answer keeps the race loop flat: socket, error, clock, bounds and three hooks"
 )]
 fn finish_deferred(
     fd: OwnedFd,
@@ -467,8 +469,6 @@ fn finish_deferred(
     due: &Due,
     bind: Instant,
     bind_timed_out: &dyn Fn() -> Poll,
-    start: Option<&mut dyn FnMut() -> io::Result<()>>,
-    started: &mut bool,
     before_read: &mut dyn FnMut(),
     accepted: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
@@ -491,28 +491,7 @@ fn finish_deferred(
             before_wait,
         )
         .map(Deferred::Connected),
-        Ok(Err(errno)) => {
-            let error = io::Error::from(errno);
-            if is_absent(error.kind()) {
-                if !is_socket_or_missing(socket) {
-                    return Err(Poll::Failed(error));
-                }
-                wait_for_start(start, started, clock, bind, bind_timed_out, error)?;
-            } else if is_busy(&errno) {
-                if clock.now() >= bind {
-                    return Err(bind_timed_out());
-                }
-                before_wait();
-                clock.wait_until(Some(bind), &mut |bound| {
-                    poll_once(fd.as_fd(), PollFlags::OUT, bound);
-                });
-            } else {
-                return Err(Poll::Failed(error));
-            }
-            // Absent-and-started, or busy-and-waited: back to the race
-            // loop with the socket.
-            Ok(Deferred::Direct(fd, errno))
-        }
+        Ok(Err(errno)) => Ok(Deferred::Direct(fd, errno)),
         Err(errno) => Err(Poll::Failed(io::Error::from(errno))),
     }
 }
@@ -581,10 +560,6 @@ fn attempt(
                     due,
                     bind,
                     &bind_timed_out,
-                    start
-                        .as_mut()
-                        .map(|start| start as &mut dyn FnMut() -> io::Result<()>),
-                    started,
                     before_read,
                     accepted,
                     before_wait,

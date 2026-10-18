@@ -353,15 +353,17 @@ fn an_answer_in_two_writes_inside_the_deadline_is_read() {
 fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     // The request fits one small write, so a full send buffer is the only
     // way the write waits: shrink the buffer, flood it, then ask. The
-    // wait parks on the fake clock; draining and answering before the
-    // advance orders every step with pause points, never timing.
+    // write's first block signals room is needed; draining exactly the
+    // flood's bytes and answering frees it, and the worker's real-poll
+    // slices retry the write without any fake time moving.
     let (mut worker_side, mut peer) = UnixStream::pair().unwrap();
     rustix::net::sockopt::set_socket_send_buffer_size(worker_side.as_fd(), 4096).unwrap();
     worker_side.set_nonblocking(true).unwrap();
     let flood = [0x70u8; 65536];
+    let mut flooded = 0;
     loop {
         match worker_side.write(&flood) {
-            Ok(_) => {}
+            Ok(wrote) => flooded += wrote,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) => panic!("flooding the send buffer: {error}"),
         }
@@ -372,11 +374,12 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     // can block.
     loop {
         match worker_side.write(&[0x70]) {
-            Ok(_) => {}
+            Ok(wrote) => flooded += wrote,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) => panic!("topping up the send buffer: {error}"),
         }
     }
+    assert!(flooded > 0, "the flood filled the send buffer");
     peer.set_nonblocking(true).unwrap();
     // Before the worker can exit: a read timeout set after its end
     // closes is refused, so it goes on while the pair is whole. It only
@@ -403,25 +406,25 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
             ))
             .unwrap_or(());
     });
-    // The write waits for room: drain the flood, then answer on the freed
-    // connection before the clock moves.
+    // The write waits for room: drain exactly the flood's bytes, then
+    // answer on the freed connection before the clock moves. An
+    // until-empty drain would race the worker's resumed write and eat
+    // the status request; the flood's count stops short of it, since
+    // the request lands after every flood byte.
     Deadline::after(DEADLINE)
         .recv(&waits)
         .expect("the write waits for room");
-    let mut drained = Vec::new();
+    let mut drained = 0;
     let mut piece = [0u8; 65536];
-    loop {
+    while drained < flooded {
         match peer.read(&mut piece) {
-            Ok(0) => break,
-            Ok(n) => drained.extend_from_slice(&piece[..n]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Ok(0) => panic!("the peer closed with flood bytes still queued"),
+            Ok(read) => drained += read,
             Err(error) => panic!("draining the flood: {error}"),
         }
     }
-    assert!(!drained.is_empty(), "the flood reached the peer");
     peer.write_all(accepted("c_status", "9.9.9", 7).as_bytes())
         .unwrap();
-    clock.advance(Duration::from_millis(1));
     let reply = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the answer arrives")
