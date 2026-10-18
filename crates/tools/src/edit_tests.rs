@@ -1,7 +1,6 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -358,13 +357,7 @@ fn a_directory_a_fifo_and_a_binary_file_are_unsupported() {
     );
 
     let pipe = dir.path().join("pipe");
-    assert!(
-        Command::new("mkfifo")
-            .arg(&pipe)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(&pipe);
     let fifo = edit_of(
         dir.path(),
         json!({"path": "pipe", "edits": [{"old_text": "a", "new_text": "b"}]}),

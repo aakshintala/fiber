@@ -1,7 +1,6 @@
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
-use std::process::Command;
 
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
@@ -289,13 +288,7 @@ fn a_directory_points_at_the_shell() {
 fn a_fifo_does_not_block() {
     let dir = TempDir::new("fiber-read-fifo");
     let path = dir.path().join("pipe");
-    assert!(
-        Command::new("mkfifo")
-            .arg(&path)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(&path);
     let output = run(dir.path(), json!({"path": "pipe"}));
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
     assert!(

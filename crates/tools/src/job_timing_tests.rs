@@ -291,11 +291,7 @@ fn run_async(
 // path. Created beside `ready`; see `Ready::new`.
 fn release_fifo(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("release.fifo");
-    let status = std::process::Command::new("mkfifo")
-        .arg(&path)
-        .status()
-        .expect("mkfifo starts");
-    assert!(status.success(), "mkfifo {}", path.display());
+    fakes::fifo(&path);
     path
 }
 
