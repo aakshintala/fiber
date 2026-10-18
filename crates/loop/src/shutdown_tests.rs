@@ -546,6 +546,80 @@ fn a_normal_end_hooks_a_model_jobs_end() {
 }
 
 #[test]
+fn abnormal_settle_redacts_only_the_extension_owned_end() {
+    let (jobs, _stops) = Listed::new(&["j_extension", "j_model"]);
+    let hooks = Arc::new(CountingHooks {
+        redact: true,
+        ..Default::default()
+    });
+    let mut world = World::new(jobs.clone()).hooked(hooks);
+    world
+        .looped
+        .write(
+            &contract::events::Event::JobStarted(contract::events::JobStarted {
+                job_id: JobId("j_extension".into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    world
+        .looped
+        .write(
+            &contract::events::Event::DelegateStarted(contract::events::DelegateStarted {
+                job_id: JobId("j_extension".into()),
+                delegate_session_id: SessionId("s_child".into()),
+                harness: "fiber".into(),
+                model: "fake/model".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    jobs.end_delegate("j_extension", &world.inbox, "PRIVATE EXTENSION OUTPUT");
+    jobs.end_delegate("j_model", &world.inbox, "MODEL OUTPUT");
+    let world = fakes::within("settle both job ends", DEADLINE, move || {
+        for delivery in world.looped.inbox.try_iter() {
+            world.looped.settle_one(delivery).unwrap();
+        }
+        world
+    });
+    assert_eq!(
+        world.held.kinds(),
+        [
+            "session_started",
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed",
+            "delegate_finished",
+            "job_completed",
+        ]
+    );
+    let lines = world.held.durable();
+    assert_eq!(lines[3].payload["job_id"], "j_extension");
+    assert_eq!(lines[3].payload["text"], "redacted");
+    assert_eq!(
+        lines[3].payload["changed_by"],
+        serde_json::json!(["redactor"])
+    );
+    assert_eq!(lines[4].payload["job_id"], "j_extension");
+    assert_eq!(lines[4].payload["status"], "cancelled");
+    assert_eq!(lines[5].payload["job_id"], "j_model");
+    assert_eq!(lines[5].payload["text"], "MODEL OUTPUT");
+    assert_eq!(lines[5].payload.get("changed_by"), None);
+    assert_eq!(lines[6].payload["job_id"], "j_model");
+    assert_eq!(lines[6].payload["status"], "cancelled");
+}
+
+#[test]
 fn a_normal_end_with_no_jobs_drains_nothing() {
     let (jobs, _) = Listed::new(&[]);
     let mut world = World::new(jobs);

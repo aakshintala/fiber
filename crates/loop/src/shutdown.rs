@@ -56,18 +56,7 @@ impl Loop {
     /// A normal end still runs delivery hooks on any job end it takes.
     fn settle_normal_one(&mut self, delivery: Delivery) -> Result<(), Error> {
         match delivery {
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
-                self.end_extension_job(notice)
-            }
-            Delivery::Job(notice) => {
-                self.redact_output(&notice.completed, None)?;
-                if let Some((ahead, completed, delegate)) = claimed(notice) {
-                    let (ahead, completed, delegate) =
-                        self.deliver_end(None, ahead, completed, delegate)?;
-                    self.write_job_end(ahead, completed, delegate)?;
-                }
-                Ok(())
-            }
+            Delivery::Job(notice) => self.end_extension_job(notice),
             delivery @ (Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Message(_)
