@@ -579,6 +579,37 @@ fn stream_closed_keeps_the_screen_unfreezes_and_skips_replayed_lines() {
     assert!(total_of(&app) > held, "Kept with no last skips nothing");
 }
 
+/// A `stream_closed` with no preview lands the pass's lines: the tail
+/// read failed and installed nothing, so the fold is the only copy. It
+/// becomes the screen, unfrozen, and the kept pass still skips nothing.
+#[test]
+fn stream_closed_with_no_preview_lands_the_pass_lines() {
+    let mut seq = 0u64;
+    let mut fold_lines = Vec::new();
+    for n in 0..2 {
+        fold_lines.extend(turn(
+            &mut seq,
+            &format!("a_f{n}"),
+            &format!("fold reply {n}"),
+        ));
+    }
+    let mut app = folding(&[], &fold_lines, 100);
+    assert_eq!(total_of(&app), 0, "no preview installed");
+    app.on_line(hub("stream_closed", SESSION, None));
+    assert!(matches!(app.overlay, Overlay::Kept { last: None }));
+    assert!(!app.attached_screen().frozen(), "the screen unfreezes");
+    assert!(total_of(&app) > 0, "the pass lines land as the screen");
+    let first = app
+        .attached_screen()
+        .pages()
+        .turn_text(0)
+        .unwrap_or_default();
+    assert!(
+        first.contains("fold reply 0"),
+        "the first reply shows: {first}"
+    );
+}
+
 /// Whether the attached screen sits idle.
 fn idle(app: &App) -> bool {
     matches!(app.phase, Phase::Attached { busy: false, .. })
