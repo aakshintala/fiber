@@ -1129,38 +1129,68 @@ mod tests {
 
     /// `wait_screen` panics with the grid its last check saw, never a
     /// fresh read, and names how much of the deadline remained when the
-    /// wait began. The child's marker is held on a pipe the test owns
-    /// until after the check, so the panic must show the checked grid;
-    /// the test uses no sleep (`docs/testing.md`, "Waits and timeouts").
+    /// wait began. The marker reaches the run's own terminal but its grid
+    /// stays stale behind a synchronized-output block, so the checked
+    /// grid holds no marker while the output does; the predicate then
+    /// publishes the held bytes to the grid synchronously after its check,
+    /// with no wake, so the timeout panic must show the checked grid while
+    /// a fresh read sees the marker. Replacing `grid.contents` with
+    /// `self.screen().contents` in the panic makes the shown grid contain
+    /// the marker and fails the equality below. The test uses no sleep
+    /// (`docs/testing.md`, "Waits and timeouts").
     #[test]
     fn wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left() {
         let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
         let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let mut terminal_side = terminal.terminal;
+        let mut run = Run::attach(main, 80, 24, deadline);
+        // The marker goes through the run's own terminal: the reader
+        // publishes it to the output but holds the grid behind the sync
+        // block, so the grid stays stale while the output advances.
+        let from = run.output().len();
+        terminal_side.write_all(SYNC_BEGIN).unwrap();
+        terminal_side.write_all(b"marker").unwrap();
+        run.wait_bytes(from, b"marker", "the fed marker");
+        assert!(
+            !run.screen().contents.contains("marker"),
+            "the grid stays stale behind the sync block"
+        );
+        // No pending wake, so the expired deadline below times out on its
+        // first receive instead of consuming the fed chunk's wake.
+        while run.wakes.try_recv().is_ok() {}
         clock.advance(fakes::deadline::WAITS);
         assert!(
             deadline.left().is_zero(),
             "the wait starts with no time left"
         );
-        // The marker stays held until after the check: the child blocks
-        // reading the pipe the test owns.
-        let mut child = Command::new("sh")
-            .args(["-c", "read line; printf marker"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let mut held = child.stdin.take().unwrap();
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let mut run = Run::attach(main, 80, 24, deadline);
         let before = run.screen().contents.clone();
         assert!(
             !before.contains("marker"),
             "the checked grid holds no marker"
         );
+        let shared = std::sync::Arc::clone(&run.shared);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.wait_screen("the marker", |grid| grid.contents.contains("marker"))
+            run.wait_screen("the never-arriving needle", |grid| {
+                assert!(
+                    !grid.contents.contains("marker"),
+                    "the checked grid is still stale"
+                );
+                // Publish the held marker to the grid after the check,
+                // synchronously and with no wake: the panic below must
+                // still show the checked grid.
+                {
+                    let mut guard = shared.lock().unwrap();
+                    guard.sync_open = false;
+                    guard.publish(b"");
+                    assert!(
+                        guard.grid.contents.contains("marker"),
+                        "the fresh grid sees the marker after the check"
+                    );
+                }
+                grid.contents.contains("needle-never-arrives")
+            })
         }));
         let message = result
             .unwrap_err()
@@ -1180,19 +1210,14 @@ mod tests {
             message.contains("left when the wait began"),
             "the panic names the remaining deadline: {message:?}"
         );
-        // Releasing the pipe lets the child print its marker, proving
-        // the hold; the reap is bounded so a stuck child fails loudly.
-        held.write_all(b"release\n").unwrap();
-        drop(held);
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = Deadline::after(Duration::from_secs(10))
-            .recv(&finished)
-            .expect("the released child back after the release")
-            .unwrap();
         assert!(
-            String::from_utf8_lossy(&output.stdout).contains("marker"),
-            "the released child prints its marker"
+            message.contains("the never-arriving needle"),
+            "the panic names the wait: {message:?}"
+        );
+        let fresh = run.screen().contents.clone();
+        assert!(
+            fresh.contains("marker"),
+            "a fresh read after the check sees the marker"
         );
     }
 }

@@ -73,25 +73,18 @@ fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool,
     (hint, first, second)
 }
 
-/// The hint-and-lift report for the last checked grid: which condition
-/// was false, so the next sighting names it.
-fn hint_lift_report(grid: &Grid, raised: &Colour, flat: &Colour) -> String {
-    let (hint, first, second) = hint_lift_checks(grid, raised, flat);
-    format!("hint present={hint}, first card lifted={first}, second card flat={second}")
-}
-
 /// Waits for the hint and the lifted first card, reporting which of the
 /// three conditions was false in the last checked grid when the wait
 /// expires. It keeps `wait_screen`'s deadline and fast-fail path: the
 /// report rides on the timeout panic instead of replacing it.
 #[track_caller]
 fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
-    let last = std::cell::RefCell::new(String::new());
+    let last = std::cell::Cell::new((false, false, false));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run.wait_screen("the hint and the lifted first card", |grid| {
-            let (hint, first, second) = hint_lift_checks(grid, raised, flat);
-            *last.borrow_mut() = hint_lift_report(grid, raised, flat);
-            hint && first && second
+            let checks = hint_lift_checks(grid, raised, flat);
+            last.set(checks);
+            checks.0 && checks.1 && checks.2
         })
     }));
     match result {
@@ -106,7 +99,10 @@ fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
                         .map(|held| (*held).to_owned())
                 })
                 .unwrap_or_else(|| "the hint and the lifted first card".to_owned());
-            panic!("{}; last check: {}", base, last.borrow());
+            let (hint, first, second) = last.get();
+            panic!(
+                "{base}; last check: hint present={hint}, first card lifted={first}, second card flat={second}"
+            );
         }
     }
 }
