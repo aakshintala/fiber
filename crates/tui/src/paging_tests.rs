@@ -3508,3 +3508,194 @@ fn a_rows_seq_and_offset_find_the_row_again() {
     assert_eq!(past.and_then(|seq| pages.seq_row(seq, 0)), None);
     assert_eq!(pages.row_seq(total), None);
 }
+
+/// Two steps with thinking and a reply each, folded into fresh pages:
+/// two groups keyed by their thought's action, two thoughts and two
+/// replies, in fold order.
+fn small() -> Pages {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "look at the code"}]}]}),
+    );
+    for (thought, message, reply) in [
+        ("a_r0", "a_m0", "reply zero here"),
+        ("a_r1", "a_m1", "reply one here"),
+    ] {
+        stream.durable("step_started", None, json!({}));
+        stream.durable("assistant_message_started", Some(message), json!({}));
+        stream.think(thought, "weigh it");
+        stream.text(message, reply);
+        stream.durable(
+            "assistant_message_completed",
+            Some(message),
+            json!({"outcome": "completed"}),
+        );
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    pages
+}
+
+/// Groups resolve by the action that keyed them, both ways: the
+/// target a reload carries (`same_target`) is the key out and the
+/// fold's id back in.
+#[test]
+fn group_targets_resolve_by_action() {
+    let pages = small();
+    for key in ["a_r0", "a_r1"] {
+        let id = target_id(key);
+        assert_eq!(
+            pages.group_key(id),
+            Some(key.to_owned()),
+            "{key} names its group"
+        );
+        assert_eq!(pages.find_group(key), Some(id), "{key} resolves back");
+    }
+    assert_eq!(pages.group_key(target_id("a_missing")), None, "no group");
+    assert_eq!(pages.find_group("a_missing"), None, "no group");
+}
+
+/// Thoughts resolve by action both ways, and the fold lists every
+/// resident thought in fold order.
+#[test]
+fn thought_targets_resolve_by_action() {
+    let pages = small();
+    assert_eq!(
+        pages.thoughts().collect::<Vec<_>>(),
+        vec![
+            (target_id("a_r0"), "a_r0".to_owned()),
+            (target_id("a_r1"), "a_r1".to_owned()),
+        ],
+        "every resident thought in fold order"
+    );
+    for action in ["a_r0", "a_r1"] {
+        assert_eq!(
+            pages.thought_action(target_id(action)),
+            Some(action.to_owned()),
+            "{action} names its thought"
+        );
+        assert_eq!(
+            pages.find_thought(action),
+            Some(target_id(action)),
+            "{action} resolves back"
+        );
+    }
+    assert_eq!(
+        pages.thought_action(target_id("a_missing")),
+        None,
+        "no thought"
+    );
+    assert_eq!(pages.find_thought("a_missing"), None, "no thought");
+}
+
+/// Copy targets resolve by reply ordinal both ways: the ordinal out
+/// and the reply at an ordinal back in, over every resident reply.
+#[test]
+fn copy_targets_resolve_by_reply_ordinal() {
+    let pages = small();
+    let replies: Vec<usize> = pages.replies().collect();
+    assert_eq!(replies.len(), 2, "two resident replies");
+    let (first, second) = (replies[0], replies[1]);
+    assert_ne!(first, second, "each reply has its own id");
+    assert_eq!(pages.reply_ordinal(first), Some(0));
+    assert_eq!(pages.reply_ordinal(second), Some(1));
+    assert_eq!(pages.reply_ordinal(usize::MAX), None, "no reply");
+    assert_eq!(pages.reply_at(0), Some(first));
+    assert_eq!(pages.reply_at(1), Some(second));
+    assert_eq!(pages.reply_at(2), None, "two replies only");
+}
+
+/// Image targets resolve by path: the folded image's id names its
+/// path back, and unknown ids name nothing.
+#[test]
+fn image_targets_resolve_by_path() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+        "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}]}),
+    );
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert_eq!(pages.image_path(1), Some("artifacts/shot.png"));
+    assert_eq!(pages.image_path(0), None, "no image at zero");
+    assert_eq!(pages.image_path(2), None, "one image only");
+}
+
+/// A page with rows but no line holds no seq: the row's piece starts
+/// at or above it only once a line drew it.
+#[test]
+fn row_seq_needs_a_line_on_the_page() {
+    let mut pages = Pages::new(80);
+    pages.index.set_rows(0, 3);
+    assert_eq!(pages.row_seq(0), None, "a page with no line holds no seq");
+    assert_eq!(pages.row_seq(2), None, "a page with no line holds no seq");
+    assert_eq!(pages.row_seq(3), None, "past the last row");
+    let pages = small();
+    let (seq, offset) = pages.row_seq(0).expect("the first row has a seq");
+    assert_eq!(offset, 0);
+    assert_eq!(
+        pages.seq_row(seq, offset),
+        Some(0),
+        "the first row round-trips"
+    );
+}
+
+/// A seq no piece starts at lands on the first piece after it: the
+/// exact arm never sees it, so only `>` (not `<`, which lands on the
+/// first piece, or `==`, which lands on the page's first row) picks
+/// the next piece.
+#[test]
+fn seq_row_skips_seqs_without_a_piece() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(60);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let mut gap = None;
+    for (at, runs) in pages.row_seqs.iter().enumerate() {
+        for pair in runs.windows(2) {
+            let ((_, from), (second_start, next)) = (pair[0], pair[1]);
+            // The next piece must start below the page's first row:
+            // both mutants land on the page's first row, so a piece
+            // starting there would not tell them apart.
+            if next.0 > from.0.saturating_add(1) && second_start > 0 {
+                gap = Some((at, Seq(from.0.saturating_add(1)), second_start));
+            }
+        }
+    }
+    let (at, between, second_start) = gap.expect("a seq between two pieces");
+    assert_eq!(
+        pages.seq_row(between, 0),
+        Some(pages.index.start(at).saturating_add(second_start)),
+        "a seq without a piece lands on the next one"
+    );
+}
+
+/// A dropped page still waits while it is neither counted nor failed:
+/// the pass stays live only while one is owed.
+#[test]
+fn stale_owed_names_an_uncounted_dropped_page() {
+    assert!(
+        !Pages::new(80).stale_owed(),
+        "an empty conversation owes nothing"
+    );
+    let mut pages = Pages::new(80);
+    pages.stale.insert(0);
+    assert!(pages.stale_owed(), "a dropped page waits to be counted");
+    pages.failed.insert(0);
+    assert!(!pages.stale_owed(), "a failed page is owed nothing");
+}

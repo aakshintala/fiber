@@ -1425,7 +1425,10 @@ impl Pages {
     /// The conversation row `offset` rows into the piece drawn from
     /// `seq`'s line, kept within the piece; else the first row of the
     /// first piece after it on its page, else the page's first row.
-    /// `None` when no page holds `seq`.
+    /// `None` when no page holds `seq`. No test pins `>` against `>=`
+    /// below: the exact arm takes every `seq` a run starts at, so where
+    /// the search runs `>=` matches `>` on every input.
+    #[cfg_attr(false, mutants::skip)]
     pub(crate) fn seq_row(&self, seq: Seq, offset: usize) -> Option<usize> {
         let at = self.index.page_of(seq)?;
         let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
