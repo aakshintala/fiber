@@ -101,10 +101,9 @@ fn text(output: &Output) -> String {
         .collect()
 }
 
-/// The failure's code and message.
-fn failed(output: &Output) -> (contract::ErrorCode, String) {
-    let failure = output.error.clone().expect("the call failed");
-    (failure.code, failure.message)
+/// The failure's message.
+fn failed(output: &Output) -> String {
+    output.error.clone().expect("the call failed").message
 }
 
 /// Serves `body` once at `/tool-1.0`, like the binary download expects.
@@ -176,7 +175,7 @@ fn a_dot_dot_program_is_refused_naming_the_path() {
     let (_setup, _server, dir) = installed(b"#!/bin/sh\necho from-binary\n");
     let ext = extension(&dir, "mybin", INIT, FakeClock::new());
     let tools = by_name(&ext);
-    let (_, message) = failed(&ran(
+    let message = failed(&ran(
         &run(&tools["escape"], json!({})),
         &Deadline::after(WAIT),
     ));
@@ -243,7 +242,7 @@ fn an_escape_fails_even_under_a_host_script() {
             .with_host_script(script),
     );
     let tools = by_name(&ext);
-    let (_, message) = failed(&ran(
+    let message = failed(&ran(
         &run(&tools["escape"], json!({})),
         &Deadline::after(WAIT),
     ));

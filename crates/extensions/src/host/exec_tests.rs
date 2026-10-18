@@ -1280,11 +1280,6 @@ fn package(name: &str) -> (fakes::TempDir, PathBuf) {
     (dir, path)
 }
 
-/// A second directory outside the package, canonicalized the same way.
-fn outside(name: &str) -> (fakes::TempDir, PathBuf) {
-    package(name)
-}
-
 #[test]
 fn resolve_in_package_a_slash_relative_program_resolves_inside_the_package() {
     let (_guard, package) = package("fiber-resolve-inside");
@@ -1330,8 +1325,8 @@ fn resolve_in_package_a_dot_dot_that_stays_inside_resolves() {
 #[test]
 fn resolve_in_package_a_symlink_out_of_the_package_is_refused() {
     use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-link-outer");
     let (_guard, package) = package("fiber-resolve-link-out");
-    let (_outer, outer) = outside("fiber-resolve-link-outer");
     std::fs::create_dir_all(package.join("bin")).unwrap();
     symlink(&outer, package.join("bin").join("link")).unwrap();
     for program in ["bin/link", "bin/link/tool"] {
@@ -1372,8 +1367,8 @@ fn resolve_in_package_a_symlink_loop_is_refused() {
 #[test]
 fn resolve_in_package_a_dangling_link_in_the_middle_is_refused() {
     use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-outer");
     let (_guard, package) = package("fiber-resolve-dangling");
-    let (_outer, outer) = outside("fiber-resolve-dangling-outer");
     std::fs::create_dir_all(package.join("bin")).unwrap();
     symlink(outer.join("not-yet"), package.join("bin").join("dang")).unwrap();
     let err = resolve_in_package("bin/dang/tool", &package).unwrap_err();
@@ -1387,8 +1382,8 @@ fn resolve_in_package_a_dangling_link_in_the_middle_is_refused() {
 #[test]
 fn resolve_in_package_a_dangling_link_is_refused_even_pointing_inside() {
     use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-in-outer");
     let (_guard, package) = package("fiber-resolve-dangling-in");
-    let (_outer, outer) = outside("fiber-resolve-dangling-in-outer");
     std::fs::create_dir_all(package.join("bin")).unwrap();
     symlink(outer.join("not-yet"), package.join("bin").join("out")).unwrap();
     symlink("not-yet", package.join("bin").join("in")).unwrap();
@@ -1403,8 +1398,8 @@ fn resolve_in_package_a_dangling_link_is_refused_even_pointing_inside() {
 #[test]
 fn resolve_in_package_a_tool_under_a_symlinked_directory_out_is_refused() {
     use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-subdir-outer");
     let (_guard, package) = package("fiber-resolve-subdir");
-    let (_outer, outer) = outside("fiber-resolve-subdir-outer");
     std::fs::write(outer.join("tool"), "x").unwrap();
     symlink(&outer, package.join("sub")).unwrap();
     let err = resolve_in_package("sub/tool", &package).unwrap_err();
@@ -1415,8 +1410,8 @@ fn resolve_in_package_a_tool_under_a_symlinked_directory_out_is_refused() {
 
 #[test]
 fn resolve_in_package_a_bare_name_and_an_absolute_path_pass_through() {
+    let (_outer, outer) = package("fiber-resolve-passthrough-outer");
     let (_guard, package) = package("fiber-resolve-passthrough");
-    let (_outer, outer) = outside("fiber-resolve-passthrough-outer");
     assert_eq!(resolve_in_package("node", &package), Ok("node".into()));
     assert_eq!(resolve_in_package("", &package), Ok(String::new()));
     assert_eq!(
