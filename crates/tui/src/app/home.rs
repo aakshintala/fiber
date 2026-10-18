@@ -441,6 +441,7 @@ impl App {
             return Vec::new();
         }
         let mut asks = self.picker_asks();
+        asks.extend(self.start_model_pick());
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };

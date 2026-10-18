@@ -13,6 +13,7 @@ One run per case: `--picker CASE`.
 - checklist: all twelve models, each with a `[x]` or `[ ]` mark before its id, five marked, a ` 5 of 12 marked ` count row and no show-all toggle; same panel, bar and legend.
 - checklist-filtered: the query `mini` in bold after `›` with a block cursor, four models each with its mark, a ` 4 of 12 models · 5 marked ` count row; same panel, bar and legend.
 - checklist-empty: the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections; same panel and legend.
+- hub: two providers with five hub models between them and none of the twelve local ids, roles on the rows, `● current` on deepseek-r2, its level chips on the row below; same panel, bar and legend.
 - prices: every row with its input and output price per million dim after the name, the rebuild cost right-aligned labelled `switch …`, the current model keeping `—`, and the tiered row at its base rates below its tier; same panel, bar and legend.
 - prices-empty: every row with its prices but no switch cost anywhere, the tiered row at its base rates; same panel, bar and legend.
 - prices-free: gemma-3-27b `›` on the accent bar reading `free` for its prices, the rest priced; same panel, bar and legend.

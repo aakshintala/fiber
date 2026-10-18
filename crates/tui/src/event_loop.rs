@@ -126,12 +126,14 @@ pub(crate) fn run_with(
     // keeps the launch description.
     let models = std::mem::take(&mut launch.models);
     let router = crate::remote::Router::new();
-    let seams = crate::remote::seams(&launch.location, launch.configure.take(), &router);
+    let seams = crate::remote::seams(&launch.location, launch.configure.take(), models, &router);
+    let models = seams.models;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
     } else {
         app.set_configure(seams.seam);
     }
+    app.set_models(models.clone());
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
@@ -146,7 +148,7 @@ pub(crate) fn run_with(
     app.set_home(launch);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
-        app.open_model_picker(crate::model_picker::Mode::Choose);
+        app.start_model_pick();
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
@@ -1018,3 +1020,7 @@ mod paste_tests;
 #[cfg(test)]
 #[path = "lib_reconnect_tests.rs"]
 mod reconnect_tests;
+
+#[cfg(test)]
+#[path = "remote_run_tests.rs"]
+mod remote_run_tests;
