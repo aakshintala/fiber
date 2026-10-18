@@ -56,9 +56,9 @@ impl Subscriptions {
     /// Opens the gate for `session`: the first stage's acknowledgement
     /// is `ack` when a first-stage subscribe went out, and `None` when
     /// the connection already holds `summary`, when the raise is due at
-    /// once. `held` keeps the screen's rows: the read is skipped and
-    /// the raise goes as Task 2 sends it. Until the raise's
-    /// acknowledgement the gate holds.
+    /// once. `held` keeps the screen's rows: the tail read is skipped
+    /// and the raise goes out after the first frame draws, once the
+    /// preview is up. Until the raise's acknowledgement the gate holds.
     pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
         self.opening = Some(match ack {
             Some(ack) => Opening::Summary { session, ack, held },
