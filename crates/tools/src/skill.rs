@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::{Control, SkillLoad};
 use contract::provider::ToolDefinition;
@@ -16,8 +15,9 @@ use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::error::SkillError;
 use crate::files::path_text;
-use crate::tool_util::{cancelled_before, effects, failed, no_effects};
+use crate::tool_util::{cancelled_before, effects, errored, no_effects};
 
 /// The call's arguments, checked against the schema before the call runs.
 #[derive(Debug, Deserialize)]
@@ -126,55 +126,34 @@ impl Tool for Skill {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(SkillError::from(error)),
         };
         let name = args.name;
         let (target, listing) = match self.resolve(&name) {
             Ok(resolved) => resolved,
             Err(Resolve::NotListed) => {
-                return failed(
-                    ErrorCode::InvalidArguments,
-                    format!(
-                        "No skill named `{name}` is in the skills listing, or it is switched off. \
-                         Load a name from the listing."
-                    ),
-                );
+                return errored(SkillError::NotListed { name: name.clone() });
             }
             Err(Resolve::Unreadable { file, error }) => {
-                return failed(
-                    ErrorCode::ToolError,
-                    format!("Could not read skill {}: {error}.", file.display()),
-                );
+                return errored(SkillError::Unreadable { file, error });
             }
             Err(Resolve::NotUtf8) => {
-                return failed(
-                    ErrorCode::InvalidArguments,
-                    format!("Skill `{name}` cannot be loaded: its path is not valid UTF-8."),
-                );
+                return errored(SkillError::NotUtf8 { name: name.clone() });
             }
         };
         if self.judged().get(&name) != Some(&target) {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{name}`'s SKILL.md changed between the permission check and the read. \
-                     Nothing was read."
-                ),
-            );
+            return errored(SkillError::PathChanged { name: name.clone() });
         }
         let body = match self.skills.body(&name, &target) {
             Ok(body) => body,
-            Err(SkillRead::Io(message)) => return failed(ErrorCode::ToolError, message),
+            Err(SkillRead::Io(message)) => return errored(SkillError::Io { message }),
             Err(SkillRead::Invalid) => {
-                return failed(
-                    ErrorCode::InvalidArguments,
-                    format!(
-                        "Skill `{name}` at {listing} cannot be loaded: its header no longer \
-                         parses, names another skill, or turns off model invocation."
-                    ),
-                );
+                return errored(SkillError::Invalid {
+                    name: name.clone(),
+                    listing: listing.clone(),
+                });
             }
         };
         Output {

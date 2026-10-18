@@ -8,19 +8,19 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
-use contract::ErrorCode;
 use contract::images::Images as _;
 use contract::shapes::{ContentPart, ImagePart, PdfPart};
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
+use crate::error::PdfError;
 use crate::image::{ImageChild, run_to_end};
-use crate::tool_util::{failed, text_output};
+use crate::tool_util::{errored, text_output};
 
 /// The most pages a PDF without `pages` may hold (`docs/tools.md`, "read").
-const WHOLE_MAX: u32 = 10;
+pub(crate) const WHOLE_MAX: u32 = 10;
 /// The most pages one `read` takes (`docs/tools.md`, "read").
-const RANGE_MAX: u32 = 20;
+pub(crate) const RANGE_MAX: u32 = 20;
 /// The longest side a rendered page is scaled to (`docs/model-routing.md`,
 /// "Image limits").
 const RENDER_SIDE: u32 = 2000;
@@ -59,7 +59,7 @@ pub(crate) struct PageRange {
 
 /// Reads `pages`: absent is the whole file, a string `N` or `N-M` is
 /// that range, anything else is why the call fails.
-pub(crate) fn page_range(pages: Option<&str>) -> Result<Option<PageRange>, String> {
+pub(crate) fn page_range(pages: Option<&str>) -> Result<Option<PageRange>, PdfError> {
     let Some(text) = pages else {
         return Ok(None);
     };
@@ -67,15 +67,14 @@ pub(crate) fn page_range(pages: Option<&str>) -> Result<Option<PageRange>, Strin
         Some(range) => {
             let count = range.last - range.first + 1;
             if count > RANGE_MAX {
-                return Err(format!(
-                    "`pages` {text} names {count} pages; a request takes at most {RANGE_MAX}."
-                ));
+                return Err(PdfError::PagesTooMany {
+                    text: text.to_owned(),
+                    count,
+                });
             }
             Ok(Some(range))
         }
-        None => Err(
-            "`pages` must be a page or a range such as `3` or `1-5`, counted from 1.".to_owned(),
-        ),
+        None => Err(PdfError::PagesMalformed),
     }
 }
 
@@ -109,10 +108,7 @@ pub(crate) fn read(
     cancel: &dyn Cancel,
 ) -> Output {
     let Some(child) = child else {
-        return failed(
-            ErrorCode::ToolError,
-            "PDF reading is not configured.".to_owned(),
-        );
+        return errored(PdfError::NotConfigured);
     };
     // A fresh stem per read: an older log line's path never points at new
     // bytes.
@@ -142,10 +138,7 @@ pub(crate) fn read(
         let output = match output {
             Ok(output) => output,
             Err(error) => {
-                return failed(
-                    ErrorCode::ToolError,
-                    format!("the image child could not start: {error}."),
-                );
+                return errored(PdfError::ChildStart { source: error });
             }
         };
         let message = crate::image::capped(&output.stderr);
@@ -153,35 +146,29 @@ pub(crate) fn read(
             Some(0) => match parse_child(&output.stdout, &stem) {
                 Ok(cut) => cut,
                 Err(why) => {
-                    return failed(ErrorCode::ToolError, format!("the image child {why}."));
+                    return errored(PdfError::ChildAnswer { why });
                 }
             },
             Some(4) => match parse_total(&output.stdout) {
-                Some(total) => return past_the_end(path, range, total),
+                Some(total) => return errored(past_the_end(path, range, total)),
                 None => {
-                    return failed(
-                        ErrorCode::ToolError,
-                        "the image child named no page count.".to_owned(),
-                    );
+                    return errored(PdfError::NoPageCount);
                 }
             },
             Some(1) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    format!("`{}` cannot be read as a PDF: {message}", path.display()),
-                );
+                return errored(PdfError::Unreadable {
+                    path: path.to_path_buf(),
+                    message,
+                });
             }
             Some(code) => {
-                return failed(
-                    ErrorCode::ToolError,
-                    format!("the image child exited with status {code}: {message}"),
-                );
+                return errored(PdfError::ChildExited {
+                    status: code,
+                    message,
+                });
             }
             None => {
-                return failed(
-                    ErrorCode::ToolError,
-                    format!("the image child was killed by a signal: {message}"),
-                );
+                return errored(PdfError::ChildSignalled { message });
             }
         }
     };
@@ -235,24 +222,18 @@ fn without_pages(head: String, why: String, stem: &str, page_count: u32) -> Outp
 
 /// The `invalid_arguments` failure when the file holds more pages than asked
 /// for: the whole-file cap or a range past the end.
-fn past_the_end(path: &Path, range: Option<PageRange>, total: u32) -> Output {
+fn past_the_end(path: &Path, range: Option<PageRange>, total: u32) -> PdfError {
     match range {
-        Some(range) => failed(
-            ErrorCode::InvalidArguments,
-            format!(
-                "`pages` {}-{} is past the end: `{}` has {total} pages.",
-                range.first,
-                range.last,
-                path.display()
-            ),
-        ),
-        None => failed(
-            ErrorCode::InvalidArguments,
-            format!(
-                "`{}` has {total} pages. A PDF of more than {WHOLE_MAX} pages needs `pages`, such as `1-5`; a request takes at most {RANGE_MAX} pages.",
-                path.display()
-            ),
-        ),
+        Some(range) => PdfError::PastTheEnd {
+            path: path.to_path_buf(),
+            first: range.first,
+            last: range.last,
+            total,
+        },
+        None => PdfError::NeedsPages {
+            path: path.to_path_buf(),
+            total,
+        },
     }
 }
 

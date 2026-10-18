@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::search::{Domains, SearchBackend, SearchResult};
@@ -13,7 +12,8 @@ use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{failed, text_output};
+use crate::error::WebSearchError;
+use crate::tool_util::{errored, text_output};
 
 /// A search the model's provider hosts. It is declared as the vendor's tool
 /// type and name only, and carries the effects and the guideline line a
@@ -61,10 +61,7 @@ impl Tool for HostedSearch {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        failed(
-            ErrorCode::ToolError,
-            "The provider runs a hosted search; Fiber has none to run.".to_owned(),
-        )
+        errored(WebSearchError::Hosted)
     }
 
     fn guidelines(&self) -> Option<String> {
@@ -150,22 +147,16 @@ impl Tool for BackendSearch {
     /// stopped returns no content and no error, so the loop completes it
     /// `cancelled` (`docs/tools.md`, "Cancellation").
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(WebSearchError::from(error)),
         };
         if args.query.is_empty() {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "`query` must be a non-empty string.".to_owned(),
-            );
+            return errored(WebSearchError::EmptyQuery);
         }
         let domains = match (args.allowed_domains, args.blocked_domains) {
             (Some(_), Some(_)) => {
-                return failed(
-                    ErrorCode::InvalidArguments,
-                    "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
-                );
+                return errored(WebSearchError::BothDomainLists);
             }
             (Some(allowed), None) => Domains::Allowed(allowed),
             (None, Some(blocked)) => Domains::Blocked(blocked),
@@ -177,7 +168,7 @@ impl Tool for BackendSearch {
                 hosts_surfaced: results.iter().map(|result| result.url.clone()).collect(),
                 ..text_output(render(&results))
             },
-            Err(failure) => failed(failure.code, failure.message),
+            Err(failure) => errored(WebSearchError::Backend(failure)),
         }
     }
 

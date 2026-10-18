@@ -3257,6 +3257,7 @@ dependencies = [
  "serde_json",
  "similar",
  "support",
+ "thiserror 2.0.21",
  "ureq",
 ]
 

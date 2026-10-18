@@ -3,7 +3,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
@@ -11,12 +10,13 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::error::{FileError, ReadError};
 use crate::files::{
     InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes, inspect,
-    resolve, unsupported_message,
+    resolve,
 };
 use crate::pdf::{PageRange, page_range};
-use crate::tool_util::{failed, text_output};
+use crate::tool_util::{errored, text_output};
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
 /// The loop's bound sits above this, so a result is not cut twice and no
@@ -98,52 +98,55 @@ impl Tool for Read {
         if cancel.is_cancelled() {
             return crate::tool_util::cancelled_before();
         }
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(ReadError::from(error)),
         };
         let raw = args.path;
         let offset = match line_argument(args.offset, "offset", 1) {
             Ok(offset) => offset,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         let limit = match line_argument(args.limit, "limit", usize::MAX) {
             Ok(limit) => limit,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         let pages = match page_range(args.pages.as_deref()) {
             Ok(pages) => pages,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return crate::tool_util::errored(ReadError::Pdf(error)),
         };
         let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(ResolveError::Arguments(message)) => {
-                return failed(ErrorCode::InvalidArguments, message);
+            Err(error) => {
+                let error = match error {
+                    ResolveError::Arguments(message) => FileError::PathInvalid { message },
+                    ResolveError::Tool(message) => FileError::PathUnresolved { message },
+                };
+                return errored(ReadError::from(error));
             }
-            Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
         let judged = self.shared.judged(&raw);
-        if let Err(output) = crate::tool_util::recheck(
+        if let Err(error) = crate::tool_util::recheck(
             &raw,
             &path,
             None,
             judged.as_deref(),
             crate::tool_util::Act::Read,
         ) {
-            return output;
+            return crate::tool_util::errored(error);
         }
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {
             Ok(Inspected::Text { text }) => {
-                if let Err(output) = reject_pages(&path, pages) {
-                    return output;
+                if let Err(error) = reject_pages(&path, pages) {
+                    return errored(error);
                 }
                 text
             }
             // `offset` and `limit` do not apply to an image.
             Ok(Inspected::Image { hash, bytes, .. }) => {
-                if let Err(output) = reject_pages(&path, pages) {
-                    return output;
+                if let Err(error) = reject_pages(&path, pages) {
+                    return errored(error);
                 }
                 let output = crate::image::read(self.shared.images(), &path, &bytes, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
@@ -175,27 +178,30 @@ impl Tool for Read {
             // apply: the file cannot be read at all, grammar errors aside
             // (parsed before inspection).
             Ok(Inspected::PdfOverCap { size }) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    crate::pdf::over_cap_message(&path, size),
-                );
+                return errored(ReadError::from(FileError::PdfOverCap {
+                    path: path.to_path_buf(),
+                    size,
+                }));
             }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
-                if let Err(output) = reject_pages(&path, pages) {
-                    return output;
+                if let Err(error) = reject_pages(&path, pages) {
+                    return errored(error);
                 }
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, &kind, size, hint),
-                );
+                return errored(ReadError::from(FileError::Unsupported {
+                    path: path.to_path_buf(),
+                    kind,
+                    size,
+                    hint,
+                }));
             }
             Err(InspectError::NotFound) => {
-                return failed(
-                    ErrorCode::NotFound,
-                    format!("`{}` does not exist.", path.display()),
-                );
+                return errored(ReadError::from(FileError::NotFound {
+                    path: path.to_path_buf(),
+                }));
             }
-            Err(InspectError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(InspectError::Tool(message)) => {
+                return errored(ReadError::from(FileError::Inspect { message }));
+            }
         };
         let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
         match slice_text(body, offset, limit, self.cap) {
@@ -205,7 +211,7 @@ impl Tool for Read {
                 output.details = Some(json!({"start_line": offset}));
                 output
             }
-            Err(message) => failed(ErrorCode::InvalidArguments, message),
+            Err(error) => errored(error),
         }
     }
 
@@ -231,42 +237,36 @@ impl Tool for Read {
 /// Fails the call when `pages` names a file that is not a PDF
 /// (`docs/tools.md`, "read"). `not_found` and path errors come first,
 /// because inspection runs first.
-#[allow(
-    clippy::result_large_err,
-    reason = "the error is the call's Output, returned unchanged"
-)]
-fn reject_pages(path: &Path, pages: Option<PageRange>) -> Result<(), Output> {
+fn reject_pages(path: &Path, pages: Option<PageRange>) -> Result<(), ReadError> {
     match pages {
-        Some(_) => Err(failed(
-            ErrorCode::InvalidArguments,
-            format!(
-                "`pages` applies only to a PDF, and `{}` is not one.",
-                path.display()
-            ),
-        )),
+        Some(_) => Err(ReadError::PagesOnNonPdf {
+            path: path.to_path_buf(),
+        }),
         None => Ok(()),
     }
 }
 
 /// `offset` and `limit`. Absent means `default`. Below 1 is
 /// `invalid_arguments`.
-fn line_argument(value: Option<i64>, key: &str, default: usize) -> Result<usize, String> {
+fn line_argument(
+    value: Option<i64>,
+    key: &'static str,
+    default: usize,
+) -> Result<usize, ReadError> {
     let Some(value) = value else {
         return Ok(default);
     };
     if value < 1 {
-        return Err(format!("`{key}` must be 1 or greater."));
+        return Err(ReadError::LineBelowOne { key });
     }
-    usize::try_from(value).map_err(|_| format!("`{key}` is too large."))
+    usize::try_from(value).map_err(|_| ReadError::LineTooLarge { key })
 }
 
-fn slice_text(text: &str, offset: usize, limit: usize, cap: usize) -> Result<String, String> {
+fn slice_text(text: &str, offset: usize, limit: usize, cap: usize) -> Result<String, ReadError> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let total = lines.len();
     if offset > total && !(total == 0 && offset == 1) {
-        return Err(format!(
-            "`offset` is past the end of the file, which has {total} lines."
-        ));
+        return Err(ReadError::OffsetPastEnd { total });
     }
     if total == 0 {
         return Ok(String::new());
