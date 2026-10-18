@@ -473,10 +473,6 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         Check::Timing("sessions_list_ms"),
     ),
     (
-        "`session_list`, waiting for every running session's status",
-        Check::Timing("session_list_ms"),
-    ),
-    (
         "`paging` jig, its session at scale 1 and 160 by 48",
         Check::Memory(&["paging_rss_kib"]),
     ),
@@ -537,7 +533,10 @@ pub(super) const TEN_TURNS_SKIP_NOTE: &str =
     "skipped: the selection did not run the 10-busy-turns workload";
 
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.
-pub(super) const NOT_MEASURED: &[(&str, &str)] = &[];
+pub(super) const NOT_MEASURED: &[(&str, &str)] = &[(
+    "`session_list`, waiting for every running session's status",
+    "#581 (`session_list`)",
+)];
 
 /// The idle rows' RSS-split diagnostics, by Budget cell: the anon and file
 /// metric ids whose head medians the comment shows after the peak RSS.
