@@ -1,7 +1,8 @@
 //! The `shell.read_only` reader: the checked merged configuration's complete
 //! string-array entries, name ordered (`docs/configuration.md`, "Keys").
 
-use super::shell_read_only;
+use super::ShellReadOnly;
+use super::{refresh_shell_read_only, shell_read_only};
 use crate::test_support::Rig;
 
 fn read(rig: &Rig, overrides: &[&str]) -> Vec<(String, Vec<String>)> {
@@ -175,4 +176,87 @@ fn reading_again_after_the_file_changes_returns_the_new_list() {
     );
     rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
     assert_eq!(read(&rig, &[]), vec![("yq".to_owned(), Vec::new())]);
+}
+
+#[test]
+fn refresh_replaces_the_held_list_with_the_fresh_config() {
+    let rig = Rig::new("fiber-shell-read-only-refresh");
+    let handle: ShellReadOnly = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "jq".to_owned(),
+        vec!["-r".to_owned()],
+    )]));
+    rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
+    let config = rig.config(Vec::<String>::new());
+    refresh_shell_read_only(&handle, &config);
+    assert_eq!(*handle.lock().unwrap(), vec![("yq".to_owned(), Vec::new())]);
+}
+
+#[test]
+fn a_clone_taken_before_refresh_sees_the_new_list() {
+    let rig = Rig::new("fiber-shell-read-only-refresh-clone");
+    let handle: ShellReadOnly = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "jq".to_owned(),
+        vec!["-r".to_owned()],
+    )]));
+    let before = handle.clone();
+    rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
+    let config = rig.config(Vec::<String>::new());
+    refresh_shell_read_only(&handle, &config);
+    assert_eq!(*before.lock().unwrap(), vec![("yq".to_owned(), Vec::new())]);
+}
+
+#[test]
+fn a_second_refresh_replaces_again() {
+    let rig = Rig::new("fiber-shell-read-only-refresh-twice");
+    let handle: ShellReadOnly = Default::default();
+    rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
+    refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
+    rig.write_global(&serde_json::json!({"shell": {"read_only": {"zq": {"flags": ["-e"]}}}}));
+    refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
+    assert_eq!(
+        *handle.lock().unwrap(),
+        vec![("zq".to_owned(), vec!["-e".to_owned()])]
+    );
+}
+
+#[test]
+fn refresh_from_a_config_with_no_entry_empties_the_list() {
+    let rig = Rig::new("fiber-shell-read-only-refresh-empty");
+    let handle: ShellReadOnly = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "jq".to_owned(),
+        vec!["-r".to_owned()],
+    )]));
+    rig.write_global(&serde_json::json!({"model": "scripted/s.json"}));
+    refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
+    assert_eq!(*handle.lock().unwrap(), Vec::new());
+}
+
+#[test]
+fn refresh_recovers_a_poisoned_lock() {
+    let rig = Rig::new("fiber-shell-read-only-refresh-poison");
+    let handle: ShellReadOnly = std::sync::Arc::new(std::sync::Mutex::new(vec![(
+        "jq".to_owned(),
+        vec!["-r".to_owned()],
+    )]));
+    let victim = handle.clone();
+    let poisoned = fakes::within(
+        "shell.read_only lock poisoned",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            std::thread::spawn(move || {
+                let _guard = victim.lock().unwrap();
+                panic!("poison the shell.read_only lock");
+            })
+            .join()
+        },
+    );
+    assert!(poisoned.is_err(), "the lock was not poisoned");
+    rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
+    refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
+    assert_eq!(
+        *handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![("yq".to_owned(), Vec::new())]
+    );
 }

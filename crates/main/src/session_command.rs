@@ -414,7 +414,7 @@ pub(crate) fn run_new(
         skills,
         extensions.tools(),
         timing.clone(),
-        shell_read_only,
+        shell_read_only.clone(),
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -527,6 +527,7 @@ pub(crate) fn run_new(
         answerable,
         log.clone(),
         diag.clone(),
+        shell_read_only,
     );
     let reloader = reload.preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());
