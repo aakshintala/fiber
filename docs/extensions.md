@@ -43,6 +43,8 @@ An extension is one directory. Its manifest, `extension.json`, states
 - its version
 - the lowest Fiber version it runs on
 - the extension API version it was written for ("The extension API version")
+- the session-half version range the TUI extension works with
+  (`tui.session_versions`)
 - the other extensions it depends on, each with a minimum version
 - the native binaries it ships, if any, with one download URL and one sha256
   per platform

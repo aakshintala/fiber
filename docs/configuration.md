@@ -526,7 +526,7 @@ a process extension, and `exit_timeout_ms` has no default. Its `program` follows
 entry script is `init.lua` at the top of its directory; its provider's Lua is
 `providers/<name>.lua`. Each `providers` key must be one filename, not a path.
 A TUI extension's entry script is `tui/init.lua`. Its manifest declares
-`tui.session_versions`, the range of session-half versions the TUI extension
+`tui.session_versions`, the session-half version range the TUI extension
 works with (`docs/extensions.md`, "Client halves"); an install reads the
 range without running Lua.
 `memory_mib` raises a
