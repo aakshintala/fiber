@@ -181,14 +181,9 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     // `admitted` rule the live render uses, read from the raw payload. No
     // early return: the guard and the typed parse below run unchanged.
     if line.kind == "tool_call_completed" {
-        let status = match line.payload.get("status").and_then(Value::as_str) {
-            Some("completed") => Some(CallStatus::Completed),
-            Some("failed") => Some(CallStatus::Failed),
-            Some("denied") => Some(CallStatus::Denied),
-            Some("cancelled") => Some(CallStatus::Cancelled),
-            _ => None,
-        };
-        if let (Some(status), Some(action)) = (status, line.action_id.as_ref())
+        let completed = line.payload.get("status").and_then(Value::as_str) == Some("completed");
+        if completed
+            && let Some(action) = line.action_id.as_ref()
             && !pass.running.is_inner(action)
         {
             let provider_run = line
@@ -200,7 +195,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 .get("control")
                 .and_then(|control| serde_json::from_value(control.clone()).ok());
             if let Some(load) =
-                crate::conversation::admitted(status, provider_run, control.as_ref())
+                crate::conversation::admitted(CallStatus::Completed, provider_run, control.as_ref())
                     .and_then(|control| control.skill.clone())
             {
                 pass.running.loaded(load);
