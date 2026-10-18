@@ -386,7 +386,8 @@ set is fixed for a given Fiber build.
 
 A model's `web_search` names the vendor's hosted-search tool type as the
 vendor spells it. Each protocol accepts only the types its code reads back
-(`docs/tools.md`, "Hosted by the provider"). A model whose `web_search` names
+(`docs/tools.md`, "Hosted by the provider"): `openai-completions` reads
+`openrouter:web_search`. A model whose `web_search` names
 any other type is left out of the model list, with the notice
 `model_invalid` naming the model and the type, as for a forbidden
 `extra_body` field.

@@ -20,8 +20,8 @@ use serde_json::json;
 #[test]
 fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complete() {
     fakes::within(
-        "configuration-filtered provider loading",
-        std::time::Duration::from_secs(10),
+        "Providers::load_enabled",
+        fakes::MUST_SUCCEED_WITHIN,
         || {
             let setup = Setup::new();
             let full = "github.com/aakshintala/fiber/providers/opencode";
@@ -87,8 +87,8 @@ fn enabled_loading_filters_packages_not_provider_ids_and_inventory_stays_complet
 #[test]
 fn disabled_packages_are_skipped_before_provider_files_secrets_and_cached_models() {
     fakes::within(
-        "disabled provider assets",
-        std::time::Duration::from_secs(10),
+        "Providers::load_enabled",
+        fakes::MUST_SUCCEED_WITHIN,
         || {
             let setup = Setup::new();
             let mut m = manifest("acme");
@@ -1198,21 +1198,6 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
     assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
 }
 
-/// How long a test waits for one background refresh to return.
-const REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Runs `f` on its own thread under [`REFRESH_WAIT`], so a refresh that
-/// never returns fails the test instead of hanging it.
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(REFRESH_WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the refresh did not return within {REFRESH_WAIT:?}"),
-    }
-}
-
 /// Sets the cached list's mtime, so its age reads against the fake clock.
 fn set_cache_mtime(home: &std::path::Path, provider: &str, mtime: std::time::SystemTime) {
     let file = home.join("cache/models").join(format!("{provider}.json"));
@@ -1290,7 +1275,7 @@ fn a_stale_list_refreshes_once_and_the_cache_is_replaced() {
         clock.wall() - DAY - std::time::Duration::from_secs(1),
     );
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    let models = within(move || {
+    let models = fakes::within("lua.refresh", fakes::MUST_SUCCEED_WITHIN, move || {
         lua.refresh(Some(DAY), ModelsArg::default())
             .unwrap()
             .join()
@@ -1312,7 +1297,7 @@ fn without_a_maximum_even_a_fresh_list_refreshes() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall());
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    within(move || {
+    fakes::within("lua.refresh", fakes::MUST_SUCCEED_WITHIN, move || {
         lua.refresh(None, ModelsArg::default())
             .unwrap()
             .join()
@@ -1340,7 +1325,10 @@ fn two_providers_over_one_stale_list_refresh_it_once() {
     let b = second.refresh(Some(DAY), ModelsArg::default());
     assert!(a.is_some(), "the first refresh starts");
     assert!(b.is_none(), "the second sees the first's lock");
-    within(move || a.unwrap().join().unwrap()).unwrap();
+    fakes::within("refresh.join", fakes::MUST_SUCCEED_WITHIN, move || {
+        a.unwrap().join().unwrap()
+    })
+    .unwrap();
     assert_eq!(cached_ids(&home, "acme"), ["new"]);
 }
 
@@ -1418,7 +1406,10 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
     let names: Vec<&str> = started.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(names, ["stale"]);
     for (_, handle) in started {
-        within(move || handle.join().unwrap()).unwrap();
+        fakes::within("handle.join", fakes::MUST_SUCCEED_WITHIN, move || {
+            handle.join().unwrap()
+        })
+        .unwrap();
     }
     // Only the stale provider with a credential ran: the fresh list and
     // the credential-less one are untouched.
@@ -2214,18 +2205,19 @@ fn models_receives_the_session_key_beside_the_workspace_host() {
         ),
     );
     let home = setup.home();
-    let (notices, cached) = within(move || {
-        let mut providers = providers;
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        );
-        let cached = cached_ids(&home, "acme");
-        (notices, cached)
-    });
+    let (notices, cached) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let mut providers = providers;
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            );
+            let cached = cached_ids(&home, "acme");
+            (notices, cached)
+        });
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["k1@h.example"]);
 }
@@ -2254,18 +2246,19 @@ fn the_workspace_host_falls_back_to_the_environment() {
         ),
     );
     let home = setup.home();
-    let (notices, cached) = within(move || {
-        let mut providers = providers;
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_workspace,
-        );
-        let cached = cached_ids(&home, "acme");
-        (notices, cached)
-    });
+    let (notices, cached) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let mut providers = providers;
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_workspace,
+            );
+            let cached = cached_ids(&home, "acme");
+            (notices, cached)
+        });
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["k1@e.example"]);
 }
@@ -2292,18 +2285,19 @@ fn models_receives_no_key_for_a_provider_that_registers_credential() {
     );
     let config = config(&setup, &[]);
     let home = setup.home();
-    let (notices, cached) = within(move || {
-        let mut providers = providers;
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        );
-        let cached = cached_ids(&home, "acme");
-        (notices, cached)
-    });
+    let (notices, cached) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let mut providers = providers;
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            );
+            let cached = cached_ids(&home, "acme");
+            (notices, cached)
+        });
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(cached, ["nil@static"]);
 }
@@ -2323,18 +2317,19 @@ fn models_is_not_called_while_the_workspace_has_no_value() {
     );
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let home = setup.home();
-    let (mut providers, notices, config) = within(move || {
-        let mut providers = providers;
-        let config = config(&setup, &[]);
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        );
-        (providers, notices, config)
-    });
+    let (mut providers, notices, config) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let mut providers = providers;
+            let config = config(&setup, &[]);
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            );
+            (providers, notices, config)
+        });
     assert!(notices.is_empty(), "{notices:?}");
     assert!(
         config::read_model_cache(&home, "acme").unwrap().is_none(),
@@ -2361,18 +2356,19 @@ fn models_is_not_called_while_the_workspace_is_not_a_host() {
     );
     let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
     let home = setup.home();
-    let (mut providers, notices, config) = within(move || {
-        let mut providers = providers;
-        let config = config(&setup, &["extensions.\"acme-ext\".settings.workspace=a/b"]);
-        let notices = providers.add_lua(
-            "acme-ext",
-            &lua,
-            &config,
-            &fakes::children::grouped_output,
-            &env_empty,
-        );
-        (providers, notices, config)
-    });
+    let (mut providers, notices, config) =
+        fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
+            let mut providers = providers;
+            let config = config(&setup, &["extensions.\"acme-ext\".settings.workspace=a/b"]);
+            let notices = providers.add_lua(
+                "acme-ext",
+                &lua,
+                &config,
+                &fakes::children::grouped_output,
+                &env_empty,
+            );
+            (providers, notices, config)
+        });
     assert!(notices.is_empty(), "{notices:?}");
     assert!(
         config::read_model_cache(&home, "acme").unwrap().is_none(),
@@ -2416,7 +2412,7 @@ fn refresh_lists_passes_the_key_and_host_to_the_thread() {
             "https://{workspace}/v1",
         ),
     );
-    let started = within(move || {
+    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
         extensions::refresh_lists(
             &[lua],
             &providers,
@@ -2429,7 +2425,10 @@ fn refresh_lists_passes_the_key_and_host_to_the_thread() {
     assert_eq!(started.len(), 1);
     assert_eq!(started[0].0, "acme");
     for (_, handle) in started {
-        within(move || handle.join().unwrap()).unwrap();
+        fakes::within("handle.join", fakes::MUST_SUCCEED_WITHIN, move || {
+            handle.join().unwrap()
+        })
+        .unwrap();
     }
     assert_eq!(cached_ids(&setup.home(), "acme"), ["k1@h.example"]);
 }
@@ -2458,7 +2457,7 @@ fn refresh_lists_starts_nothing_while_the_workspace_has_no_value() {
             "https://{workspace}/v1",
         ),
     );
-    let started = within(move || {
+    let started = fakes::within("refresh_lists", fakes::MUST_SUCCEED_WITHIN, move || {
         extensions::refresh_lists(
             &[lua],
             &providers,
@@ -2507,13 +2506,16 @@ fn a_models_failure_redacts_the_key() {
         key: Some(Secret::new("dapi-secret".into())),
         placeholders: std::collections::BTreeMap::new(),
     };
-    let err = within(move || lua.list_models(&arg)).unwrap_err();
+    let err = fakes::within("lua.list_models", fakes::MUST_SUCCEED_WITHIN, move || {
+        lua.list_models(&arg)
+    })
+    .unwrap_err();
     let text = err.to_string();
     assert!(text.contains("[redacted]"), "{text}");
     assert!(!text.contains("dapi-secret"), "{text}");
     let lua = lua_bare_arg(&setup, "ext", "acme", "error(\"saw \" .. arg.key)");
     let config = config(&setup, &[]);
-    let notices = within(move || {
+    let notices = fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
         let mut providers = providers;
         providers.add_lua(
             "acme-ext",
@@ -2560,13 +2562,16 @@ fn a_models_non_list_return_redacts_the_key() {
         key: Some(Secret::new("dapi-secret".into())),
         placeholders: std::collections::BTreeMap::new(),
     };
-    let err = within(move || lua.list_models(&arg)).unwrap_err();
+    let err = fakes::within("lua.list_models", fakes::MUST_SUCCEED_WITHIN, move || {
+        lua.list_models(&arg)
+    })
+    .unwrap_err();
     let text = err.to_string();
     assert!(text.contains("[redacted]"), "{text}");
     assert!(!text.contains("dapi-secret"), "{text}");
     let lua = lua_bare_arg(&setup, "ext", "acme", "arg.key");
     let config = config(&setup, &[]);
-    let notices = within(move || {
+    let notices = fakes::within("providers.add_lua", fakes::MUST_SUCCEED_WITHIN, move || {
         let mut providers = providers;
         providers.add_lua(
             "acme-ext",

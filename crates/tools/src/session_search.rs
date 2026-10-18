@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::session_search::{Found, Hit, LIMIT, Query, Scan};
@@ -15,7 +14,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use support::text::one_line;
 
-use crate::tool_util::{effects, failed, text_output};
+use crate::error::ArgumentsError;
+use crate::tool_util::{effects, errored, text_output};
 
 /// The most characters of a session's name a hit shows.
 const NAME: usize = 80;
@@ -93,7 +93,7 @@ impl Tool for SessionSearch {
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         let query = match query(arguments) {
             Ok(query) => query,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         let found = self.scan.scan(&query, cancel);
         // The scan returns what it had when cancelled, which is not the
@@ -106,8 +106,8 @@ impl Tool for SessionSearch {
 }
 
 /// The call's query, with the documented defaults.
-fn query(arguments: &Map<String, Value>) -> Result<Query, String> {
-    let args: Args = crate::tool_util::arguments(arguments)?;
+fn query(arguments: &Map<String, Value>) -> Result<Query, ArgumentsError> {
+    let args: Args = crate::tool_util::parsed(arguments)?;
     Ok(Query {
         text: args.text,
         all_projects: args.all_projects,

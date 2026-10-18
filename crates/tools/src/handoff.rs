@@ -1,7 +1,6 @@
 //! The `handoff` tool (`docs/handoff.md`, "A tool"): the model restarts its
 //! context from a note it writes as the argument.
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::Control;
 use contract::provider::ToolDefinition;
@@ -9,7 +8,7 @@ use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{failed, no_effects};
+use crate::tool_util::{errored, no_effects};
 
 /// The call's arguments, checked against the schema before the call runs.
 #[derive(Debug, Deserialize)]
@@ -59,7 +58,7 @@ impl Tool for Handoff {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        match crate::tool_util::arguments(arguments) {
+        match crate::tool_util::parsed::<Args>(arguments) {
             Ok(Args { note }) => Output {
                 control: Some(Control {
                     handoff: Some(note),
@@ -69,7 +68,7 @@ impl Tool for Handoff {
                 }),
                 ..Output::default()
             },
-            Err(message) => failed(ErrorCode::InvalidArguments, message),
+            Err(error) => errored(error),
         }
     }
 

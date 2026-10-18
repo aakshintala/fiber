@@ -465,7 +465,7 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
         vec![crate::host::script::ExecEntry {
             request: serde_json::json!({}),
             reply: Ok(crate::host::script::ExecReply {
-                code: 0,
+                end: crate::host::script::ExecEnd::Code(0),
                 stdout: String::new(),
                 stderr: String::new(),
             }),

@@ -16,7 +16,8 @@ use contract::hook::Hooks;
 use contract::inbox::Delivery;
 use contract::shapes::Process;
 use extensions::{
-    Error, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, ModelsArg, SessionExtensions,
+    Error, ExecEnd, ExecEntry, ExecReply, HostScript, HttpEntry, LuaExtension, ModelsArg,
+    SessionExtensions,
 };
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
@@ -202,7 +203,7 @@ fiber.provider("host-script", {{ models = {{
                 "env": {"FIBER_X": "1"}
             }),
             reply: Ok(ExecReply {
-                code: 7,
+                end: ExecEnd::Code(7),
                 stdout: "out".to_owned(),
                 stderr: "err".to_owned(),
             }),
@@ -324,7 +325,7 @@ fn a_mismatched_env_fails_the_scripted_exec() {
                 "env": {"FIBER_X": "1"}
             }),
             reply: Ok(ExecReply {
-                code: 0,
+                end: ExecEnd::Code(0),
                 stdout: "ok".to_owned(),
                 stderr: String::new(),
             }),

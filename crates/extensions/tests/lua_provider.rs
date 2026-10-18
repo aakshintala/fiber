@@ -30,18 +30,6 @@ use serde_json::json;
 /// How long a test waits for one call, or for a background refresh.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Runs `f` on its own thread under `WAIT`, so a call that never returns
-/// fails the test instead of hanging it.
-#[track_caller]
-fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || tx.send(f()));
-    match Deadline::after(WAIT).recv(&rx) {
-        Ok(answer) => answer,
-        Err(_) => panic!("the call did not return within {WAIT:?}"),
-    }
-}
-
 fn provider_file(lua: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
     let dir = fakes::TempDir::new("lazy-provider");
     std::fs::create_dir_all(dir.path().join("providers")).unwrap();
@@ -60,7 +48,12 @@ fn provider_only_file_lists_functions_on_first_use() {
     let (_dir, ext) =
         provider_file("fiber.provider('p', {models={timeout=100, run=function() return {} end}})");
     assert!(!ext.is_running());
-    let functions = within(move || ext.provider_functions("p")).unwrap();
+    let functions = fakes::within(
+        "ext.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || ext.provider_functions("p"),
+    )
+    .unwrap();
     assert_eq!(functions, ["models"]);
 }
 
@@ -76,7 +69,12 @@ fn provider_file_refuses_wrong_duplicate_missing_and_tool_registrations() {
         ("fiber.tool('t', {})", "init.lua"),
     ] {
         let (_dir, ext) = provider_file(lua);
-        let err = within(move || ext.provider_functions("p")).unwrap_err();
+        let err = fakes::within(
+            "ext.provider_functions",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || ext.provider_functions("p"),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
         let Error::Lua { message, .. } = err else {
             panic!("{err:?}")
@@ -91,7 +89,12 @@ fn a_provider_file_cannot_hide_a_tool_registration_refusal_with_pcall() {
     let (_dir, ext) = provider_file(
         "fiber.provider('p', {})\n local ok = pcall(fiber.tool, 't', {})\n assert(not ok)",
     );
-    let error = within(move || ext.provider_functions("p")).unwrap_err();
+    let error = fakes::within(
+        "ext.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || ext.provider_functions("p"),
+    )
+    .unwrap_err();
     assert_eq!(error.code(), ErrorCode::ExtensionFailed);
     let Error::Lua { message, .. } = error else {
         panic!("{error:?}")
@@ -106,7 +109,12 @@ fn a_provider_file_cannot_hide_a_search_backend_registration_refusal_with_pcall(
     let (_dir, ext) = provider_file(
         "fiber.provider('p', {})\n local ok = pcall(fiber.search_backend, 's', {})\n assert(not ok)",
     );
-    let error = within(move || ext.provider_functions("p")).unwrap_err();
+    let error = fakes::within(
+        "ext.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || ext.provider_functions("p"),
+    )
+    .unwrap_err();
     assert_eq!(error.code(), ErrorCode::ExtensionFailed);
     let Error::Lua { message, .. } = error else {
         panic!("{error:?}")
@@ -127,7 +135,12 @@ fn absent_provider_file_starts_no_vm() {
     ));
     let copy = Arc::clone(&ext);
     assert_eq!(
-        within(move || copy.provider_functions("none")).unwrap(),
+        fakes::within(
+            "copy.provider_functions",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || copy.provider_functions("none")
+        )
+        .unwrap(),
         Vec::<String>::new()
     );
     assert!(!ext.is_running());
@@ -136,7 +149,12 @@ fn absent_provider_file_starts_no_vm() {
 #[test]
 fn oversized_provider_file_names_the_file() {
     let (_dir, ext) = provider_file(&" ".repeat(extensions::MEMORY_CAP + 1));
-    let err = within(move || ext.provider_functions("p")).unwrap_err();
+    let err = fakes::within(
+        "ext.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || ext.provider_functions("p"),
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = err else {
         panic!("{err:?}")
     };
@@ -148,7 +166,12 @@ fn oversized_provider_file_names_the_file() {
 fn first_use_load_failure_is_extension_failed_not_credential_failed() {
     let (_dir, ext) = provider_file("error('broken at load')");
     let provider = LuaProvider::new(ext, "p");
-    let err = within(move || provider.credential_value(&pair("p", "p"))).unwrap_err();
+    let err = fakes::within(
+        "provider.credential_value",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || provider.credential_value(&pair("p", "p")),
+    )
+    .unwrap_err();
     assert_eq!(err.code(), ErrorCode::ExtensionFailed);
     assert!(
         matches!(err, Error::Lua { message, .. } if message.contains("providers/p.lua:1:") && message.contains("broken at load"))
@@ -161,7 +184,12 @@ fn credential_callback_failure_keeps_credential_failed() {
         "fiber.provider('p', {credential={timeout=100, run=function() error('broken credential') end}})",
     );
     let provider = LuaProvider::new(ext, "p");
-    let err = within(move || provider.credential_value(&pair("p", "p"))).unwrap_err();
+    let err = fakes::within(
+        "provider.credential_value",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || provider.credential_value(&pair("p", "p")),
+    )
+    .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(matches!(err, Error::Credential(_)));
     assert!(err.to_string().contains("providers/p.lua:1:"));
@@ -214,7 +242,7 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
         !provider.has_model_cache(),
         "no copy before the first discovery"
     );
-    let models = within({
+    let models = fakes::within("provider.models", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.models(&ModelsArg::default())
     })
@@ -260,7 +288,10 @@ fn a_cached_list_is_served_without_running_lua_until_the_refresh_returns() {
     assert!(server.requests().is_empty(), "the cached copy is served");
 
     let refresh = provider.refresh(None, ModelsArg::default()).unwrap();
-    let refreshed = within(move || refresh.join().unwrap()).unwrap();
+    let refreshed = fakes::within("refresh.join", fakes::MUST_SUCCEED_WITHIN, move || {
+        refresh.join().unwrap()
+    })
+    .unwrap();
     assert_eq!(ids(&refreshed), ["new"]);
     assert_eq!(
         ids(&provider.models(&ModelsArg::default()).unwrap()),
@@ -281,7 +312,10 @@ fn a_models_call_that_fails_or_returns_no_model_list_caches_nothing() {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::status(200, reply)]).unwrap();
         let provider = fixture(&setup, &server);
-        let err = within(move || provider.models(&ModelsArg::default())).unwrap_err();
+        let err = fakes::within("provider.models", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.models(&ModelsArg::default())
+        })
+        .unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
         assert_eq!(
             matches!(err, Error::BadReturn { .. }),
@@ -303,9 +337,11 @@ fn a_token_far_from_expiry_is_reused() {
     for _ in 0..3 {
         let provider = Arc::clone(&provider);
         assert_eq!(
-            within(move || provider.token(&pair(provider.name(), "default")))
-                .unwrap()
-                .expose(),
+            fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+                provider.token(&pair(provider.name(), "default"))
+            })
+            .unwrap()
+            .expose(),
             "t1"
         );
     }
@@ -333,9 +369,10 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     let provider = fixture_on(&setup, &server, clock.clone());
     let first = Arc::clone(&provider);
     assert_eq!(
-        within(move || first.token(&pair(first.name(), "default")))
-            .unwrap()
-            .expose(),
+        fakes::within("first.token", fakes::MUST_SUCCEED_WITHIN, move || first
+            .token(&pair(first.name(), "default")))
+        .unwrap()
+        .expose(),
         "t1"
     );
     assert_eq!(server.requests().len(), 1);
@@ -347,9 +384,10 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     );
     let second = Arc::clone(&provider);
     assert_eq!(
-        within(move || second.token(&pair(second.name(), "default")))
-            .unwrap()
-            .expose(),
+        fakes::within("second.token", fakes::MUST_SUCCEED_WITHIN, move || second
+            .token(&pair(second.name(), "default")))
+        .unwrap()
+        .expose(),
         "t1"
     );
     assert!(
@@ -381,7 +419,10 @@ fn an_expired_token_just_returned_is_an_error() {
     let setup = Setup::new();
     let server = ProviderServer::start([token("t1", Duration::ZERO)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token(&pair(provider.name(), "default"))).unwrap_err();
+    let err = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair(provider.name(), "default"))
+    })
+    .unwrap_err();
     assert!(
         matches!(
             &err,
@@ -403,7 +444,10 @@ fn a_credential_with_no_usable_expiry_is_an_error() {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::status(200, body)]).unwrap();
         let provider = fixture(&setup, &server);
-        let err = within(move || provider.token(&pair(provider.name(), "default"))).unwrap_err();
+        let err = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.token(&pair(provider.name(), "default"))
+        })
+        .unwrap_err();
         assert!(
             matches!(
                 &err,
@@ -421,7 +465,10 @@ fn a_credential_with_no_token_is_credential_failed() {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(200, r#"{"expires_at": 1}"#)]).unwrap();
     let provider = fixture(&setup, &server);
-    let err = within(move || provider.token(&pair(provider.name(), "default"))).unwrap_err();
+    let err = fakes::within("provider.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        provider.token(&pair(provider.name(), "default"))
+    })
+    .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     let Error::Credential(inner) = &err else {
         panic!("{err:?}")
@@ -470,7 +517,7 @@ fn sign_returns_a_table_of_headers_or_nothing() {
         ("number", false),
     ] {
         let provider = LuaProvider::new(Arc::clone(&extension), name);
-        let signed = within(move || {
+        let signed = fakes::within("provider.sign", fakes::MUST_SUCCEED_WITHIN, move || {
             provider.sign(&SignRequest {
                 method: "POST",
                 url: "http://x/",
@@ -497,7 +544,7 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
     let url = format!("{}/v1/responses", server.url());
     let signer = Arc::clone(&provider);
     let call_url = url.clone();
-    let headers = within(move || {
+    let headers = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: &call_url,
@@ -552,7 +599,7 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
         "waited for models() to reach the server"
     );
     let signer = Arc::clone(&provider);
-    let headers = within(move || {
+    let headers = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: "http://127.0.0.1/v1/responses",
@@ -580,7 +627,12 @@ fn the_fixture_registers_each_provider_function() {
         setup.home(),
         fakes::clock::FakeClock::new(),
     ));
-    let functions = within(move || extension.provider_functions("fixture")).unwrap();
+    let functions = fakes::within(
+        "extension.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || extension.provider_functions("fixture"),
+    )
+    .unwrap();
     assert_eq!(functions, ["credential", "models", "sign"]);
 }
 
@@ -603,7 +655,10 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
     ));
     let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
-    let err = within(move || tokens.token(&pair(tokens.name(), "default"))).unwrap_err();
+    let err = fakes::within("tokens.token", fakes::MUST_SUCCEED_WITHIN, move || {
+        tokens.token(&pair(tokens.name(), "default"))
+    })
+    .unwrap_err();
     assert!(
         matches!(
             &err,
@@ -613,11 +668,18 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
     );
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(
-        within(move || provider.models(&ModelsArg::default()))
-            .unwrap()
-            .is_empty()
+        fakes::within("provider.models", fakes::MUST_SUCCEED_WITHIN, move || {
+            provider.models(&ModelsArg::default())
+        })
+        .unwrap()
+        .is_empty()
     );
-    let none = within(move || extension.provider_functions("nobody")).unwrap();
+    let none = fakes::within(
+        "extension.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || extension.provider_functions("nobody"),
+    )
+    .unwrap();
     assert!(none.is_empty());
 }
 
@@ -649,7 +711,12 @@ fn a_provider_function_without_a_timeout_or_an_unknown_one_is_an_error_at_its_li
             setup.home(),
             fakes::clock::FakeClock::new(),
         ));
-        let err = within(move || extension.provider_functions("p")).unwrap_err();
+        let err = fakes::within(
+            "extension.provider_functions",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || extension.provider_functions("p"),
+        )
+        .unwrap_err();
         let Error::Lua { message, .. } = &err else {
             panic!("{err:?}")
         };
@@ -706,7 +773,12 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     assert_eq!(*timeout_ms, 30000);
     // A timeout of one parked callback leaves the extension's thread running.
     let again = Arc::clone(&extension);
-    assert_eq!(within(move || again.command("ok", "")).unwrap(), "ok");
+    assert_eq!(
+        fakes::within("again.command", fakes::MUST_SUCCEED_WITHIN, move || again
+            .command("ok", ""))
+        .unwrap(),
+        "ok"
+    );
 }
 
 #[track_caller]
@@ -715,7 +787,7 @@ fn signed(signer: &Arc<dyn Signer>, headers: &[(String, String)]) -> Vec<(String
     let body = br#"{"model":"m"}"#.to_vec();
     let signer = Arc::clone(signer);
     let owned: Vec<(String, String)> = headers.to_vec();
-    within(move || {
+    fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: &url,
@@ -738,14 +810,14 @@ fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
         Some("{ [\"x-saw-auth\"] = request.headers.authorization or \"missing\" }"),
     );
     assert_eq!(
-        within({
+        fakes::within("provider.functions", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&provider);
             move || provider.functions()
         })
         .unwrap(),
         ["credential", "sign"]
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -768,7 +840,7 @@ fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
 fn without_sign_only_the_token_is_sent() {
     let setup = Setup::new();
     let provider = script_provider(&setup, FakeClock::new(), Some(TOKEN), None);
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -789,7 +861,7 @@ fn without_credential_only_what_sign_returns_is_sent() {
         None,
         Some("{ [\"x-s\"] = \"v\" }"),
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -806,7 +878,7 @@ fn without_credential_or_sign_there_is_no_signer() {
     let setup = Setup::new();
     let provider = script_provider(&setup, FakeClock::new(), None, None);
     assert_eq!(
-        within({
+        fakes::within("provider.functions", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&provider);
             move || provider.functions()
         })
@@ -814,7 +886,7 @@ fn without_credential_or_sign_there_is_no_signer() {
         Vec::<String>::new()
     );
     assert!(
-        within({
+        fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&provider);
             move || provider.signer(pair(provider.name(), "default"))
         })
@@ -828,7 +900,7 @@ fn registers_is_true_for_a_registered_function_only() {
     let setup = Setup::new();
     let provider = script_provider(&setup, FakeClock::new(), Some(TOKEN), None);
     let registered = |function: &'static str| {
-        within({
+        fakes::within("provider.registers", fakes::MUST_SUCCEED_WITHIN, {
             let provider = Arc::clone(&provider);
             move || provider.registers(function)
         })
@@ -841,7 +913,7 @@ fn registers_is_true_for_a_registered_function_only() {
     let setup = Setup::new();
     let bare = script_provider(&setup, FakeClock::new(), None, None);
     assert!(
-        !within({
+        !fakes::within("bare.registers", fakes::MUST_SUCCEED_WITHIN, {
             let bare = Arc::clone(&bare);
             move || bare.registers("credential")
         })
@@ -858,7 +930,7 @@ fn sign_wins_over_the_token_header_whatever_its_case() {
         Some(TOKEN),
         Some("{ Authorization = \"Bearer custom\" }"),
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -879,7 +951,7 @@ fn signer_credentials_returns_the_cached_token_even_when_sign_replaces_authoriza
         Some(TOKEN),
         Some("{ Authorization = \"Bearer custom\" }"),
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -913,7 +985,7 @@ fn signer_credentials_is_empty_without_credential() {
         None,
         Some("{ [\"x-s\"] = \"v\" }"),
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
@@ -930,14 +1002,14 @@ fn signer_credentials_is_empty_without_credential() {
 fn a_credential_error_at_send_time_is_credential_failed() {
     let setup = Setup::new();
     let provider = script_provider(&setup, FakeClock::new(), Some("{}"), Some("{}"));
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
     .unwrap()
     .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let err = within(move || {
+    let err = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: &url,
@@ -984,14 +1056,14 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
 
 #[track_caller]
 fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
     .unwrap()
     .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    within(move || {
+    fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: &url,
@@ -1059,15 +1131,19 @@ fn declared_provider_files_list_owners_in_order_without_running_lua() {
     common::install(&setup.home(), &source, "0.1.0").unwrap();
     let configuration = common::config(&setup, &[]);
     let home = setup.home();
-    let session = within(move || {
-        extensions::SessionExtensions::load(
-            &home,
-            &configuration,
-            FakeClock::new(),
-            Arc::new(NoLock),
-            None,
-        )
-    });
+    let session = fakes::within(
+        "SessionExtensions::load",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            extensions::SessionExtensions::load(
+                &home,
+                &configuration,
+                FakeClock::new(),
+                Arc::new(NoLock),
+                None,
+            )
+        },
+    );
     assert!(session.notices().is_empty());
     let names: Vec<_> = session
         .lua_providers()
@@ -1087,7 +1163,7 @@ fn a_sign_error_is_its_own_first_line() {
         Some("error(\"signing broke\")"),
     );
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let err = within({
+    let err = fakes::within("provider.sign", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || {
             provider.sign(&SignRequest {
@@ -1116,14 +1192,14 @@ fn a_credential_error_is_its_own_first_line_with_its_code() {
         Some("error(\"refresh failed: body-xyz\")"),
         Some("{}"),
     );
-    let signer = within({
+    let signer = fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.signer(pair(provider.name(), "default"))
     })
     .unwrap()
     .unwrap();
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let err = within(move || {
+    let err = fakes::within("signer.sign", fakes::MUST_SUCCEED_WITHIN, move || {
         signer.sign(&SignRequest {
             method: "POST",
             url: &url,
@@ -1158,13 +1234,20 @@ fn cost_registers_and_is_listed_among_the_provider_functions() {
         FakeClock::new(),
     ));
     let provider = LuaProvider::new(extension, "p");
-    let functions = within({
+    let functions = fakes::within("provider.functions", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(&provider);
         move || provider.functions()
     })
     .unwrap();
     assert_eq!(functions, ["cost"]);
-    assert!(within(move || provider.registers("cost")).unwrap());
+    assert!(
+        fakes::within(
+            "provider.registers",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || provider.registers("cost")
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -1184,7 +1267,12 @@ fn an_unknown_provider_function_is_refused_naming_cost_among_the_known_ones() {
         setup.home(),
         FakeClock::new(),
     ));
-    let err = within(move || extension.provider_functions("p")).unwrap_err();
+    let err = fakes::within(
+        "extension.provider_functions",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || extension.provider_functions("p"),
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = &err else {
         panic!("{err:?}")
     };

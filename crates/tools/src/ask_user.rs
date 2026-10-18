@@ -1,7 +1,6 @@
 //! The `ask_user` tool (`docs/tools.md`, "Asking the person"): the model
 //! asks whoever drives the session one to four questions.
 
-use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::{Answer, Control, FormAnswer, Interaction};
 use contract::provider::ToolDefinition;
@@ -9,7 +8,8 @@ use contract::shapes::{ContentPart, Question};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{failed, no_effects, text_output};
+use crate::error::AskUserError;
+use crate::tool_util::{errored, no_effects, text_output};
 
 /// The result of a call whose questions went to a program driver
 /// (`docs/tools.md`, "When a program drives the session").
@@ -97,7 +97,7 @@ impl Tool for AskUser {
     ) -> Output {
         match questions(arguments) {
             Ok(questions) => to_driver(questions),
-            Err(message) => failed(ErrorCode::InvalidArguments, message),
+            Err(error) => errored(error),
         }
     }
 
@@ -115,7 +115,7 @@ impl Tool for AskUser {
         }
         let questions = match questions(arguments) {
             Ok(questions) => questions,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(error),
         };
         let answer = ask.ask(Asking {
             interaction: Interaction::Form {
@@ -143,10 +143,7 @@ impl Tool for AskUser {
             Answered::NoAnswer => to_driver(questions),
             Answered::Reply(
                 Answer::Confirmed { .. } | Answer::Labels { .. } | Answer::Text { .. },
-            ) => failed(
-                ErrorCode::ToolError,
-                "The answer does not fit the form.".to_owned(),
-            ),
+            ) => errored(AskUserError::AnswerMismatch),
         }
     }
 }
@@ -191,9 +188,9 @@ fn escaped(text: &str) -> String {
 }
 
 /// The call's questions, read from the arguments the loop already checked.
-fn questions(arguments: &Map<String, Value>) -> Result<Vec<Question>, String> {
+fn questions(arguments: &Map<String, Value>) -> Result<Vec<Question>, AskUserError> {
     let value = arguments.get("questions").cloned().unwrap_or(Value::Null);
-    serde_json::from_value(value).map_err(|e| format!("`questions` cannot be read: {e}"))
+    serde_json::from_value(value).map_err(|source| AskUserError::QuestionsUnreadable { source })
 }
 
 /// The result that hands the questions to a program driver: the loop ends

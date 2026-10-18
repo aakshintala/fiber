@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 use super::page_range;
 use super::{PDF_MAX_BYTES, pdf_over_cap};
 use crate::Files;
+use crate::error::PdfError;
 
 /// How long a cancel test waits for the renderer to start, and for the call
 /// to end after the cancel. A wait that reaches it fails the test.
@@ -193,15 +194,25 @@ fn page_ranges_refuse_anything_else() {
     ] {
         let error = page_range(Some(text)).unwrap_err();
         if text == "1-21" {
-            assert_eq!(
-                error, "`pages` 1-21 names 21 pages; a request takes at most 20.",
+            assert!(
+                matches!(error, PdfError::PagesTooMany { count: 21, .. }),
                 "{text}"
             );
+            match error {
+                PdfError::PagesTooMany { text, .. } => assert_eq!(text, "1-21"),
+                PdfError::PagesMalformed
+                | PdfError::NotConfigured
+                | PdfError::ChildStart { .. }
+                | PdfError::ChildAnswer { .. }
+                | PdfError::NoPageCount
+                | PdfError::Unreadable { .. }
+                | PdfError::ChildExited { .. }
+                | PdfError::ChildSignalled { .. }
+                | PdfError::PastTheEnd { .. }
+                | PdfError::NeedsPages { .. } => panic!("{text}: expected PagesTooMany"),
+            }
         } else {
-            assert_eq!(
-                error, "`pages` must be a page or a range such as `3` or `1-5`, counted from 1.",
-                "{text}"
-            );
+            assert!(matches!(error, PdfError::PagesMalformed), "{text}");
         }
     }
 }

@@ -4,16 +4,17 @@
 
 use std::sync::Arc;
 
+use contract::SessionId;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::sessions::{MessageError, Sessions};
 use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ErrorCode, SessionId};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_util::{effects, failed, text_output};
+use crate::error::SessionMessageError;
+use crate::tool_util::{effects, errored, text_output};
 
 /// The call's arguments, checked against the schema before the call runs.
 #[derive(Debug, Deserialize)]
@@ -62,9 +63,9 @@ impl Tool for SessionMessage {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(SessionMessageError::from(error)),
         };
         let to = SessionId(args.id.clone());
         let result = self.sessions.message(&to, &self.own, &args.text, cancel);
@@ -75,15 +76,14 @@ impl Tool for SessionMessage {
         }
         match result {
             Ok(()) => text_output("delivered".into()),
-            Err(MessageError::Unreachable) => failed(
-                ErrorCode::Unreachable,
-                format!("No running session has the id {}.", to.0),
-            ),
-            Err(MessageError::Rejected(failure)) => failed(failure.code, failure.message),
-            Err(MessageError::Io { message, .. }) => failed(
-                ErrorCode::ToolError,
-                format!("Could not message session {}: {message}", to.0),
-            ),
+            Err(MessageError::Unreachable) => {
+                errored(SessionMessageError::Unreachable { id: to.clone() })
+            }
+            Err(MessageError::Rejected(failure)) => errored(SessionMessageError::Rejected(failure)),
+            Err(MessageError::Io { message, .. }) => errored(SessionMessageError::Io {
+                id: to.clone(),
+                message,
+            }),
             Err(MessageError::Cancelled) => text_output("Cancelled before it finished.".into()),
         }
     }
