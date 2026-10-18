@@ -564,7 +564,7 @@ a click on it returns too. The views are:
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, each model's input and output prices,
   and what a switch to it costs to rebuild the prompt cache. Choosing a model
-  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
+  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
