@@ -3,7 +3,7 @@
 use contract::ErrorCode;
 use serde_json::{Value, json};
 
-use super::{ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
+use super::{ExecEnd, ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
 
 #[test]
 fn oauth_entries_match_in_order_and_misses_consume_nothing() {
@@ -64,8 +64,8 @@ fn http(request: Value) -> HttpEntry {
 fn exec(request: Value) -> ExecEntry {
     ExecEntry {
         request,
-        reply: Ok(ExecReply {
-            code: 0,
+        reply: Ok(ExecReply::Ran {
+            end: ExecEnd::Code(0),
             stdout: "ok".to_owned(),
             stderr: String::new(),
         }),
@@ -270,11 +270,14 @@ fn exec_matches_program_arguments_and_working_directory_in_order() {
     );
     assert_eq!(
         script.exec(request),
-        Ok(ExecReply {
-            code: 0,
-            stdout: "ok".to_owned(),
-            stderr: String::new(),
-        })
+        Ok((
+            0,
+            ExecReply::Ran {
+                end: ExecEnd::Code(0),
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            }
+        ))
     );
 
     let unmet = script.unmet();
@@ -378,11 +381,47 @@ fn an_exec_request_with_the_same_env_matches_its_entry() {
     let script = HostScript::new(vec![], vec![exec(request.clone())], Vec::new());
     assert_eq!(
         script.exec(request),
-        Ok(ExecReply {
-            code: 0,
-            stdout: "ok".to_owned(),
-            stderr: String::new(),
-        })
+        Ok((
+            0,
+            ExecReply::Ran {
+                end: ExecEnd::Code(0),
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            }
+        ))
+    );
+    assert!(script.unmet().is_empty());
+}
+
+#[test]
+fn exec_returns_a_signal_end_with_its_entry_index() {
+    let request = json!({
+        "program": "sh",
+        "args": [],
+        "cwd": "/w",
+    });
+    let script = HostScript::new(
+        vec![],
+        vec![ExecEntry {
+            request: request.clone(),
+            reply: Ok(ExecReply::Ran {
+                end: ExecEnd::Signal(9),
+                stdout: String::new(),
+                stderr: String::new(),
+            }),
+        }],
+        Vec::new(),
+    );
+    assert_eq!(
+        script.exec(request),
+        Ok((
+            0,
+            ExecReply::Ran {
+                end: ExecEnd::Signal(9),
+                stdout: String::new(),
+                stderr: String::new(),
+            }
+        ))
     );
     assert!(script.unmet().is_empty());
 }

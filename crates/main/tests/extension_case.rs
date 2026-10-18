@@ -549,6 +549,48 @@ end })"#,
 }
 
 #[test]
+fn a_scripted_exec_signal_reaches_the_extension_as_a_name() {
+    let setup = setup(
+        r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
+  local reply = host.exec("/case-test-do-not-run", {}, {env = {FIBER_X = "1"}})
+  assert(reply.signal == "SIGKILL" and reply.exit_code == nil)
+  host.log("exec response was used")
+end })"#,
+    );
+    write_tool_fixture(&setup);
+    let kinds = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "extension_exec",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ];
+    let mut value = session(tool_script(), "hi", expected(&kinds));
+    value["until"] = json!({"kind": "extension_log", "nth": 1});
+    value["host"] = json!({"exec": [{
+        "request": {"program": "/case-test-do-not-run", "env": {"FIBER_X": "1"}},
+        "reply": {"signal": 9, "stdout": "", "stderr": ""}
+    }]});
+    assert_success(&run_case(&setup, "exec-signal", &value));
+}
+
+#[test]
 fn the_retry_deadline_is_fixed_before_retry_scheduled_even_with_a_timer() {
     for timer_ms in [2000, 500] {
         let setup = setup(&format!(

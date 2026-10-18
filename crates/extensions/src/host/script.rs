@@ -16,15 +16,31 @@ pub struct HttpEntry {
     pub reply: Result<(u16, Vec<u8>), (ErrorCode, String)>,
 }
 
+/// How a scripted `host.exec` run ended: its exit code or the signal
+/// that ended it, shaped like a real run's (`host.rs` sets only the
+/// present one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecEnd {
+    /// The process exit code.
+    Code(i32),
+    /// The signal number that ended the process.
+    Signal(i32),
+}
+
 /// The result of a scripted `host.exec` run.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecReply {
-    /// The process exit code.
-    pub code: i32,
-    /// Standard output.
-    pub stdout: String,
-    /// Standard error.
-    pub stderr: String,
+pub enum ExecReply {
+    /// A finished run with its end and both streams.
+    Ran {
+        /// How the run ended.
+        end: ExecEnd,
+        /// Standard output.
+        stdout: String,
+        /// Standard error.
+        stderr: String,
+    },
+    /// A hang: the call parks on the case clock until its deadline.
+    Hang,
 }
 
 /// One scripted result for a `host.exec` request.
@@ -153,7 +169,7 @@ impl HostScript {
         entry.reply
     }
 
-    pub(crate) fn exec(&self, request: Value) -> Result<ExecReply, (ErrorCode, String)> {
+    pub(crate) fn exec(&self, request: Value) -> Result<(usize, ExecReply), (ErrorCode, String)> {
         let mut state = lock(&self.state);
         let index = state.exec_next;
         let entry = state.exec.get(index).cloned();
@@ -170,7 +186,7 @@ impl HostScript {
             return Err(no_reply("exec"));
         }
         state.exec_next = index.saturating_add(1);
-        entry.reply
+        entry.reply.map(|reply| (index, reply))
     }
 }
 

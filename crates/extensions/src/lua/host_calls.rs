@@ -16,6 +16,7 @@ use contract::inbox::Delivery;
 use contract::shapes::Process;
 use contract::tool::Cancel;
 
+use crate::host::script::{ExecEnd, ExecReply};
 use crate::host::{self, Reply, Request, exec};
 use crate::oauth::{self, Deliver, Holder};
 
@@ -314,17 +315,37 @@ pub(super) fn admit<'a>(
             });
             if let Some(script) = hub.host_script() {
                 drop(shared);
-                let result = script.exec(request.case_value()).map(|reply| {
-                    let ran = exec::Ran {
-                        exit_code: Some(reply.code),
-                        signal: None,
-                        stdout: reply.stdout.into_bytes(),
-                        stderr: reply.stderr.into_bytes(),
-                        timed_out: false,
-                    };
-                    send_exec(&hub_exec, meta.as_ref(), &ran);
-                    ran
-                });
+                let result = match script.exec(request.case_value()) {
+                    Ok((
+                        _,
+                        ExecReply::Ran {
+                            end,
+                            stdout,
+                            stderr,
+                        },
+                    )) => {
+                        let (exit_code, signal) = match end {
+                            ExecEnd::Code(code) => (Some(code), None),
+                            ExecEnd::Signal(number) => {
+                                (None, Some(support::group::signal_name(number)))
+                            }
+                        };
+                        let ran = exec::Ran {
+                            exit_code,
+                            signal,
+                            stdout: stdout.into_bytes(),
+                            stderr: stderr.into_bytes(),
+                            timed_out: false,
+                        };
+                        send_exec(&hub_exec, meta.as_ref(), &ran);
+                        Ok(ran)
+                    }
+                    Ok((_, ExecReply::Hang)) => Err((
+                        contract::ErrorCode::IoFailed,
+                        "host.exec: a scripted hang needs the hang park".to_owned(),
+                    )),
+                    Err(failed) => Err(failed),
+                };
                 Admitted::Replied(Reply::Exec(result))
             } else {
                 // The stop sender stays in the hub, so the stop reaches the

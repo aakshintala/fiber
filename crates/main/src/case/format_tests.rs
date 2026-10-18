@@ -248,10 +248,17 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
     assert_eq!(parsed.host.exec[0].request["program"], "git");
     assert_eq!(parsed.host.exec[0].request["cwd"], "/workspace");
     assert_eq!(parsed.host.exec[1].request["cwd"], Value::Null);
-    let reply = parsed.host.exec[0].reply.as_ref().unwrap();
+    let Ok(extensions::ExecReply::Ran {
+        end,
+        stdout,
+        stderr,
+    }) = &parsed.host.exec[0].reply
+    else {
+        panic!("code reply parsed as {:?}", parsed.host.exec[0].reply);
+    };
     assert_eq!(
-        (reply.code, reply.stdout.as_str(), reply.stderr.as_str()),
-        (7, "out", "err")
+        (*end, stdout.as_str(), stderr.as_str()),
+        (extensions::ExecEnd::Code(7), "out", "err")
     );
     assert_eq!(
         parsed
@@ -523,4 +530,42 @@ fn unknown_keys_and_zero_nth_are_refused() {
     value["clock"] = json!([{"after": {"kind": "turn_completed", "nth": 0}, "advance_ms": 1}]);
     let error = case_error(&value);
     assert!(error.contains("nth"), "{error}");
+}
+
+#[test]
+fn a_signal_exec_reply_parses_to_a_signal_end() {
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "sh"},
+        "reply": {"signal": 9, "stdout": "", "stderr": ""}}]});
+    let Case::Session(parsed) = parse(&value).expect("signal reply parses") else {
+        panic!("signal reply parsed as a call case");
+    };
+    assert!(
+        matches!(
+            parsed.host.exec[0].reply,
+            Ok(extensions::ExecReply::Ran {
+                end: extensions::ExecEnd::Signal(9),
+                ..
+            })
+        ),
+        "{:?}",
+        parsed.host.exec[0].reply
+    );
+    let mut value = session_case();
+    value["host"] = json!({"exec": [{"request": {"program": "git", "args": ["status"]},
+        "reply": {"code": 7, "stdout": "out", "stderr": "err"}}]});
+    let Case::Session(parsed) = parse(&value).expect("code reply still parses") else {
+        panic!("code reply parsed as a call case");
+    };
+    assert!(
+        matches!(
+            parsed.host.exec[0].reply,
+            Ok(extensions::ExecReply::Ran {
+                end: extensions::ExecEnd::Code(7),
+                ..
+            })
+        ),
+        "{:?}",
+        parsed.host.exec[0].reply
+    );
 }

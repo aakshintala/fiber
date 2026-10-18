@@ -544,18 +544,26 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.reply: expected an object"))?;
     only(
         reply,
-        &["code", "stdout", "stderr"],
+        &["code", "signal", "stdout", "stderr"],
         &format!("{prefix}.reply"),
     )?;
-    let code = signed(reply, "code", &format!("{prefix}.reply"))?;
-    let code = i32::try_from(code)
-        .map_err(|_| format!("{prefix}.reply.code: outside the process exit-code range"))?;
+    let end = if reply.contains_key("signal") {
+        let signal = signed(reply, "signal", &format!("{prefix}.reply"))?;
+        let signal = i32::try_from(signal)
+            .map_err(|_| format!("{prefix}.reply.signal: outside the process signal range"))?;
+        extensions::ExecEnd::Signal(signal)
+    } else {
+        let code = signed(reply, "code", &format!("{prefix}.reply"))?;
+        let code = i32::try_from(code)
+            .map_err(|_| format!("{prefix}.reply.code: outside the process exit-code range"))?;
+        extensions::ExecEnd::Code(code)
+    };
     let stdout = string(reply, "stdout", &format!("{prefix}.reply"))?;
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;
     Ok(extensions::ExecEntry {
         request: Value::Object(request.clone()),
-        reply: Ok(extensions::ExecReply {
-            code,
+        reply: Ok(extensions::ExecReply::Ran {
+            end,
             stdout,
             stderr,
         }),
