@@ -314,9 +314,8 @@ pub(super) fn admit<'a>(
                 cwd: request.cwd.clone(),
             });
             if let Some(script) = hub.host_script() {
-                let reply = script.exec(request.case_value());
                 drop(shared);
-                match reply {
+                match script.exec(request.case_value()) {
                     Ok(ExecReply {
                         end,
                         stdout,
