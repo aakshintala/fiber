@@ -93,21 +93,18 @@ fn a_directory_is_invalid_arguments() {
     file_failure(&repo, "directory", ErrorCode::InvalidArguments);
 }
 
-// debt: macOS coverage of FIFO refusal, upgrade when rustix exposes mkfifo on macOS
-#[cfg(target_os = "linux")]
 #[test]
 fn a_fifo_is_invalid_arguments_and_does_not_block() {
     use std::sync::mpsc;
     use std::time::Duration;
     let repo = Repo::bare();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        repo.root().join("fifo"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::RUSR,
-        0,
-    )
-    .unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(repo.root().join("fifo"))
+            .status()
+            .unwrap()
+            .success()
+    );
     let code = session(&repo);
     let (tx, rx) = mpsc::channel();
     let _reader = std::thread::spawn(move || {
