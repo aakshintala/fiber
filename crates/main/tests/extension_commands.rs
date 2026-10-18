@@ -20,9 +20,14 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, function_call, session_dir};
+use support::{Setup, bounded, function_call, session_dir};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
+
+/// `SYNC` held behind a FIFO read: `run` blocks reading the FIFO before it
+/// reports status, so the test decides when `extension_ui` lands. `{fifo}`
+/// is the FIFO's path, replaced at the use site.
+const SYNC_HELD: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.fs.read(\"{fifo}\") host.status(\"synced \" .. text) end })\n";
 
 /// Every line of the command's action, not just the expected endpoints.
 fn command_action<'a>(
@@ -1111,7 +1116,12 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    setup.lua("worker", SYNC);
+    let fifo = setup.workspace().join("sync-hold.fifo");
+    fakes::fifo(&fifo);
+    setup.lua(
+        "worker",
+        &SYNC_HELD.replace("{fifo}", fifo.to_str().unwrap()),
+    );
     let dir = setup.workspace().join(".agents/skills/sync-now");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -1148,6 +1158,16 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
     assert!(!ran.is_empty());
+    // The held `run` is admitted but blocked reading the FIFO: release it,
+    // then wait for its status before closing, so `close` cannot win the
+    // race against `extension_ui`.
+    bounded(setup.deadline, "release the held command", move || {
+        std::fs::write(&fifo, b"").unwrap();
+    });
+    let status = until(&client, "the held command's status", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
+    });
+    assert_eq!(status.last().unwrap()["payload"]["status"], "synced x");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let _tail = until_close(&client);
     drop(client);
