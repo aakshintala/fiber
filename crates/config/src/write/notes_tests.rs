@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{FileOutcome, NotesSaved, NotesWrite, save_reviewer_notes};
+use super::{FileOutcome, NotesSaved, NotesWrite, same_directory, save_reviewer_notes};
 use crate::home::ProjectKey;
 use crate::reviewer_notes;
 use crate::write::atomic::{Stage, fail_nth};
@@ -480,4 +480,67 @@ fn an_aliased_project_writes_nothing() {
         assert!(!error.to_string().is_empty());
         assert_eq!(setup.bytes(&setup.global()), before);
     });
+}
+
+#[test]
+fn same_directory_by_path_and_by_symlink_is_true() {
+    fakes::within("same directory", Duration::from_secs(10), || {
+        let setup = Setup::new();
+        let real = setup.home.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = setup.home.join("link");
+        symlink(&real, &link).unwrap();
+        // Two spellings of one directory: a plain path, and a symlink to it.
+        assert!(matches!(
+            same_directory(&real.join("config.json"), &real.join("notes.toml")),
+            Ok(true)
+        ));
+        assert!(matches!(
+            same_directory(&real.join("config.json"), &link.join("notes.toml")),
+            Ok(true)
+        ));
+    });
+}
+
+#[test]
+fn same_directory_for_two_sibling_directories_is_false() {
+    fakes::within("sibling directories", Duration::from_secs(10), || {
+        let setup = Setup::new();
+        let first = setup.home.join("first");
+        let second = setup.home.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        // Same device, different inode: only `&&` gives false here.
+        let result = same_directory(&first.join("config.json"), &second.join("config.json"));
+        assert!(matches!(result, Ok(false)), "got {result:?}");
+    });
+}
+
+#[test]
+fn same_directory_with_a_missing_project_directory_is_false() {
+    fakes::within("missing project directory", Duration::from_secs(10), || {
+        let setup = Setup::new();
+        let project = setup.home.join("missing").join("config.json");
+        let result = same_directory(&setup.global(), &project);
+        assert!(matches!(result, Ok(false)), "got {result:?}");
+    });
+}
+
+#[test]
+fn same_directory_with_a_project_parent_under_a_file_is_an_io_error() {
+    fakes::within(
+        "project parent under a file",
+        Duration::from_secs(10),
+        || {
+            let setup = Setup::new();
+            let afile = setup.home.join("afile");
+            fs::write(&afile, "not a directory").unwrap();
+            let project = afile.join("sub").join("notes.toml");
+            let result = same_directory(&setup.global(), &project);
+            assert!(
+                matches!(result, Err(crate::ConfigError::Io { .. })),
+                "got {result:?}"
+            );
+        },
+    );
 }
