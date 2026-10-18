@@ -591,6 +591,84 @@ end })"#,
 }
 
 #[test]
+fn a_hung_scripted_exec_runs_the_callback_to_its_timeout() {
+    let setup = setup(
+        r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
+  local reply = host.exec("/case-test-do-not-run", {}, {env = {FIBER_X = "1"}})
+  host.log("exec returned")
+end })"#,
+    );
+    write_tool_fixture(&setup);
+    let kinds = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "turn_failed",
+        "fiber_exited",
+    ];
+    let mut value = session(tool_script(), "hi", expected(&kinds));
+    value["clock"] =
+        json!([{"after": {"kind": "tool_call_started", "nth": 1}, "advance_ms": 5000}]);
+    value["host"] = json!({"exec": [{
+        "request": {"program": "/case-test-do-not-run", "env": {"FIBER_X": "1"}},
+        "reply": {"hang": true}
+    }]});
+    assert_success(&run_case(&setup, "exec-hang-timeout", &value));
+}
+
+#[test]
+fn a_hung_scripted_exec_with_no_advance_fails_the_advance() {
+    let setup = setup(
+        r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
+  local reply = host.exec("/case-test-do-not-run", {}, {env = {FIBER_X = "1"}})
+  host.log("exec returned")
+end })"#,
+    );
+    write_tool_fixture(&setup);
+    let mut value = session(tool_script(), "hi", expected(SESSION_KINDS));
+    value["clock"] = json!([{"advance_ms": 999999}]);
+    value["host"] = json!({"exec": [{
+        "request": {"program": "/case-test-do-not-run", "env": {"FIBER_X": "1"}},
+        "reply": {"hang": true}
+    }]});
+    assert_failure(
+        &run_case(&setup, "exec-hang-no-advance", &value),
+        "clock advance[1] was not reached",
+    );
+}
+
+#[test]
+fn a_hung_scripted_exec_still_parked_at_close_names_the_hang() {
+    let setup = setup(
+        r#"fiber.hook("after_tool", { timeout = 5000, on_failure = "blocking", run = function()
+  host.log("about to hang")
+  local reply = host.exec("/case-test-do-not-run", {}, {env = {FIBER_X = "1"}})
+  host.log("exec returned")
+end })"#,
+    );
+    write_tool_fixture(&setup);
+    let mut value = session(tool_script(), "hi", expected(SESSION_KINDS));
+    value["until"] = json!({"kind": "extension_log", "nth": 1});
+    value["host"] = json!({"exec": [{
+        "request": {"program": "/case-test-do-not-run", "env": {"FIBER_X": "1"}},
+        "reply": {"hang": true}
+    }]});
+    assert_failure(
+        &run_case(&setup, "exec-hang-at-close", &value),
+        "unmet host call: host.exec[1] hung",
+    );
+}
+
+#[test]
 fn the_retry_deadline_is_fixed_before_retry_scheduled_even_with_a_timer() {
     for timer_ms in [2000, 500] {
         let setup = setup(&format!(
