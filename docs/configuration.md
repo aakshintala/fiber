@@ -522,7 +522,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
 `fiber` is the lowest Fiber version it runs on. `api` is the extension API's
 major version it was written for; Fiber loads it only when that is Fiber's own
 (`docs/extensions.md`, "The extension API version"). `process` is present only for
-a process extension, and `exit_timeout_ms` has no default. A Lua extension's
+a process extension, and `exit_timeout_ms` has no default. Its `program` follows the same rule as a Lua `host.exec` program: a path containing `/` that is not absolute resolves against the package directory and must stay inside it, a bare name resolves on `PATH`, and an absolute path is used as written. A Lua extension's
 entry script is `init.lua` at the top of its directory; its provider's Lua is
 `providers/<name>.lua`. Each `providers` key must be one filename, not a path.
 `memory_mib` raises a
