@@ -23,7 +23,7 @@ const DOC: &str = concat!(
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
-    "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| `paging` jig, open pass and first frame | 616 ms | Linux x86_64 | picked | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |\n",
     "| `paging` jig, slowest frame that loaded pages | 3 ms | Linux x86_64 | picked | 8 ms | 5 ms | 10 ms | 16 % | 4 % |\n",
@@ -64,6 +64,7 @@ fn head() -> Value {
             "terminal_idle_switches": [quiet_run(), quiet_run(), quiet_run(), quiet_run(), quiet_run()],
             "session_threads": [threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7), threads_run(5, 7)],
             "session_start_ms": [6.1, 5.9, 6.0, 6.3, 6.0],
+            "session_list_ms": [3.1, 2.9, 3.0, 3.3, 3.0],
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
             "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
             "terminal_attach_ms": attach_metric(),
@@ -148,6 +149,7 @@ fn base() -> Value {
         "schema": 1, "runs": 5, "idle_secs": 10,
         "metrics": {
             "session_start_ms": [0.6, 0.6, 0.6, 0.6, 0.6],
+            "session_list_ms": [3.0, 3.0, 3.0, 3.0, 3.0],
             "terminal_first_frame_ms": [1.8, 1.8, 1.8, 1.8, 1.8],
             "sessions_list_ms": [11.5, 11.5, 11.5, 11.5, 11.5],
             "terminal_attach_ms": attach_base_metric(),
@@ -263,9 +265,10 @@ fn rows_not_measured_appear_with_their_ticket() {
     let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
     let not_measured = comment.split("### Not measured").nth(1).unwrap();
     assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        !not_measured.contains("`session_list`, waiting"),
         "{not_measured}"
     );
+    assert!(row(&comment, "`session_list`, waiting").contains("3.0 ms"));
     for budget in [
         "Terminal to its first frame, attaching",
         "Listing 1,000 sessions in one project, warm cache",
@@ -510,6 +513,7 @@ fn a_missing_metric_fails() {
         "session_threads",
         "terminal_first_frame_ms",
         "sessions_list_ms",
+        "session_list_ms",
         "terminal_attach_ms",
     ] {
         let mut results = head();
@@ -715,9 +719,10 @@ fn every_gated_row_but_one_is_measured() {
         assert!(row(&comment, budget).ends_with("| pass |"), "{comment}");
     }
     assert!(
-        not_measured.contains("`session_list`, waiting") && not_measured.contains("#581"),
+        !not_measured.contains("`session_list`, waiting"),
         "{comment}"
     );
+    assert!(row(&comment, "`session_list`, waiting").contains("3.0 ms"));
     for budget in [
         "Terminal to its first frame, attaching",
         "Listing 1,000 sessions in one project, warm cache",
@@ -1647,6 +1652,7 @@ fn a_pull_request_file_with_three_timing_runs_passes() {
         three,
         &[
             ("session_start_ms", 3),
+            ("session_list_ms", 3),
             ("terminal_first_frame_ms", 3),
             ("sessions_list_ms", 3),
             ("wheel_paging_ms", 3),
@@ -1655,6 +1661,7 @@ fn a_pull_request_file_with_three_timing_runs_passes() {
     );
     // Three medians no five-run median of the fixture equals.
     three = with_metric(three, "session_start_ms", json!([9.0, 9.4, 9.2]));
+    three = with_metric(three, "session_list_ms", json!([3.0, 3.1, 3.2]));
     three = with_metric(three, "terminal_first_frame_ms", json!([19.0, 19.4, 19.2]));
     three = with_metric(three, "sessions_list_ms", json!([13.0, 13.4, 13.2]));
     three = with_metric(three, "wheel_paging_ms", json!([4.9, 5.3, 5.1]));
@@ -1704,6 +1711,7 @@ fn a_file_without_metric_runs_expects_runs_for_every_metric() {
         "terminal_idle_switches",
         "session_threads",
         "session_start_ms",
+        "session_list_ms",
         "terminal_first_frame_ms",
         "sessions_list_ms",
         "terminal_attach_rss_kib",
@@ -2734,9 +2742,9 @@ fn both_paging_ratio_rows_are_measured_and_scale_one_stays() {
         let line = row(&out.comment, budget);
         assert!(line.ends_with("| pass |"), "{line}");
     }
-    // The unrelated tickets stay, and all six scale-1 paging metrics
-    // still judge their rows.
-    assert!(not_measured.contains("#581"), "{not_measured}");
+    // Session listing and all six scale-1 paging metrics judge their rows.
+    assert!(!not_measured.contains("#581"), "{not_measured}");
+    assert!(row(&out.comment, "`session_list`, waiting").contains("3.0 ms"));
     assert!(!not_measured.contains("#2210"), "{not_measured}");
     for budget in [
         "`paging` jig, its session at scale 1 and 160 by 48",
