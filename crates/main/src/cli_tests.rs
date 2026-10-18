@@ -1410,20 +1410,34 @@ fn a_dash_c_without_an_equals_is_a_usage_sentence() {
 
 #[test]
 fn resume_takes_an_optional_id() {
-    let Invocation::Run(Some(Commands::Resume { id, credential }), _) =
-        parse_from(["fiber", "resume"])
+    let Invocation::Run(
+        Some(Commands::Resume {
+            id,
+            credential,
+            hub,
+        }),
+        _,
+    ) = parse_from(["fiber", "resume"])
     else {
         panic!("bare resume");
     };
     assert_eq!(id, None);
     assert_eq!(credential, None);
-    let Invocation::Run(Some(Commands::Resume { id, credential }), _) =
-        parse_from(["fiber", "resume", "s_12"])
+    assert_eq!(hub, None);
+    let Invocation::Run(
+        Some(Commands::Resume {
+            id,
+            credential,
+            hub,
+        }),
+        _,
+    ) = parse_from(["fiber", "resume", "s_12"])
     else {
         panic!("resume with an id");
     };
     assert_eq!(id.as_deref(), Some("s_12"));
     assert_eq!(credential, None);
+    assert_eq!(hub, None);
     let help = super::render_help(&["resume"]).unwrap();
     assert!(
         help.contains("Open a session in the terminal, or home at the session list"),
@@ -1439,11 +1453,20 @@ fn resume_credential_rides_with_an_id_in_either_order() {
         vec!["fiber", "resume", "--credential", "work", "s_12"],
         vec!["fiber", "resume", "s_12", "--credential=work"],
     ] {
-        let Invocation::Run(Some(Commands::Resume { id, credential }), _) = parse_from(argv) else {
+        let Invocation::Run(
+            Some(Commands::Resume {
+                id,
+                credential,
+                hub,
+            }),
+            _,
+        ) = parse_from(argv)
+        else {
             panic!("resume with a credential");
         };
         assert_eq!(id.as_deref(), Some("s_12"));
         assert_eq!(credential.as_deref(), Some("work"));
+        assert_eq!(hub, None);
     }
 }
 
@@ -1460,6 +1483,81 @@ fn resume_credential_without_an_id_is_a_usage_error() {
 fn resume_help_names_the_credential_flag() {
     let help = super::render_help(&["resume"]).unwrap();
     assert!(help.contains("--credential <label>"), "{help}");
+}
+
+#[test]
+fn hub_names_the_listed_hub_on_bare_fiber_and_resume() {
+    let Invocation::Run(None, top) = parse_from(["fiber", "--hub", "box"]) else {
+        panic!("bare fiber with --hub");
+    };
+    assert_eq!(top.hub.as_deref(), Some("box"));
+    assert_eq!(top.model, None);
+    assert!(top.overrides.is_empty());
+    let Invocation::Run(None, top) =
+        parse_from(["fiber", "--hub=box", "-c", "a=1", "--model", "m"])
+    else {
+        panic!("bare fiber with --hub, -c and --model");
+    };
+    assert_eq!(top.hub.as_deref(), Some("box"));
+    assert_eq!(top.model.as_deref(), Some("m"));
+    assert_eq!(top.overrides, ["a=1"]);
+    let Invocation::Run(None, top) = parse_from(["fiber"]) else {
+        panic!("bare fiber");
+    };
+    assert_eq!(top.hub, None);
+    for (argv, id) in [
+        (
+            vec!["fiber", "resume", "--hub", "box", "s_12"],
+            Some("s_12"),
+        ),
+        (vec!["fiber", "resume", "--hub", "box"], None),
+        (
+            vec![
+                "fiber",
+                "resume",
+                "s_12",
+                "--credential",
+                "work",
+                "--hub",
+                "box",
+            ],
+            Some("s_12"),
+        ),
+    ] {
+        let Invocation::Run(
+            Some(Commands::Resume {
+                id: actual,
+                credential,
+                hub,
+            }),
+            _,
+        ) = parse_from(argv.clone())
+        else {
+            panic!("resume with --hub: {argv:?}");
+        };
+        assert_eq!(actual.as_deref(), id, "{argv:?}");
+        assert_eq!(hub.as_deref(), Some("box"), "{argv:?}");
+        if id.is_some() && argv.contains(&"--credential") {
+            assert_eq!(credential.as_deref(), Some("work"), "{argv:?}");
+        } else {
+            assert_eq!(credential, None, "{argv:?}");
+        }
+    }
+    let help = super::render_help(&["resume"]).unwrap();
+    assert!(help.contains("--hub <name>"), "{help}");
+}
+
+#[test]
+fn hub_with_a_subcommand_or_without_an_id_is_a_usage_sentence() {
+    for args in [
+        &["fiber", "--hub", "box", "sessions"][..],
+        &["fiber", "--hub", "box", "resume", "s_12"],
+        &["fiber", "resume", "--hub", "box", "--credential", "work"],
+    ] {
+        let said = sentence(args);
+        assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+        assert_eq!(said.lines().count(), 1, "{said}");
+    }
 }
 
 #[test]

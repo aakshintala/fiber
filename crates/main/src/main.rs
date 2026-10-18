@@ -121,13 +121,16 @@ fn run() -> i32 {
             print_help(command.as_slice())
         }
         // `fiber` with no arguments opens the terminal: this tty as a
-        // client of the hub, starting one when none runs.
-        cli::Invocation::Run(None, top) => {
-            terminal(fiber, tui::OpenAt::Home, top.model, top.overrides)
-        }
-        cli::Invocation::Run(Some(cli::Commands::Resume { id, credential }), _) => {
-            open::resume(id, credential, fiber)
-        }
+        // client of one hub, its own or a listed one.
+        cli::Invocation::Run(None, top) => open::home(fiber, top.hub, top.model, top.overrides),
+        cli::Invocation::Run(
+            Some(cli::Commands::Resume {
+                id,
+                credential,
+                hub,
+            }),
+            _,
+        ) => open::resume(id, credential, hub, fiber),
         cli::Invocation::Run(Some(cli::Commands::Continue), _) => open::continue_latest(fiber),
         cli::Invocation::Usage {
             ask: true,
@@ -719,14 +722,19 @@ fn terminal_guards(
         .map(|(cancel, watcher)| (reads, cancel, watcher))
 }
 
-/// `fiber` with no arguments: the terminal on this tty, a client of the hub
-/// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
-/// naming `fiber ask`. The hub it starts listens on its local socket only
-/// and is never waited on. `model` and `overrides` are the run's top-level
-/// flags, forwarded into the launch description; a resume or a continue
-/// carries none.
+/// `fiber` with no arguments: the terminal on this tty, a client of the
+/// hub `target` names (`docs/invocation.md`, "Two doors"). Without a tty
+/// it is a usage error naming `fiber ask`. The local hub starts when none
+/// runs; a listed one never does. `model` and `overrides` are the run's
+/// top-level flags, forwarded into the launch description; a resume or a
+/// continue carries none.
+#[allow(
+    clippy::print_stderr,
+    reason = "prints client configuration notices (docs/code-quality.md, \"Lints\")"
+)]
 fn terminal(
     fiber: Result<PathBuf, String>,
+    target: doors::hub::Target,
     open_at: tui::OpenAt,
     model: Option<String>,
     overrides: Vec<String>,
@@ -761,6 +769,14 @@ fn terminal(
         Ok(config) => config,
         Err(e) => return fail(e),
     };
+    // A listed hub owns no startup notice: the client's own ignored keys
+    // print once to stderr before the terminal takes the screen, while a
+    // local launch carries them as startup notices instead.
+    if target.is_listed() {
+        for line in open::notice_lines(config.notices()) {
+            eprintln!("{line}");
+        }
+    }
     let tty = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(tty) => std::fs::File::from(tty),
         Err(e) => return fail(failed(ErrorCode::IoFailed, format!("the terminal: {e}"))),
@@ -791,15 +807,6 @@ fn terminal(
     // connect closure moves it, as is the diagnostic writer's.
     let launch_home = home.clone();
     let diag_home = home.clone();
-    let connect: tui::Connect = Box::new(move || {
-        connect_hub(
-            &home,
-            &doors::hub::Target::Local,
-            &fiber,
-            hub_clock.as_ref(),
-        )
-        .map_err(io::Error::other)
-    });
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(
         workspace,
@@ -810,6 +817,12 @@ fn terminal(
         model,
         overrides,
     );
+    if let doors::hub::Target::Listed { name, .. } = &target {
+        launch = launch::remote(launch, name);
+    }
+    let connect: tui::Connect = Box::new(move || {
+        connect_hub(&home, &target, &fiber, hub_clock.as_ref()).map_err(io::Error::other)
+    });
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;

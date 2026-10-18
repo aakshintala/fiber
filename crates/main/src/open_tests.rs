@@ -4,7 +4,8 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use super::{in_project, select_latest, tty_refusal};
+use super::{hub_entries, in_project, notice_lines, route, select_latest, target_in, tty_refusal};
+use contract::SessionId;
 
 /// The refusal sentence, as `fiber` without a tty prints it.
 const SENTENCE: &str =
@@ -82,4 +83,198 @@ fn in_project_runs_the_identity_once_per_distinct_workspace() {
         *calls.borrow(),
         vec![PathBuf::from("/w"), PathBuf::from("/x")]
     );
+}
+
+/// A Fiber home whose global `config.json` sets `hub.default` and the
+/// `hubs` entries `hubs` names, beside a launch directory: the shape
+/// `target_in` reads, without process state.
+fn hub_home(default: Option<&str>, hubs: &[(&str, &str)]) -> (fakes::TempDir, PathBuf) {
+    let dir = fakes::TempDir::new("fiber-open-target");
+    let mut global = serde_json::Map::new();
+    if let Some(default) = default {
+        global.insert("hub".to_owned(), serde_json::json!({"default": default}));
+    }
+    if !hubs.is_empty() {
+        let entries: serde_json::Map<String, serde_json::Value> = hubs
+            .iter()
+            .map(|(name, address)| ((*name).to_owned(), serde_json::json!({"address": address})))
+            .collect();
+        global.insert("hubs".to_owned(), serde_json::Value::Object(entries));
+    }
+    std::fs::write(
+        dir.path().join("config.json"),
+        serde_json::Value::Object(global).to_string(),
+    )
+    .unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    (dir, workspace)
+}
+
+/// The hub `target` names: `None` for the local hub.
+fn listed_name(target: &doors::hub::Target) -> Option<&str> {
+    match target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name),
+    }
+}
+
+/// The configuration `target_in` loads for `home` and `workspace`, so
+/// the notice test reads the same file the target test does.
+fn loaded_config(home: &Path, workspace: &Path) -> config::Config {
+    let project = config::ProjectKey::new(log::project_key(&doors::project(workspace))).unwrap();
+    config::Config::load(config::Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn hub_entries_keeps_only_hub_and_hubs_keys() {
+    assert_eq!(
+        hub_entries(vec![
+            "hub.default=box".to_owned(),
+            "model=x".to_owned(),
+            "hubs.\"box\".address=ws://h".to_owned(),
+            "hubbub=1".to_owned(),
+            "hub_x=1".to_owned(),
+            "a.hub=1".to_owned(),
+            "hub".to_owned(),
+        ]),
+        vec![
+            "hub.default=box".to_owned(),
+            "hubs.\"box\".address=ws://h".to_owned(),
+        ]
+    );
+    // A quoted segment may hold a dot, and a value may hold an `=`:
+    // the whole entry rides. A key the path parser refuses rides
+    // nowhere, as does an entry with no `=`.
+    assert_eq!(
+        hub_entries(vec![
+            "hubs.\"a.b\".address=unix:/x".to_owned(),
+            "hub.default=a=b".to_owned(),
+            "hub..default=x".to_owned(),
+            "hubs.\"unclosed=x".to_owned(),
+        ]),
+        vec![
+            "hubs.\"a.b\".address=unix:/x".to_owned(),
+            "hub.default=a=b".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn target_reads_the_flag_else_the_default_else_the_local_hub() {
+    let (dir, workspace) = hub_home(
+        Some("a"),
+        &[
+            ("a", "unix:/tmp/a"),
+            ("box", "unix:/tmp/box"),
+            ("c", "unix:/tmp/c"),
+        ],
+    );
+    let home = dir.path();
+    assert_eq!(
+        listed_name(&target_in(home, &workspace, None, Vec::new()).unwrap()),
+        Some("a")
+    );
+    assert_eq!(
+        listed_name(
+            &target_in(home, &workspace, None, vec!["hub.default=box".to_owned()]).unwrap()
+        ),
+        Some("box")
+    );
+    assert_eq!(
+        listed_name(
+            &target_in(
+                home,
+                &workspace,
+                Some("c"),
+                vec!["hub.default=box".to_owned()]
+            )
+            .unwrap()
+        ),
+        Some("c")
+    );
+}
+
+#[test]
+fn target_without_a_flag_or_default_is_the_local_hub() {
+    let (dir, workspace) = hub_home(None, &[("a", "unix:/tmp/a")]);
+    assert!(matches!(
+        target_in(dir.path(), &workspace, None, Vec::new()).unwrap(),
+        doors::hub::Target::Local
+    ));
+    // A layer with no hub entry loads with no overrides and does not
+    // fail: the unrelated key stays with the terminal run.
+    assert!(matches!(
+        target_in(dir.path(), &workspace, None, vec!["model=nope".to_owned()]).unwrap(),
+        doors::hub::Target::Local
+    ));
+}
+
+#[test]
+fn target_with_an_unknown_hub_is_a_usage_error() {
+    let (dir, workspace) = hub_home(Some("a"), &[("a", "unix:/tmp/a")]);
+    let error = target_in(dir.path(), &workspace, Some("nope"), Vec::new()).unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::Usage);
+}
+
+#[test]
+fn a_repository_hub_default_is_ignored_with_a_notice() {
+    let (dir, workspace) = hub_home(Some("a"), &[("a", "unix:/tmp/a"), ("b", "unix:/tmp/b")]);
+    std::fs::create_dir_all(workspace.join(".fiber")).unwrap();
+    std::fs::write(
+        workspace.join(".fiber/config.json"),
+        r#"{"hub": {"default": "b"}}"#,
+    )
+    .unwrap();
+    // The repository's person-only key cannot redirect the target.
+    assert_eq!(
+        listed_name(&target_in(dir.path(), &workspace, None, Vec::new()).unwrap()),
+        Some("a")
+    );
+    let lines = notice_lines(loaded_config(dir.path(), &workspace).notices());
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("fiber: "), "{}", lines[0]);
+    assert!(lines[0].contains("ignored `hub.default`"), "{}", lines[0]);
+    assert!(lines[0].contains(".fiber/config.json"), "{}", lines[0]);
+}
+
+#[test]
+fn notice_lines_is_empty_without_an_ignored_key() {
+    let (dir, workspace) = hub_home(Some("a"), &[("a", "unix:/tmp/a")]);
+    assert!(notice_lines(loaded_config(dir.path(), &workspace).notices()).is_empty());
+}
+
+#[test]
+fn route_runs_only_the_taken_side() {
+    let listed_target = doors::hub::Target::Listed {
+        name: "box".to_owned(),
+        address: doors::hub::Address::parse("unix:/x").unwrap(),
+        token: None,
+    };
+    let mut local_calls = 0;
+    let mut listed_calls = 0;
+    let mut listed_name_seen: Option<String> = None;
+    let local_target = doors::hub::Target::Local;
+    let mut local = || {
+        local_calls += 1;
+        Ok::<_, contract::shapes::Failure>(SessionId("s_1".to_owned()))
+    };
+    let mut listed = |name: &str| {
+        listed_calls += 1;
+        listed_name_seen = Some(name.to_owned());
+        Ok::<_, contract::shapes::Failure>(SessionId("s_2".to_owned()))
+    };
+    let first = route(&local_target, &mut local, &mut listed).unwrap();
+    let second = route(&listed_target, &mut local, &mut listed).unwrap();
+    drop((local, listed));
+    assert_eq!(first.0, "s_1");
+    assert_eq!(second.0, "s_2");
+    assert_eq!((local_calls, listed_calls), (1, 1));
+    assert_eq!(listed_name_seen.as_deref(), Some("box"));
 }

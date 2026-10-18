@@ -19,7 +19,7 @@ use std::time::Duration;
 use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
 
-use super::{list, run};
+use super::{list, resolve_listed, run};
 use fakes::Deadline;
 
 /// One named deadline per wait on the fake hub.
@@ -492,4 +492,133 @@ fn list_exits_zero_on_success_and_fail_code_on_hub_failure() {
             output.status
         );
     }
+}
+
+/// Resolves `selector` on hub `box` against `result` answered to one
+/// `sessions` command: the outcome and the command the hub read, the
+/// outcome received under the hub deadline.
+#[track_caller]
+fn resolving(
+    selector: &str,
+    result: Value,
+) -> (
+    Result<contract::SessionId, contract::shapes::Failure>,
+    Value,
+) {
+    let selector = selector.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&[accepted(result)]);
+        let resolved = resolve_listed(&selector, "box", &mut || hub.connect());
+        let sent = hub.sent();
+        tx.send((resolved, sent)).unwrap_or(());
+    });
+    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+}
+
+#[test]
+fn an_exact_id_wins_over_a_longer_id_it_prefixes() {
+    let (resolved, sent) = resolving(
+        "s_1",
+        json!({"live": [live("s_1", idle("a")), live("s_10", idle("b"))], "exited": []}),
+    );
+    assert_eq!(resolved.unwrap().0, "s_1");
+    assert_eq!(
+        sent,
+        json!({"id": "c_sessions", "command": "sessions", "args": {}})
+    );
+}
+
+#[test]
+fn a_unique_prefix_resolves_live_or_exited() {
+    for (selector, expected) in [("s_abc", "s_abcdef"), ("s_ex", "s_exit1")] {
+        let (resolved, _) = resolving(
+            selector,
+            json!({
+                "live": [live("s_abcdef", idle("a"))],
+                "exited": [exited("s_exit1", "n", "exited", None)],
+            }),
+        );
+        assert_eq!(resolved.unwrap().0, expected, "{selector}");
+    }
+}
+
+#[test]
+fn a_prefix_matching_two_rows_is_a_usage_error_naming_both_sorted() {
+    for result in [
+        json!({"live": [live("s_b", idle("a")), live("s_a", idle("b"))], "exited": []}),
+        json!({
+            "live": [live("s_b", idle("a"))],
+            "exited": [exited("s_a", "n", "exited", None)],
+        }),
+    ] {
+        let (resolved, _) = resolving("s_", result);
+        let failure = resolved.unwrap_err();
+        assert_eq!(failure.code, ErrorCode::Usage);
+        assert_eq!(
+            failure.message,
+            "\"s_\" matches more than one session: s_a, s_b"
+        );
+    }
+}
+
+#[test]
+fn no_match_is_session_not_found_naming_the_hub() {
+    let (resolved, _) = resolving("s_nope", empty());
+    let failure = resolved.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::SessionNotFound);
+    assert_eq!(
+        failure.message,
+        "no session matches \"s_nope\" on hub `box`"
+    );
+}
+
+#[test]
+fn an_empty_selector_matches_nothing_without_connecting() {
+    let mut connect = || -> Result<doors::hub::Hub, doors::Error> {
+        panic!("an empty selector must not connect")
+    };
+    let failure = resolve_listed("", "box", &mut connect).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::SessionNotFound);
+    assert_eq!(failure.message, "no session matches \"\" on hub `box`");
+}
+
+#[test]
+fn a_rejection_and_an_early_end_are_hub_failures() {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&[hub_line(
+            "command_rejected",
+            json!({"command_id": "c_sessions", "code": "invalid_arguments", "message": "no"}),
+        )]);
+        let resolved = resolve_listed("s_1", "box", &mut || hub.connect());
+        tx.send(resolved).unwrap_or(());
+    });
+    let resolved: Result<contract::SessionId, contract::shapes::Failure> =
+        Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
+    let failure = resolved.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::InvalidArguments);
+    assert_eq!(failure.message, "no");
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = FakeHub::new(&[]);
+        let resolved = resolve_listed("s_1", "box", &mut || hub.connect());
+        tx.send(resolved).unwrap_or(());
+    });
+    let resolved: Result<contract::SessionId, contract::shapes::Failure> =
+        Deadline::after(HUB_DEADLINE).recv(&rx).unwrap();
+    let failure = resolved.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert!(
+        failure.message.contains("`sessions`"),
+        "{}",
+        failure.message
+    );
+
+    let failure = resolve_listed("s_1", "box", &mut || {
+        Err(doors::Error::Local(io::Error::other("hub down")))
+    })
+    .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
 }
