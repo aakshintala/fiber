@@ -287,6 +287,11 @@ pub(crate) struct Pages {
     /// piece above, and the first piece starts at the page's first row.
     /// Counting sets it with the rows, so it keeps their width.
     row_seqs: Vec<Vec<(usize, Seq)>>,
+    /// A held landing's top, its `seq` and offset as [`Pages::seq_row`]
+    /// takes them, kept while a dropped page waits to be counted at the
+    /// width: its rows and pieces keep the old width until it loads, so
+    /// each load finds the top again.
+    anchor: Option<(Seq, usize)>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
@@ -334,6 +339,7 @@ impl Pages {
             table: vec![None],
             focus: vec![Vec::new()],
             row_seqs: Vec::new(),
+            anchor: None,
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
@@ -1438,6 +1444,25 @@ impl Pages {
                 .map_or(0, |(start, _)| *start),
         };
         Some(self.index.start(at).saturating_add(within))
+    }
+
+    /// Holds a landing's top at `seq` and `offset` until no dropped page
+    /// waits to be counted at the width: [`Pages::anchored_row`] finds
+    /// it again after each load.
+    pub(crate) fn hold_anchor(&mut self, seq: Seq, offset: usize) {
+        self.anchor = Some((seq, offset));
+    }
+
+    /// The held anchor's row as the pages count now, as
+    /// [`Pages::seq_row`] finds it; `None` with no anchor held. The
+    /// anchor lets go once every stale page is counted again or failed,
+    /// since then its row no longer moves.
+    pub(crate) fn anchored_row(&mut self) -> Option<usize> {
+        let (seq, offset) = self.anchor?;
+        if self.stale.iter().all(|at| self.failed.contains(at)) {
+            self.anchor = None;
+        }
+        self.seq_row(seq, offset)
     }
 
     /// The page index.

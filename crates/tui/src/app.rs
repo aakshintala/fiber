@@ -745,7 +745,9 @@ impl App {
     /// and its offset among that line's rows are read before the swap,
     /// and after the unfreeze applies any deferred width the top is the
     /// fold's row with that `seq`, at that offset kept within its rows,
-    /// or the end when the fold lacks the `seq`.
+    /// or the end when the fold lacks the `seq`. A dropped page keeps
+    /// the old width's rows until it loads, so the pages hold the anchor
+    /// and each load finds the top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
         self.attached_screen().pages().carry_opens(&mut fold);
         let focus = self.focus.take();
@@ -761,7 +763,9 @@ impl App {
         std::mem::swap(self.attached_screen_mut().pages_mut(), &mut fold);
         self.end_overlay();
         if let Some((seq, offset)) = anchor {
-            match self.attached_screen().pages().seq_row(seq, offset) {
+            let pages = self.attached_screen_mut().pages_mut();
+            pages.hold_anchor(seq, offset);
+            match pages.anchored_row() {
                 Some(row) => self.jump(row),
                 None => self.attached_screen_mut().follow(),
             }
@@ -1258,6 +1262,10 @@ impl App {
     /// Folds a fetched range's durable lines into their pages.
     pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
         self.screen.pages_mut().load(&lines);
+        // A held landing's top, found again at the width the load counted.
+        if let Some(row) = self.screen.pages_mut().anchored_row() {
+            self.screen.jump(row);
+        }
         self.settle();
     }
 

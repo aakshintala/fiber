@@ -629,6 +629,100 @@ fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
     assert!(first.contains("reply 13"), "{shown}");
 }
 
+/// A held landing with a resize deferred while frozen keeps the top on
+/// the same `seq` when the fold dropped the top's page: the unfreeze
+/// only marks a dropped page stale, so its rows and pieces keep the old
+/// width until it loads. The anchor holds through the loads and applies
+/// again once they count the pages at the new width.
+#[test]
+fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
+    // As above: three pages, the second from turn 11, whose long
+    // replies sit above the top on turn 13's reply.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    assert_eq!(app.attached_screen().top(), Some(top));
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    // The fold keeps only its last row's page: the top's page drops.
+    let total = fold.index().total();
+    fold.trim(total - 1, 1);
+    let page = fold
+        .index()
+        .page_of(contract::Seq(66))
+        .unwrap_or_else(|| panic!("a page holds turn 11"));
+    let range = fold
+        .index()
+        .pages()
+        .get(page)
+        .map(|page| page.first_seq..=page.last_seq)
+        .unwrap_or_else(|| panic!("the top's page"));
+    assert!(
+        fold.needs(0, total).contains(&range),
+        "the fold dropped the top's page"
+    );
+    app.land(fold, true);
+    assert!(app.attached_screen().pages().wrap_width() < 79);
+    // The frame's loads, as the loop pages them in.
+    let log = envelopes(&lines);
+    for _ in 0..8 {
+        let Some(range) = app.needs().into_iter().next() else {
+            break;
+        };
+        let held: Vec<contract::Envelope> = log
+            .iter()
+            .filter(|envelope| envelope.seq.is_some_and(|seq| range.contains(&seq)))
+            .cloned()
+            .collect();
+        app.load(held);
+    }
+    assert!(app.needs().is_empty(), "every page loaded");
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let conversation = app.conversation_area();
+    let first: String = (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect();
+    assert!(first.contains("reply 13"), "{shown}");
+}
+
 #[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);
