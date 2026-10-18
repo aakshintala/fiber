@@ -1025,7 +1025,10 @@ fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
                 .iter()
                 .filter_map(|input| match input {
                     Input::ToolCall { call, .. } => Some(call.name.clone()),
-                    _ => None,
+                    Input::User { .. }
+                    | Input::Assistant { .. }
+                    | Input::Reasoning { .. }
+                    | Input::ToolResult { .. } => None,
                 })
                 .collect::<Vec<_>>()
         };
@@ -1059,12 +1062,11 @@ fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
         &Deadline::after(DEADLINE),
     );
     world.send(Delivery::Cancelled);
-    assert_eq!(
-        Deadline::after(DEADLINE)
+    assert!(
+        !Deadline::after(DEADLINE)
             .recv(&finished)
             .expect("the offer wait ended")
-            .unwrap(),
-        false
+            .unwrap()
     );
 }
 
