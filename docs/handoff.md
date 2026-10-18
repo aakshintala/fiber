@@ -122,7 +122,10 @@ In order:
    loaded skill whose file is gone at the handoff is not sent again, and the
    new opening message's listing leaves it out. A loaded skill that cannot be
    read at the handoff, for any other reason the `skill` tool would refuse it,
-   is left out the same way, with a `notice` naming it and the reason.
+   is left out the same way, with a `notice` naming it and the reason. The
+   standing deny keyed on the tool name is the exception: a resend is not a
+   call of any tool, so that rule cannot match at a resend; the credential
+   deny and the fail-closed answer for unreadable standing rules still apply.
 
 When a tool set `control.handoff`, the other calls in that step and their
 results follow the note verbatim, because the model had not seen them. They go

@@ -1435,7 +1435,7 @@ fn a_skill_load_with_hosts_reaches_the_seed_and_the_known_hosts() {
         ],
     );
     let folded = resumed(&sessions.join(A)).unwrap();
-    // The 2609 guard would swallow this line; the load branch runs first.
+    // A completion carrying both a skill load and surfaced hosts updates both folded states.
     assert_eq!(folded.seed.skills, [alpha()]);
     assert!(
         folded

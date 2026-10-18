@@ -119,6 +119,43 @@ fn denied_skill_kinds() -> Vec<&'static str> {
     ]
 }
 
+/// The event kinds of the resumed turn that hands off after one read call
+/// and refuses the credential-linked resend: the handoff completes, no
+/// `skills_resent` line is written, one notice names the skill, then the
+/// answer. A resume writes no `session_started`.
+fn resent_refused_kinds() -> Vec<&'static str> {
+    vec![
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "handoff_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "handoff_completed",
+        "opening_message",
+        "notice",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+}
+
 /// The event kinds of a run whose model loads a skill, reads its file,
 /// writes it, loads it again, then answers `Hello.`: four fast-path
 /// calls, each in its own step, with no `permission_` line.
@@ -453,6 +490,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
         ],
     );
     let id = first[0]["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(kinds(&first), skill_kinds());
 
     // The skill becomes a link into the credentials directory.
     let target = setup.home().join("credentials/sec");
@@ -498,6 +536,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
         .collect();
 
+    assert_eq!(kinds(&lines), resent_refused_kinds());
     let done = line(&lines, "handoff_completed");
     assert_eq!(done["payload"]["outcome"], "completed");
     // The resend runs no tool: nothing is read, started or sent again.

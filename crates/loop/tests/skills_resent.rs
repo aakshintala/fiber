@@ -27,9 +27,107 @@ use fakes::{Deadline, Scripted, ScriptedProvider};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, Session, StartHooks, calls_reply, delivery, handoff, kinds, of_kind, start_added,
-    start_empty,
+    DEADLINE, ENDED, OPENING, REPLY, STEP, Session, StartHooks, assert_kinds, calls_reply,
+    delivery, handoff, kinds, of_kind, start_added, start_empty,
 };
+
+/// One reply calling one skill: streamed arguments, requests, then runs.
+const SKILL1: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+];
+/// One reply calling two skills.
+const SKILL2: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_completed",
+];
+/// One reply calling three skills.
+const SKILL3: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_arguments_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_completed",
+    "tool_call_completed",
+];
+/// A hosted provider-run record carrying a skill load: the provider ran
+/// the call, so the request and completion come without streamed arguments.
+const HOSTED_SKILL: &[&str] = &[
+    "assistant_message_started",
+    "tool_call_requested",
+    "tool_call_started",
+    "tool_call_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+/// A handoff whose streamed note the model wrote, through the completion.
+const HANDOFF_NOTE: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+];
+/// Three durable skill calls as the log keeps them: no streamed deltas.
+const DURABLE_SKILL3: &[&str] = &[
+    "assistant_message_started",
+    "tool_call_requested",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_completed",
+    "tool_call_completed",
+];
+/// A handoff note as the log keeps it: no streamed deltas.
+const DURABLE_NOTE: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+];
+/// A text reply as the log keeps it: no streamed deltas.
+const DURABLE_TEXT: &[&str] = &[
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
 
 /// A tool named `skill`: it reads `workspace/.agents/skills/{name}/SKILL.md`,
 /// answers the header's body under the file's path, and records the load.
@@ -235,6 +333,19 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL3,
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message"],
+            REPLY,
+            ENDED,
+        ],
+    );
     // One durable line, between the handoff and the new opening.
     let all = kinds(&lines);
     let at = all
@@ -300,6 +411,19 @@ fn a_body_edited_since_the_load_is_sent_as_it_is_at_the_handoff() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL1,
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message"],
+            REPLY,
+            ENDED,
+        ],
+    );
     let resent = of_kind(&lines, "skills_resent");
     assert_eq!(resent.len(), 1);
     let sent = payload_skills(resent[0]);
@@ -327,6 +451,19 @@ fn a_context_with_no_loaded_skills_sends_nothing_extra() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            REPLY,
+            STEP,
+            HANDOFF_NOTE,
+            &["opening_message"],
+            REPLY,
+            ENDED,
+        ],
+    );
     assert!(of_kind(&lines, "skills_resent").is_empty());
     assert!(resend_notices(&lines).is_empty());
     let requests = session.requests();
@@ -355,6 +492,19 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL2,
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message", "notice"],
+            REPLY,
+            ENDED,
+        ],
+    );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "completed");
@@ -405,6 +555,19 @@ fn a_skill_whose_file_is_gone_is_not_sent_and_the_new_listing_omits_it() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL2,
+            STEP,
+            HANDOFF_NOTE,
+            &["opening_message", "notice", "notice"],
+            REPLY,
+            ENDED,
+        ],
+    );
     assert!(of_kind(&lines, "skills_resent").is_empty());
     assert_eq!(resend_notices(&lines).len(), 2);
     let done = of_kind(&lines, "handoff_completed");
@@ -430,6 +593,19 @@ fn a_skill_whose_header_no_longer_parses_is_not_sent_and_the_handoff_still_compl
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL1,
+            STEP,
+            HANDOFF_NOTE,
+            &["opening_message", "notice", "notice"],
+            REPLY,
+            ENDED,
+        ],
+    );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
     assert!(of_kind(&lines, "skills_resent").is_empty());
@@ -486,6 +662,19 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
     }));
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL2,
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message", "notice"],
+            REPLY,
+            ENDED,
+        ],
+    );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
     for line in of_kind(&lines, "skills_resent") {
@@ -645,6 +834,43 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
         !texts.iter().any(|text| text.contains("Beta body")),
         "{texts:?}"
     );
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL3,
+            STEP,
+            REPLY,
+            ENDED,
+            &["turn_started"],
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message"],
+            ENDED,
+            &["turn_started"],
+            STEP,
+            SKILL1,
+            STEP,
+            REPLY,
+            ENDED,
+            &["turn_started"],
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message"],
+            ENDED,
+            &["skills_changed", "turn_started"],
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message", "notice"],
+            ENDED,
+            &["turn_started"],
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message"],
+            ENDED,
+        ],
+    );
 }
 
 #[test]
@@ -674,6 +900,21 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
     let outcome = run_loop(&mut looped);
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&session.dir).unwrap();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            DURABLE_SKILL3,
+            STEP,
+            DURABLE_NOTE,
+            &["preamble_built", "skills_resent", "opening_message"],
+            &["turn_started"],
+            STEP,
+            DURABLE_TEXT,
+            ENDED,
+        ],
+    );
     let all = kinds(&lines);
     let at = all
         .iter()
@@ -723,6 +964,21 @@ fn a_crash_after_skills_resent_writes_only_the_opening() {
     let outcome = run_loop(&mut looped);
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&session.dir).unwrap();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            DURABLE_SKILL3,
+            STEP,
+            DURABLE_NOTE,
+            &["skills_resent", "preamble_built", "opening_message"],
+            &["turn_started"],
+            STEP,
+            DURABLE_TEXT,
+            ENDED,
+        ],
+    );
     assert_eq!(of_kind(&lines, "skills_resent").len(), 1);
     let all = kinds(&lines);
     let at = all
@@ -764,6 +1020,19 @@ fn a_provider_run_record_carrying_a_skill_is_not_a_load() {
     );
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            HOSTED_SKILL,
+            STEP,
+            HANDOFF_NOTE,
+            &["opening_message"],
+            REPLY,
+            ENDED,
+        ],
+    );
     // The provider-run record never counts: nothing is sent again.
     assert!(of_kind(&lines, "skills_resent").is_empty());
     let live = session.requests()[2].conversation.clone();
