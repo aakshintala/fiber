@@ -741,7 +741,7 @@ fn rewind_runs_with_the_published_environment_and_the_flag() {
     assert_eq!(exit_of(started).message, "recorded");
     let (args, env) = reported(&root);
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
-    assert!(args.contains(&"--rewound-from".to_owned()));
+    assert!(args.contains(&"--rewound-from=s0".to_owned()));
     assert_eq!(env, "start /h unset");
 }
 
