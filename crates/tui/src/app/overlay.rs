@@ -102,14 +102,17 @@ impl Tail {
         self.start
     }
 
-    /// The durable lines read so far, oldest first.
-    pub(super) fn lines(&self) -> &[Envelope] {
-        &self.lines
-    }
-
-    /// The preview's lines: from the first turn start, never cut inside
-    /// a turn; none when no held line starts one.
-    pub(super) fn turn_lines(&self) -> Option<&[Envelope]> {
+    /// The preview's lines: the held lines from the earliest turn
+    /// start, never cut inside a turn; the whole held run when its
+    /// first seq is zero; none when neither holds.
+    #[allow(
+        clippy::wrong_self_convention,
+        reason = "the plan's interface names this turn-start view from_turn"
+    )]
+    pub(super) fn from_turn(&self) -> Option<&[Envelope]> {
+        if self.lines.first().and_then(|line| line.seq) == Some(Seq(0)) {
+            return Some(&self.lines);
+        }
         self.lines
             .iter()
             .position(|line| line.kind == "turn_started")
@@ -117,9 +120,14 @@ impl Tail {
     }
 
     /// Whether the tail is filled: the start reached, the read ended,
-    /// or the folded fresh pages report at least `height` rows.
+    /// or the turn-start lines folded fresh report at least `height`
+    /// rows. Lines cut before the first `turn_started` never count.
     pub(super) fn filled(&self, fresh: &Pages, height: usize) -> bool {
-        self.start || self.ended || fresh.index().total() >= height
+        self.start
+            || self.ended
+            || self
+                .from_turn()
+                .is_some_and(|_| fresh.index().total() >= height)
     }
 
     /// Ends the read: failed, abandoned, or lost.

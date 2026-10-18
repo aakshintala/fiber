@@ -1066,21 +1066,29 @@ fn reads_follow_the_answer_window_at_the_edges() {
         let many = usize::try_from(count).unwrap_or(usize::MAX);
         assert_eq!(asked, expected, "{count} lines");
         assert!(tail.start_reached(), "{count} lines");
-        assert_eq!(tail.lines().len(), many, "{count} lines");
+        assert_eq!(
+            tail.from_turn().map(|lines| lines.len()),
+            Some(many),
+            "{count} lines"
+        );
     }
 }
 
-/// The read stops when the held lines fill the screen: at one row below
-/// the total the tail asks again, at the total and above it is filled.
+/// The read stops when the held lines starting at a turn fill the screen:
+/// at one row below the total the tail asks again, at the total and
+/// above it is filled. Lines cut before the turn's start never count.
 #[test]
 fn reads_stop_when_the_held_lines_fill_the_screen() {
     use crate::app::overlay::Tail;
     let mut seq = 0u64;
-    let mut all = Vec::new();
+    // Lines cut inside an older turn: no `turn_started` among them.
+    let mut cut = turn(&mut seq, "a_cut", "a cut reply");
+    cut.drain(..3);
+    let mut held = cut;
     for at in 0..3 {
-        all.extend(turn(&mut seq, &format!("a_m{at}"), &format!("reply {at}")));
+        held.extend(turn(&mut seq, &format!("a_m{at}"), &format!("reply {at}")));
     }
-    let all = envelopes(&all);
+    let all = envelopes(&held);
     // The held window starts past zero, so only the row count fills.
     let all: Vec<contract::Envelope> = all
         .into_iter()
@@ -1089,15 +1097,23 @@ fn reads_stop_when_the_held_lines_fill_the_screen() {
             envelope
         })
         .collect();
-    let app = app();
-    let mut fresh = app.attached_screen().pages().fresh();
-    for envelope in &all {
-        fresh.apply(envelope);
-    }
-    let total = fresh.index().total();
     let mut tail = Tail::new();
     tail.prepend(all)
         .unwrap_or_else(|_| panic!("a contiguous answer"));
+    let from = tail
+        .from_turn()
+        .unwrap_or_else(|| panic!("a turn start in the window"));
+    assert_eq!(
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started"),
+        "the cut lines never count"
+    );
+    let app = app();
+    let mut fresh = app.attached_screen().pages().fresh();
+    for envelope in from {
+        fresh.apply(envelope);
+    }
+    let total = fresh.index().total();
     assert!(!tail.filled(&fresh, total + 1), "one row short asks again");
     assert!(tail.filled(&fresh, total), "at the total it is filled");
     assert!(
@@ -1164,10 +1180,11 @@ fn a_long_turn_reads_until_the_screen_is_full_with_no_cap() {
         }
     }
     assert_eq!(reads, 3, "256, 256 and 188 lines");
-    assert_eq!(tail.lines().len(), 700);
+    let from = tail.from_turn().unwrap_or_else(|| panic!("the turn start"));
+    assert_eq!(from.len(), 700);
     assert_eq!(
-        tail.lines().first().and_then(|line| line.seq),
-        Some(contract::Seq(0))
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started")
     );
 }
 
@@ -1179,7 +1196,7 @@ fn an_empty_log_ends_with_nothing_held() {
     tail.prepend(Vec::new())
         .unwrap_or_else(|_| panic!("an empty answer"));
     assert!(tail.start_reached());
-    assert!(tail.lines().is_empty());
+    assert!(tail.from_turn().is_none());
 }
 
 /// One line at seq zero starts at the beginning and ends the read.
@@ -1190,7 +1207,7 @@ fn a_log_of_one_line_starts_at_zero() {
     tail.prepend(plain(1))
         .unwrap_or_else(|_| panic!("one line"));
     assert!(tail.start_reached());
-    assert_eq!(tail.lines().len(), 1);
+    assert_eq!(tail.from_turn().map(|lines| lines.len()), Some(1));
 }
 
 /// An answer that leaves a gap, or a line carrying no seq, is refused:
@@ -1215,4 +1232,537 @@ fn an_answer_that_leaves_a_gap_is_refused() {
         app.notice(),
         Some("Could not load history: the answer was out of order")
     );
+}
+
+// ---- Task 7: turn-boundary reading ----
+
+/// A turn from `seq` with `texts` reply lines.
+fn roomy_turn(seq: &mut u64, message: &str, text: &str, texts: usize) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, *seq, action, payload));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(message), json!({}));
+    for _ in 0..texts {
+        push("text_completed", Some(message), json!({"text": text}));
+    }
+    push(
+        "assistant_message_completed",
+        Some(message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// Opens [`SESSION`] from home through the summary ack, with the tail
+/// read running.
+fn reading() -> App {
+    let mut app = home_at(crate::OpenAt::Home);
+    let lines: Vec<Value> = app
+        .open_session(id(SESSION), None, None, false)
+        .into_iter()
+        .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe"));
+    let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(
+        app.on_line(session_accepted(SESSION, summary_id))
+            .is_empty()
+    );
+    assert!(app.tail_due().is_some(), "the tail read starts");
+    assert!(
+        matches!(app.overlay, Overlay::Reading(_)),
+        "the tail read runs"
+    );
+    app
+}
+
+/// Reads `all` through the open's tail until it reports filled, then
+/// installs the preview.
+fn install_preview(app: &mut App, all: &[contract::Envelope]) {
+    while let Some(args) = app.tail_next() {
+        app.tail_lines(doors(all, &args));
+    }
+    app.install_tail();
+}
+
+/// The attached screen's conversation rows as text.
+fn row_texts(app: &App) -> Vec<String> {
+    app.lines().iter().map(ToString::to_string).collect()
+}
+
+/// The read stops at the turn start that fills the screen: the newest
+/// turn starts inside the first answer, and the tail below the height
+/// asks once more while the tail reaching it fills, through the real
+/// path. The boundary is `>=`: each tail's own total fills it, and one
+/// past asks again.
+#[test]
+fn reads_stop_at_the_turn_start_that_fills_the_screen() {
+    let height = app().conversation_height();
+    // The reply length per row total: each text draws two rows.
+    let mut totals: Vec<(usize, usize)> = Vec::new();
+    for texts in 0..200 {
+        let total = turn_start_total(texts);
+        if !totals.iter().any(|(seen, _)| *seen == total) {
+            totals.push((total, texts));
+        }
+        if totals.iter().any(|(total, _)| *total < height)
+            && totals.iter().any(|(total, _)| *total >= height)
+        {
+            break;
+        }
+    }
+    let below = totals
+        .iter()
+        .filter(|(total, _)| *total < height)
+        .max_by_key(|(total, _)| *total)
+        .unwrap_or_else(|| panic!("a reply short of {height}"));
+    let above = totals
+        .iter()
+        .filter(|(total, _)| *total >= height)
+        .min_by_key(|(total, _)| *total)
+        .unwrap_or_else(|| panic!("a reply reaching {height}"));
+    for (total, texts) in [below, above] {
+        let tail = turn_start_tail(*texts);
+        // The newest turn starts inside the first answer; lines cut
+        // before its start never count.
+        let from = tail
+            .from_turn()
+            .unwrap_or_else(|| panic!("the newest turn start"));
+        assert_eq!(
+            from.first().map(|line| line.kind.as_str()),
+            Some("turn_started"),
+            "the cut lines never count"
+        );
+        let probe = app();
+        let mut fresh = probe.attached_screen().pages().fresh();
+        for line in from {
+            fresh.apply(line);
+        }
+        assert_eq!(fresh.index().total(), *total);
+        // The boundary itself is `>=`: the total fills, one past asks.
+        assert!(tail.filled(&fresh, *total), "the total itself fills");
+        assert!(
+            !tail.filled(&fresh, total + 1),
+            "one past the total asks again"
+        );
+        // The real path agrees at the conversation height.
+        let mut probe = app();
+        probe.overlay = Overlay::Reading(tail);
+        assert_eq!(
+            probe.tail_next().is_none(),
+            *total >= height,
+            "the real path agrees at the height"
+        );
+    }
+}
+
+/// A tail holding lines cut inside an older turn plus a newest turn
+/// with `texts` reply lines.
+fn turn_start_tail(texts: usize) -> crate::app::overlay::Tail {
+    use crate::app::overlay::Tail;
+    let mut seq = 0u64;
+    let mut cut = turn(&mut seq, "a_old", "an old reply");
+    cut.drain(..3);
+    let mut held = cut;
+    held.extend(roomy_turn(&mut seq, "a_new", "a new reply", texts));
+    let mut tail = Tail::new();
+    tail.prepend(envelopes(&held))
+        .unwrap_or_else(|_| panic!("the first answer"));
+    tail
+}
+
+/// The rows a [`turn_start_tail`] with `texts` reply lines reports.
+fn turn_start_total(texts: usize) -> usize {
+    let tail = turn_start_tail(texts);
+    let from = tail
+        .from_turn()
+        .unwrap_or_else(|| panic!("the newest turn start"));
+    let probe = app();
+    let mut fresh = probe.attached_screen().pages().fresh();
+    for line in from {
+        fresh.apply(line);
+    }
+    fresh.index().total()
+}
+
+/// A turn longer than one answer reads until its start with no cap: the
+/// rows pass the height while the `turn_started` is still unread, so the
+/// read keeps going down to it.
+#[test]
+fn a_turn_longer_than_one_answer_reads_until_its_start() {
+    use crate::app::overlay::Tail;
+    // Sixty older lines, then one 700-line turn starting past zero.
+    let mut all = plain(60);
+    let mut seq = 60u64;
+    all.extend(envelopes(&roomy_turn(&mut seq, "a_m", "part", 695)));
+    assert_eq!(all.len(), 760);
+    for envelope in &mut all {
+        envelope.seq = envelope.seq.map(|seq| contract::Seq(seq.0 + 1000));
+    }
+    let probe = app();
+    let height = probe.conversation_height();
+    let mut tail = Tail::new();
+    let mut reads = 0;
+    loop {
+        let mut fresh = probe.attached_screen().pages().fresh();
+        if let Some(from) = tail.from_turn() {
+            for line in from {
+                fresh.apply(line);
+            }
+        }
+        if tail.filled(&fresh, height) {
+            break;
+        }
+        let args = tail.next_args();
+        let answer = doors(&all, &args);
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        reads += 1;
+    }
+    assert_eq!(reads, 3, "256, 256 and 248 lines");
+    let from = tail.from_turn().unwrap_or_else(|| panic!("the turn start"));
+    assert_eq!(from.len(), 700);
+    assert_eq!(
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started")
+    );
+}
+
+/// A failed or abandoned read keeps whole turns or nothing: the preview
+/// is the turn-start lines when the first answer holds one, else an
+/// empty conversation, and no frame shows a cut turn.
+#[test]
+fn a_failed_read_keeps_whole_turns_or_nothing() {
+    use crate::app::overlay::Tail;
+    // A first answer holding a turn start keeps from that start.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..50 {
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
+    }
+    let all = envelopes(&lines);
+    let first = doors(&all, &json!({}));
+    assert!(first.len() < all.len(), "the first answer is a window");
+    let mut app = reading();
+    assert!(app.tail_next().is_some());
+    app.tail_lines(first.clone());
+    app.tail_ended(Some("gone"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let cut = (all.len() - first.len()) / 6;
+    let mut tail = Tail::new();
+    tail.prepend(first)
+        .unwrap_or_else(|_| panic!("the first answer"));
+    let from = tail
+        .from_turn()
+        .unwrap_or_else(|| panic!("a turn start in the window"));
+    let mut fresh = app.attached_screen().pages().fresh();
+    for line in from {
+        fresh.apply(line);
+    }
+    let expect: Vec<String> = fresh
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert_eq!(row_texts(&app), expect, "the preview is the whole turns");
+    assert!(
+        !row_texts(&app)
+            .iter()
+            .any(|row| row.contains(&format!("reply {cut}"))),
+        "no cut turn shows"
+    );
+    // A first answer holding no turn start keeps nothing.
+    let all = plain(300);
+    let first = doors(&all, &json!({}));
+    let mut app = reading();
+    app.tail_lines(first);
+    app.tail_ended(Some("gone"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        0,
+        "an empty conversation"
+    );
+}
+
+/// The preview is exact for the last turns: folding the tail's
+/// turn-start lines draws the last screenful, the totals line, the open
+/// ledger's step numbers and the prompt bubble exactly as the whole log
+/// does. A log with an orphaned job completion, an automatic handoff
+/// trigger and a ledger call from before the held turns lands with only
+/// those allowed kinds differing (B3).
+#[test]
+fn the_preview_is_exact_for_the_last_turns() {
+    // Three long turns, then one short turn with a tool call, so the
+    // last screenful holds the short turn's bubble, ledger and totals:
+    // more than one window in all.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..3 {
+        lines.extend(roomy_turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("reply {n}"),
+            90,
+        ));
+    }
+    let message = "a_m3".to_owned();
+    let call = "a_c3".to_owned();
+    let mut turn = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        turn.push(line(kind, seq, action, payload));
+        seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(&message), json!({}));
+    push(
+        "tool_call_requested",
+        Some(&call),
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    );
+    push(
+        "tool_call_completed",
+        Some(&call),
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+    );
+    push("text_completed", Some(&message), json!({"text": "reply 3"}));
+    push(
+        "assistant_message_completed",
+        Some(&message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines.extend(turn);
+    let all = envelopes(&lines);
+    assert!(all.len() > 256, "the log needs more than one window");
+    let mut app = reading();
+    // The whole log folded at the screen's own wrap width.
+    let mut whole = app.attached_screen().pages().fresh();
+    for envelope in &all {
+        whole.apply(envelope);
+    }
+    install_preview(&mut app, &all);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    // The open ledger draws its step numbers in both folds.
+    app.toggle_ledgers();
+    whole.toggle_ledgers();
+    let height = app.conversation_height();
+    let preview = row_texts(&app);
+    let whole_rows: Vec<String> = whole
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert!(preview.len() >= height && whole_rows.len() >= height);
+    let screen = &preview[preview.len() - height..];
+    assert_eq!(
+        screen,
+        &whole_rows[whole_rows.len() - height..],
+        "the last screenful is exact"
+    );
+    let screenful = screen.join("\n");
+    assert!(screenful.contains("▣"), "the totals line shows");
+    assert!(
+        screenful
+            .lines()
+            .any(|row| row.trim_start().starts_with(|c: char| c.is_ascii_digit())),
+        "the open ledger's step numbers show: {screenful:?}"
+    );
+    assert!(
+        screenful.contains("prompt"),
+        "the prompt bubble shows: {screenful:?}"
+    );
+}
+
+/// Only the rows that depend on turns before the held lines change in
+/// the frame where the full fold replaces the preview: an orphaned job
+/// completion, an automatic handoff trigger, and a ledger call requested
+/// before the held turns (B3).
+#[test]
+fn only_the_cross_turn_rows_change_at_landing() {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, seq, action, payload));
+        seq += 1;
+    };
+    for _ in 0..10 {
+        push("usage_recorded", None, json!({}));
+    }
+    // Before the held lines: a job starts, a handoff starts, a tool
+    // call is requested.
+    push(
+        "job_started",
+        None,
+        json!({"job_id": "j_1", "description": "build the docs",
+            "output_path": "/tmp/o"}),
+    );
+    push("handoff_started", None, json!({"trigger": "person"}));
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_early"), json!({}));
+    push(
+        "tool_call_requested",
+        Some("a_c0"),
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_early"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    // Filler the first window skips over.
+    for _ in 0..260 {
+        push("usage_recorded", None, json!({}));
+    }
+    // The held turns: the orphaned completion, the handoff trigger's
+    // completion, and the ledger call's result.
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_held"), json!({}));
+    push(
+        "text_completed",
+        Some("a_held"),
+        json!({"text": "a held reply"}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_held"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    push(
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "failed",
+            "error": {"code": "orphaned", "message": "j_1 orphaned."}}),
+    );
+    push(
+        "handoff_completed",
+        None,
+        json!({"outcome": "completed", "tokens_before": 300_000,
+            "note_text": "From the hook.", "extension": "notes"}),
+    );
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_last"), json!({}));
+    push(
+        "tool_call_completed",
+        Some("a_c0"),
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_last"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    let all = envelopes(&lines);
+    assert!(all.len() > 256, "the early turns leave the first window");
+    let mut app = reading();
+    install_preview(&mut app, &all);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let before = row_texts(&app);
+    // Raise, then replay the whole log through the pass to its end.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    let last = all.len() as u64 - 1;
+    assert!(
+        app.on_line(raise_accepted(SESSION, raise_id, last))
+            .is_empty()
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Folding { .. }),
+        "the pass folds"
+    );
+    for envelope in &all {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the pass lands");
+    let after = row_texts(&app);
+    // Every row the landing rewrites within the held lines is one of
+    // the allowed kinds: an orphaned job's completion, an automatic
+    // handoff's trigger, or a ledger call from before the held lines.
+    // The preview and the landed screen both follow to the bottom, so
+    // the held rows align at the tail; early turns' own rows stand
+    // above the preview and never align.
+    let offset = after.len().saturating_sub(before.len());
+    let mut changed = Vec::new();
+    for (at, row) in before.iter().enumerate() {
+        if after.get(offset + at) != Some(row) {
+            changed.push(("preview", row.clone()));
+            if let Some(landed) = after.get(offset + at) {
+                changed.push(("landed", landed.clone()));
+            }
+        }
+    }
+    if after.len() < before.len() {
+        for row in &after[..before.len() - after.len()] {
+            changed.push(("landed-only", row.clone()));
+        }
+    }
+    assert!(!changed.is_empty(), "the landing changes some row");
+    let bad: Vec<_> = changed
+        .iter()
+        .filter(|(_, row)| {
+            !(row.to_lowercase().contains("orphan")
+                || row.contains("handoff")
+                || row.contains("⇄")
+                || row.contains("src/a.rs")
+                || row.trim_start().starts_with('●'))
+        })
+        .collect();
+    assert!(bad.is_empty(), "only allowed rows change, got: {bad:?}");
 }

@@ -558,8 +558,10 @@ impl App {
             return None;
         }
         let mut fresh = self.attached_screen().pages().fresh();
-        for line in tail.lines() {
-            fresh.apply(line);
+        if let Some(lines) = tail.from_turn() {
+            for line in lines {
+                fresh.apply(line);
+            }
         }
         if tail.filled(&fresh, self.conversation_height()) {
             return None;
@@ -609,7 +611,7 @@ impl App {
         };
         let mut preview = self.attached_screen().pages().fresh();
         let mut busy = None;
-        if let Some(lines) = tail.turn_lines() {
+        if let Some(lines) = tail.from_turn() {
             for line in lines {
                 let applied = preview.apply(line);
                 if applied.busy.is_some() {
