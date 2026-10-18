@@ -6,10 +6,10 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use contract::SessionId;
+use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
 
-use crate::{EVENTS, Error, LOCK};
+use crate::{EVENTS, Error, LOCK, io_at};
 
 /// A session named by its first line: its id, directory, workspace and the
 /// session it continues, when each is known.
@@ -41,14 +41,15 @@ pub fn started_sessions_in(sessions: &Path) -> Vec<Started> {
             continue;
         }
         let dir = entry.path();
-        let Some((workspace, forked_from)) = started_line(&dir.join(EVENTS)) else {
+        let Some(view) = started_in(&dir) else {
             continue;
         };
         let id = SessionId(entry.file_name().to_string_lossy().into_owned());
+        let forked_from = view.forked_from();
         found.push(Started {
             id,
             dir,
-            workspace,
+            workspace: view.workspace,
             forked_from,
         });
     }
@@ -72,36 +73,109 @@ pub fn started_sessions(home: &Path) -> Vec<Started> {
     found
 }
 
-/// The workspace and fork of the `session_started` on `log`'s first line:
-/// `None` when the line does not read as one. A first line with no
-/// trailing newline still counts, as `read_line` reads it.
-fn started_line(log: &Path) -> Option<(Option<String>, Option<SessionId>)> {
-    let mut first = String::new();
-    BufReader::new(File::open(log).ok()?)
-        .read_line(&mut first)
-        .ok()?;
-    started_from(first.as_bytes())
+/// A session's first line as a `session_started`: the lenient view both
+/// walks share. [`SessionStarted::parse`] reads what the scans accept;
+/// [`first_line`] reads what history needs.
+pub(crate) struct SessionStarted {
+    /// `payload.workspace` when it is a string.
+    pub(crate) workspace: Option<String>,
+    /// `payload.forked_from`, raw: the two pointer policies read it
+    /// differently.
+    forked_from: Option<Value>,
 }
 
-/// The workspace and fork of the `session_started` in `first`, a log's
-/// first line with or without its newline: `None` when it does not read as
-/// one.
-pub(crate) fn started_from(first: &[u8]) -> Option<(Option<String>, Option<SessionId>)> {
-    let line: Value = serde_json::from_slice(first).ok()?;
-    if line.get("kind")?.as_str()? != "session_started" {
-        return None;
+impl SessionStarted {
+    /// The shared read of one `session_started` payload.
+    fn of(payload: &Value) -> Self {
+        Self {
+            workspace: payload
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            forked_from: payload.get("forked_from").cloned(),
+        }
     }
-    let payload = line.get("payload")?;
-    let workspace = payload
-        .get("workspace")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let forked_from = payload
-        .get("forked_from")
-        .and_then(|from| from.get("session_id"))
-        .and_then(Value::as_str)
-        .map(|id| SessionId(id.to_owned()));
-    Some((workspace, forked_from))
+
+    /// The view of `first`, a log's first line with or without its
+    /// newline: `None` when it does not read as a `session_started`
+    /// with a payload. No newline, `ts` or `seq` is needed.
+    pub(crate) fn parse(first: &[u8]) -> Option<Self> {
+        let line: Value = serde_json::from_slice(first).ok()?;
+        if line.get("kind")?.as_str()? != "session_started" {
+            return None;
+        }
+        Some(Self::of(line.get("payload")?))
+    }
+
+    /// `forked_from.session_id` when it is a string: the lenient policy
+    /// the scans walk by. A `seq` is not needed.
+    pub(crate) fn forked_from(&self) -> Option<SessionId> {
+        self.forked_from
+            .as_ref()?
+            .get("session_id")?
+            .as_str()
+            .map(|id| SessionId(id.to_owned()))
+    }
+
+    /// What the first line forks from: the strict policy history walks
+    /// by. Absent is `Ok(None)`; any present value without a string
+    /// `session_id` and a `u64` `seq` is malformed.
+    pub(crate) fn fork_point(&self) -> Result<Option<(SessionId, Seq)>, MalformedFork> {
+        let Some(from) = self.forked_from.as_ref() else {
+            return Ok(None);
+        };
+        match (
+            from.get("session_id").and_then(Value::as_str),
+            from.get("seq").and_then(Value::as_u64),
+        ) {
+            (Some(session), Some(seq)) => Ok(Some((SessionId(session.to_owned()), Seq(seq)))),
+            _ => Err(MalformedFork),
+        }
+    }
+}
+
+/// A `forked_from` that is present but names no session and `seq`.
+#[derive(Debug)]
+pub(crate) struct MalformedFork;
+
+/// The [`SessionStarted`] of the session in `dir`: the strict policy
+/// history walks by. A missing log is [`Error::NotFound`]; anything else
+/// that is not a `session_started` first line is [`Error::Pointer`].
+/// Reads only the first line, never the log past it.
+pub(crate) fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
+    let path = dir.join(EVENTS);
+    let file = crate::open_log(dir)?;
+    let mut first = Vec::new();
+    BufReader::new(file)
+        .read_until(b'\n', &mut first)
+        .map_err(io_at(&path))?;
+    if first.last() != Some(&b'\n') {
+        return Err(Error::Pointer {
+            path,
+            reason: "the log's first line is missing".to_owned(),
+        });
+    }
+    let line: Envelope = serde_json::from_slice(&first).map_err(|_| Error::Pointer {
+        path: path.clone(),
+        reason: "the log's first line is not an event".to_owned(),
+    })?;
+    if line.kind != "session_started" {
+        return Err(Error::Pointer {
+            path,
+            reason: "the log's first line is not session_started".to_owned(),
+        });
+    }
+    Ok(SessionStarted::of(&Value::Object(line.payload)))
+}
+
+/// The [`SessionStarted`] of the session in `dir`: `None` when the log
+/// cannot be read or its first line does not read as one. A first line
+/// with no trailing newline still counts, as `read_line` reads it.
+fn started_in(dir: &Path) -> Option<SessionStarted> {
+    let file = crate::open_log(dir).ok()?;
+    let mut first = Vec::new();
+    BufReader::new(file).read_until(b'\n', &mut first).ok()?;
+    SessionStarted::parse(&first)
 }
 
 /// The `ts` of the last complete line of `events.jsonl` in `dir`: `None`

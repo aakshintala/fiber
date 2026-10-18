@@ -22,7 +22,7 @@ use contract::diag::{Op, Timing};
 use contract::session_search::{Found, Hit, Label, Query, Scan};
 use contract::tool::Cancel;
 
-use crate::scan::started_from;
+use crate::scan::SessionStarted;
 use crate::{EVENTS, project_key};
 use read::Cancelling;
 use session::Session;
@@ -273,10 +273,10 @@ impl Context<'_> {
             return;
         }
         // A first line that is not a `session_started` is not a session.
-        let Some((workspace, _)) = started_from(&first) else {
+        let Some(view) = SessionStarted::parse(&first) else {
             return;
         };
-        if !self.all_projects && !workspace.is_some_and(|w| self.ours(&w)) {
+        if !self.all_projects && !view.workspace.is_some_and(|w| self.ours(&w)) {
             return;
         }
         let session = Session {

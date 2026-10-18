@@ -487,3 +487,177 @@ fn last_ts_completes_within_a_wall_clock_bound() {
         .recv_or_fail(&waited, "last_ts of the small log");
     assert_eq!(ts, Some(9));
 }
+
+#[test]
+fn parse_reads_a_minimal_first_line_with_no_newline_or_ts_or_seq() {
+    let view = SessionStarted::parse(br#"{"kind":"session_started","payload":{"workspace":"/w"}}"#)
+        .unwrap();
+    assert_eq!(view.workspace.as_deref(), Some("/w"));
+    assert!(view.forked_from().is_none());
+}
+
+#[test]
+fn parse_rejects_a_wrong_kind() {
+    assert!(
+        SessionStarted::parse(br#"{"kind":"turn_started","payload":{"workspace":"/w"}}"#).is_none()
+    );
+}
+
+#[test]
+fn parse_rejects_garbage() {
+    assert!(SessionStarted::parse(b"not json").is_none());
+}
+
+#[test]
+fn parse_rejects_a_first_line_with_no_payload() {
+    assert!(SessionStarted::parse(br#"{"kind":"session_started"}"#).is_none());
+}
+
+#[test]
+fn parse_rejects_a_non_string_kind() {
+    assert!(SessionStarted::parse(br#"{"kind":7,"payload":{"workspace":"/w"}}"#).is_none());
+}
+
+#[test]
+fn a_pointer_with_no_seq_is_lenient_but_not_strict() {
+    let view = SessionStarted::parse(
+        br#"{"kind":"session_started","payload":{"workspace":"/w","forked_from":{"session_id":"s_p"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
+    assert!(view.fork_point().is_err());
+}
+
+#[test]
+fn a_pointer_with_a_string_seq_is_lenient_but_not_strict() {
+    let view = SessionStarted::parse(
+        br#"{"kind":"session_started","payload":{"forked_from":{"session_id":"s_p","seq":"3"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
+    assert!(view.fork_point().is_err());
+}
+
+#[test]
+fn a_pointer_with_a_session_and_a_seq_reads_both_ways() {
+    let view = SessionStarted::parse(
+        br#"{"kind":"session_started","payload":{"workspace":"/w","forked_from":{"session_id":"s_p","seq":3}}}"#,
+    )
+    .unwrap();
+    assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
+    assert_eq!(
+        view.fork_point().unwrap(),
+        Some((SessionId("s_p".to_owned()), Seq(3)))
+    );
+}
+
+#[test]
+fn a_null_pointer_is_absent_leniently_and_malformed_strictly() {
+    let view =
+        SessionStarted::parse(br#"{"kind":"session_started","payload":{"forked_from":null}}"#)
+            .unwrap();
+    assert!(view.forked_from().is_none());
+    assert!(view.fork_point().is_err());
+}
+
+#[test]
+fn a_pointer_with_a_non_string_session_is_absent_leniently_and_malformed_strictly() {
+    let view = SessionStarted::parse(
+        br#"{"kind":"session_started","payload":{"forked_from":{"session_id":7,"seq":3}}}"#,
+    )
+    .unwrap();
+    assert!(view.forked_from().is_none());
+    assert!(view.fork_point().is_err());
+}
+
+#[test]
+fn no_pointer_is_absent_both_ways() {
+    let view = SessionStarted::parse(br#"{"kind":"session_started","payload":{"workspace":"/w"}}"#)
+        .unwrap();
+    assert!(view.forked_from().is_none());
+    assert_eq!(view.fork_point().unwrap(), None);
+}
+
+#[test]
+fn first_line_on_a_missing_log_is_not_found() {
+    let home = fakes::TempDir::new("log-first-line-missing");
+    let dir = home.path().join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    let Err(Error::NotFound(path)) = first_line(&dir) else {
+        panic!("a missing log has a first line");
+    };
+    assert_eq!(path, dir);
+}
+
+#[test]
+fn first_line_with_no_trailing_newline_is_a_pointer_naming_the_missing_line() {
+    let home = fakes::TempDir::new("log-first-line-nonl");
+    let dir = home.path().join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        br#"{"kind":"session_started","payload":{"workspace":"/w"}}"#,
+    )
+    .unwrap();
+    let Err(Error::Pointer { path, reason }) = first_line(&dir) else {
+        panic!("a first line with no newline reads");
+    };
+    assert_eq!(path, dir.join(EVENTS));
+    assert_eq!(reason, "the log's first line is missing");
+}
+
+#[test]
+fn first_line_that_is_not_an_event_is_a_pointer() {
+    let home = fakes::TempDir::new("log-first-line-event");
+    let dir = home.path().join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        br#"{"kind":"session_started","payload":{}}
+"#,
+    )
+    .unwrap();
+    let Err(Error::Pointer { path, reason }) = first_line(&dir) else {
+        panic!("a first line that is not an event reads");
+    };
+    assert_eq!(path, dir.join(EVENTS));
+    assert_eq!(reason, "the log's first line is not an event");
+}
+
+#[test]
+fn first_line_of_another_kind_is_a_pointer() {
+    let home = fakes::TempDir::new("log-first-line-kind");
+    let dir = home.path().join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        br#"{"kind":"turn_started","session_id":"s_aaaaaaaaaaaaaaaa","ts":1,"schema_version":1,"payload":{}}
+"#,
+    )
+    .unwrap();
+    let Err(Error::Pointer { path, reason }) = first_line(&dir) else {
+        panic!("a first line of another kind reads");
+    };
+    assert_eq!(path, dir.join(EVENTS));
+    assert_eq!(reason, "the log's first line is not session_started");
+}
+
+#[test]
+fn first_line_of_a_session_started_gives_the_view() {
+    let home = fakes::TempDir::new("log-first-line-view");
+    let dir = home.path().join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("events.jsonl"),
+        br#"{"kind":"session_started","session_id":"s","ts":1,"schema_version":1,"seq":0,"payload":{"workspace":"/w","forked_from":{"session_id":"s_p","seq":3}}}
+"#,
+    )
+    .unwrap();
+    let view = first_line(&dir).unwrap();
+    assert_eq!(view.workspace.as_deref(), Some("/w"));
+    assert_eq!(view.forked_from(), Some(SessionId("s_p".to_owned())));
+    assert_eq!(
+        view.fork_point().unwrap(),
+        Some((SessionId("s_p".to_owned()), Seq(3)))
+    );
+}
