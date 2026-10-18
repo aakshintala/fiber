@@ -50,6 +50,28 @@ fn a_tool_call_completed_and_a_permission_resolved_omit_their_new_keys_when_empt
     );
 }
 
+#[test]
+fn an_extensions_loaded_entry_omits_replaces_when_empty() {
+    let empty = LoadedExtension {
+        name: "e".into(),
+        version: "0.1.0".into(),
+        replaces: Vec::new(),
+    };
+    let written = serde_json::to_value(&empty).unwrap();
+    assert_eq!(written, json!({"name": "e", "version": "0.1.0"}));
+    assert!(!written.as_object().unwrap().contains_key("replaces"));
+    let read: LoadedExtension = serde_json::from_value(written).unwrap();
+    assert_eq!(read.replaces, Vec::<String>::new());
+    let full = LoadedExtension {
+        replaces: vec!["read".into(), "model".into()],
+        ..empty
+    };
+    assert_eq!(
+        serde_json::to_value(&full).unwrap(),
+        json!({"name": "e", "version": "0.1.0", "replaces": ["read", "model"]})
+    );
+}
+
 /// Each kind under `docs/events.md`, "Kinds", with the class its text gives
 /// and the keys its payload table lists.
 fn doc_kinds() -> BTreeMap<&'static str, (Class, BTreeSet<&'static str>)> {
@@ -755,6 +777,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "extensions_loaded",
             json!({"extensions": [{"name": "e", "version": "0.1.0"}]}),
+        ),
+        (
+            "extensions_loaded",
+            json!({"extensions": [{"name": "e", "version": "0.1.0", "replaces": ["read", "model"]}]}),
         ),
         (
             "extension_state_set",
