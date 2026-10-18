@@ -1020,3 +1020,7 @@ mod paste_tests;
 #[cfg(test)]
 #[path = "lib_reconnect_tests.rs"]
 mod reconnect_tests;
+
+#[cfg(test)]
+#[path = "remote_run_tests.rs"]
+mod remote_run_tests;
