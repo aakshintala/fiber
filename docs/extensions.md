@@ -745,6 +745,85 @@ A package with no case files fails the command. An invalid package path is a
 usage error. The runner reports each case and exits non-zero if any case fails
 (`docs/invocation.md`, "Commands and flags").
 
+### Testing a tool that executes
+
+A call to a tool that declares `executes` goes to the reviewer, as every
+reviewed call does (`docs/permissions.md`, "The reviewer"). A case has no
+field that approves a call, so it approves one through configuration:
+`config` sets `reviewer.model` to `scripted/script.json`, and the script's
+first step carries the reviewer's reply.
+
+A case writes exactly one file into its workspace, the session script, so the
+reviewer reads the same `script.json` from its own step 1. The allow case's
+first step therefore carries both halves: `"text": "allow"` answers the
+reviewer's first stage, and the `tool_calls` entry is the session's call. The
+reviewer takes the text and never sees a tool call, because a review request
+carries no tools. The expected stream records the reviewer's verdict as
+`permission_resolved` with `decided_by: reviewer` and `decision: allow`, and
+the call runs to `tool_call_completed` with `status: completed`.
+
+With no `reviewer.model` the call cannot be allowed: a `notice` with code
+`no_model` is written and the failure escalates (`docs/permissions.md`,
+"How it runs"). The escalation goes to a person as `permission_requested`,
+so a session case with no reviewer waits for an answer instead of finishing.
+Where no person can answer, such as a headless run (`docs/permissions.md`,
+"Headless"), the same failure denies the call with `decided_by:
+no_reviewer` and it never runs, and `tool_call_completed` has `status:
+denied`.
+
+The reviewer's first stage answers `allow` or `check`; a `check` goes to a
+second stage whose reply is `allow` or `block` plus a reason
+(`docs/permissions.md`, "Its verdict"). The case below answers the first
+stage with `allow`.
+
+The `launch` tool declares `executes` and returns without a host call:
+
+```lua
+fiber.tool("launch", {
+  description = "Launches the job.",
+  input_schema = { type = "object" },
+  timeout = 2000,
+  effects = { effects = { "executes" }, reversible = false },
+  run = function() return "launched" end
+})
+```
+
+`tests/launch-allowed.json` sets the reviewer through `config` and expects
+the allowed stream:
+
+```json
+{
+  "script": {"steps": [{"text": "allow", "tool_calls": [{"name": "launch", "arguments": {}}]}, {"text": "Launched."}]},
+  "prompt": "launch it",
+  "config": {"reviewer": {"model": "scripted/script.json"}},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "preamble_built"},
+    {"kind": "opening_message"},
+    {"kind": "turn_started"},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "allow"}},
+    {"kind": "tool_call_requested"},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "usage_recorded"},
+    {"kind": "permission_resolved", "payload": {"decided_by": "reviewer", "decision": "allow"}},
+    {"kind": "tool_call_started"},
+    {"kind": "tool_call_completed", "payload": {"status": "completed"}},
+    {"kind": "step_started"},
+    {"kind": "assistant_message_started"},
+    {"kind": "text_completed", "payload": {"text": "Launched."}},
+    {"kind": "usage_recorded"},
+    {"kind": "assistant_message_completed"},
+    {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
 ## Hooks
 
 A hook is asked at a fixed point in a session and may change what happens
