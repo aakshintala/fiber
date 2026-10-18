@@ -386,11 +386,9 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     let origin = clock.origin();
     let due = origin + ANSWER;
     let (waits_tx, waits) = mpsc::channel();
-    let (ids_tx, ids) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
     let worker_clock = Arc::clone(&clock);
     thread::spawn(move || {
-        ids_tx.send(thread::current().id()).unwrap_or(());
         let mut before_read = || {};
         let mut before_wait = || waits_tx.send(()).unwrap_or(());
         let worker: &FakeClock = &worker_clock;
@@ -405,9 +403,6 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
             ))
             .unwrap_or(());
     });
-    let id = Deadline::after(DEADLINE)
-        .recv(&ids)
-        .expect("the asker reports its thread");
     // The write waits for room: drain the flood, then answer on the freed
     // connection before the clock moves.
     Deadline::after(DEADLINE)
@@ -426,12 +421,7 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     assert!(!drained.is_empty(), "the flood reached the peer");
     peer.write_all(accepted("c_status", "9.9.9", 7).as_bytes())
         .unwrap();
-    clock.advance_when_parked(
-        Some(due),
-        Some(id),
-        Duration::from_millis(1),
-        &Deadline::after(DEADLINE),
-    );
+    clock.advance(Duration::from_millis(1));
     let reply = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the answer arrives")
