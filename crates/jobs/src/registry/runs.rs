@@ -18,6 +18,7 @@ use contract::{ActionId, ErrorCode, JobId, SessionId};
 use super::park::Parked;
 use super::{Registry, final_text, lock};
 use crate::delegate::outcome::empty;
+use crate::error::JobsError;
 
 /// What `id` names in this session's registry.
 #[derive(Debug)]
@@ -519,12 +520,7 @@ impl Registry {
             JobCompleted {
                 job_id,
                 status: Outcome::Failed,
-                error: Some(Failure {
-                    code: ErrorCode::Indeterminate,
-                    message: "The job ended without a result.".to_owned(),
-                    retry_after_ms: None,
-                    provider: None,
-                }),
+                error: Some(Failure::from(&JobsError::JobNoResult)),
                 process: None,
                 output_tail: None,
 
