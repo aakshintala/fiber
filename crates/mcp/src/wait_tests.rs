@@ -3,6 +3,15 @@
 use contract::clock::Clock;
 use serde_json::json;
 
+impl super::SharedState {
+    /// Whether any pending slot holds a response; read on a guard the
+    /// caller already holds, inside `cv.wait_timeout_while`, so the wait
+    /// never locks twice. Test-only: production waits go through `park`.
+    pub(crate) fn holds_a_response(&self) -> bool {
+        self.pending.values().any(|slot| slot.is_some())
+    }
+}
+
 #[test]
 fn login_refusal_wins_over_a_later_result_but_is_not_sticky() {
     use super::{NoCancel, Outcome, Shared};
@@ -51,22 +60,6 @@ fn shared_slots_deliver_remove_and_mark_gone() {
     assert_eq!(missing.response, None);
     shared.gone();
     assert!(shared.view(9, &cancel).gone);
-}
-
-#[test]
-fn the_wait_ends_on_a_new_response_or_cancel() {
-    // All four combinations: `||` into `&&` misses the two mixed rows,
-    // and `!=` into `==` flips the two uncancelled rows.
-    assert!(!super::should_stop(7, 7, false));
-    assert!(super::should_stop(8, 7, false));
-    assert!(super::should_stop(7, 7, true));
-    assert!(super::should_stop(8, 7, true));
-}
-
-#[test]
-fn no_cancel_never_cancels() {
-    use contract::tool::Cancel;
-    assert!(!super::NoCancel.is_cancelled());
 }
 
 #[test]

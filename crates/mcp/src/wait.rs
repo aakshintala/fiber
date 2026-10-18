@@ -71,16 +71,6 @@ pub(crate) struct Shared {
     pub(crate) cv: Condvar,
 }
 
-impl SharedState {
-    /// Whether any pending slot holds a response; read on a guard the
-    /// caller already holds, inside `cv.wait_timeout_while`, so the wait
-    /// never locks twice.
-    #[cfg(test)]
-    pub(crate) fn holds_a_response(&self) -> bool {
-        self.pending.values().any(|slot| slot.is_some())
-    }
-}
-
 impl Wake for Shared {
     fn wake(&self) {
         // The sequence moves under the same lock as the wait, so a clock
@@ -271,13 +261,6 @@ pub(crate) fn deadline(clock: &dyn Clock, timeout: Duration) -> Instant {
     now.checked_add(timeout).unwrap_or(now)
 }
 
-/// True when the waiter stops waiting: a response landed (`seq` moved) or
-/// the call was cancelled. A pure function of its inputs so a test pins all
-/// four combinations without parking a thread.
-fn should_stop(seq: u64, seen: u64, cancelled: bool) -> bool {
-    seq != seen || cancelled
-}
-
 /// Blocks until woken or `until` passes on the clock, releasing every lock
 /// first: the response lands under the shared lock, so joining ahead of
 /// that release would deadlock.
@@ -296,7 +279,8 @@ pub(crate) fn park(
         None,
         &shared.cv,
         lock(&shared.inner),
-        |guard| should_stop(guard.seq, seen, cancel.is_cancelled()),
+        // The wait ends on a new response (`seq` moved) or a cancel.
+        |guard| guard.seq != seen || cancel.is_cancelled(),
     );
 }
 
