@@ -3096,9 +3096,6 @@ fn menu_synopses_take_the_text_before_the_description_gap() {
     assert!(!fields.contains(&"sessions [--all]"));
 }
 
-/// The Command column of `docs/invocation.md` is the synopsis, so the
-/// help menu holds each built command's row word for word. Rows the
-/// parser does not build name future commands, not drift.
 /// The `SessionArgs` a `to_argv` round-trip returns: `parse_from` of
 /// `fiber` plus the argv, which must be the session command with equal
 /// fields.
@@ -3263,6 +3260,44 @@ fn session_argv_round_trips_a_worktree_and_a_login_shell() {
     assert_same_session(&round_tripped(&args), &args);
 }
 
+#[test]
+fn session_argv_round_trips_a_workspace_named_like_a_flag() {
+    let args = SessionArgs {
+        workspace: PathBuf::from("-w"),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    let rendered: Vec<String> = argv
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    // One argument, so a workspace starting with `-` never reads as a
+    // flag.
+    assert!(
+        rendered.contains(&"--workspace=-w".to_owned()),
+        "{rendered:?}"
+    );
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+#[test]
+fn session_argv_round_trips_a_workspace_that_is_not_utf8() {
+    let args = SessionArgs {
+        // Built from bytes, never created on disk: only the argv and
+        // its parse ever see these bytes.
+        workspace: PathBuf::from(OsString::from_vec(b"/w/\xff".to_vec())),
+        ..minimal_session()
+    };
+    let argv = args.to_argv();
+    // The workspace travels byte for byte: a lossy render would fail
+    // the round-trip below.
+    assert_eq!(argv[2], OsString::from_vec(b"--workspace=/w/\xff".to_vec()),);
+    assert_same_session(&round_tripped(&args), &args);
+}
+
+/// The Command column of `docs/invocation.md` is the synopsis, so the
+/// help menu holds each built command's row word for word. Rows the
+/// parser does not build name future commands, not drift.
 #[test]
 fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
     let rendered = menu();
