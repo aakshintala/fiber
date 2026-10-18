@@ -802,6 +802,57 @@ fn extension_spawn_failure_binds_once_but_records_nothing() {
     assert!(rig.inbox.try_recv().is_err());
 }
 
+type Releases = Arc<std::sync::Mutex<Vec<std::fs::File>>>;
+
+fn held_children(rig: &Rig) -> (Launch, Releases) {
+    let releases = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held = releases.clone();
+    let home = rig._dir.path().to_path_buf();
+    let launch: Launch = Arc::new(move |child| {
+        let path = home.join(format!("release-{}", child.job_id.0));
+        fakes::fifo(&path);
+        // Keep both ends open until the child consumes its release, even
+        // when it has not opened the FIFO yet.
+        let release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        held.lock().unwrap().push(release);
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "read line < \"$1\"", "held-child"])
+            .arg(path);
+        command
+    });
+    (launch, releases)
+}
+
+#[test]
+fn an_immediate_exit_still_delivers_the_extension_start_before_its_end() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.launch = Arc::new(|_| {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        command
+    });
+    let id = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |_| {})
+        .unwrap();
+    let deadline = Deadline::after(DEADLINE);
+    let Delivery::ExtensionJob(started, _) =
+        deadline.recv_or_fail(&rig.inbox, "immediate child's start")
+    else {
+        panic!("start must precede end");
+    };
+    assert_eq!(started.job_id, id);
+    let Delivery::Job(notice) = deadline.recv_or_fail(&rig.inbox, "immediate child's end") else {
+        panic!("end follows start");
+    };
+    assert_eq!(notice.completed.job_id, id);
+}
+
 #[test]
 fn extension_start_binds_before_launch_and_sends_start_before_end_at_depth_one() {
     let rig = rig();
@@ -809,28 +860,18 @@ fn extension_start_binds_before_launch_and_sends_start_before_end_at_depth_one()
     spawned.depth = 1;
     let bound = Arc::new(std::sync::Mutex::new(Vec::new()));
     let checked = bound.clone();
-    spawned.launch = Arc::new(move |launch| {
-        assert_eq!(launch.depth, 2);
-        assert_eq!(*checked.lock().unwrap(), vec![launch.job_id.clone()]);
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 0"]);
-        command
+    let (launch, releases) = held_children(&rig);
+    spawned.launch = Arc::new(move |child| {
+        assert_eq!(child.depth, 2);
+        assert_eq!(*checked.lock().unwrap(), vec![child.job_id.clone()]);
+        launch(child)
     });
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let release_rx = std::sync::Mutex::new(release_rx);
-    spawned.watch = Arc::new(move |_, _, _| {
-        let _sent = entered_tx.send(());
-        let _released = release_rx.lock().unwrap().recv();
-        Err(std::io::Error::other("done"))
-    });
-    let _guard = Watchdog::matching(&rig.sessions.display().to_string());
+    let _guard = Watchdog::matching(&rig._dir.path().display().to_string());
     let id = spawned
         .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
             bound.lock().unwrap().push(id.clone())
         })
         .unwrap();
-    Deadline::after(DEADLINE).recv_or_fail(&entered_rx, "runner paused in watch");
     let Delivery::ExtensionJob(started, delegate) = rig.inbox.try_recv().unwrap() else {
         panic!("start precedes the end");
     };
@@ -839,7 +880,10 @@ fn extension_start_binds_before_launch_and_sends_start_before_end_at_depth_one()
     assert_eq!(started.extension.as_deref(), Some("a"));
     assert_eq!(started.tool, None);
     assert!(rig.inbox.try_recv().is_err());
-    drop(release_tx);
+    use std::io::Write as _;
+    for release in releases.lock().unwrap().iter_mut() {
+        writeln!(release, "go").unwrap();
+    }
     let Delivery::Job(notice) =
         Deadline::after(DEADLINE).recv_or_fail(&rig.inbox, "delegate end after release")
     else {
@@ -853,20 +897,13 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
     for extension_tenth in [false, true] {
         let rig = rig();
         let mut spawned = tool(&rig);
-        let (release_tx, release_rx) = mpsc::channel::<()>();
-        let release_rx = std::sync::Mutex::new(release_rx);
-        spawned.watch = Arc::new(move |_, _, _| {
-            let _released = release_rx.lock().unwrap().recv();
-            Err(std::io::Error::other("done"))
-        });
+        let (launch, releases) = held_children(&rig);
         let counted = rig.launch_count.clone();
-        spawned.launch = Arc::new(move |_| {
+        spawned.launch = Arc::new(move |child| {
             counted.fetch_add(1, Ordering::SeqCst);
-            let mut command = Command::new("sh");
-            command.args(["-c", "exit 0"]);
-            command
+            launch(child)
         });
-        let _guard = Watchdog::matching(&rig.sessions.display().to_string());
+        let _guard = Watchdog::matching(&rig._dir.path().display().to_string());
         let shell = rig
             .registry
             .open(crate::support::opening("shell does not count"))
@@ -931,7 +968,21 @@ fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
             .report(crate::support::ended_ok("ignored"), None);
         start(!extension_tenth).unwrap();
         assert_eq!(rig.launch_count.load(Ordering::SeqCst), 2);
-        drop(release_tx);
+        use std::io::Write as _;
+        for release in releases.lock().unwrap().iter_mut() {
+            writeln!(release, "go").unwrap();
+        }
+        // Drain the two real children as well as the synthetic starts and end.
+        let deadline = Deadline::after(DEADLINE);
+        let mut children = 0;
+        while children < 2 {
+            let delivery = deadline.recv_or_fail(&rig.inbox, "released cap fixture children ended");
+            if let Delivery::Job(notice) = delivery
+                && notice.completed.job_id.0 != "j_8"
+            {
+                children += 1;
+            }
+        }
         drop(shell);
     }
 }
