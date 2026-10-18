@@ -21,14 +21,14 @@ use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, function_call, hello, is_status, read_kinds, spawn_watched, stream,
+    Deadline, KillGroup, StdoutRun, function_call, hello, read_kinds, spawn_watched, stream,
 };
 
 struct Setup {
@@ -131,7 +131,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` to its exit under the deadline.
     #[track_caller]
-    fn run(&self, args: &[&str], empty_path: &Path) -> Run {
+    fn run(&self, args: &[&str], empty_path: &Path) -> StdoutRun {
         let mut command = self.fiber(args, empty_path);
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
@@ -153,46 +153,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::new(output)
-    }
-}
-
-#[derive(Debug)]
-struct Run {
-    code: Option<i32>,
-    #[allow(dead_code, reason = "kept for failure output")]
-    stdout: String,
-    stderr: String,
-    lines: Vec<Value>,
-}
-
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
-    }
-
-    fn new(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        Self {
-            code: output.status.code(),
-            lines: stdout
-                .lines()
-                .filter(|l| !is_status(l))
-                .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-                .collect(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-            stdout,
-        }
+        StdoutRun::from(output)
     }
 }
 

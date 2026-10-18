@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
-use support::{Deadline, Setup};
+use support::{Deadline, Output, Setup};
 
 /// Every target a release publishes an archive for.
 const TARGETS: [&str; 3] = [
@@ -53,11 +53,6 @@ const LINUX_X86_64: Host = Host {
     cpu: "x86_64",
     arm64: "0",
 };
-
-struct Run {
-    code: Option<i32>,
-    stderr: String,
-}
 
 impl Setup {
     /// A root whose stub binary reports `version`.
@@ -117,7 +112,7 @@ impl Setup {
     /// with `FIBER_INSTALL_DIR` set to `dest` and then each of `env`, and
     /// waits for it under the test's [`Deadline`].
     #[track_caller]
-    fn install(&self, host: &Host, env: &[(&str, &str)]) -> Run {
+    fn install(&self, host: &Host, env: &[(&str, &str)]) -> Output {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
         let path = format!("{}:/usr/bin:/bin", fixture().join("bin").display());
         let mut command = Command::new("/bin/dash");
@@ -154,10 +149,7 @@ impl Setup {
             0,
             "install.sh left its temporary directory"
         );
-        Run {
-            code: output.status.code(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 
     /// Asserts `dest/fiber` is the stub with mode 755 and no staging

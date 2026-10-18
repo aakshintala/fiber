@@ -31,14 +31,23 @@ fn is_ephemeral(line: &str) -> bool {
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
 /// stderr.
-struct Run {
-    code: Option<i32>,
+/// One finished run that keeps stdout's raw lines: the resume tests compare
+/// them against the session log. Shared behaviour (`kinds`, `session_id`)
+/// comes from the inner run.
+struct RawRun {
+    run: support::Run,
     raw: Vec<String>,
-    lines: Vec<Value>,
-    stderr: String,
 }
 
-impl From<Output> for Run {
+impl std::ops::Deref for RawRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<Output> for RawRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let raw: Vec<String> = stdout
@@ -51,26 +60,17 @@ impl From<Output> for Run {
             .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             raw,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|l| l["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
-    }
-
+impl RawRun {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.root.path()).unwrap();
@@ -193,7 +193,7 @@ fn a_new_session_cuts_a_shell_result_to_its_configured_cap() {
     write_config(&setup, json!({"shell": {"max_result_bytes": 100}}));
 
     let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "go"]));
-    let run = Run::from(output);
+    let run = RawRun::from(output);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), tool_kinds());
@@ -242,7 +242,7 @@ fn a_resumed_session_cuts_a_shell_result_to_its_configured_cap() {
     .unwrap();
     setup.provider(&server);
 
-    let first = Run::from(run_to_exit(
+    let first = RawRun::from(run_to_exit(
         setup.deadline,
         "fiber ask",
         setup.fiber(&["ask", "one"]),
@@ -251,7 +251,7 @@ fn a_resumed_session_cuts_a_shell_result_to_its_configured_cap() {
     let id = first.session_id().to_owned();
 
     write_config(&setup, json!({"shell": {"max_result_bytes": 100}}));
-    let second = Run::from(run_to_exit(
+    let second = RawRun::from(run_to_exit(
         setup.deadline,
         "fiber ask --resume",
         setup.fiber(&["ask", "--resume", &id, "go"]),
@@ -312,7 +312,7 @@ fn a_new_session_cuts_a_read_at_its_configured_cap_with_no_artifact() {
     write_config(&setup, json!({"read": {"max_result_bytes": 100}}));
 
     let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "go"]));
-    let run = Run::from(output);
+    let run = RawRun::from(output);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), tool_kinds());

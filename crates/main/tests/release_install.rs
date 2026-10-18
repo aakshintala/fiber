@@ -20,7 +20,7 @@ use std::thread;
 
 use fakes::ustar::{archive, gzip, header, sha256};
 use serde_json::json;
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 /// The version the binary under test was built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -37,7 +37,7 @@ impl Setup {
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
     #[track_caller]
-    fn run_in_root(&self, args: &[&str]) -> Run {
+    fn run_in_root(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -64,18 +64,8 @@ impl Setup {
             ),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
-}
-
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
 }
 
 /// A release of `anthropic` and `memory` at this binary's version, served
