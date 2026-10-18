@@ -1221,6 +1221,72 @@ fn failed_inner_and_pre_handoff_loads_never_seed() {
     );
 }
 
+/// A log whose one skill load of `status` predates the handoff, as
+/// [`seed_log`] holds a completed one: only a completed Fiber-run load
+/// arms the resend.
+fn status_log(status: CallStatus) -> Vec<(u64, Option<&'static str>, Option<&'static str>, Event)> {
+    vec![
+        (0, None, None, started("/w", None)),
+        (1, Some("t_1"), None, turn()),
+        (2, Some("t_1"), Some("a_1"), requested()),
+        (
+            3,
+            Some("t_1"),
+            Some("a_1"),
+            skilled_completed(status, "alpha", "/w/alpha/SKILL.md"),
+        ),
+        (4, Some("t_2"), None, turn()),
+        (5, Some("t_2"), None, handoff()),
+    ]
+}
+
+/// Folds [`status_log`] and checks the seed holds no skill and the live
+/// render agrees with the rebuild: the load of that status never counts.
+fn check_status_seeds_nothing(name: &str, status: CallStatus) {
+    let (_home, sessions) = sessions(name);
+    let lines: Vec<Envelope> = status_log(status)
+        .iter()
+        .map(|(seq, turn, action, event)| envelope(A, *seq, *turn, *action, event))
+        .collect();
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.seed.skills.is_empty());
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut carry = crate::handoff::Carry::default();
+    for line in &lines {
+        let Some(event) = Event::from_envelope(line).unwrap() else {
+            continue;
+        };
+        crate::conversation::render(
+            &mut live,
+            &event,
+            line.action_id.as_ref(),
+            "fake/model-1",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert!(carry.skills.is_empty());
+    let rebuilt = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn a_cancelled_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-cancelled", CallStatus::Cancelled);
+}
+
+#[test]
+fn a_denied_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-denied", CallStatus::Denied);
+}
+
+#[test]
+fn a_failed_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-failed", CallStatus::Failed);
+}
+
 #[test]
 fn a_crash_after_handoff_completed_rebuilds_the_armed_resend() {
     let (_home, sessions) = sessions("crash-window-one");

@@ -693,6 +693,78 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
 }
 
 #[test]
+fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
+    // The link's header still names the loaded skill, so the handoff's
+    // fresh listing holds beta and only the resend's permission check
+    // leaves it out: without `refuse` the credential bytes would be read
+    // and sent again.
+    let skill = Skill::named();
+    let mut session = start(
+        vec![
+            load_calls(&["alpha", "beta"]),
+            Scripted::text("The note."),
+            Scripted::text("Done."),
+        ],
+        vec![handoff("c_h", None)],
+        &skill,
+    );
+    let target = session.credentials.join("sec").join("SKILL.md");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(
+        &target,
+        "---\nname: beta\ndescription: The beta skill.\n---\nMARKER body.\n",
+    )
+    .unwrap();
+    *skill.after.lock().unwrap() = Some(Box::new(move |name, file| {
+        if name == "beta" {
+            std::fs::remove_file(file).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, file).unwrap();
+        }
+    }));
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            SKILL2,
+            STEP,
+            HANDOFF_NOTE,
+            &["skills_resent", "opening_message", "notice"],
+            REPLY,
+            ENDED,
+        ],
+    );
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["outcome"], "completed");
+    let resent = of_kind(&lines, "skills_resent");
+    assert_eq!(resent.len(), 1);
+    let sent = payload_skills(resent[0]);
+    let names: Vec<&str> = sent.iter().map(|skill| skill.0.as_str()).collect();
+    assert_eq!(names, ["alpha"]);
+    let notices = resend_notices(&lines);
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].payload["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Skill beta was not sent again after the handoff: "),
+        "{}",
+        notices[0].payload["message"]
+    );
+    // The credential bytes reach neither the log nor any request.
+    let logged = serde_json::to_string(&lines).unwrap();
+    assert!(!logged.contains("MARKER"), "{logged}");
+    for request in &session.requests() {
+        let text = serde_json::to_string(&request.conversation).unwrap();
+        assert!(!text.contains("MARKER"), "{text}");
+    }
+}
+
+#[test]
 fn a_resume_renders_the_same_bytes() {
     let skill = Skill::named();
     let mut session = start(
