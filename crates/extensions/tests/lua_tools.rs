@@ -122,7 +122,7 @@ fn each_tool_reports_its_declared_keep_as_its_bound() {
 fiber.tool("both", {
   description = "d", input_schema = { type = "object" },
   effects = { effects = {}, reversible = true }, timeout = 1000,
-  keep = { start = 2048, ["end"] = 512 },
+  keep = { head = 2048, tail = 512 },
   run = function() return "" end,
 })
 fiber.tool("plain", {

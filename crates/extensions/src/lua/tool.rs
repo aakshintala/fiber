@@ -196,16 +196,16 @@ fn is_tool_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// A tool's `keep`: the byte counts of the start and of the end of a
-/// long result the model is sent (`docs/tools.md`, "Bounded results").
-/// Either may be omitted and defaults to 0; at least one is above 0.
-/// A nil value is absent and gives `Bound::DEFAULT`.
+/// A tool's `keep`: the byte counts of the start (`head`) and of the
+/// end (`tail`) of a long result the model is sent (`docs/tools.md`,
+/// "Bounded results"). Either may be omitted and defaults to 0; at least
+/// one is above 0. A nil value is absent and gives `Bound::DEFAULT`.
 fn keep(value: &LuaValue) -> Result<Bound, String> {
     if value.is_nil() {
         return Ok(Bound::DEFAULT);
     }
     let LuaValue::Table(table) = value else {
-        return Err("`keep` must be a table of `start` and `end`".to_owned());
+        return Err("`keep` must be a table of `head` and `tail`".to_owned());
     };
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, _) = pair.map_err(|e| e.to_string())?;
@@ -226,8 +226,8 @@ fn keep(value: &LuaValue) -> Result<Bound, String> {
             | LuaValue::Error(_)
             | LuaValue::Other(_) => key.type_name().to_owned(),
         };
-        if name != "start" && name != "end" {
-            return Err(format!("`keep`: `{name}` is not `start` or `end`"));
+        if name != "head" && name != "tail" {
+            return Err(format!("`keep`: `{name}` is not `head` or `tail`"));
         }
     }
     let pair = |key: &str| -> Result<usize, String> {
@@ -240,15 +240,17 @@ fn keep(value: &LuaValue) -> Result<Bound, String> {
         };
         usize::try_from(n).map_err(|_| format!("`keep`: `{key}` must be a whole number of bytes"))
     };
-    let start = pair("start")?;
-    let end = pair("end")?;
-    if start == 0 && end == 0 {
-        return Err("`keep`: `start` and `end` cannot both be 0".to_owned());
+    let head = pair("head")?;
+    let tail = pair("tail")?;
+    if head == 0 && tail == 0 {
+        return Err("`keep`: `head` and `tail` cannot both be 0".to_owned());
     }
-    start
-        .checked_add(end)
-        .map(|_| Bound { start, end })
-        .ok_or_else(|| "`keep`: `start` plus `end` is too large".to_owned())
+    head.checked_add(tail)
+        .map(|_| Bound {
+            start: head,
+            end: tail,
+        })
+        .ok_or_else(|| "`keep`: `head` plus `tail` is too large".to_owned())
 }
 
 /// A tool's `input_schema`: a table that reads as a JSON object whose `type`

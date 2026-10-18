@@ -4,8 +4,8 @@
 //! its own `FIBER_HOME`, holding an ordinary provider whose base URL is
 //! the fake server, and the extensions under test.
 //!
-//! In Lua `end` is a keyword, so it is written in brackets: a keep table
-//! is `{ start = 1024, ["end"] = 1024 }`.
+//! A keep table is `{ head = 1024, tail = 1024 }`: `head` maps to
+//! `Bound.start` and `tail` to `Bound.end`.
 
 #![allow(
     clippy::unwrap_used,
@@ -164,6 +164,52 @@ fn plain(name: &str, run: &str) -> String {
     )
 }
 
+/// Asserts two strings are byte-identical without printing either whole
+/// on failure: only the two lengths and the first differing offset
+/// (`docs/testing.md`, "What a test asserts").
+#[track_caller]
+fn assert_large_eq(actual: &str, expected: &str) {
+    if actual.len() != expected.len() {
+        panic!(
+            "large strings differ in length: actual {} bytes, expected {} bytes",
+            actual.len(),
+            expected.len()
+        );
+    }
+    if let Some(offset) = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right)
+    {
+        panic!(
+            "large strings of {} bytes differ first at offset {offset}",
+            actual.len()
+        );
+    }
+}
+
+/// The single text part of a `tool_call_completed`'s `content`: the JSON
+/// structure is checked here, so the text itself compares byte-exact
+/// through [`assert_large_eq`].
+#[track_caller]
+fn completed_text(completed: &Value) -> &str {
+    let content = completed["content"]
+        .as_array()
+        .expect("content is a list of one text part");
+    assert_eq!(content.len(), 1, "content holds one part");
+    assert_eq!(content[0]["type"], "text");
+    content[0]["text"].as_str().expect("the part holds text")
+}
+
+/// The one model-facing output the run sent: exactly one call output, so
+/// its bytes compare through [`assert_large_eq`].
+#[track_caller]
+fn sent_output(server: &ProviderServer) -> String {
+    let sent = outputs_sent(server);
+    assert_eq!(sent.len(), 1, "one call output sent");
+    sent.into_iter().next().unwrap()
+}
+
 /// The `tool_call_completed` of a run whose model makes one call: its
 /// action's artifact path, and the artifact's absolute path in the
 /// session directory.
@@ -190,7 +236,7 @@ fn a_larger_declared_cap_sends_a_result_past_the_default_uncut() {
         "big",
         &keeping(
             "big",
-            "{ start = 32768 }",
+            "{ head = 32768 }",
             &format!("function() return string.rep(\"a\", {}) end", full.len()),
         ),
     );
@@ -198,13 +244,10 @@ fn a_larger_declared_cap_sends_a_result_past_the_default_uncut() {
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
-    assert_eq!(
-        completed["content"],
-        json!([{"type": "text", "text": full}])
-    );
+    assert_large_eq(completed_text(completed), &full);
     assert_eq!(completed.get("artifact"), None);
     assert_eq!(completed.get("kept"), None);
-    assert_eq!(outputs_sent(&server), [full]);
+    assert_large_eq(&sent_output(&server), &full);
 }
 
 #[test]
@@ -217,7 +260,7 @@ fn a_smaller_declared_cap_cuts_at_it_with_the_artifact() {
         "small",
         &keeping(
             "small",
-            "{ start = 1024 }",
+            "{ head = 1024 }",
             "function() return string.rep(\"b\", 4096) end",
         ),
     );
@@ -226,19 +269,16 @@ fn a_smaller_declared_cap_cuts_at_it_with_the_artifact() {
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
-    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
     let text = format!(
         "{}\n[{} bytes cut. The full output is in {}; read it with `read`.]",
         &full[..1024],
         full.len() - 1024,
         path.display()
     );
-    assert_eq!(
-        completed["content"],
-        json!([{"type": "text", "text": text}])
-    );
+    assert_large_eq(completed_text(completed), &text);
     assert_eq!(completed["kept"], json!([[0, 1024]]));
-    assert_eq!(outputs_sent(&server), [text]);
+    assert_large_eq(&sent_output(&server), &text);
 }
 
 #[test]
@@ -257,7 +297,7 @@ fn a_keep_of_both_ends_sends_the_first_and_last_kib_with_the_notice_between() {
         "both",
         &keeping(
             "both",
-            "{ start = 1024, [\"end\"] = 1024 }",
+            "{ head = 1024, tail = 1024 }",
             "function() return string.rep(\"H\", 1024) .. string.rep(\"M\", 62 * 1024) .. string.rep(\"T\", 1024) end",
         ),
     );
@@ -266,7 +306,7 @@ fn a_keep_of_both_ends_sends_the_first_and_last_kib_with_the_notice_between() {
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
-    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
     let text = format!(
         "{}\n[{} bytes cut. The full output is in {}; read it with `read`.]\n{}",
         &full[..1024],
@@ -274,12 +314,9 @@ fn a_keep_of_both_ends_sends_the_first_and_last_kib_with_the_notice_between() {
         path.display(),
         &full[full.len() - 1024..]
     );
-    assert_eq!(
-        completed["content"],
-        json!([{"type": "text", "text": text}])
-    );
+    assert_large_eq(completed_text(completed), &text);
     assert_eq!(completed["kept"], json!([[0, 1024], [64512, 65536]]));
-    assert_eq!(outputs_sent(&server), [text]);
+    assert_large_eq(&sent_output(&server), &text);
 }
 
 #[test]
@@ -300,19 +337,16 @@ fn no_keep_cuts_at_the_default_sixteen_kib() {
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
-    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
     let text = format!(
         "{}\n[{} bytes cut. The full output is in {}; read it with `read`.]",
         &full[..16384],
         full.len() - 16384,
         path.display()
     );
-    assert_eq!(
-        completed["content"],
-        json!([{"type": "text", "text": text}])
-    );
+    assert_large_eq(completed_text(completed), &text);
     assert_eq!(completed["kept"], json!([[0, 16384]]));
-    assert_eq!(outputs_sent(&server), [text]);
+    assert_large_eq(&sent_output(&server), &text);
 }
 
 #[test]
@@ -330,7 +364,7 @@ fn a_configured_cap_divides_in_the_declared_start_to_end_proportion() {
         "capped",
         &keeping(
             "capped",
-            "{ start = 1024, [\"end\"] = 1024 }",
+            "{ head = 1024, tail = 1024 }",
             "function() return string.rep(\"d\", 4096) end",
         ),
     );
@@ -339,7 +373,7 @@ fn a_configured_cap_divides_in_the_declared_start_to_end_proportion() {
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
-    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
     // The end gets its share rounded down, and the start gets the rest:
     // 50 and 50 (`docs/tools.md`, "Bounded results").
     let text = format!(
@@ -349,12 +383,9 @@ fn a_configured_cap_divides_in_the_declared_start_to_end_proportion() {
         path.display(),
         &full[full.len() - 50..]
     );
-    assert_eq!(
-        completed["content"],
-        json!([{"type": "text", "text": text}])
-    );
+    assert_large_eq(completed_text(completed), &text);
     assert_eq!(completed["kept"], json!([[0, 50], [4046, 4096]]));
-    assert_eq!(outputs_sent(&server), [text]);
+    assert_large_eq(&sent_output(&server), &text);
 }
 
 #[test]
@@ -366,8 +397,8 @@ fn a_malformed_keep_leaves_the_tool_out_and_names_it_in_a_notice() {
         "two",
         &format!(
             "{}{}",
-            keeping("bad", "{ start = -1 }", "function() return \"\" end"),
-            keeping("kept", "{ start = 1024 }", "function() return \"kept\" end"),
+            keeping("bad", "{ head = -1 }", "function() return \"\" end"),
+            keeping("kept", "{ head = 1024 }", "function() return \"kept\" end"),
         ),
     );
     let run = ask(&setup, "use the tool");
@@ -377,7 +408,7 @@ fn a_malformed_keep_leaves_the_tool_out_and_names_it_in_a_notice() {
         [(
             "extension_failed".to_owned(),
             Some("fiber.test/two".to_owned()),
-            "`bad` tool not registered: `keep`: `start` must be a whole number of bytes".to_owned()
+            "`bad` tool not registered: `keep`: `head` must be a whole number of bytes".to_owned()
         )]
     );
     let names = sent_names(&server, 0);

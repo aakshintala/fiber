@@ -249,16 +249,16 @@ fn keep_absent_or_nil_registers_the_default_bound() {
 fn keep_declares_how_many_bytes_of_each_end_the_model_is_sent() {
     let cases = [
         (
-            "{ start = 1024, [\"end\"] = 1024 }",
+            "{ head = 1024, tail = 1024 }",
             Bound {
                 start: 1024,
                 end: 1024,
             },
         ),
-        ("{ [\"end\"] = 8 }", Bound { start: 0, end: 8 }),
-        ("{ start = 5 }", Bound { start: 5, end: 0 }),
-        ("{ start = 0, [\"end\"] = 1 }", Bound { start: 0, end: 1 }),
-        ("{ start = 1, [\"end\"] = 0 }", Bound { start: 1, end: 0 }),
+        ("{ tail = 8 }", Bound { start: 0, end: 8 }),
+        ("{ head = 5 }", Bound { start: 5, end: 0 }),
+        ("{ head = 0, tail = 1 }", Bound { start: 0, end: 1 }),
+        ("{ head = 1, tail = 0 }", Bound { start: 1, end: 0 }),
     ];
     for (keep, bound) in cases {
         let (_dir, ext) = extension(&format!("fiber.tool(\"x\", {})\n", spec_with("keep", keep)));
@@ -270,35 +270,37 @@ fn keep_declares_how_many_bytes_of_each_end_the_model_is_sent() {
 #[test]
 fn each_bad_keep_leaves_one_problem_and_the_rest_stand() {
     let cases = [
-        ("5", "`keep` must be a table of `start` and `end`"),
-        ("\"a\"", "`keep` must be a table of `start` and `end`"),
-        ("{}", "`keep`: `start` and `end` cannot both be 0"),
+        ("5", "`keep` must be a table of `head` and `tail`"),
+        ("\"a\"", "`keep` must be a table of `head` and `tail`"),
+        ("{}", "`keep`: `head` and `tail` cannot both be 0"),
         (
-            "{ start = 0, [\"end\"] = 0 }",
-            "`keep`: `start` and `end` cannot both be 0",
+            "{ head = 0, tail = 0 }",
+            "`keep`: `head` and `tail` cannot both be 0",
         ),
         (
-            "{ start = -1 }",
-            "`keep`: `start` must be a whole number of bytes",
+            "{ head = -1 }",
+            "`keep`: `head` must be a whole number of bytes",
         ),
         (
-            "{ [\"end\"] = -2 }",
-            "`keep`: `end` must be a whole number of bytes",
+            "{ tail = -2 }",
+            "`keep`: `tail` must be a whole number of bytes",
         ),
         (
-            "{ start = 1.5 }",
-            "`keep`: `start` must be a whole number of bytes",
+            "{ head = 1.5 }",
+            "`keep`: `head` must be a whole number of bytes",
         ),
         (
-            "{ start = 1024.0 }",
-            "`keep`: `start` must be a whole number of bytes",
+            "{ head = 1024.0 }",
+            "`keep`: `head` must be a whole number of bytes",
         ),
         (
-            "{ start = \"9\" }",
-            "`keep`: `start` must be a whole number of bytes",
+            "{ head = \"9\" }",
+            "`keep`: `head` must be a whole number of bytes",
         ),
-        ("{ stop = 5 }", "`keep`: `stop` is not `start` or `end`"),
-        ("{ 5 }", "`keep`: `1` is not `start` or `end`"),
+        ("{ stop = 5 }", "`keep`: `stop` is not `head` or `tail`"),
+        ("{ start = 5 }", "`keep`: `start` is not `head` or `tail`"),
+        ("{ [\"end\"] = 5 }", "`keep`: `end` is not `head` or `tail`"),
+        ("{ 5 }", "`keep`: `1` is not `head` or `tail`"),
     ];
     for (keep, why) in cases {
         let (_dir, ext) = extension(&format!(
@@ -321,10 +323,7 @@ fn each_bad_keep_leaves_one_problem_and_the_rest_stand() {
 fn keep_of_two_maxintegers_registers_on_a_64_bit_target() {
     let (_dir, ext) = extension(&format!(
         "fiber.tool(\"x\", {})\n",
-        spec_with(
-            "keep",
-            "{ start = math.maxinteger, [\"end\"] = math.maxinteger }"
-        ),
+        spec_with("keep", "{ head = math.maxinteger, tail = math.maxinteger }"),
     ));
     assert_eq!(
         tools(&ext).get("x").unwrap().keep,
