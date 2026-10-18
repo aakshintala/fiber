@@ -72,7 +72,7 @@ use crate::listen::Held;
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
 pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
-pub use crate::recent::{Left, RecentRow, append};
+pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
 
 /// What the hub reads from the configuration when it starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
