@@ -98,6 +98,7 @@ impl Session {
             }
             seen_clients && seen_extensions
         });
+        assert_one_clients(&stream);
         Self {
             child,
             guard,
@@ -611,4 +612,40 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
         .find(|line| line["kind"] == "command_rejected")
         .unwrap();
     assert_eq!(rejection["payload"]["code"], "closing");
+}
+
+#[test]
+fn startup_waits_for_extensions_loaded_and_clients_in_any_order() {
+    let (setup, _server) = fixture();
+    let fifo = setup.root.path().join("startup.fifo");
+    let mut command = Command::new("mkfifo");
+    command.arg(&fifo).process_group(0);
+    assert!(
+        run_to_exit(setup.deadline, "make startup fifo", command)
+            .status
+            .success()
+    );
+    // The startup extension initialization blocks reading the fifo: the
+    // session's socket and first stdout line only exist once it completes,
+    // so the writer below rendezvouses before the subscribe, and the
+    // startup wait still collects both events whatever order they land in.
+    extension(
+        &setup,
+        &format!("host.fs.read({:?})", fifo.to_str().unwrap()),
+    );
+    let (tx, written) = mpsc::channel();
+    thread::spawn(move || {
+        fs::write(fifo, b"").unwrap();
+        tx.send(()).unwrap();
+    });
+    let session = Session::start(setup);
+    session.setup.deadline.recv(&written).unwrap();
+    let stream = session.finish();
+    for kind in ["extensions_loaded", "clients"] {
+        assert_eq!(
+            stream.iter().filter(|line| line["kind"] == kind).count(),
+            1,
+            "{stream:?}"
+        );
+    }
 }
