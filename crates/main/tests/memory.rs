@@ -149,6 +149,8 @@ fn write_text(file: &Path, text: &str) {
 /// One finished run that keeps stdout's text: the extension-list test pins
 /// `list`'s text, while the ask tests read parsed lines. Shared behaviour
 /// (`kinds`, `first`) comes from the inner run.
+// debt: runner-local StdoutRun (#1707 keeps it: shared behaviour lives in
+// support::Run, while only this file's extension-list test pins stdout text).
 struct StdoutRun {
     run: support::Run,
     stdout: String,
