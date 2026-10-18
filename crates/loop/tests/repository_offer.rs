@@ -67,6 +67,14 @@ impl Fake {
 }
 
 impl RepositoryCode for Fake {
+    fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+        Err(contract::shapes::Failure {
+            code: contract::ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
         self.gathers.fetch_add(1, Ordering::SeqCst);
         if let Some(failure) = self.gather_fails.lock().unwrap().clone() {
@@ -115,6 +123,7 @@ fn failure(code: ErrorCode, message: &str) -> Failure {
 fn item(kind: OfferedKind, name: &str, required: bool) -> Unapproved {
     Unapproved {
         offered: OfferedItem {
+            files: vec![],
             kind,
             name: name.to_owned(),
             hash: format!("h_{name}"),

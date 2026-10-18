@@ -158,7 +158,8 @@ below names a shape from this section by its name.
   milliseconds, and its key ends `_ms`.
 - Ids are strings. A token count is an integer.
 - A path to a file in the session directory is relative to that directory,
-  such as `artifacts/j_5e10.log`. Every other path is absolute.
+  such as `artifacts/j_5e10.log`. An offered item's `files` are relative to
+  the workspace, `/`-separated. Every other path is absolute.
 - A value listed as a closed set is breaking to extend ("Versioning"). An open
   set is additive, and a consumer treats an unknown value as the table says.
 
@@ -781,7 +782,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `files` (array of strings, sorted workspace-relative paths, possibly empty; absent on older offers), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
@@ -1345,6 +1346,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
+| `offered_file` | `text` (string), the file's full UTF-8 text |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
@@ -1375,7 +1377,7 @@ Every driver command is answered with exactly one of these, echoing its id
 A session is reconstructed from the log and its
 [configuration](configuration.md), nothing else.
 
-Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
+Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds, the pending offer's `repository_code_offered` and `repository_code_resolved`, and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
 residency policies over one primitive: a range read by `seq`. A handoff
 shortening what the model sees must not shorten what a person can scroll back
 to.

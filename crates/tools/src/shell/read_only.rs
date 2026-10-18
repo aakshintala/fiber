@@ -224,8 +224,9 @@ const GIT_BLAME: &[Flag] = &[
 /// `git branch <name>` creates, so only `--show-current` reads.
 pub(super) const EXACT: &[&[&str]] = &[&["git", "branch", "--show-current"]];
 
-/// Fiber's own read-only commands. A later change can pass a person's
-/// `shell.read_only` entries in beside this slice.
+/// Fiber's own read-only commands. The person's `shell.read_only` entries
+/// reach the classifier beside this slice, never under a name above: a
+/// configured entry whose basename is built in is never consulted.
 pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "pwd",

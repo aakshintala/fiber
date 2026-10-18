@@ -321,7 +321,7 @@ fn down_stops_at_send() {
     }
     assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Send));
     press(&mut offer, &Key::Up, 40);
-    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Handled));
+    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));
 }
 
 #[test]
@@ -333,18 +333,85 @@ fn up_stops_at_the_first_item() {
 }
 
 #[test]
-fn enter_on_an_item_moves_down() {
+fn enter_on_an_item_asks_for_its_source() {
     let mut offer = holding(2);
-    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Handled));
+    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Source));
+    assert!(offer.ask_file("c", &SessionId(SESSION.into())).is_none());
     offer.on_edit(&Edit::Left);
-    assert_eq!(decisions(&mut offer), json!(["skip", "approve"]));
+    assert_eq!(decisions(&mut offer), json!(["approve", "skip"]));
 }
 
 #[test]
 fn enter_on_send_sends() {
     let mut offer = holding(1);
-    assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Handled));
+    assert_eq!(press(&mut offer, &Key::Down, 40), Some(OfferKey::Handled));
     assert_eq!(press(&mut offer, &Key::Enter, 40), Some(OfferKey::Send));
+}
+
+fn source_offer() -> Offer {
+    let mut item = item("hook", "db", None, "hook", None);
+    item["files"] = json!(["tools/db.sh", "tools/b.sh"]);
+    with_items(json!([item]))
+}
+
+#[test]
+fn source_rows_and_close_keep_the_lists_choices_cursor_and_scroll() {
+    let mut offer = source_offer();
+    offer.on_edit(&Edit::Left);
+    let before = offer.rows(80).unwrap();
+    let line = offer.ask_file("c1", &SessionId(SESSION.into())).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["args"]["path"],
+        "tools/db.sh"
+    );
+    assert!(offer.source_open());
+    let rows = texts(&offer, 80);
+    assert!(rows[0].contains("Offer"));
+    assert_eq!(rows[1], "Hook db · tools/db.sh · 1/2");
+    assert_eq!(rows[3], "Loading…");
+    offer.on_edit(&Edit::Right);
+    assert!(offer.close_source());
+    assert!(!offer.close_source());
+    assert_eq!(offer.rows(80).unwrap(), before);
+    assert_eq!(decisions(&mut offer), json!(["approve"]));
+}
+
+#[test]
+fn source_lifetime_follows_its_offer() {
+    let session = SessionId(SESSION.into());
+    let mut offer = source_offer();
+    offer.ask_file("c1", &session);
+    offer.fold(&offered("r_1", 1));
+    assert!(offer.source_open());
+    assert_eq!(offer.click(Spot::Close), OfferKey::Handled);
+    assert!(!offer.source_open());
+    assert!(offer.open());
+    offer.ask_file("c2", &session);
+    offer.put_aside();
+    assert!(!offer.source_open());
+    offer.reopen();
+    assert!(!offer.source_open());
+    offer.ask_file("c3", &session);
+    offer.answer("reply", &session);
+    assert!(!offer.source_open());
+    offer.restore("reply");
+    offer.ask_file("c4", &session);
+    offer.fold(&offered("r_new", 1));
+    assert!(!offer.source_open());
+    let accepted = contract::events::CommandAccepted {
+        command_id: contract::CommandId("c4".into()),
+        result: Some(contract::events::CommandResult::OfferedFile {
+            text: "late".into(),
+        }),
+    };
+    assert!(!offer.file_answered(&accepted));
+    offer.fold(&resolved("r_new"));
+    assert!(!offer.open());
+    let mut offer = source_offer();
+    offer.ask_file("c5", &session);
+    offer.fold(&resolved("r_1"));
+    assert!(!offer.source_open());
+    assert!(!offer.open());
 }
 
 #[test]

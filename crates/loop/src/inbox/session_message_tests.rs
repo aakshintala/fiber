@@ -286,6 +286,7 @@ impl FakeRepo {
         Arc::new(Self {
             list: Mutex::new(vec![Unapproved {
                 offered: contract::events::OfferedItem {
+                    files: vec![],
                     kind: contract::events::OfferedKind::McpServer,
                     name: name.to_owned(),
                     hash: format!("h_{name}"),
@@ -301,6 +302,14 @@ impl FakeRepo {
 }
 
 impl RepositoryCode for FakeRepo {
+    fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+        Err(contract::shapes::Failure {
+            code: contract::ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
         Ok(self.list.lock().unwrap().clone())
     }

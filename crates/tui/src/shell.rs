@@ -47,6 +47,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::CredentialSwitch { .. }
         | CommandResult::History { .. }
         | CommandResult::ArtifactPage { .. }
+        | CommandResult::OfferedFile { .. }
         | CommandResult::Start { .. }
         | CommandResult::Status { .. }
         | CommandResult::Subscribe { .. } => None,

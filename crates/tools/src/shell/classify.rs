@@ -9,13 +9,19 @@ use super::read_only::{COMMANDS, Command, EXACT};
 
 /// Effects of `command` run in `workdir`. A command this classifier cannot
 /// read plainly, or any part not on the read-only list, is `executes` with
-/// no paths. One plain part is the subject.
-pub(super) fn classify(command: &str, workdir: &Path) -> Effects {
+/// no paths. One plain part is the subject. `configured` holds the person's
+/// `shell.read_only` entries beside the built-in list: a part the built-in
+/// list does not answer falls back to them.
+pub(super) fn classify(
+    command: &str,
+    workdir: &Path,
+    configured: &[(String, Vec<String>)],
+) -> Effects {
     let Some(parts) = Lexer::new(command).run() else {
         return executes(None, None);
     };
     let (subject, prefix) = subject_and_prefix(&parts);
-    match outcome(&parts, workdir) {
+    match outcome(&parts, workdir, configured) {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
     }
@@ -96,11 +102,11 @@ enum Outcome {
     Reads(Vec<String>),
 }
 
-fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
+fn outcome(parts: &[Part], workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
     let mut saw_executes = false;
     let mut paths = Vec::new();
     for part in parts {
-        match part_outcome(part, workdir) {
+        match part_outcome(part, workdir, configured) {
             Outcome::Executes => saw_executes = true,
             Outcome::Reads(more) => paths.extend(more),
         }
@@ -112,7 +118,7 @@ fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
     }
 }
 
-fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
+fn part_outcome(part: &Part, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
     // A redirect applies wherever it stands, so it is dropped before the
     // read-only check and kept only in the subject.
     let kept: Vec<Word> = part
@@ -144,7 +150,20 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
         return path_tail(&files, workdir);
     }
     let Some(entry) = lookup(first, &mut words) else {
-        return Outcome::Executes;
+        // A name the built-in list owns never reaches configuration: the
+        // link-following and write flags the built-in rule refuses stay
+        // refused, and configuration cannot widen them.
+        if builtin_name(&first.cooked) {
+            return Outcome::Executes;
+        }
+        let flags = configured
+            .iter()
+            .find(|(name, _)| *name == first.cooked)
+            .map(|(_, flags)| flags);
+        let Some(flags) = flags else {
+            return Outcome::Executes;
+        };
+        return configured_outcome(flags, words, workdir);
     };
     let mut operands = Vec::new();
     let mut ended = false;
@@ -238,6 +257,66 @@ fn is_option_word(cooked: &str) -> bool {
         return false;
     };
     !rest.is_empty() && rest.chars().all(|ch| matches!(ch, 'n' | 'e' | 'E'))
+}
+
+/// Whether `first`, the cooked first word, names a built-in command: the
+/// text after its last `/`, against the built-in command names and `sed`,
+/// which has its own grammar. The whole word is used, so a quoted path
+/// holding a space still ends at its basename. A configured entry under
+/// such a name is never consulted.
+fn builtin_name(first: &str) -> bool {
+    let base = first.rsplit('/').next().unwrap_or(first);
+    base == "sed"
+        || COMMANDS
+            .iter()
+            .any(|entry| entry.name.split(' ').next().unwrap_or(entry.name) == base)
+}
+
+/// The configured read-only rule for one part: every cooked word starting
+/// `-` is a flag, any other word a path operand. A listed spelling ending
+/// `=` takes a value after that exact prefix, or as the next word; any
+/// other listed spelling matches exactly and takes none. `--` ends no
+/// flags here: it must be listed to read. Flag values are never paths.
+fn configured_outcome(
+    flags: &[String],
+    words: std::slice::Iter<'_, Word>,
+    workdir: &Path,
+) -> Outcome {
+    let mut words = words;
+    let mut operands = Vec::new();
+    while let Some(word) = words.next() {
+        if !word.cooked.starts_with('-') {
+            operands.push(word.cooked.clone());
+            continue;
+        }
+        // An exact plain spelling wins over its `=` twin, in either list
+        // order: the word takes no value and the next word stays an operand.
+        if flags
+            .iter()
+            .any(|flag| !flag.ends_with('=') && *flag == word.cooked)
+        {
+            continue;
+        }
+        // An inline value after the exact `=` prefix, empty allowed.
+        if flags
+            .iter()
+            .any(|flag| flag.ends_with('=') && word.cooked.starts_with(flag.as_str()))
+        {
+            continue;
+        }
+        // A separate value word, a leading `-` allowed; missing executes.
+        if flags.iter().any(|flag| {
+            flag.strip_suffix('=')
+                .is_some_and(|base| base == word.cooked)
+        }) {
+            if words.next().is_none() {
+                return Outcome::Executes;
+            }
+            continue;
+        }
+        return Outcome::Executes;
+    }
+    path_tail(&operands, workdir)
 }
 
 fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'static Command> {

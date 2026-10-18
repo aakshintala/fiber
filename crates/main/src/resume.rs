@@ -409,6 +409,7 @@ fn resumed_session(
         switchable,
         resolve,
         web_search,
+        shell_read_only,
         ..
     } = parts;
     // The log is already open: install the writer before any append the
@@ -489,6 +490,7 @@ fn resumed_session(
         skills,
         extensions.tools(),
         timing.clone(),
+        shell_read_only,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -527,6 +529,7 @@ fn resumed_session(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
     session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);

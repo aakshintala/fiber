@@ -207,7 +207,9 @@ impl Log {
     /// The newest line of a latest-wins kind (`session_status`,
     /// `extensions_loaded`, `steering_queue` or `clients`), recorded as it
     /// was appended. Nothing for any
-    /// other kind, and nothing before that kind has been written. A
+    /// other kind except `repository_code_offered`, which holds the pending
+    /// offer until its matching resolution or any `preamble_built`. Nothing
+    /// before that kind has been written. A
     /// subscriber registers its watcher first and then reads this, so a line
     /// written in between is queued and may also be here; the latest wins.
     pub fn latest(&self, kind: &str) -> Option<Envelope> {
@@ -573,7 +575,8 @@ struct Head<'a> {
 }
 
 /// Whether `keep_latest` keeps a line of this kind: the latest-wins kinds.
-/// `Log::open` fully parses only these and the kinds the rate fold reads.
+/// `Log::open` fully parses these, the pending-offer pair, and the kinds
+/// the rate fold reads.
 fn latest_wins(kind: &str) -> bool {
     matches!(
         kind,
@@ -584,7 +587,12 @@ fn latest_wins(kind: &str) -> bool {
 /// Whether `Log::open` fully parses a line of this kind: the kinds a fold
 /// reads.
 fn folded(kind: &str) -> bool {
-    latest_wins(kind) || RateFold::reads(kind)
+    latest_wins(kind) || offer_kind(kind) || RateFold::reads(kind)
+}
+
+/// The event kinds that maintain the pending repository offer.
+fn offer_kind(kind: &str) -> bool {
+    matches!(kind, "repository_code_offered" | "repository_code_resolved")
 }
 
 /// Fully parses one line open folds. The one full-parse helper on the open
@@ -618,6 +626,25 @@ pub(crate) fn full_parses() -> usize {
 /// one key for the status line and one per widget; a clearing line (`status`
 /// `""`, or empty `lines`) removes its key.
 fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
+    if offer_kind(&line.kind) {
+        match contract::events::Event::from_envelope(line) {
+            Ok(Some(contract::events::Event::RepositoryCodeOffered(_))) => {
+                latest.insert(line.kind.clone(), line.clone());
+            }
+            Ok(Some(contract::events::Event::RepositoryCodeResolved(resolved))) => {
+                if let Some(pending) = latest.get("repository_code_offered")
+                    && let Ok(Some(contract::events::Event::RepositoryCodeOffered(offered))) =
+                        contract::events::Event::from_envelope(pending)
+                    && offered.request_id == resolved.request_id
+                {
+                    latest.remove("repository_code_offered");
+                }
+            }
+            _ => {}
+        }
+    } else if line.kind == "preamble_built" {
+        latest.remove("repository_code_offered");
+    }
     if latest_wins(line.kind.as_str()) && line.kind.as_str() != "extension_ui" {
         latest.insert(line.kind.clone(), line.clone());
         return;

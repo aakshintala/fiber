@@ -125,6 +125,75 @@ fn server(command: &str, args: &Value) -> Value {
     json!({"mcp": {"servers": {"db": {"command": command, "args": args}}}})
 }
 
+fn listed(item: &RepoItem) -> Vec<&str> {
+    item.files.iter().map(|f| f.listed.as_str()).collect()
+}
+
+#[test]
+fn an_extension_lists_its_files_under_its_package_path() {
+    let repo = Repo::new();
+    repo.package("tools/lint", "fiber.test/lint", &json!({}));
+    repo.config(&json!({"repository_extensions": [{"path": "./tools/lint"}]}));
+    let item = repo.items().remove(0);
+    assert_eq!(
+        listed(&item),
+        ["tools/lint/extension.json", "tools/lint/init.lua"]
+    );
+    assert_eq!(rels(&item), ["extension.json", "init.lua"]);
+    repo.link("alias", &repo.root().join("tools/lint"));
+    repo.config(&json!({"repository_extensions": [{"path": "alias"}]}));
+    assert_eq!(listed(&repo.items().remove(0)), listed(&item));
+}
+
+#[test]
+fn a_package_at_the_root_lists_bare_names() {
+    let repo = Repo::new();
+    repo.package(".", "fiber.test/root", &json!({}));
+    repo.config(&json!({"repository_extensions": [{"path": "."}]}));
+    let item = repo.items().remove(0);
+    assert_eq!(
+        listed(&item),
+        [".fiber/config.json", "extension.json", "init.lua"]
+    );
+}
+
+#[test]
+fn a_hook_lists_the_files_its_command_and_args_name() {
+    let repo = Repo::new();
+    repo.write("tools/a.sh", "a");
+    repo.write("tools/b.sh", "b");
+    repo.hooks(&json!({"lint": {"command": "tools/b.sh", "args": ["tools/a.sh"]}}));
+    assert_eq!(
+        listed(&repo.items().remove(0)),
+        ["tools/a.sh", "tools/b.sh"]
+    );
+}
+
+#[test]
+fn an_outside_file_is_not_listed() {
+    let repo = Repo::new();
+    let outside = repo.elsewhere("secret", "secret");
+    repo.hooks(&json!({"lint": {"command": outside}}));
+    assert!(listed(&repo.items().remove(0)).is_empty());
+}
+
+#[test]
+fn a_link_inside_the_package_is_listed_by_its_own_name() {
+    let repo = Repo::new();
+    repo.package("tools/lint", "fiber.test/lint", &json!({}));
+    repo.write("elsewhere.lua", "-- inside workspace");
+    repo.link("tools/lint/link.lua", &repo.root().join("elsewhere.lua"));
+    repo.config(&json!({"repository_extensions": [{"path": "tools/lint"}]}));
+    assert_eq!(
+        listed(&repo.items().remove(0)),
+        [
+            "tools/lint/extension.json",
+            "tools/lint/init.lua",
+            "tools/lint/link.lua"
+        ]
+    );
+}
+
 #[test]
 fn items_come_in_offer_order_with_their_names_paths_and_required() {
     let repo = Repo::new();

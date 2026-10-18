@@ -337,6 +337,7 @@ pub(crate) fn run_new(
         idle,
         warm,
         caps,
+        shell_read_only,
         home,
         project,
         workspace,
@@ -413,6 +414,7 @@ pub(crate) fn run_new(
         skills,
         extensions.tools(),
         timing.clone(),
+        shell_read_only,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -467,6 +469,7 @@ pub(crate) fn run_new(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
     session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
