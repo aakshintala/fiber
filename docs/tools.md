@@ -231,8 +231,8 @@ path's directory, ending in `/`.
 - Arguments: `path` (required); `offset`, the first line to return, counted
   from 1; `limit`, the number of lines; `pages`, a page range such as `1-5`,
   for a PDF only.
-- Its optional properties put its schema outside the strict subset, so it is
-  sent with `strict: false`.
+- `read` is strict: its optional arguments are typed nullable and listed in
+  `required`.
 - Text comes back as it is in the file, without line numbers and without a
   byte order mark. Nothing needs stripping before it is copied into an edit.
 - `details` is `{ "start_line": N }` on a text result, the number of the
@@ -492,8 +492,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   (optional); `monitor` (optional; starts a monitor, "Background jobs");
   `deadline_ms` (optional; a monitor's deadline). Each call starts fresh: a `cd` does not carry over to the
   next call.
-- Its optional properties and the `minimum` limits put its schema outside the
-  strict subset, so it is sent with `strict: false`.
+- Its optional arguments are typed nullable and listed in `required`. The
+  `minimum` limits put its schema outside the strict subset, so it is sent
+  with `strict: false`.
 - A monitor takes neither `tty` nor `run_in_background`, and its only limit
   is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
   `monitor` is refused too. Each of these fails with `invalid_arguments`,
