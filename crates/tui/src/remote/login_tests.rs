@@ -239,7 +239,7 @@ fn cancellation_waits_for_its_answer_without_holding_login_state() {
     let finish = hub.line(&d, "device_login_result");
     let cancelled = cancel(&login);
     let command = hub.line(&d, "device_login_cancel");
-    assert!(login.l1_free());
+    released(&login, &d);
     no_answer(&cancelled);
     hub.route(
         &finish,
