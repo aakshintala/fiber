@@ -824,6 +824,56 @@ fn toggle_mark_flips_only_the_selected_row() {
 }
 
 #[test]
+fn adopt_scoped_keeps_touched_rows_and_derives_the_rest() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m2".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.toggled.clone()),
+        Some(vec![false, false, false, false, false])
+    );
+    // The person toggles row 2 off: it stays off against the new
+    // list, while row 1 adopts it and row 3 stays unmarked.
+    picker.move_row(1);
+    picker.toggle_mark();
+    picker.adopt_scoped(vec![
+        "acme/m1".to_owned(),
+        "acme/m2".to_owned(),
+        "gone/x".to_owned(),
+    ]);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    // Toggling row 2 on keeps it marked against an answer
+    // omitting it; toggling twice more ends marked the same way.
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, true, false, false, false])
+    );
+    picker.adopt_scoped(vec!["acme/m1".to_owned()]);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, true, false, false, false])
+    );
+    picker.toggle_mark();
+    picker.toggle_mark();
+    picker.adopt_scoped(vec!["acme/m1".to_owned()]);
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, true, false, false, false])
+    );
+}
+
+#[test]
 fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
     let mut picker = ModelPicker {
         scoped: Vec::new(),

@@ -234,6 +234,95 @@ pub fn fixture() -> Vec<Provider> {
     ]
 }
 
+/// Two providers, five models, as a hub's catalogue reads on a remote
+/// terminal: every id is absent from `fixture()`.
+pub fn hub_fixture() -> Vec<Provider> {
+    vec![
+        Provider {
+            name: "openrouter",
+            updated: "4m ago",
+            models: vec![
+                Model {
+                    id: "deepseek-r2",
+                    name: "DeepSeek R2",
+                    roles: vec!["main"],
+                    current: true,
+                    levels: vec!["low", "medium", "high"],
+                    level: Some("high"),
+                    rebuild: "—",
+                    input: Some(2.00),
+                    output: Some(8.00),
+                    tier: None,
+                },
+                Model {
+                    id: "qwen-4-coder",
+                    name: "Qwen 4 Coder",
+                    roles: vec!["reviewer"],
+                    current: false,
+                    levels: vec!["low", "medium", "high"],
+                    level: Some("medium"),
+                    rebuild: "~84k tokens · $0.31",
+                    input: Some(3.00),
+                    output: Some(15.00),
+                    tier: Some(Tier {
+                        min: 200_000,
+                        input: 6.00,
+                        output: 30.00,
+                    }),
+                },
+                Model {
+                    id: "llama-5-70b",
+                    name: "Llama 5 70B",
+                    roles: vec!["explorer", "small"],
+                    current: false,
+                    levels: vec!["low", "medium"],
+                    level: Some("low"),
+                    rebuild: "~61k tokens · $0.12",
+                    input: Some(0.80),
+                    output: Some(4.00),
+                    tier: None,
+                },
+            ],
+        },
+        Provider {
+            name: "mistral",
+            updated: "12m ago",
+            models: vec![
+                Model {
+                    id: "mistral-large-3",
+                    name: "Mistral Large 3",
+                    roles: vec!["explorer"],
+                    current: false,
+                    levels: vec!["low", "medium", "high"],
+                    level: Some("medium"),
+                    rebuild: "~88k tokens · $0.22",
+                    input: Some(1.25),
+                    output: Some(10.00),
+                    tier: None,
+                },
+                Model {
+                    id: "codestral-3",
+                    name: "Codestral 3",
+                    roles: vec!["small"],
+                    current: false,
+                    levels: vec![],
+                    level: None,
+                    rebuild: "~58k tokens · $0.03",
+                    input: None,
+                    output: None,
+                    tier: None,
+                },
+            ],
+        },
+    ]
+}
+
+/// The catalogue on screen: the hub's on a remote terminal, else the
+/// local fixture.
+fn catalog(hub: bool) -> Vec<Provider> {
+    if hub { hub_fixture() } else { fixture() }
+}
+
 /// The five models `scoped_models` holds.
 const SCOPED: [usize; 5] = [0, 1, 3, 8, 9];
 
@@ -262,6 +351,8 @@ pub struct State {
     pub still: bool,
     /// the conversation tokens a switch would rebuild; None means no conversation yet
     pub session: Option<u64>,
+    /// Draw the hub's catalogue, as a remote terminal's picker does.
+    pub hub: bool,
 }
 
 /// Every `--picker` case.
@@ -374,6 +465,15 @@ pub(crate) const CASES: &[Case<State>] = &[
         },
     },
     Case {
+        name: "hub",
+        help: "the hub's catalogue on a remote terminal",
+        check: "two providers with five hub models between them and none of the twelve local ids, roles on the rows, `● current` on deepseek-r2, its level chips on the row below; same panel, bar and legend.",
+        build: || State {
+            hub: true,
+            ..base()
+        },
+    },
+    Case {
         name: "prices",
         help: "rows with per-million prices and the labelled switch cost",
         check: "every row with its input and output price per million dim after the name, the rebuild cost right-aligned labelled `switch …`, the current model keeping `—`, and the tiered row at its base rates below its tier; same panel, bar and legend.",
@@ -435,7 +535,7 @@ fn base() -> State {
 /// the focused chip's level, else the model's own level.
 pub fn chosen(s: &State) -> (&'static str, &'static str) {
     let mut i = 0;
-    for p in fixture() {
+    for p in catalog(s.hub) {
         for m in &p.models {
             if i == s.focus {
                 let level = match s.chip {
@@ -474,8 +574,8 @@ pub fn for_case(case: &str) -> State {
         .unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
-fn count() -> usize {
-    fixture().iter().map(|p| p.models.len()).sum()
+fn count(hub: bool) -> usize {
+    catalog(hub).iter().map(|p| p.models.len()).sum()
 }
 
 /// The text one query token must subsequence-match: provider, id and
@@ -542,7 +642,7 @@ fn id_hits(query: &str, id: &str) -> Vec<usize> {
 /// The flat indices on screen: the scoped set, or everything. The
 /// checklist shows every model whatever the scope says; the query still filters.
 pub fn visible(s: &State) -> Vec<usize> {
-    let all = fixture();
+    let all = catalog(s.hub);
     let mut flat: Vec<(&str, &Model)> = vec![];
     for p in &all {
         for m in &p.models {
@@ -562,9 +662,9 @@ pub fn visible(s: &State) -> Vec<usize> {
 }
 
 /// The focused model's level count and its current level's index.
-fn model_levels(focus: usize) -> (usize, usize) {
+fn model_levels(hub: bool, focus: usize) -> (usize, usize) {
     let mut i = 0;
-    for p in fixture() {
+    for p in catalog(hub) {
         for m in &p.models {
             if i == focus {
                 let cur = m
@@ -609,14 +709,14 @@ impl State {
         self.chip = None;
     }
     pub fn chip_left(&mut self) {
-        let (n, cur) = model_levels(self.focus);
+        let (n, cur) = model_levels(self.hub, self.focus);
         if n == 0 {
             return;
         }
         self.chip = Some(self.chip.unwrap_or(cur).saturating_sub(1));
     }
     pub fn chip_right(&mut self) {
-        let (n, cur) = model_levels(self.focus);
+        let (n, cur) = model_levels(self.hub, self.focus);
         if n == 0 {
             return;
         }
@@ -650,7 +750,7 @@ impl State {
         self.keep_focus();
     }
     pub fn refresh_all(&mut self) {
-        self.refreshing = (0..fixture().len()).collect();
+        self.refreshing = (0..catalog(self.hub).len()).collect();
     }
 }
 
@@ -862,20 +962,20 @@ fn controls(s: &State, w: usize) -> Row {
             format!(
                 " {} of {} models · {} marked ",
                 visible(s).len(),
-                count(),
+                count(s.hub),
                 s.marked.len()
             )
         } else {
-            format!(" {} of {} marked ", s.marked.len(), count())
+            format!(" {} of {} marked ", s.marked.len(), count(s.hub))
         };
         return row(vec![sp(scope, dim())]);
     }
     let scope = if !s.query.is_empty() {
-        format!(" {} of {} models ", visible(s).len(), count())
+        format!(" {} of {} models ", visible(s).len(), count(s.hub))
     } else if s.scoped.is_empty() {
         format!(" {} models ", visible(s).len())
     } else {
-        format!(" scoped · {} of {} ", visible(s).len(), count())
+        format!(" scoped · {} of {} ", visible(s).len(), count(s.hub))
     };
     let mut parts: Vec<(ratatui::text::Span<'static>, Option<Act>)> =
         vec![(sp(scope, dim()), None)];
@@ -922,7 +1022,7 @@ fn footer(s: &State) -> Row {
 /// The panel's body at an inner width: controls, dim provider sections with
 /// a blank row between them, and the visible models, the focused one barred.
 fn body(s: &State, inner: usize) -> Vec<Row> {
-    let all = fixture();
+    let all = catalog(s.hub);
     let mut at: Vec<(usize, usize)> = vec![];
     for (pi, p) in all.iter().enumerate() {
         for mi in 0..p.models.len() {
@@ -2337,5 +2437,25 @@ mod tests {
             !t.contains("$3.00 in · $15.00 out /M"),
             "base rates leak above the tier"
         );
+    }
+
+    #[test]
+    fn hub_case_lists_the_hub_catalogue_and_none_of_the_local_one() {
+        let t = text(&view(&for_case("hub"), 100));
+        for id in [
+            "deepseek-r2",
+            "qwen-4-coder",
+            "llama-5-70b",
+            "mistral-large-3",
+            "codestral-3",
+        ] {
+            assert!(t.contains(id), "missing hub model {id}");
+        }
+        for p in fixture() {
+            for m in &p.models {
+                assert!(!t.contains(m.id), "local model {} leaks into hub", m.id);
+            }
+        }
+        assert_eq!(picks(&view(&for_case("hub"), 100)), 5);
     }
 }
