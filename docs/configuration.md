@@ -515,9 +515,6 @@ holds what `docs/extensions.md` ("What a package holds") lists:
     "machine": ["index.md"],
     "project": ["index.md"],
     "budget_bytes": 25000
-  },
-  "tui": {
-    "session_versions": ">=1.0.0 <2.0.0"
   }
 }
 ```
