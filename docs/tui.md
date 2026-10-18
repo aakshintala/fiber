@@ -2273,6 +2273,10 @@ built-in rather than drawing the row again.
   changes the first frame, so the terminal loads its TUI extensions before
   drawing it ("Performance"). An extension that passes its loading timeout is
   switched off, and the frame goes ahead without it.
+- **The renderer is a trait the terminal defines.** `tui` defines a
+  `Renderer` trait, and `main` adapts the `extensions` Lua VM to it, so `tui`
+  depends on no crate that holds the VM (`docs/architecture.md`, "The call
+  rules").
 - **Each drawn item is cached** by its input and the width. Its spans name
   colour roles, which the theme resolves as the frame is written, so a theme
   change runs no renderer. A renderer runs again only when its input or the
@@ -2335,9 +2339,11 @@ the extension author's cost to keep down.
   and the Lua error, the first time only. A key or click handler that errors
   counts as not having handled the input. An extension's own view or overlay
   has no built-in, so it closes.
-- **A timeout** switches the extension off in this terminal until `reload`,
-  with one notice. Every slot it replaced goes back to its built-in, so one
-  freeze of the declared length is the most it can cost.
+- **A timeout** switches the extension off in this terminal until `/reload`,
+  the terminal's reload slash command, with one notice. Every slot it replaced
+  goes back to its built-in, so one freeze of the declared length is the most
+  it can cost. The `reload` driver command acts on the session only, so it
+  does not switch the extension back on.
 - **A replaced input box that fails** hands over to the built-in box with the
   draft intact, because the terminal holds the draft.
 
