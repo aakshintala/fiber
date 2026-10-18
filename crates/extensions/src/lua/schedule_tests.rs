@@ -1302,6 +1302,7 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 Reply::Http(_)
                 | Reply::Drive(_)
                 | Reply::Exec(_)
+                | Reply::Model(_)
                 | Reply::Query(_)
                 | Reply::Lock(_)
                 | Reply::Ask(_)
@@ -1369,15 +1370,33 @@ fn a_failed_spawn_drops_its_parked_callback_and_fails_the_call() {
 
 /// Commands for the settle-hook tests: `arm` sets a timer whose callback
 /// finishes at once, `arm_exec` sets one whose callback suspends on a
-/// `host.exec` run, and `plain` is a command that finishes.
-const TIMER_INIT: &str = r#"fiber.command("arm", { timeout = 5000, run = function()
-  host.after(100, function() return "fired" end, { timeout = 5000 })
-  return "armed" end })
-fiber.command("arm_exec", { timeout = 5000, run = function()
-  host.after(100, function() host.exec("sh", { "-c", "true" }) return "fired" end, { timeout = 5000 })
-  return "armed" end })
-fiber.command("plain", { timeout = 5000, run = function() return "plain" end })
-"#;
+/// `host.exec` run, and `plain` is a command that finishes. The `arm_exec`
+/// child signals on the `ready` FIFO, then blocks reading the `block` FIFO
+/// until the suspend test releases it, so the suspended state is a pause
+/// point rather than a window. Tests that never run `arm_exec` format in
+/// paths that are never opened.
+fn timer_init(ready: &std::path::Path, block: &std::path::Path) -> String {
+    format!(
+        r#"fiber.command("arm", {{ timeout = 5000, run = function()
+  host.after(100, function() return "fired" end, {{ timeout = 5000 }})
+  return "armed" end }})
+fiber.command("arm_exec", {{ timeout = 5000, run = function()
+  host.after(100, function() host.exec("sh", {{ "-c", "echo $$ > {ready}; read _ < {block}; exit 0" }}) return "fired" end, {{ timeout = 5000 }})
+  return "armed" end }})
+fiber.command("plain", {{ timeout = 5000, run = function() return "plain" end }})
+"#,
+        ready = shell_quote(ready),
+        block = shell_quote(block),
+    )
+}
+
+/// Single-quotes `path` for the `sh -c` line in [`timer_init`].
+// debt: third copy across three test crates (ceiling three); upgrade
+// trigger: a fourth copy, or the next edit to any of them, moves it into
+// fakes.
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
 
 /// The settle hook's log: each pause as its target's name and stage.
 type PauseLog = Arc<std::sync::Mutex<Vec<(String, Pause)>>>;
@@ -1408,14 +1427,17 @@ fn timer_done(log: &PauseLog) -> Vec<(String, Pause)> {
         .collect()
 }
 
-/// A hub in registration, with `TIMER_INIT` served on a thread; the call
+/// A hub in registration, with [`timer_init`] served on a thread; the call
 /// `name` is queued and its id returned.
 fn serve_timer_init(
     clock: &Arc<fakes::clock::FakeClock>,
     dir: &std::path::Path,
     name: &str,
+    ready: &std::path::Path,
+    block: &std::path::Path,
 ) -> (Arc<Hub>, u64) {
-    std::fs::write(dir.join("init.lua"), TIMER_INIT).unwrap();
+    let init = timer_init(ready, block);
+    std::fs::write(dir.join("init.lua"), init).unwrap();
     let hub = Hub::new(clock.clone());
     hub.lock().phase = Phase::Registering { abandon_at: None };
     let id = hub.lock().push(
@@ -1451,7 +1473,13 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, done) = log_pauses();
     let _guard = SettleGuard;
-    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm");
+    let (hub, armed) = serve_timer_init(
+        &clock,
+        dir.path(),
+        "arm",
+        &dir.path().join("ready.fifo"),
+        &dir.path().join("block.fifo"),
+    );
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
@@ -1468,6 +1496,36 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     );
 }
 
+/// The suspend test's hold on the timer callback's `sh`: the block FIFO
+/// open read-write, so the child's `read` parks until the test releases
+/// it. Dropping without `release` closes the end, so a failure before the
+/// release still lets the child read end-of-file and exit instead of
+/// hanging the run.
+struct HoldExec {
+    file: std::fs::File,
+}
+
+impl HoldExec {
+    /// Opens `block` read-write: the open never blocks, and the held write
+    /// end keeps the child's `read` parked.
+    fn hold(block: &std::path::Path) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(block)
+            .unwrap();
+        Self { file }
+    }
+
+    /// Wakes the child's `read` with a line and closes the end.
+    fn release(mut self) {
+        use std::io::Write as _;
+        match writeln!(&mut self.file) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
 /// A timer whose callback suspends records no `TimerDone` while it waits
 /// on its `host.exec` run, and records exactly one once the callback
 /// finishes. Without the guard's suspend check, the hook would fire at the
@@ -1478,7 +1536,22 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, done) = log_pauses();
     let _guard = SettleGuard;
-    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec");
+    // The ready reader is open before the child runs, so its signal line
+    // is never lost and its open never blocks; the held write end keeps
+    // the child's `read` parked until the release below.
+    let ready = fakes::children::Ready::new(dir.path());
+    let block = dir.path().join("block.fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&block)
+            .status()
+            .unwrap()
+            .success(),
+        "mkfifo {}",
+        block.display()
+    );
+    let hold = HoldExec::hold(&block);
+    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
@@ -1486,6 +1559,9 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         "the timer waits for its due time"
     );
     clock.advance(Duration::from_secs(5));
+    // The child reached its script, so the suspension below stays put:
+    // nothing advances the fake clock while the exec is held.
+    let started = ready.wait(WAIT_FOR_TIMER);
     {
         let shared = hub.lock();
         assert!(
@@ -1504,12 +1580,17 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         );
     }
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
+    hold.release();
     Deadline::after(WAIT_FOR_TIMER)
         .recv(&done)
         .expect("the timer callback completed");
     assert_eq!(
         timer_done(&log),
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
+    );
+    assert!(
+        fakes::group_empties(started[0], WAIT_FOR_TIMER),
+        "the released exec left its group behind"
     );
 }
 
@@ -1521,7 +1602,13 @@ fn a_finished_command_records_no_timer_done() {
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, _done) = log_pauses();
     let _guard = SettleGuard;
-    let (hub, plain) = serve_timer_init(&clock, dir.path(), "plain");
+    let (hub, plain) = serve_timer_init(
+        &clock,
+        dir.path(),
+        "plain",
+        &dir.path().join("ready.fifo"),
+        &dir.path().join("block.fifo"),
+    );
     wait_returned(&hub, plain);
     assert!(
         timer_done(&log).is_empty(),

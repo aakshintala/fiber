@@ -20,6 +20,7 @@ use contract::commands::ModelArgs;
 use contract::diag::Op;
 use contract::files::PathLock;
 use contract::inbox::Rejection;
+use contract::provider::{Cost, Provider};
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers, SessionExtensions};
@@ -187,6 +188,13 @@ pub(crate) struct Switching {
     /// Route thinking and credentials stay fixed to the startup configuration.
     startup_config: Config,
     remembered: Mutex<Remembered>,
+    /// The label each provider is on in the running session, moved only
+    /// when a switch applies: `host.model` reads it at call time, so a
+    /// credential or `/model` switch moves the next call but never one in
+    /// flight (`docs/model-routing.md`, "Which credential a session uses").
+    /// It is not `remembered.selected`, which `prepare` publishes before
+    /// the loop applies the switch.
+    current: Mutex<BTreeMap<String, String>>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     started: Arc<StartLock>,
     reads: Arc<Reads>,
@@ -217,6 +225,35 @@ pub(crate) fn hosted_stands(tools: &[(String, Arc<dyn contract::tool::Tool>)]) -
         .any(|(by, tool)| by != "builtin" && tool.definition().name == "web_search")
 }
 
+/// How `host.model` reaches its model reference: `reacher` builds one per
+/// `ModelHost`, and the host calls it once per call, right after the
+/// budget gate and before the first budget check.
+pub(crate) type Reach = Arc<dyn Fn(&str) -> Result<Reached, Failure> + Send + Sync>;
+
+/// One `host.model` call's route: the connected provider, the model
+/// declaration's prices and whether a subscription serves it. The same
+/// two fields `prepare` puts in `r#loop::Model`.
+pub(crate) struct Reached {
+    pub(crate) provider: Arc<dyn Provider>,
+    pub(crate) cost: Option<Cost>,
+    pub(crate) subscription: bool,
+}
+
+/// `connect` as a value, so a test records what the reach connected: the
+/// signature of `connect` (`connect.rs`), with production passing
+/// `crate::connect` itself.
+pub(crate) type Connector = Arc<
+    dyn for<'a> Fn(
+            extensions::Model<'a>,
+            Option<Secret>,
+            Option<Arc<dyn contract::signing::Signer>>,
+            Option<(&Arc<LuaProvider>, &str)>,
+            &crate::connect::Here,
+        ) -> Result<Arc<dyn Provider>, Failure>
+        + Send
+        + Sync,
+>;
+
 impl Switching {
     /// `registry` is the startup registry after its Lua providers were
     /// added and placeholders filled; the switch keeps it holding no Lua
@@ -233,9 +270,11 @@ impl Switching {
     ) -> Self {
         registry.forget_lua();
         let mut remembered = Remembered::default();
+        let mut current = BTreeMap::new();
         for (name, (label, (key, _))) in credentials {
             remembered.keys.insert((name.clone(), label.clone()), key);
-            remembered.selected.insert(name, label);
+            remembered.selected.insert(name.clone(), label.clone());
+            current.insert(name, label);
         }
         Self {
             registry,
@@ -249,6 +288,7 @@ impl Switching {
             })),
             startup_config: config,
             remembered: Mutex::new(remembered),
+            current: Mutex::new(current),
             started: Arc::new(StartLock::seeded(&loaded)),
             loaded: Mutex::new(loaded.into_iter().collect()),
             reads,
@@ -270,26 +310,22 @@ impl Switching {
 
     /// The `Loop::switcher` closure: `prepare` over the shared `Switching`,
     /// publishing to `door` when a switch applies.
-    pub(crate) fn split(self, door: Door) -> (r#loop::Prepare, Arc<Self>) {
+    pub(crate) fn closure(self: Arc<Self>, door: Door) -> r#loop::Prepare {
         {
             let mut now = self.now.lock().unwrap_or_else(PoisonError::into_inner);
             now.backend = door.backend.clone();
             now.hosted_stands = door.hosted_stands;
         }
-        let shared = Arc::new(self);
-        let prepare = shared.clone();
-        (
-            Arc::new(move |args, label, chosen| {
-                let now = prepare.reloadable();
-                let current_door = Door {
-                    declare: door.declare.clone(),
-                    backend: now.backend,
-                    hosted_stands: now.hosted_stands,
-                };
-                crate::switch::prepare(&prepare, &current_door, args, label, chosen)
-            }),
-            shared,
-        )
+        let prepare = self;
+        Arc::new(move |args, label, chosen| {
+            let now = prepare.reloadable();
+            let current_door = Door {
+                declare: door.declare.clone(),
+                backend: now.backend,
+                hosted_stands: now.hosted_stands,
+            };
+            crate::switch::prepare(&prepare, &current_door, args, label, chosen)
+        })
     }
 
     pub(crate) fn reloaded(&self, now: Reloadable) {
@@ -372,6 +408,66 @@ impl Switching {
             Ok((reviewer, observe)) => (Ok(reviewer), observe, files, publish),
             Err(error) => (Err(error), None, files, publish),
         }
+    }
+
+    /// Moves `provider` to `label`: the label the last applied switch
+    /// landed on, read by the next `host.model` reach. Runs on apply only,
+    /// never in `prepare`'s publish, so a rejected, failed or
+    /// never-applied preparation moves nothing.
+    fn repoint(&self, provider: &str, label: &str) {
+        self.current
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(provider.to_owned(), label.to_owned());
+    }
+
+    /// How one `host.model` call reaches its model reference: resolving it
+    /// against the registry and connecting it with the session's current
+    /// credential label, once per call. The returned `Reached` serves
+    /// every attempt and retry of that call: an in-flight call keeps the
+    /// provider and key it started with, and a re-point moves only the
+    /// next call. A `connect` error is `model_unconfigured` carrying its
+    /// message; a registry error and a credential read error keep their
+    /// own codes.
+    pub(crate) fn reacher(self: &Arc<Self>, connect: Connector) -> Reach {
+        let shared = Arc::clone(self);
+        Arc::new(move |reference: &str| {
+            let resolved = shared
+                .registry
+                .resolve(reference)
+                .map_err(|error| crate::failed(error.code(), error))?;
+            let name = resolved.provider.name.clone();
+            let label = shared
+                .current
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&name)
+                .cloned();
+            let want = shared.want(&name, label.as_deref());
+            let reader = Arc::clone(&shared);
+            let read: Result<Got, Failure> = shared
+                .reads
+                .run("credential read", move || reader.read(want))?;
+            let got = read?;
+            let loader = shared.loader();
+            let here = crate::Here {
+                workspace: loader.workspace.clone(),
+                clock: Arc::clone(&loader.clock),
+            };
+            let provider = connect(
+                resolved,
+                got.access.key.clone(),
+                got.access.signer.clone(),
+                got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
+                &here,
+            )
+            .map_err(|failure| crate::failed(ErrorCode::ModelUnconfigured, failure.message))?;
+            Ok(Reached {
+                provider,
+                cost: resolved.model.cost.clone(),
+                subscription: resolved.model.subscription,
+            })
+        })
     }
 
     /// Holds exactly `keep` loaded: the Lua providers of the session and the
@@ -720,8 +816,10 @@ pub(crate) fn prepare(
         .filter_map(|read| read.file.clone())
         .collect();
     let shared = Arc::clone(switching);
+    let (switched_provider, switched_label) = (session.clone(), got.label.clone());
     let applied: Applied = Box::new(move || {
         shared.keep_loaded(keep);
+        shared.repoint(&switched_provider, &switched_label);
         if let Some(publish) = publish {
             publish();
         }

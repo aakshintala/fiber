@@ -50,7 +50,7 @@ impl Default for Retry {
 }
 
 /// What `decide` says about a failure.
-pub(crate) enum Decision {
+pub enum Decision {
     /// Make another attempt after the wait.
     Retry(Duration),
     /// Record this failure; no further attempt.
@@ -65,12 +65,7 @@ impl Retry {
     /// `Fail` carries the failure to record: the input unchanged, except an
     /// over-cap wait, which sets `code` to `rate_limited`
     /// (`docs/errors.md`, "A failed model call").
-    pub(crate) fn decide(
-        &self,
-        failure: &Failure,
-        should_retry: Option<bool>,
-        retries: u32,
-    ) -> Decision {
+    pub fn decide(&self, failure: &Failure, should_retry: Option<bool>, retries: u32) -> Decision {
         if matches!(
             failure.code,
             ErrorCode::QuotaExceeded | ErrorCode::PausedTooLong | ErrorCode::UnknownStopReason

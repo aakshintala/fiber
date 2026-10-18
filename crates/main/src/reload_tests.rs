@@ -17,6 +17,17 @@ impl contract::extension::Drive for NoDrive {
     }
 }
 
+impl contract::model::HostModel for NoDrive {
+    fn call(
+        &self,
+        _: &str,
+        _: contract::model::HostModelRequest,
+        _: contract::model::Bound,
+    ) -> Result<contract::model::HostModelReply, Failure> {
+        panic!("unexpected model call")
+    }
+}
+
 struct Fixture {
     rig: Rig,
     state: Arc<State>,
@@ -105,6 +116,7 @@ impl Fixture {
             }),
             replace: Arc::new(move |replacement| seen.lock().unwrap().push(replacement)),
             drive: Arc::new(NoDrive),
+            model: Arc::new(NoDrive),
             attended: Arc::new(|| true),
             answerable: true,
             log,

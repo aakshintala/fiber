@@ -24,6 +24,7 @@ mod late_emit;
 mod launch;
 mod lua_providers;
 mod mcp_servers;
+mod model_host;
 mod model_list;
 mod open;
 mod parts;
@@ -49,6 +50,8 @@ mod live_tests;
 #[cfg(test)]
 #[path = "lua_warm_tests.rs"]
 mod lua_warm_tests;
+#[cfg(test)]
+mod model_host_tests;
 #[cfg(test)]
 #[path = "read_signals_entry_tests.rs"]
 mod read_signals_entry_tests;
@@ -225,7 +228,9 @@ fn run() -> i32 {
                 ::cli::extension_reinstall(&name, env!("CARGO_PKG_VERSION"), clock.as_ref())
             }
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
-            cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
+            cli::ExtensionCommands::Test { path } => {
+                ::cli::extension_test(path.as_deref(), fiber, Arc::clone(&clock))
+            }
         },
         cli::Invocation::Run(Some(cli::Commands::Mcp(command)), _) => {
             mcp_command(command, Arc::clone(&clock))

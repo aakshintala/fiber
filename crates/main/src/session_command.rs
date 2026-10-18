@@ -468,6 +468,15 @@ pub(crate) fn run_new(
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
     extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
     extensions.drive_to(session.driver());
+    let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
+    let host_model = Arc::new(crate::model_host::ModelHost::new(
+        switching.reacher(Arc::new(crate::connect)),
+        budget,
+        &retry,
+        dir.clone(),
+        id.clone(),
+    ));
+    extensions.model_to(host_model.clone());
     extensions.answerable(!one_turn);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
@@ -494,7 +503,7 @@ pub(crate) fn run_new(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    let (switcher, switching) = switching.diagnostics(Arc::clone(&diag)).split(door);
+    let switcher = switching.clone().closure(door);
     let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
         sources,
         prompt_inputs.clone(),
@@ -502,6 +511,7 @@ pub(crate) fn run_new(
         switching.clone(),
         &tools,
         &session,
+        host_model,
         session_servers,
         !one_turn,
         log.clone(),

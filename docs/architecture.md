@@ -119,7 +119,8 @@ images, `Scan`, the session log search in `log` that `tools` uses for
 `session_search`, `SearchBackend`, the Lua search backend in `extensions`
 that `tools` uses for Fiber's own `web_search`, `Skills`, skill
 discovery in `loop` that `tools` uses for `skill`, and `TokenFiles`, credential
-files in `config` that `mcp` uses for remote servers' OAuth tokens.
+files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
+the session's model call in `main` that `extensions` uses for `host.model`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.

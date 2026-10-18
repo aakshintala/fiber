@@ -174,6 +174,7 @@ impl Loop {
             | Delivery::Resolved(..)
             | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
             | Delivery::Shell(..)
             | Delivery::Cancelled) => {
                 crate::rewind::command::refuse_after_rewound(other);

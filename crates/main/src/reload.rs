@@ -89,6 +89,7 @@ pub(crate) struct State {
     pub(crate) declare: doors::Declare,
     pub(crate) replace: Arc<dyn Fn(doors::Replacement) + Send + Sync>,
     pub(crate) drive: Arc<dyn contract::extension::Drive>,
+    pub(crate) model: Arc<dyn contract::model::HostModel>,
     pub(crate) attended: Arc<dyn Fn() -> bool + Send + Sync>,
     pub(crate) answerable: bool,
     pub(crate) log: Arc<log::Log>,
@@ -108,6 +109,7 @@ impl State {
         switching: Arc<crate::switch::Switching>,
         tools: &[(String, Arc<dyn contract::tool::Tool>)],
         session: &doors::Session,
+        model: Arc<dyn contract::model::HostModel>,
         servers: crate::mcp_servers::SessionServers,
         answerable: bool,
         log: Arc<log::Log>,
@@ -149,6 +151,7 @@ impl State {
             declare: session.declarer(),
             replace: session.reloader(),
             drive: session.driver(),
+            model,
             attended: session.attended(),
             answerable,
             log,
@@ -294,6 +297,7 @@ impl State {
         let installed = Box::new(move || {
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());
+            extensions.model_to(shared.model.clone());
             extensions.answerable(shared.answerable);
             extensions.browse_with(
                 Arc::new(extensions::SystemBrowser::default()),

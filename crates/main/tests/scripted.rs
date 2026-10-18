@@ -759,27 +759,44 @@ fn a_live_scripted_resume_with_a_label_is_rejected() {
 /// A reviewed shell call that reaches stage 2, then an automatic handoff,
 /// with an extension loaded throughout: the saved log holds exactly three
 /// reviewer `usage_recorded` lines, and no other line carries `reviewer`.
-/// An extension's own model call needs `host.model`, which this build does
-/// not offer yet, so no extension usage line can exist; the extension still
-/// loads and its hook runs on the reviewed call, and the exclusion is
-/// asserted over every usage line in the log.
+/// The extension's `after_tool` hook also makes one `host.model` call, so
+/// the log holds one more `usage_recorded` naming the tag extension, and
+/// the extension's `before_model_call` hook runs for the session's own
+/// calls only. The exclusion is asserted over every usage line in the log.
 #[test]
 fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     let setup = Setup::new();
     install_lua(
         &setup,
         "tag",
-        "fiber.hook(\"after_tool\", { timeout = 10000, on_failure = \"non-blocking\",\n\
-           run = function(call) host.log(\"seen\") end })\n",
+        "fiber.hook(\"before_model_call\", { timeout = 10000, on_failure = \"non-blocking\",\n\
+           run = function(call) host.log(\"checking\") return nil end })\n\
+         fiber.hook(\"after_tool\", { timeout = 10000, on_failure = \"non-blocking\",\n\
+           run = function(call) host.log(\"seen\")\n\
+             local ok, reply = pcall(host.model, { model = \"scripted/e.json\",\n\
+               messages = { { role = \"user\", content = \"hi\" } }, max_tokens = 16 })\n\
+             host.log(ok and \"model-ok\" or \"model-failed\") end })\n",
     );
     script(
         &setup,
         "s.json",
+        // The session's own steps: the tool call, then the handoff note.
+        // The extension's `host.model` call connects its own scripted
+        // provider for `e.json` below, so it takes no step of this script.
         &json!({"steps": [
             {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
              "usage": {"input": 100, "output": 10}},
             {"text": "Handing off."},
             {"text": "Done."}
+        ]}),
+    );
+    script(
+        &setup,
+        "e.json",
+        // The extension's `host.model` call names this model: the reach
+        // connects a provider reading this script from its first step.
+        &json!({"steps": [
+            {"text": "ext", "usage": {"input": 7, "output": 3}},
         ]}),
     );
     script(
@@ -793,7 +810,10 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     );
     reviewed_by_script(
         &setup,
-        json!({"model": "scripted/s.json", "handoff": {"tokens": 5}}),
+        // The `roles` entry registers `scripted/e.json` for the hook's
+        // `host.model` call; no delegate runs, so it stays inert.
+        json!({"model": "scripted/s.json", "handoff": {"tokens": 5},
+               "roles": {"ext": "fiber:scripted/e.json"}}),
     );
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -802,7 +822,9 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
     let seen: Vec<&Value> = run
         .of("extension_log")
         .into_iter()
-        .filter(|line| line["payload"]["extension"] == "fiber.test/tag")
+        .filter(|line| {
+            line["payload"]["extension"] == "fiber.test/tag" && line["payload"]["message"] == "seen"
+        })
         .collect();
     assert_eq!(seen.len(), 1, "{:?}", run.of("extension_log"));
     assert_eq!(
@@ -834,6 +856,7 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
             "tool_call_started",
             "tool_call_completed",
             "step_started",
+            "usage_recorded",
             "handoff_started",
             "assistant_message_started",
             "text_completed",
@@ -898,4 +921,57 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
             assert!(line["payload"].get("reviewer").is_none(), "{line}");
         }
     }
+    // The extension's own model call: exactly one usage line names the
+    // tag extension, with the model it named and no reviewer.
+    let tagged: Vec<&&Value> = usages
+        .iter()
+        .filter(|line| line["payload"].get("extension").is_some())
+        .collect();
+    assert_eq!(tagged.len(), 1, "{usages:?}");
+    assert_eq!(tagged[0]["payload"]["extension"], "fiber.test/tag");
+    assert_eq!(tagged[0]["payload"]["model"], "scripted/e.json");
+    assert!(
+        tagged[0]["payload"].get("reviewer").is_none(),
+        "{}",
+        tagged[0]
+    );
+    // The session usage total includes the extension line's tokens: the
+    // usage `fiber_exited` reports equals the sum over every line.
+    let exited = log
+        .iter()
+        .find(|line| line["kind"] == "fiber_exited")
+        .unwrap();
+    let mut input = 0;
+    let mut output = 0;
+    for line in &usages {
+        input += line["payload"]["tokens"]["input"].as_u64().unwrap();
+        output += line["payload"]["tokens"]["output"].as_u64().unwrap();
+    }
+    assert_eq!(
+        exited["payload"]["usage"]["tokens"],
+        json!({"input": input, "cache_read": 0, "cache_write": {}, "output": output}),
+        "{usages:?}"
+    );
+    assert!(exited["payload"]["usage"]["cost"].is_null(), "{exited}");
+    // The extension's `before_model_call` hook ran for the session's step
+    // sends only: the tool call and the final text. The handoff note sends
+    // through `request_note`, which never consults the hooks, and the
+    // extension's own call never reaches them either, so neither has a
+    // `checking` line.
+    let checking = run
+        .of("extension_log")
+        .into_iter()
+        .filter(|line| {
+            line["payload"]["extension"] == "fiber.test/tag"
+                && line["payload"]["message"] == "checking"
+        })
+        .count();
+    assert_eq!(checking, 2);
+    // The extension's own call succeeded inside the hook.
+    let model_ok = run
+        .of("extension_log")
+        .into_iter()
+        .filter(|line| line["payload"]["message"] == "model-ok")
+        .count();
+    assert_eq!(model_ok, 1);
 }

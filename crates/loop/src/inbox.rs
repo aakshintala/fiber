@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
 use contract::events::{
-    Event, ExtensionExec, ExtensionLog, QueuedMessage, ShellCommand, SteeringQueue,
+    Event, ExtensionExec, ExtensionLog, QueuedMessage, ShellCommand, SteeringQueue, UsageRecorded,
 };
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
@@ -493,6 +493,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
             | Delivery::Shell(..)) => {
@@ -594,6 +595,7 @@ impl Loop {
                 }
             }
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
@@ -636,6 +638,14 @@ impl Loop {
     /// it never starts a turn and never joins the model's input.
     pub(crate) fn record_extension_exec(&self, exec: ExtensionExec) -> Result<(), Error> {
         self.log.append(&Event::ExtensionExec(exec), None, None)?;
+        Ok(())
+    }
+
+    /// Writes an extension's `host.model` usage line: recorded in the log
+    /// and folded into the ledger, with no turn and no action.
+    pub(crate) fn record_extension_usage(&mut self, line: UsageRecorded) -> Result<(), Error> {
+        self.write(&Event::UsageRecorded(line.clone()), None, None)?;
+        self.ledger.record(&line);
         Ok(())
     }
 
@@ -741,6 +751,7 @@ impl Loop {
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,

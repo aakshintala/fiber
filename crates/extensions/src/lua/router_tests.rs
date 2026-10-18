@@ -58,6 +58,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::Interaction(_)
         | Delivery::Resolved(..)
         | Delivery::Shell(..)
+        | Delivery::ExtensionUsage(_)
         | Delivery::Cancelled => None,
     }
 }
@@ -489,6 +490,58 @@ fn driver_after_seal_alone_is_none() {
     hub.seal();
     assert!(!hub.lock().router.disposed, "seal alone does not dispose");
     assert!(hub.driver().is_none(), "no drive follows fiber_exited");
+}
+
+/// A stub session model `host.model` calls through.
+struct StubModel;
+
+impl contract::model::HostModel for StubModel {
+    fn call(
+        &self,
+        _extension: &str,
+        _request: contract::model::HostModelRequest,
+        _bound: contract::model::Bound,
+    ) -> Result<contract::model::HostModelReply, contract::shapes::Failure> {
+        unreachable!("no call runs in these tests");
+    }
+}
+
+fn with_model() -> Arc<Hub> {
+    let hub = Hub::new(FakeClock::new());
+    hub.set_model(Arc::new(StubModel));
+    hub
+}
+
+/// The model answers while the extension is live, and is gone once it is
+/// dropped or sealed: neither alone leaves a call.
+#[test]
+fn model_answers_only_while_live() {
+    assert!(with_model().model().is_some(), "live answers");
+    let hub = with_model();
+    hub.dispose("ext");
+    assert!(hub.model().is_none(), "nothing calls after the drop");
+    let hub = with_model();
+    hub.seal();
+    assert!(hub.model().is_none(), "nothing calls after the seal");
+    let hub = with_model();
+    hub.dispose("ext");
+    hub.seal();
+    assert!(hub.model().is_none(), "nothing calls after drop and seal");
+    let hub = Hub::new(FakeClock::new());
+    assert!(hub.model().is_none(), "nothing calls before model_to");
+}
+
+/// A model set after the seal still never answers: the sealed edge alone
+/// leaves no call, however late the model arrives.
+#[test]
+fn model_set_after_the_seal_still_never_answers() {
+    let hub = Hub::new(FakeClock::new());
+    hub.seal();
+    hub.set_model(Arc::new(StubModel));
+    assert!(
+        hub.model().is_none(),
+        "nothing calls after the seal, however late the model"
+    );
 }
 
 /// The status text of an `ExtensionUi` status event, if that is what it is.
