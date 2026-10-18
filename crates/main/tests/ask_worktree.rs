@@ -22,27 +22,9 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call, group_alive, kinds, run_to_exit};
-
-/// Runs the system `git` in `dir`, in its own process group, to its exit
-/// under the test's [`Deadline`].
-#[track_caller]
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = run_to_exit(deadline, &format!("git {args:?}"), command);
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
+use support::{
+    Deadline, Setup, function_call, git, group_alive, hello, kinds, run_to_exit, stream,
+};
 
 /// A repository with one commit on `main` at `dir`.
 #[track_caller]
@@ -51,33 +33,6 @@ fn init_repo(deadline: Deadline, dir: &Path) {
     fs::write(dir.join("file.txt"), "x").unwrap();
     git(deadline, dir, &["add", "."]);
     git(deadline, dir, &["commit", "--quiet", "-m", "first"]);
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!("event: response.completed\ndata: {done}\n\n"));
-    Response::stream(body)
 }
 
 /// One `fiber` invocation launched from `cwd`, under the test's
