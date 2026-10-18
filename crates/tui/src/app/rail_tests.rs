@@ -6,7 +6,8 @@ use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
-use crate::mouse::TargetId;
+use crate::mouse::{Target, TargetId};
+use crate::stroke::{Code, Mods, Stroke};
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -1087,6 +1088,180 @@ fn sized(width: u16) -> App {
     app
 }
 
+/// One exited `recent` row for `session` in the launch project.
+fn exited_row(session: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": "-w",
+        "workspace": "/w",
+        "name": session,
+        "how": "exited",
+    })
+}
+
+/// Answers `recent` with exited rows for `sessions`, oldest first.
+fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) {
+    let result = json!({"sessions": sessions
+        .iter()
+        .map(|session| exited_row(session))
+        .collect::<Vec<_>>()});
+    let line = Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(recent.to_owned())),
+            ("result".to_owned(), result),
+        ]
+        .into_iter()
+        .collect(),
+    });
+    assert!(app.on_line(line).is_empty());
+}
+
+/// Thirty live sessions in the launch project with `recent` waiting,
+/// `live_027` on screen, drawn at 80x24: the app, the recent id, and the
+/// row key of the session on screen.
+fn thirty_live_on_screen() -> (App, String, u64) {
+    let sessions: Vec<String> = (0..30).map(|i| format!("s_live_{i:03}")).collect();
+    let refs: Vec<&str> = sessions.iter().map(String::as_str).collect();
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    for session in &refs {
+        app.on_line(live(session, json!({})));
+    }
+    app.set_size(80, 24);
+    open(&mut app, refs[27]);
+    let key = key(&app, refs[27]);
+    (app, recent, key)
+}
+
+/// Renders home at 80x24; the targets of that frame.
+fn render_home(app: &App, buf: &mut ratatui::buffer::Buffer) -> Vec<crate::mouse::Target> {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    crate::view::render(app, area, buf, None)
+}
+
+/// Whether `targets` draws `key` as a home list row.
+fn draws_row(targets: &[crate::mouse::Target], key: u64) -> bool {
+    targets
+        .iter()
+        .any(|target| target.id == TargetId::Home(HomeSpot::Entry(key)))
+}
+
+#[test]
+fn focus_row_focuses_an_off_screen_live_row() {
+    let (mut app, _, key) = thirty_live_on_screen();
+    app.leave();
+    assert!(app.on_home());
+    app.focus_row(key);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut first_buf = ratatui::buffer::Buffer::empty(area);
+    let first = render_home(&app, &mut first_buf);
+    assert!(
+        !draws_row(&first, key),
+        "the row starts below the list window"
+    );
+    assert!(
+        app.drawn(&first),
+        "home_drawn runs, so the frame draws again"
+    );
+    let mut second_buf = ratatui::buffer::Buffer::empty(area);
+    let second = render_home(&app, &mut second_buf);
+    assert!(
+        draws_row(&second, key),
+        "the redraw scrolls the focused row into view"
+    );
+    assert!(!app.drawn(&second));
+    assert_eq!(app.focused(), Some(TargetId::Home(HomeSpot::Entry(key))));
+}
+
+#[test]
+fn resume_list_focuses_the_first_off_screen_exited_row() {
+    let (mut app, recent, _) = thirty_live_on_screen();
+    let exited = ["s_old_001", "s_old_002", "s_old_003"];
+    answer_recent(&mut app, &recent, &exited);
+    let first = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .row(&contract::SessionId(exited[0].to_owned()))
+        })
+        .map(|row| row.key)
+        .unwrap_or_else(|| panic!("the first exited row is listed"));
+    app.resume_list();
+    assert!(app.on_home());
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut first_buf = ratatui::buffer::Buffer::empty(area);
+    let first_targets = render_home(&app, &mut first_buf);
+    assert!(
+        !draws_row(&first_targets, first),
+        "the exited row starts below the list window"
+    );
+    assert!(app.drawn(&first_targets));
+    let mut second_buf = ratatui::buffer::Buffer::empty(area);
+    let second = render_home(&app, &mut second_buf);
+    assert!(draws_row(&second, first));
+    assert!(!app.drawn(&second));
+    assert_eq!(app.focused(), Some(TargetId::Home(HomeSpot::Entry(first))));
+}
+
+#[test]
+fn focus_row_expands_a_project_hiding_the_row_behind_more() {
+    let sessions: Vec<String> = (0..5).map(|i| format!("s_old_{i:03}")).collect();
+    let refs: Vec<&str> = sessions.iter().map(String::as_str).collect();
+    let mut app = home();
+    app.set_size(80, 24);
+    let (_, recent) = linked(&mut app);
+    answer_recent(&mut app, &recent, &refs);
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&contract::SessionId(refs[4].to_owned())))
+        .map(|row| row.key)
+        .unwrap_or_else(|| panic!("the fifth exited row is listed"));
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut before_buf = ratatui::buffer::Buffer::empty(area);
+    let before = render_home(&app, &mut before_buf);
+    assert!(
+        !draws_row(&before, key),
+        "the fifth exited row hides behind more"
+    );
+    app.focus_row(key);
+    let hidden = app.home.as_ref().map(|home| {
+        home.sessions
+            .sections(home.launch_project())
+            .into_iter()
+            .find(|section| section.project == "-w")
+            .map(|section| section.hidden())
+    });
+    assert_eq!(hidden, Some(Some(0)), "focus_row expands the project");
+    let mut first_buf = ratatui::buffer::Buffer::empty(area);
+    let first = render_home(&app, &mut first_buf);
+    assert!(app.drawn(&first));
+    let mut second_buf = ratatui::buffer::Buffer::empty(area);
+    let second = render_home(&app, &mut second_buf);
+    assert!(!app.drawn(&second));
+    assert_eq!(app.focused(), Some(TargetId::Home(HomeSpot::Entry(key))));
+    assert!(draws_row(&second, key));
+}
+
+#[test]
+fn focus_row_with_an_unknown_key_focuses_nothing() {
+    let mut app = with(&[A, B]);
+    app.set_size(80, 24);
+    assert!(app.on_home());
+    app.focus_row(999_999);
+    assert_eq!(app.focused(), None, "the box keeps focus");
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = render_home(&app, &mut buf);
+    assert!(!app.drawn(&targets));
+    assert_eq!(app.focused(), None);
+}
+
 #[test]
 fn alt_r_hides_and_shows() {
     let mut app = sized(200);
@@ -1277,4 +1452,724 @@ fn slash_rail_on_home_does_nothing() {
     assert!(app.take_saves().is_empty());
     open(&mut app, A);
     assert!(rail_rect(&app).is_some());
+}
+
+/// The rail's focused card key, if any.
+fn rail_focus(app: &App) -> Option<u64> {
+    app.rail_state().focus
+}
+
+/// `stroke` pressed through the bindings.
+fn stroke_press(app: &mut App, stroke: Stroke) -> Effect {
+    app.on_press(stroke, fakes::clock::FakeClock::new().now())
+}
+
+fn plain(code: Code) -> Stroke {
+    Stroke {
+        code,
+        mods: Mods::NONE,
+    }
+}
+
+/// The home row key of `session`.
+fn row_key(app: &App, session: &str) -> u64 {
+    app.home
+        .as_ref()
+        .expect("home draws the rail")
+        .sessions
+        .row(&contract::SessionId(session.to_owned()))
+        .expect("session has a row")
+        .key
+}
+
+/// `A` and `B` live in the launch project, `C` live in another one, with
+/// `A` on screen: feed order is `A`, `C`, `B`, but the rail draws the
+/// launch project first.
+fn two_projects() -> App {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(A, json!({})));
+    app.on_line(live(C, json!({"project": "-other", "workspace": "/other"})));
+    app.on_line(live(B, json!({})));
+    open(&mut app, A);
+    app
+}
+
+/// A session envelope of `kind` for `session` with a JSON `payload`.
+fn turn(session: &str, kind: &str, payload: Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn left_in_an_empty_box_focuses_the_on_screen_card() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn down_moves_in_drawn_order_across_two_project_groups() {
+    let mut app = two_projects();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+}
+
+#[test]
+fn down_on_the_last_card_and_up_on_the_first_stay_put() {
+    let mut app = two_projects();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+}
+
+#[test]
+fn enter_on_another_card_switches_to_it() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    let effect = stroke_press(&mut app, plain(Code::Enter));
+    assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn enter_on_the_on_screen_card_sends_nothing() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn esc_on_a_working_turn_clears_focus_without_an_interrupt() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    let input = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(turn(A, "turn_started", input));
+    app.on_line(turn(
+        A,
+        "assistant_message_delta",
+        json!({"text": "working"}),
+    ));
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn with_focus_unset_arrows_enter_and_esc_reach_the_box() {
+    let mut app = opened(&[A, B], A);
+    let recall = stroke_press(&mut app, plain(Code::Up));
+    assert!(matches!(recall, Effect::Send(_)), "{recall:?}");
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    type_text(&mut app, "ab");
+    assert!(matches!(
+        stroke_press(&mut app, plain(Code::Enter)),
+        Effect::Send(_)
+    ));
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn alt_digit_clears_focus_first() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("alt+1").unwrap()),
+        Effect::None
+    );
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn alt_a_clears_focus_with_no_waiting_request() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("alt+a").unwrap()),
+        Effect::None
+    );
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn alt_r_hiding_the_rail_clears_focus() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("alt+r").unwrap()),
+        Effect::None
+    );
+    assert_eq!(rail_focus(&app), None);
+    assert!(rail_rect(&app).is_none());
+}
+
+#[test]
+fn slash_rail_hiding_clears_focus() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    type_text(&mut app, "/rail");
+    press(&mut app, Key::Enter);
+    assert_eq!(rail_focus(&app), None);
+    assert!(rail_rect(&app).is_none());
+}
+
+#[test]
+fn an_exit_of_the_focused_card_clears_it() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    app.on_line(left(B, "exited"));
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn dismissing_the_focused_card_clears_it() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "crashed"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    let out = sent(app.on_click(TargetId::Rail(Spot::Dismiss(key(&app, B)))));
+    let id = out
+        .iter()
+        .find(|line| line["command"] == "dismiss")
+        .expect("dismiss goes out")["id"]
+        .as_str()
+        .expect("dismiss has an id")
+        .to_owned();
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    app.on_line(hub_answer("command_accepted", &id, ""));
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn a_resize_that_sheds_the_rail_clears_it() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    app.set_size(60, 24);
+    app.on_line(live(B, json!({})));
+    assert!(rail_rect(&app).is_none());
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn leaving_clears_the_rail() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    app.leave();
+    app.on_line(live(B, json!({})));
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn a_second_left_widens_home_on_the_on_screen_row_after_moving() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    let widened = stroke_press(&mut app, plain(Code::Left));
+    assert!(matches!(widened, Effect::Send(_)), "{widened:?}");
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, A))))
+    );
+}
+
+#[test]
+fn a_focused_text_left_moves_the_cursor() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    type_text(&mut app, "ab");
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 3);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert!(!app.on_home());
+}
+
+#[test]
+fn right_gives_focus_back_leaving_the_cursor_alone() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    type_text(&mut app, "ab");
+    assert_eq!(stroke_press(&mut app, plain(Code::Right)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 4);
+    assert!(!app.on_home());
+}
+
+#[test]
+fn a_hidden_rail_left_goes_home_with_default_focus() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("alt+r").unwrap()),
+        Effect::None
+    );
+    assert!(rail_rect(&app).is_none());
+    let homeward = stroke_press(&mut app, plain(Code::Left));
+    assert!(matches!(homeward, Effect::Send(_)), "{homeward:?}");
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn an_exited_on_screen_session_widens_home_on_its_row() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, A))))
+    );
+}
+
+#[test]
+fn an_exited_on_screen_session_behind_more_widens_home_on_its_row() {
+    let mut app = opened(&[A, B, C, D], A);
+    app.on_line(left(B, "exited"));
+    app.on_line(left(C, "exited"));
+    app.on_line(left(D, "exited"));
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, A))))
+    );
+}
+
+#[test]
+fn esc_closes_the_completion_panel_before_giving_focus_back() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert!(app.completions().is_none());
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn esc_goes_to_an_open_approval_panel_first() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    app.on_line(permission(A, "r_esc"));
+    assert!(app.panel().is_some());
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert!(app.panel().is_none());
+}
+
+#[test]
+fn esc_goes_to_an_open_search_bar_first() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("ctrl+f").unwrap()),
+        Effect::None
+    );
+    assert!(app.find_open());
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert!(!app.find_open());
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+}
+
+#[test]
+fn unset_arrows_still_move_a_focused_rail_with_rebound_recall() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(crate::KeysSetup {
+        user: [("recall_prompt".to_owned(), json!("ctrl+u"))]
+            .into_iter()
+            .collect(),
+    });
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+}
+
+fn keyed_setup(entries: &[(&str, Value)]) -> crate::KeysSetup {
+    crate::KeysSetup {
+        user: entries
+            .iter()
+            .map(|(id, value)| ((*id).to_owned(), value.clone()))
+            .collect(),
+    }
+}
+
+#[test]
+fn an_unbound_focus_rail_key_never_focuses() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(keyed_setup(&[("focus_rail", json!([]))]));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 2);
+    type_text(&mut app, "ab");
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 3);
+    assert_eq!(rail_focus(&app), None);
+    app.open_keymap();
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    assert!(crate::view::text(&buf).contains("unbound"));
+}
+
+#[test]
+fn a_rebound_focus_rail_key_focuses_an_empty_box() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(keyed_setup(&[("focus_rail", json!("alt+l"))]));
+    let alt_l = Stroke::parse("alt+l").unwrap();
+    assert_eq!(stroke_press(&mut app, alt_l), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn a_rebound_left_is_still_the_cursor_with_focus_unset() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(keyed_setup(&[("focus_rail", json!("alt+l"))]));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 2);
+}
+
+#[test]
+fn a_rebound_focus_rail_key_leaves_text_alone() {
+    let mut app = opened(&[A, B], A);
+    app.set_keys(keyed_setup(&[("focus_rail", json!("alt+l"))]));
+    type_text(&mut app, "ab");
+    let alt_l = Stroke::parse("alt+l").unwrap();
+    assert_eq!(stroke_press(&mut app, alt_l), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 3);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn a_default_keyset_leaves_word_left_alone() {
+    let mut app = opened(&[A, B], A);
+    type_text(&mut app, "ab cd");
+    let word_left = Stroke::parse("alt+left").unwrap();
+    assert_eq!(stroke_press(&mut app, word_left), Effect::None);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 5);
+    assert_eq!(rail_focus(&app), None);
+}
+
+/// The `sessions` command id waiting after a dropped and re-helloed link.
+fn reconnected_sessions(app: &mut App) -> String {
+    app.disconnected();
+    let out: Vec<Value> = app
+        .on_line(hello())
+        .into_iter()
+        .map(|line| serde_json::from_str(&line).expect("hub line parses"))
+        .collect();
+    out.iter()
+        .find(|line| line["command"] == "sessions")
+        .expect("reconnect sends sessions")["id"]
+        .as_str()
+        .expect("sessions has an id")
+        .to_owned()
+}
+
+/// The `sessions` answer listing `running` live and none exited.
+fn sessions_result(app: &mut App, id: &str, running: &[&str]) {
+    let live: Vec<Value> = running
+        .iter()
+        .map(|session| json!({"session_id": session}))
+        .collect();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id, "result": {"live": live, "exited": []}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+}
+
+#[test]
+fn a_dropped_link_keeps_a_focused_card() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    app.disconnected();
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert!(app.panel().is_none());
+}
+
+#[test]
+fn enter_on_a_focused_card_with_the_link_down_sends_nothing() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    app.disconnected();
+    assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+}
+
+#[test]
+fn down_still_moves_a_focused_rail_with_the_link_down() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    app.disconnected();
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+}
+
+#[test]
+fn a_reconnect_dropping_the_focused_card_clears_it() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    let id = reconnected_sessions(&mut app);
+    sessions_result(&mut app, &id, &[A]);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn a_reconnect_listing_the_focused_card_keeps_it() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    let id = reconnected_sessions(&mut app);
+    sessions_result(&mut app, &id, &[A, B]);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+}
+
+/// `A` and `B` live with `A` on screen, after one finished turn, so the
+/// conversation has a stop to navigate to.
+fn opened_in_conversation() -> App {
+    let mut app = opened(&[A, B], A);
+    let input = json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": "go"}]}]});
+    app.on_line(turn(A, "turn_started", input));
+    app.on_line(turn(A, "text_completed", json!({"text": "done"})));
+    app.on_line(turn(A, "turn_completed", json!({"outcome": "completed"})));
+    app
+}
+
+/// The real targets plus a notice standing in for the panel's cards, with
+/// the regions the layout drew.
+fn framed(app: &mut App) -> Vec<Target> {
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let mut targets = crate::view::render(app, area, &mut buf, None);
+    let regions = app.chrome().regions();
+    if let Some(panel) = regions.panel {
+        targets.push(Target {
+            id: TargetId::Notice(5),
+            rect: ratatui::layout::Rect::new(panel.x, panel.y + 2, 20, 3),
+        });
+    }
+    app.set_regions(regions);
+    app.drawn(&targets);
+    targets
+}
+
+/// Rail focus and `App` focus are never both on the rail.
+fn assert_single_focus(app: &App) {
+    let rail = rail_focus(app);
+    let rail_target = app
+        .focused()
+        .is_some_and(|id| matches!(id, TargetId::Rail(_)));
+    assert!(!(rail.is_some() && rail_target), "both focuses set");
+}
+
+fn shift_tab() -> Stroke {
+    Stroke::parse("shift+tab").unwrap()
+}
+
+#[test]
+fn tab_walks_the_conversation_the_panel_and_the_rail() {
+    let mut app = opened_in_conversation();
+    framed(&mut app);
+    stroke_press(&mut app, shift_tab());
+    assert!(matches!(app.focused(), Some(TargetId::Turn(_))));
+    assert_single_focus(&app);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(app.focused(), Some(TargetId::Notice(5)));
+    assert_single_focus(&app);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert!(matches!(app.focused(), Some(TargetId::Turn(_))));
+    assert_eq!(rail_focus(&app), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn typing_on_a_focused_rail_types_into_the_box() {
+    let mut app = opened_in_conversation();
+    framed(&mut app);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    let x = Stroke {
+        code: Code::Char('x'),
+        mods: Mods::NONE,
+    };
+    assert_eq!(stroke_press(&mut app, x), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_single_focus(&app);
+    assert_eq!(app.input().cursor(app.draft_width()).1, 3);
+}
+
+#[test]
+fn shift_tab_from_the_rail_returns_to_the_conversation() {
+    let mut app = opened_in_conversation();
+    framed(&mut app);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    stroke_press(&mut app, shift_tab());
+    assert!(matches!(app.focused(), Some(TargetId::Turn(_))));
+    assert_eq!(rail_focus(&app), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn shift_tab_with_no_stop_clears_the_rail_leaving_no_focus() {
+    let mut app = opened(&[A, B], A);
+    framed(&mut app);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(app.focused(), None);
+    assert_eq!(rail_focus(&app), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn tab_with_the_on_screen_session_exited_lands_on_the_first_card() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    let targets = framed(&mut app);
+    let panel_stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Notice(5))
+        .expect("a panel stop")
+        .id;
+    app.focus = Some(panel_stop);
+    app.drawn(&targets);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn tab_with_no_card_stop_skips_the_rail() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    app.on_line(left(B, "exited"));
+    let targets = framed(&mut app);
+    let panel_stop = targets
+        .iter()
+        .find(|target| target.id == TargetId::Notice(5))
+        .expect("a panel stop")
+        .id;
+    app.focus = Some(panel_stop);
+    app.drawn(&targets);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), Some(panel_stop));
+    assert_single_focus(&app);
+}
+
+#[test]
+fn focusing_a_card_past_the_rail_height_scrolls_it_into_view() {
+    let mut app = opened(&[A, B, C, D], A);
+    for extra in ["s_e1", "s_e2", "s_e3", "s_e4"] {
+        app.on_line(live(extra, json!({})));
+    }
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    for _ in 0..7 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    }
+    assert_eq!(rail_focus(&app), Some(key(&app, "s_e4")));
+    app.on_line(live(A, json!({})));
+    assert!(app.rail_state().scroll() > 0);
 }

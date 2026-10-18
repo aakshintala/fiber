@@ -5,6 +5,7 @@
 //! where a focused chip keeps them and typing returns to the entry bar.
 //! Global keys work as from the input box.
 
+use super::rail::Spot as RailSpot;
 use super::{App, Effect};
 use crate::focus::{Area, Regions, area_of, order};
 use crate::keys::Key;
@@ -31,7 +32,8 @@ impl App {
                 self.focus,
                 Some(TargetId::Home(spot)) if spot.is_chip()
             );
-        if !chip_held
+        if !resumed
+            && !chip_held
             && self
                 .focus
                 .is_some_and(|id| !targets.iter().any(|target| target.id == id))
@@ -52,6 +54,7 @@ impl App {
     /// scrolled into view; with none, the last stop of the conversation
     /// area; with no stop, nothing changes.
     pub(super) fn navigate(&mut self) -> Effect {
+        self.clear_rail_focus();
         let items = self.items();
         match items.last() {
             Some((line, id)) => {
@@ -197,6 +200,15 @@ impl App {
             .focus
             .and_then(|id| area_of(&self.stops, &self.regions, id))
             .unwrap_or(Area::Conversation);
+        self.tab_to(from);
+    }
+
+    /// Tab from `from`: the next area's first stop, or the conversation's
+    /// newest item back in the conversation. The rail takes no `App`
+    /// focus: Tab onto it focuses the on-screen session's card, else the
+    /// rail's first card, and a cardless rail walks on as if from the
+    /// rail (`docs/tui.md`, "The rail").
+    pub(super) fn tab_to(&mut self, from: Area) {
         let Some(area) = crate::focus::next_area(&self.stops, &self.regions, from) else {
             return;
         };
@@ -204,9 +216,35 @@ impl App {
             Area::Conversation => {
                 self.navigate();
             }
-            Area::Panel | Area::Rail => {
+            Area::Panel => {
                 if let Some(first) = order(&self.stops, &self.regions, area).first() {
                     self.focus = Some(*first);
+                }
+            }
+            Area::Rail => {
+                let stops = order(&self.stops, &self.regions, Area::Rail);
+                let on_screen = self.session().and_then(|id| {
+                    self.rail_cards().and_then(|(cards, _)| {
+                        cards.iter().find(|row| &row.id == id).map(|row| row.key)
+                    })
+                });
+                let key = on_screen
+                    .filter(|key| stops.contains(&TargetId::Rail(RailSpot::Card(*key))))
+                    .or_else(|| {
+                        stops.iter().find_map(|id| {
+                            if let TargetId::Rail(RailSpot::Card(key)) = id {
+                                Some(*key)
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                match key {
+                    Some(key) => {
+                        self.set_rail_focus(key);
+                        self.focus = None;
+                    }
+                    None => self.tab_to(Area::Rail),
                 }
             }
         }

@@ -2,13 +2,18 @@
 //! elapsed times read, and the glue between the app and the rail
 //! (`docs/tui.md`, "The rail"). Drawing lives in `crate::view::rail`.
 
+use std::time::Instant;
+
 use contract::events::SessionState;
 use contract::{Envelope, RequestId, SessionId};
 use serde_json::{Map, Value, json};
 
 use super::{App, Effect, Link, Phase, mint};
+use crate::focus::Area;
 use crate::home::{Left, Row, State};
-use crate::keys::Key;
+use crate::keys::{Event, Key, default_event};
+use crate::keyset::Context;
+use crate::stroke::{Code, Mods, Stroke};
 use crate::view::rail::{CARD_ROWS, rows};
 
 /// A rail item that does something when clicked (`docs/tui.md`, "The
@@ -30,6 +35,10 @@ pub(crate) enum Spot {
 pub(crate) struct RailState {
     /// Each card's number, by its row's key.
     numbers: Vec<(u64, usize)>,
+    /// The focused card's row key; None while the input box has focus.
+    /// Only one focus exists: while this is set, [`App::focus`] holds
+    /// no rail target (`docs/tui.md`, "The rail").
+    focus: Option<u64>,
     /// The wall time the loop last set, in milliseconds since the epoch.
     wall: u64,
     /// How many rows the rail has scrolled.
@@ -107,8 +116,24 @@ impl App {
     /// Keeps the rail's numbers in step with the cards, on every settle,
     /// and scrolls a card waiting to be revealed into view once the rail
     /// is drawn, moving the least that shows all its rows. Without home
-    /// there are no cards and nothing changes.
+    /// there are no cards and nothing changes. A focus whose card left,
+    /// whose rail shed, or whose screen went home clears first, so focus
+    /// is set only while the layout draws its card
+    /// (`docs/tui.md`, "The rail").
     pub(super) fn sync_rail(&mut self) {
+        let held = self.rail_state.focus.is_some_and(|focus| {
+            self.chrome
+                .layout()
+                .and_then(|layout| layout.rail)
+                .is_some()
+                && self
+                    .home
+                    .as_ref()
+                    .is_some_and(|home| home.sessions.cards().iter().any(|card| card.key == focus))
+        });
+        if !held {
+            self.rail_state.focus = None;
+        }
         let Some(home) = self.home.as_ref() else {
             return;
         };
@@ -132,11 +157,151 @@ impl App {
         self.rail_state.reveal = None;
     }
 
+    /// Focuses the rail on the card with `key`, scrolling it into view:
+    /// the only way rail focus is set, so the reveal stays with it.
+    pub(super) fn set_rail_focus(&mut self, key: u64) {
+        self.rail_state.focus = Some(key);
+        self.rail_state.reveal = Some(key);
+    }
+
+    /// Drops rail focus, leaving the draft where it is.
+    pub(super) fn clear_rail_focus(&mut self) {
+        self.rail_state.focus = None;
+    }
+
+    /// The on-screen session's card key, when its session has a card.
+    fn attached_card_key(&self) -> Option<u64> {
+        let (cards, _) = self.rail_cards()?;
+        let attached = self.session()?;
+        cards
+            .iter()
+            .find(|row| &row.id == attached)
+            .map(|row| row.key)
+    }
+
+    /// The on-screen session's home row key.
+    fn attached_row_key(&self) -> Option<u64> {
+        let attached = self.session().cloned()?;
+        self.home
+            .as_ref()?
+            .sessions
+            .row(&attached)
+            .map(|row| row.key)
+    }
+
+    /// Moves rail focus one card down the drawn order, or up it,
+    /// staying on the last and first cards. Only the drawn order
+    /// moves, never feed order (`docs/tui.md`, "The rail").
+    fn move_rail_focus(&mut self, down: bool) {
+        let Some(rail) = self.chrome.layout().and_then(|layout| layout.rail) else {
+            return;
+        };
+        let mut cards = Vec::new();
+        for row in rows(self, rail.width) {
+            if let Some(key) = row.start
+                && cards.last() != Some(&key)
+            {
+                cards.push(key);
+            }
+        }
+        let Some(focus) = self.rail_state.focus else {
+            return;
+        };
+        let Some(at) = cards.iter().position(|key| *key == focus) else {
+            return;
+        };
+        let next = if down {
+            at.saturating_add(1).min(cards.len().saturating_sub(1))
+        } else {
+            at.saturating_sub(1)
+        };
+        let Some(next) = cards.get(next).copied() else {
+            return;
+        };
+        if next != focus {
+            self.set_rail_focus(next);
+        }
+    }
+
+    /// One stroke before the bindings resolve, for the rail's keys
+    /// (`docs/tui.md`, "The rail"): the `focus_rail` stroke in an empty
+    /// box focuses the rail or widens it home, and plain Up, Down,
+    /// Enter, Esc and Tab move a focused rail ahead of any rebound
+    /// binding, with Right giving focus back. Typing goes on to the
+    /// input box. None for every other stroke.
+    pub(super) fn rail_stroke(&mut self, stroke: &Stroke, now: Instant) -> Option<Effect> {
+        if self.key_context() != Context::Input
+            || self.item_open()
+            || self.notice_overlay().is_some()
+            || self.home.is_none()
+            || self.chrome.layout().is_none()
+        {
+            return None;
+        }
+        if self.keys().current("focus_rail").contains(stroke) {
+            if !self.draft.is_empty() {
+                if stroke.mods == Mods::NONE && matches!(stroke.code, Code::Left) {
+                    return None;
+                }
+                return Some(Effect::None);
+            }
+            if self.rail_state.focus.is_some() {
+                let Some(key) = self.attached_row_key() else {
+                    return Some(self.leave());
+                };
+                let effect = self.leave();
+                if self.on_home() {
+                    self.clear_rail_focus();
+                    self.focus_row(key);
+                }
+                return Some(effect);
+            }
+            if self
+                .chrome
+                .layout()
+                .is_some_and(|layout| layout.rail.is_some())
+            {
+                if let Some(key) = self.attached_card_key() {
+                    self.set_rail_focus(key);
+                    return Some(Effect::None);
+                }
+                let Some(key) = self.attached_row_key() else {
+                    return Some(self.leave());
+                };
+                let effect = self.leave();
+                if self.on_home() {
+                    self.focus_row(key);
+                }
+                return Some(effect);
+            }
+            return Some(self.leave());
+        }
+        if self.rail_state.focus.is_some() && stroke.mods == Mods::NONE {
+            if matches!(
+                stroke.code,
+                Code::Up | Code::Down | Code::Enter | Code::Esc | Code::Tab
+            ) {
+                if let Some(Event::Key(key)) = default_event(stroke) {
+                    return Some(self.on_key(key, now));
+                }
+            } else if matches!(stroke.code, Code::Right) {
+                self.clear_rail_focus();
+                self.edited();
+                self.settle();
+                return Some(Effect::None);
+            }
+        }
+        None
+    }
+
     /// The rail's keys (`docs/tui.md`, "Bindings"), ahead of every
     /// overlay: ⌥R hides a drawn rail and shows one that is not, and does
     /// nothing without the session screen's layout; ⌥1 to ⌥9 switch to
     /// the card with that number, and do nothing when no card has it, as
-    /// without home, where no card is numbered. `None` for every other
+    /// without home, where no card is numbered. While the rail has focus,
+    /// and nothing is on top, Up and Down move between cards, Enter
+    /// switches to the focused card, Tab walks on from the rail, and Esc
+    /// or Right gives focus back to the input box. `None` for every other
     /// key.
     pub(super) fn rail_key(&mut self, key: &Key) -> Option<Effect> {
         // A running `tty` job's view owns Alt+R and Alt+digits: they type
@@ -150,23 +315,63 @@ impl App {
             };
             return Some(self.toggle_rail());
         }
-        let Key::AltDigit(digit) = key else {
+        if let Key::AltDigit(digit) = key {
+            self.clear_rail_focus();
+            let number = usize::from(*digit);
+            let card = self
+                .rail_state
+                .numbers
+                .iter()
+                .find(|(_, held)| *held == number)
+                .map(|(key, _)| *key);
+            return Some(card.map_or(Effect::None, |key| self.switch_to(key)));
+        }
+        if *key == Key::AltA {
+            self.clear_rail_focus();
             return None;
-        };
-        let number = usize::from(*digit);
-        let card = self
-            .rail_state
-            .numbers
-            .iter()
-            .find(|(_, held)| *held == number)
-            .map(|(key, _)| *key);
-        Some(card.map_or(Effect::None, |key| self.switch_to(key)))
+        }
+        if self.rail_state.focus.is_none()
+            || self.key_context() != Context::Input
+            || self.item_open()
+            || self.notice_overlay().is_some()
+        {
+            return None;
+        }
+        if *key == Key::Up {
+            self.move_rail_focus(false);
+            return Some(Effect::None);
+        }
+        if *key == Key::Down {
+            self.move_rail_focus(true);
+            return Some(Effect::None);
+        }
+        if *key == Key::Enter {
+            if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
+                return Some(Effect::None);
+            }
+            let Some(key) = self.rail_state.focus else {
+                return Some(Effect::None);
+            };
+            self.clear_rail_focus();
+            return Some(self.switch_to(key));
+        }
+        if *key == Key::Esc {
+            self.clear_rail_focus();
+            return Some(Effect::None);
+        }
+        if *key == Key::Tab {
+            self.clear_rail_focus();
+            self.tab_to(Area::Rail);
+            return Some(Effect::None);
+        }
+        None
     }
 
     /// Hides the rail and saves the choice as `tui.rail.shown` off, so
     /// it stays hidden across launches until shown (`docs/tui.md`, "The
     /// rail"). The caller settles.
     pub(super) fn hide_rail(&mut self) {
+        self.clear_rail_focus();
         self.chrome.hide_rail();
         self.queue_save("tui.rail.shown", "false".to_owned());
     }
@@ -363,8 +568,10 @@ impl App {
     /// the card scrolls into view. The approval panel and the key map do
     /// not stop it; a crashed card's session resumes on its `subscribe`.
     /// Nothing happens with the link not up, while a `start` waits, for a
-    /// key naming no row, or for the session already on screen.
+    /// key naming no row, or for the session already on screen. A switch
+    /// drops rail focus: the rail shows the new session on screen.
     fn switch_to(&mut self, key: u64) -> Effect {
+        self.clear_rail_focus();
         if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
