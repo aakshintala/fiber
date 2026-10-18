@@ -1,8 +1,8 @@
 //! The opt-in live test for the databricks package
 //! (`docs/testing/fakes.md`, "Live calls and evals"): one turn per protocol
-//! against the real gateway. It returns at once unless
-//! `FIBER_LIVE_DATABRICKS_KEY` holds a token and
-//! `FIBER_LIVE_DATABRICKS_HOST` names the workspace; it never runs in CI.
+//! against the real gateway. It is `#[ignore]`d and panics without
+//! `FIBER_LIVE_DATABRICKS_KEY`, `FIBER_LIVE_DATABRICKS_HOST`, and the model
+//! id variable; it never runs in CI.
 //! It reads the package files at run time, never `include_str!`.
 
 #![allow(
@@ -49,14 +49,14 @@ struct Live {
     id: String,
 }
 
-/// The live home: `None` when the key or the workspace is unset. A missing
-/// id fails the test naming its variable.
-fn live_setup(id_var: &str) -> Option<Live> {
+/// The live home: panics naming the missing variable when the key, the
+/// workspace, or the id `id_var` names is unset.
+fn live_setup(id_var: &str) -> Live {
     let Ok(key) = std::env::var("FIBER_LIVE_DATABRICKS_KEY") else {
-        return None;
+        panic!("the live databricks test needs FIBER_LIVE_DATABRICKS_KEY set");
     };
     let Ok(host) = std::env::var("FIBER_LIVE_DATABRICKS_HOST") else {
-        return None;
+        panic!("the live databricks test needs FIBER_LIVE_DATABRICKS_HOST set");
     };
     let id = std::env::var(id_var)
         .unwrap_or_else(|_| panic!("{id_var} names the live model id for this protocol"));
@@ -72,22 +72,20 @@ fn live_setup(id_var: &str) -> Option<Live> {
         install,
     );
     assert_eq!(installed.status.code(), Some(0), "{installed:?}");
-    Some(Live {
+    Live {
         setup,
         env: vec![
             ("DATABRICKS_TOKEN".to_owned(), key),
             ("DATABRICKS_HOST".to_owned(), host),
         ],
         id,
-    })
+    }
 }
 
 /// One live turn on the model `id_var` names: exit 0 and a non-empty reply.
 #[track_caller]
 fn live_turn(id_var: &str) {
-    let Some(live) = live_setup(id_var) else {
-        return;
-    };
+    let live = live_setup(id_var);
     let Live { setup, env, id } = &live;
     let mut models = setup.fiber(&["models", "--json"]);
     for (name, value) in env {
@@ -121,16 +119,19 @@ fn live_turn(id_var: &str) {
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_CLAUDE; run with --run-ignored only"]
 fn live_claude_turn_answers_on_the_anthropic_route() {
     live_turn("FIBER_LIVE_DATABRICKS_CLAUDE");
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_RESPONSES; run with --run-ignored only"]
 fn live_responses_turn_answers_on_the_codex_route() {
     live_turn("FIBER_LIVE_DATABRICKS_RESPONSES");
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_DATABRICKS_KEY, FIBER_LIVE_DATABRICKS_HOST and FIBER_LIVE_DATABRICKS_COMPLETIONS; run with --run-ignored only"]
 fn live_completions_turn_answers_on_the_mlflow_route() {
     live_turn("FIBER_LIVE_DATABRICKS_COMPLETIONS");
 }

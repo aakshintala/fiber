@@ -1,7 +1,7 @@
 //! The opt-in live test for the opencode package's `quota()`
 //! (`docs/testing.md`, "Live calls and evals"): one quota fetch against the
-//! real endpoint. It returns at once unless `FIBER_LIVE_OPENCODE_KEY` holds
-//! a key; it never runs in CI. The package's `init.lua` is compiled in, so
+//! real endpoint. It is `#[ignore]`d and panics without
+//! `FIBER_LIVE_OPENCODE_KEY`; it never runs in CI. The package's `init.lua` is compiled in, so
 //! the test reads no repository file at run time, and the fetch runs on a
 //! thread bounded by a channel deadline instead of hanging the test.
 
@@ -22,9 +22,10 @@ const INIT: &str = include_str!("../../../providers/opencode/providers/opencode-
 const LIVE_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_OPENCODE_KEY; run with --run-ignored only"]
 fn a_live_opencode_quota_fetch_reports_three_windows() {
     let Ok(key) = std::env::var("FIBER_LIVE_OPENCODE_KEY") else {
-        return;
+        panic!("the live opencode test needs FIBER_LIVE_OPENCODE_KEY set");
     };
     let root = fakes::TempDir::new("fiber-live-opencode-quota");
     let home = root.path().join("home");

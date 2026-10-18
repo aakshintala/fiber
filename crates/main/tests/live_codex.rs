@@ -1,7 +1,7 @@
 //! The opt-in live test for the codex package (`docs/testing.md`, "Live
-//! calls and evals"): one turn against the real endpoint. It returns at once
-//! unless `FIBER_LIVE_CODEX_HOME` names a Fiber home where the owner
-//! installed the package and ran `fiber login codex`; it never runs in CI
+//! calls and evals"): one turn against the real endpoint. It is `#[ignore]`d
+//! and panics without `FIBER_LIVE_CODEX_HOME` naming a Fiber home where the
+//! owner installed the package and ran `fiber login codex`; it never runs in CI
 //! and never tries to reach a usage limit. The child runs in its own
 //! process group under a watchdog, and a timeout kills the group and reaps
 //! it before failing (`docs/testing.md`, "Running tests").
@@ -30,9 +30,10 @@ const REAP_DEADLINE: Duration = Duration::from_secs(10);
 const QUOTA_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_CODEX_HOME; run with --run-ignored only"]
 fn a_live_codex_quota_fetch_reports_windows() {
     let Ok(home) = std::env::var("FIBER_LIVE_CODEX_HOME") else {
-        return;
+        panic!("the live codex test needs FIBER_LIVE_CODEX_HOME set");
     };
     let home = std::path::PathBuf::from(home);
     // The owner's stored login: `default` where one is stored under it,
@@ -107,9 +108,10 @@ fn a_live_codex_quota_fetch_reports_windows() {
 }
 
 #[test]
+#[ignore = "live/needs FIBER_LIVE_CODEX_HOME; run with --run-ignored only"]
 fn a_live_codex_turn_replies() {
     let Ok(home) = std::env::var("FIBER_LIVE_CODEX_HOME") else {
-        return;
+        panic!("the live codex test needs FIBER_LIVE_CODEX_HOME set");
     };
     let model = std::env::var("FIBER_LIVE_CODEX_MODEL").unwrap_or("gpt-6-luna".to_owned());
     let child = Command::new(env!("CARGO_BIN_EXE_fiber"))
