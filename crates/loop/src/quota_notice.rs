@@ -68,7 +68,7 @@ impl Fired {
                     if reset {
                         return;
                     }
-                    let Some(percent_used) = percent else {
+                    let Some(percent_used) = percent.filter(|p| !p.is_nan()) else {
                         return;
                     };
                     if resets_at.is_some_and(|at| at <= now_ms) {
@@ -91,7 +91,7 @@ impl Fired {
                             due.lines.push(text(&notice));
                             due.events.push(Event::QuotaNoticed(notice));
                         }
-                    } else if percent_used < notice_at && fired {
+                    } else if fired {
                         due.events.push(Event::QuotaRearmed(QuotaRearmed {
                             provider: key.0,
                             credential: key.1,
