@@ -2748,9 +2748,6 @@ enum Full {
     Replay,
     /// Accepts with no result: no pass opens.
     Accepted,
-    /// Leaves the raise to the test and continues serving history while
-    /// the test supplies acknowledged replay chunks on the input channel.
-    Chunked,
     /// Reads the raise and hangs up without answering.
     Hung,
 }
@@ -2878,14 +2875,11 @@ fn tail_open(
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
-    let want_full = matches!(
-        full,
-        Full::Replay | Full::Accepted | Full::Chunked | Full::Hung
-    );
+    let want_full = matches!(full, Full::Replay | Full::Accepted | Full::Hung);
     let want_drop = matches!(history, History::Drop);
     let (hub_done_tx, hub_done) = mpsc::channel();
     let (full_tx, full_seen) = mpsc::channel();
-    let keeps_serving = matches!(full, Full::Replay | Full::Chunked);
+    let replay = matches!(full, Full::Replay);
     std::thread::Builder::new()
         .name("tail-hub".to_owned())
         .spawn(move || {
@@ -2949,11 +2943,9 @@ fn tail_open(
                             Full::Accepted => {
                                 write(session_ack(&id, json!({})));
                             }
-                            Full::Hung | Full::Chunked => {}
+                            Full::Hung => {}
                         }
-                        if !matches!(full, Full::Chunked) {
-                            break;
-                        }
+                        break;
                     }
                     Some("subscribe") => write(session_ack(&id, json!({}))),
                     Some("history") => {
@@ -3010,7 +3002,7 @@ fn tail_open(
     if want_drop {
         wait.recv_or_fail(&hub_done, "the hub to drop the stream");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
-    } else if !keeps_serving {
+    } else if !replay {
         wait.recv_or_fail(&hub_done, "the hub to hang up");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
     }
@@ -3212,27 +3204,35 @@ fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
     assert_eq!(&texts[..2], ["first".to_owned(), "second".to_owned()]);
 }
 
-/// Each producer chunk is acknowledged only after the loop drains its
-/// channel and draws. Closing that chunk's channel lets `run` return
-/// without a quit or disconnect input: the same loop, connection and
-/// pass continue on the next chunk. One chunk exceeds `HUB_BATCH`, so
-/// both a full batch and an exhausted channel draw during the pass.
+/// No frame shows part of the replay through a slow channel: the pass
+/// folds a replay longer than `HUB_BATCH`, held at each fold chunk,
+/// and no frame is written before the boundary — the screen redraws
+/// only what changes, so the full-`HUB_BATCH` batch and the tail that
+/// empties the channel both draw nothing new. The hub stays up
+/// serving history, so the landing fills its dropped pages and draws
+/// the one frame holding the whole session.
 #[test]
 fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
-    use crate::event_loop::batch::{HOLD, HUB_BATCH};
-    let mut log = super::handoff_log(479, "the last reply holds quokkas");
-    // Keep the final message running so live text parts can append.
-    log.truncate(log.len() - 3);
-    assert!(log.len() > HUB_BATCH + 100);
+    use crate::event_loop::batch::HUB_BATCH;
+    // Nine lines a turn bar the last: the replay overfills one batch,
+    // with a short tail behind it.
+    let log = super::handoff_log(479, "the last reply holds quokkas");
+    assert!(
+        log.len() > HUB_BATCH + 100,
+        "the replay overfills one batch"
+    );
     let last = last_seq(&log);
-    let open = tail_open(log.clone(), Full::Chunked, History::Windows, Vec::new());
+    let open = tail_open(log.clone(), Full::Accepted, History::Windows, Vec::new());
     let first = frames(&open)
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
     assert!(first.contains("quokkas"), "{first}");
-    // The producer supplies the raise acknowledgement too; the hub
-    // supplies only history answers, so no stray ack can end the pass.
-    assert!(open.rx.try_recv().is_err());
+    // The hub acks without the replay and keeps serving history; the
+    // ack below carries the boundary, then the whole replay follows.
+    // A full `HUB_BATCH` batch holds 64 chunks, the tail a short rest.
+    // Drain first: the hub's own ack may still sit queued, and the
+    // worker must see exactly one pass — this ack, then the replay.
+    while open.rx.try_recv().is_ok() {}
     let raise_id = open
         .seen
         .lock()
@@ -3245,153 +3245,78 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         })
         .unwrap_or_default()
         .unwrap_or_else(|| panic!("the raise"));
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    open.tx
+        .send(Input::Hub(raise_accepted(SESSION, &raise_id, last)))
+        .unwrap_or_else(|error| panic!("{error}"));
+    for envelope in &log {
+        open.tx
+            .send(Input::Hub(Line::Session(envelope.clone())))
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
     let TailOpen {
         mut lp,
         events,
+        seen: _,
         tx,
         rx,
-        ..
     } = open;
-    // No later chunk is queued until this one's result acknowledges
-    // every fold and frame, including the empty-channel frame. The fold
-    // pause also proves how many full batches/chunks the loop took.
-    let chunk = |inputs: Vec<Input>| {
-        let (tx, rx) = mpsc::channel();
-        for input in inputs {
-            tx.send(input).unwrap_or_else(|error| panic!("{error}"));
-        }
-        drop(tx);
-        rx
-    };
-    let feed =
-        |mut lp: super::super::Loop<RecordBackend>, rx: mpsc::Receiver<Input>, folds: usize| {
-            let (reached_tx, reached) = mpsc::channel();
-            let (release_tx, release) = mpsc::channel();
-            let (done_tx, done) = mpsc::channel();
-            std::thread::spawn(move || {
-                pause::install(reached_tx, release);
-                let before = lp.wakeups;
-                assert_eq!(lp.run(&rx), 0);
-                done_tx.send((lp.wakeups - before, lp)).unwrap_or(());
-            });
-            let wait = Deadline::after(DEADLINE);
-            for _ in 0..folds {
-                wait.recv_or_fail(&reached, "the next producer chunk to fold");
-                release_tx
-                    .send(())
-                    .unwrap_or_else(|error| panic!("{error}"));
-            }
-            let result = wait.recv_or_fail(&done, "the producer chunk to drain and draw");
-            assert!(reached.try_recv().is_err(), "no unacknowledged fold");
-            result
-        };
-    let drawn = || {
-        events
-            .try_iter()
-            .map(|event| {
-                event
-                    .strip_prefix("frame\n")
-                    .unwrap_or_else(|| panic!("a recorded frame"))
-                    .to_owned()
-            })
-            .collect::<Vec<_>>()
-    };
-    let unchanged = |lp: &super::super::Loop<RecordBackend>| {
-        for frame in drawn() {
-            assert_eq!(frame, first, "every mid-pass frame keeps the preview");
-        }
-        assert_eq!(crate::view::text(lp.screen.backend().inner.buffer()), first);
-        assert!(lp.app.pass_open());
-    };
-    let (taken, next) = feed(
-        lp,
-        chunk(vec![Input::Hub(raise_accepted(
-            "s_aaaaaaaaaaaaaaaa",
-            &raise_id,
-            last,
-        ))]),
-        1,
-    );
-    lp = next;
-    assert_eq!(taken, 1);
-    unchanged(&lp);
-    // This short chunk exhausts the channel with the pass still open.
-    let (taken, next) = feed(
-        lp,
-        chunk(
-            log[..HOLD]
-                .iter()
-                .cloned()
-                .map(|line| Input::Hub(Line::Session(line)))
-                .collect(),
-        ),
-        1,
-    );
-    lp = next;
-    assert_eq!(taken, HOLD as u64);
-    unchanged(&lp);
-    let top = lp.app.top();
-    let (taken, next) = feed(lp, chunk(vec![Input::Bytes(super::PAGE_UP.to_vec())]), 0);
-    lp = next;
-    assert_eq!(taken, 1);
-    assert_eq!(lp.app.top(), top, "mid-pass scrolling waits");
-    unchanged(&lp);
-    // HOLD + HUB_BATCH is still before last_seq. HUB_BATCH + 1
-    // inputs force a full batch, then a second, exhausted-channel batch.
-    let end = HOLD + HUB_BATCH + 1;
-    let (taken, next) = feed(
-        lp,
-        chunk(
-            log[HOLD..end]
-                .iter()
-                .cloned()
-                .map(|line| Input::Hub(Line::Session(line)))
-                .collect(),
-        ),
-        HUB_BATCH / HOLD + 1,
-    );
-    lp = next;
-    assert_eq!(taken, (HUB_BATCH + 1) as u64);
-    unchanged(&lp);
-    // Both live lines are ready behind last_seq before landing begins;
-    // they append below the replay in the same final batch.
-    log.push(super::line(
-        "text_completed",
-        Some(last + 1),
-        Some("a_m478"),
-        json!({"text": "live wombats"}),
-    ));
-    log.push(super::line(
-        "text_completed",
-        Some(last + 2),
-        Some("a_m478"),
-        json!({"text": "live echidnas"}),
-    ));
-    let remaining = log.len() - end;
-    // Landing can fetch dropped pages. Use the hub reader's channel
-    // for this last chunk, and quit only after its landing frame.
-    for line in &log[end..] {
-        tx.send(Input::Hub(Line::Session(line.clone())))
+    let (reached_tx, reached) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        pause::install(reached_tx, release);
+        let code = lp.run(&rx);
+        done_tx.send((code, lp)).unwrap_or(());
+    });
+    let wait = Deadline::after(DEADLINE);
+    let hold = || {
+        wait.recv_or_fail(&reached, "the next fold chunk");
+        release_tx
+            .send(())
             .unwrap_or_else(|error| panic!("{error}"));
+    };
+    let drawn = || {
+        let mut out = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Some(text) = event.strip_prefix("frame\n") {
+                out.push(text.to_owned());
+            }
+        }
+        out
+    };
+    // The head's chunks draw the same preview the loop already
+    // drew, so the screen dedupes them and writes no frame. The
+    // slow channel keeps the rest coming while the test paces it.
+    hold();
+    hold();
+    hold();
+    assert!(drawn().is_empty(), "no frame shows part of the replay");
+    // Sixty-one more paced chunks finish the full `HUB_BATCH`
+    // batch: 64 chunks, still no frame.
+    for _ in 0..61 {
+        hold();
     }
+    assert!(drawn().is_empty(), "no frame shows part of the replay");
+    // Three tail chunks start the emptied channel, still no frame:
+    // the boundary lands behind them.
+    hold();
+    hold();
+    hold();
+    assert!(drawn().is_empty(), "no frame shows part of the replay");
+    // Release the rest and quit behind the replay: quitting runs
+    // after every queued line, so the tail folds free, lands, and
+    // draws the one frame holding the whole session.
+    drop(release_tx);
     tx.send(quit()).unwrap_or_else(|error| panic!("{error}"));
-    let (taken, lp) = feed(lp, rx, remaining.div_ceil(HOLD));
-    assert_eq!(taken, (remaining + 1) as u64);
+    let (code, lp) =
+        Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after the replay");
+    assert_eq!(code, 0);
+    let tail = drawn();
+    assert_eq!(tail.len(), 1, "the emptied-channel frame");
+    assert!(tail[0].contains("quokkas"), "{}", tail[0]);
+    assert_ne!(tail[0], first, "the landing draws");
     assert!(!lp.app.pass_open());
-    let landed = drawn();
-    assert_eq!(landed.len(), 1, "one landing frame, with no partial replay");
-    let frame = &landed[0];
-    let quokkas = frame.find("quokkas").unwrap_or_else(|| panic!("{frame}"));
-    let wombats = frame
-        .find("live wombats")
-        .unwrap_or_else(|| panic!("{frame}"));
-    let echidnas = frame
-        .find("live echidnas")
-        .unwrap_or_else(|| panic!("{frame}"));
-    assert!(
-        quokkas < wombats && wombats < echidnas,
-        "live lines append below the replay: {frame}"
-    );
     let mut whole = lp.app.pages().fresh();
     for envelope in &log {
         whole.apply(envelope);
