@@ -292,6 +292,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
             let state = Carry {
                 jobs: pass.running.jobs.clone(),
+                extension_jobs: pass.running.extension_jobs.clone(),
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
                 ..Carry::default()

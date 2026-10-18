@@ -321,6 +321,86 @@ fn start_records_the_worktree_on_session_started() {
     assert!(!lines[0].payload.contains_key("worktree"));
 }
 
+fn extension_job() -> Delivery {
+    let id = contract::JobId("j_extension".into());
+    Delivery::ExtensionJob(
+        contract::events::JobStarted {
+            job_id: id.clone(),
+            tool: None,
+            extension: Some("fiber.test/notes".into()),
+            description: "scan".into(),
+            output_path: "/child/events.jsonl".into(),
+        },
+        contract::events::DelegateStarted {
+            job_id: id,
+            delegate_session_id: SessionId("s_child".into()),
+            harness: "fiber".into(),
+            model: "fake/model".into(),
+            workspace: "/w".into(),
+            worktree: None,
+            forked_from: None,
+        },
+    )
+}
+
+#[test]
+fn an_extension_job_start_is_written_without_turn_or_action_at_each_drain() {
+    for running in [false, true] {
+        let (mut looped, _log, _watched, home) = started();
+        let mut input = TurnInput::of(Vec::new());
+        if running {
+            looped
+                .admit_running(extension_job(), &TurnId("t_test".into()))
+                .unwrap();
+        } else {
+            looped.admit_idle(extension_job(), &mut input).unwrap();
+        }
+        let lines = log::read(&home.path().join("s_test")).unwrap();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["session_started", "job_started", "delegate_started"]
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.turn_id.is_none() && line.action_id.is_none())
+        );
+        assert_eq!(lines[1].payload["extension"], "fiber.test/notes");
+        assert!(!lines[1].payload.contains_key("tool"));
+        assert_eq!(lines[2].payload["job_id"], "j_extension");
+        assert!(input.pieces.is_empty());
+        assert!(looped.queued.is_empty());
+        assert!(looped.deferred.is_empty());
+    }
+}
+
+#[test]
+fn an_extension_delegate_counts_as_a_delegate_not_an_ordinary_job() {
+    let (mut looped, _log, _watched, home) = started();
+    looped
+        .admit_idle(extension_job(), &mut TurnInput::of(Vec::new()))
+        .unwrap();
+    let mut fold = crate::status::Fold::new(
+        "/w".into(),
+        "/w".into(),
+        "fake/model".into(),
+        None,
+        Box::new(|| vec![contract::JobId("j_extension".into())]),
+        Box::new(|| None),
+        Box::new(|| 0),
+    );
+    fold.go_live();
+    for line in log::read(&home.path().join("s_test")).unwrap() {
+        fold.observe(&line);
+    }
+    let status = fold.status();
+    assert_eq!(status.delegates, 1);
+    assert_eq!(status.jobs, 0);
+}
+
 #[test]
 fn an_extension_exec_idle_is_written_once_and_starts_no_turn() {
     let (mut looped, _log, mut watched, _home) = started();
@@ -728,6 +808,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ExtensionExec(_)
             | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)

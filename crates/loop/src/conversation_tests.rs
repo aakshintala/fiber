@@ -652,6 +652,132 @@ fn ask_about(id: &str) -> Vec<contract::shapes::Question> {
 }
 
 #[test]
+fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
+    for extension in [false, true] {
+        for batch in [false, true] {
+            for orphan in [false, true] {
+                let started = Event::JobStarted(contract::events::JobStarted {
+                    job_id: JobId("j_owned".into()),
+                    tool: None,
+                    extension: extension.then(|| "test/scan".into()),
+                    description: "scan".into(),
+                    output_path: "/child/events.jsonl".into(),
+                });
+                let mut lines = vec![line("job_started", &started, None)];
+                if batch {
+                    lines.push(line("tool_call_requested", &call("a"), Some("a_1")));
+                }
+                lines.push(line(
+                    "delegate_finished",
+                    &finished("j_owned", "PRIVATE SENTINEL", None),
+                    None,
+                ));
+                lines.push(line(
+                    "job_completed",
+                    &if orphan {
+                        orphaned("j_owned")
+                    } else {
+                        completed("j_owned")
+                    },
+                    None,
+                ));
+                if batch {
+                    lines.push(line(
+                        "tool_call_completed",
+                        &result("logged result"),
+                        Some("a_1"),
+                    ));
+                }
+                let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+                let text = format!("{rebuilt:?}");
+                assert_eq!(text.contains("PRIVATE SENTINEL"), !extension);
+                assert_eq!(text.contains("background job j_owned ended"), !extension);
+                if batch {
+                    assert!(
+                        matches!(&rebuilt[1], Input::ToolResult { text, is_error: false, .. } if text == "logged result")
+                    );
+                }
+                let mut carry = crate::handoff::Carry::default();
+                let mut live = Vec::new();
+                let mut had = BTreeMap::new();
+                for entry in &lines {
+                    let event = Event::from_envelope(entry).unwrap().unwrap();
+                    render(
+                        &mut live,
+                        &event,
+                        entry.action_id.as_ref(),
+                        "fake/model-1",
+                        &mut had,
+                        &mut carry,
+                    );
+                }
+                // Only an extension end is written live inside a batch;
+                // model notices wait until its results have been written.
+                if extension || !batch {
+                    assert_eq!(live, rebuilt);
+                }
+                assert!(carry.jobs.is_empty());
+                assert_eq!(
+                    carry.owned("j_owned"),
+                    extension,
+                    "ownership survives the end"
+                );
+                // A still-outstanding batch holds no private notice either.
+                if batch {
+                    lines.pop();
+                    let (_, _, held, _) = super::rebuild_and_sent(
+                        &lines,
+                        "fake/model-1",
+                        &std::collections::HashSet::from([ActionId("a_1".into())]),
+                        crate::handoff::Carry::default(),
+                    )
+                    .unwrap();
+                    assert_eq!(held.is_empty(), extension);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn extension_ownership_survives_handoff_and_seeded_rebuilds() {
+    let started = Event::JobStarted(contract::events::JobStarted {
+        job_id: JobId("j_owned".into()),
+        tool: None,
+        extension: Some("test/scan".into()),
+        description: "scan".into(),
+        output_path: "/child/events.jsonl".into(),
+    });
+    let starts = vec![line("job_started", &started, None)];
+    let (_, _, _, seed) = super::rebuild_and_sent(
+        &starts,
+        "fake/model-1",
+        &Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(seed.owned("j_owned"));
+    let ends = vec![
+        line(
+            "delegate_finished",
+            &finished("j_owned", "PRIVATE SENTINEL", None),
+            None,
+        ),
+        line("job_completed", &completed("j_owned"), None),
+    ];
+    let (rebuilt, _, held, carry) =
+        super::rebuild_and_sent(&ends, "fake/model-1", &Default::default(), seed).unwrap();
+    assert!(rebuilt.is_empty());
+    assert!(held.is_empty());
+    assert!(carry.owned("j_owned"));
+    let mut lines = starts;
+    lines.push(line("handoff_completed", &handoff_over(true), None));
+    let before = super::rebuild(&lines, "fake/model-1").unwrap();
+    lines.extend(ends);
+    assert_eq!(super::rebuild(&lines, "fake/model-1").unwrap(), before);
+}
+
+#[test]
 fn a_delegate_finish_then_its_end_renders_two_messages_in_log_order() {
     let jobs = Event::TurnStarted(contract::events::TurnStarted {
         input: vec![contract::events::InputItem::Jobs {

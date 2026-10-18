@@ -1511,6 +1511,31 @@ fn a_skill_load_with_hosts_reaches_the_seed_and_the_known_hosts() {
 }
 
 #[test]
+fn a_turn_start_history_seed_keeps_extension_job_ownership() {
+    let (_home, sessions) = sessions("extension-seed");
+    let job = Event::JobStarted(contract::events::JobStarted {
+        job_id: contract::JobId("j_owned".into()),
+        tool: None,
+        extension: Some("test/scan".into()),
+        description: "scan".into(),
+        output_path: "/child/events.jsonl".into(),
+    });
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &job),
+            envelope(A, 2, Some("t_1"), None, &turn()),
+            envelope(A, 3, Some("t_1"), None, &handoff()),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.seed.owned("j_owned"));
+    assert_eq!(folded.seed.jobs, [("j_owned".into(), "scan".into())]);
+}
+
+#[test]
 fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
     let seed = crate::handoff::Carry {
         skills: vec![alpha()],

@@ -734,6 +734,12 @@ The kinds are `docs/events.md`.
   message does. Jobs finishing together are delivered together in one turn,
   not one turn each. If a `jobs wait` already returned a job's final state to
   the model, no completion notice is sent for it.
+  A job an extension started with `host.delegate` is the exception: its end
+  wakes nothing and starts no turn. The model does not see its completion
+  notice, live or after a resume. A `jobs wait`, `jobs stop` or `jobs write`
+  answer still reports the final state, without the delegate's final message.
+  Its `delegate_finished` and `job_completed` are written with no turn, after
+  the `after_tool` hooks (`docs/extensions.md`, "Host calls").
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output
@@ -785,6 +791,9 @@ The kinds are `docs/events.md`.
   (`docs/invocation.md`, "Shutdown"),
   because a cap on the waiter cannot tell a hang from long healthy work such
   as a CI watch.
+  A job an extension started is not counted here: it holds no session open,
+  is not in the ending notice or the jobs check, and a session that ends
+  normally stops it.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").

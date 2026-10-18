@@ -220,7 +220,19 @@ impl Loop {
             }
             // Waiting on a question is idle, and a running job is not
             // (`docs/invocation.md`, "Lifecycle").
-            let idle = self.idle_until(deadline);
+            match self.inbox.try_recv() {
+                Ok(delivery) => {
+                    return self.take_while_asked(delivery, calls, turn).map(|()| false);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    return self.inbox_closed(calls, turn).map(|()| false);
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+            let running = self.running();
+            self.record_waiting_extension_jobs()?;
+            let model = self.model_running(running);
+            let idle = self.idle_until(deadline, &model);
             if idle.is_some_and(|at| clock.now() >= at) {
                 // Anything already queued is taken first, as the idle wait
                 // takes it.
@@ -287,7 +299,7 @@ impl Loop {
     /// then anything already queued, then a wait on the loop's clock until
     /// `until`. Unlike the idle wait it honours `until` while a job runs
     /// and moves no idle state.
-    fn receive(&self, until: Option<Instant>) -> Received {
+    fn receive(&mut self, until: Option<Instant>) -> Received {
         if self.cancel.state() != SignalState::Live {
             return Received::Due;
         }

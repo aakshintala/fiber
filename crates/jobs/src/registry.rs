@@ -305,6 +305,51 @@ impl Registry {
         (started, finish)
     }
 
+    /// Whether a session has wired its inbox for delegate starts and ends.
+    pub(crate) fn has_inbox(&self) -> bool {
+        lock(&self.inner).inbox.is_some()
+    }
+
+    /// Records an extension-owned delegate and sends its start under the
+    /// same lock, before a reader can see it in the running list.
+    pub(crate) fn open_extension_started(
+        self: &Arc<Self>,
+        job_id: JobId,
+        extension: String,
+        description: String,
+        output_path: String,
+        stop: Stop,
+        delegate: DelegateStarted,
+    ) -> Unreported {
+        let started = JobStarted {
+            job_id: job_id.clone(),
+            tool: None,
+            extension: Some(extension),
+            description,
+            output_path: output_path.clone(),
+        };
+        let finish = Unreported {
+            job_id,
+            run: 1,
+            registry: Some(Arc::clone(self)),
+            delegate: true,
+        };
+        let mut inner = lock(&self.inner);
+        // Send before registering, under this same lock: a running() reader
+        // that sees the job can already take its start in the second drain.
+        if let Some(inbox) = &inner.inbox {
+            let _sent = inbox.send(Delivery::ExtensionJob(started.clone(), delegate.clone()));
+        }
+        inner.jobs.push(Job::running(
+            started,
+            PathBuf::from(output_path),
+            Arc::from(stop.0),
+            None,
+            Some(delegate),
+        ));
+        finish
+    }
+
     /// Sends a monitor's batch to the inbox, under the lock an end sends
     /// under, so the job's lines and its end arrive in the order its drive
     /// thread made them. Dropped when no inbox is set.
