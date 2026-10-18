@@ -13,19 +13,10 @@
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
-
-use fakes::Deadline;
 
 #[path = "support/record.rs"]
 mod support;
-
-/// The deadline on each wait: the jig rejecting its arguments, and the
-/// watchdog standing down after it. A stall fails naming the wait
-/// (`docs/testing.md`, "Waits and timeouts").
-const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/record`), so the test starts no cargo and
@@ -37,9 +28,9 @@ fn example_path() -> PathBuf {
     path.join("examples").join("record")
 }
 
-/// Runs the built `record` binary with `args` and waits for it under one
-/// deadline. The child is in its own process group under a watchdog, so a
-/// stall fails naming the wait and leaves no process behind.
+/// Runs the built `record` binary with `args` and waits for it. The child
+/// is in its own process group under a watchdog, so a stall fails naming
+/// the wait and leaves no process behind.
 #[track_caller]
 fn run_jig(args: &[&str]) -> Output {
     let child = Command::new(example_path())
@@ -50,14 +41,7 @@ fn run_jig(args: &[&str]) -> Output {
         .spawn()
         .unwrap();
     let watchdog = fakes::Watchdog::group(child.id());
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || match done.send(child.wait_with_output()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
-    });
-    let output = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("the record jig finished")
-        .unwrap();
+    let output = fakes::wait_output(child, "the record jig finished");
     watchdog.stand_down(Duration::from_secs(5));
     output
 }
