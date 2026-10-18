@@ -353,10 +353,8 @@ pub(crate) fn until_session_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
-/// The provider wire builders and the event-kinds reader, shared from
-/// `support`: the harness's copies were byte-equal after normalising,
-/// so the names stay for the harness users while `support` owns the
-/// bodies.
+/// Re-exports `support`'s provider wire builders and event-kinds reader
+/// under the names the harness users call.
 #[allow(
     unused_imports,
     reason = "each test binary uses its own subset of the harness names"
