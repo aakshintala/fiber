@@ -201,6 +201,23 @@ fn a_missing_program_is_the_spawn_error() {
     assert!(err.ran.is_none(), "a spawn failure never ran");
 }
 
+/// A group error no spawn returns is `io_failed` with nothing logged: the
+/// refusal names the program and the cause.
+#[test]
+fn a_group_error_no_spawn_returns_is_io_failed() {
+    let (_dir, cwd) = dir("fiber-exec-spawn-error");
+    let req = request("sh", &["-c", "exit 0"], cwd, CAP);
+    let err = super::spawn_error(&req, group::Error::Refused(0));
+    assert_eq!(err.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        err.message,
+        format!("host.exec: sh: {}", group::Error::Refused(0)),
+        "the refusal names the program and the cause"
+    );
+    assert!(err.ran.is_none(), "a spawn failure never ran");
+    assert!(err.source.is_none(), "a refusal carries no spawn error");
+}
+
 #[test]
 fn output_past_the_cap_stops_the_run_with_the_cap_error() {
     let (_dir, cwd) = dir("fiber-exec-cap");

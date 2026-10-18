@@ -93,8 +93,9 @@ struct Shared {
 
 impl contract::clock::Wake for Shared {
     // Latency only: `park` never blocks past `support::group::GROUP_POLL`,
-    // so a clock move this misses is seen on the next poll with the same outcome, and no
-    // test can tell the difference without reading the real clock.
+    // so a clock move this misses is seen on the next poll with the same
+    // outcome, and no test can tell the difference without reading the
+    // real clock.
     #[cfg_attr(false, mutants::skip)]
     fn wake(&self) {
         self.cv.notify_all();
@@ -105,9 +106,10 @@ fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-// Latency only: `park` never blocks past `support::group::GROUP_POLL`, so a
-// change this does not announce is seen on the next poll with the same outcome, and no
-// test can tell the difference without reading the real clock.
+// Latency only: `park` never blocks past `support::group::GROUP_POLL`,
+// so a change this does not announce is seen on the next poll with the
+// same outcome, and no test can tell the difference without reading the
+// real clock.
 #[cfg_attr(false, mutants::skip)]
 fn bump(inner: &mut Inner, shared: &Shared) {
     inner.seq = inner.seq.wrapping_add(1);
@@ -148,19 +150,7 @@ pub(crate) fn run(
         // shutdown with every other listed group.
         match support::group::spawn(&mut cmd) {
             Ok((child, listing)) => (child, Some(listing)),
-            Err(support::group::Error::Spawn(source)) => {
-                return Err(spawn_failed(req, source));
-            }
-            Err(other) => {
-                // No refused id reaches here: the child just spawned, so
-                // its id is a real pid.
-                return Err(Box::new(ExecError {
-                    code: contract::ErrorCode::IoFailed,
-                    message: format!("host.exec: {}: {other}", req.program),
-                    ran: None,
-                    source: None,
-                }));
-            }
+            Err(error) => return Err(spawn_error(req, error)),
         }
     } else {
         match cmd.spawn() {
@@ -306,8 +296,6 @@ pub(crate) fn run(
 /// program or working directory, anything else for a program that could
 /// not start.
 fn spawn_failed(req: &ExecRequest, source: std::io::Error) -> Box<ExecError> {
-    // `NotFound` names a missing program or working directory;
-    // anything else kept the program from starting.
     let code = if source.kind() == std::io::ErrorKind::NotFound {
         contract::ErrorCode::NotFound
     } else {
@@ -318,6 +306,30 @@ fn spawn_failed(req: &ExecRequest, source: std::io::Error) -> Box<ExecError> {
         message: format!("host.exec: {}: {source}", req.program),
         ran: None,
         source: Some(source),
+    })
+}
+
+/// A group spawn that never ran names its failure: `NotFound` when the
+/// program or working directory does not exist, `io_failed` for anything
+/// else. A refused id or a signal failure never reaches here: the child
+/// just spawned, so its id is a real pid, and listing a live group sends
+/// no signal.
+fn spawn_error(req: &ExecRequest, error: support::group::Error) -> Box<ExecError> {
+    match error {
+        support::group::Error::Spawn(source) => spawn_failed(req, source),
+        refused @ support::group::Error::Refused(_) => no_spawn(req, &refused),
+        signal @ support::group::Error::Signal { .. } => no_spawn(req, &signal),
+    }
+}
+
+/// A group error no spawn returns, reported as `io_failed` with nothing
+/// logged: the program never ran.
+fn no_spawn(req: &ExecRequest, error: &dyn std::fmt::Display) -> Box<ExecError> {
+    Box::new(ExecError {
+        code: contract::ErrorCode::IoFailed,
+        message: format!("host.exec: {}: {error}", req.program),
+        ran: None,
+        source: None,
     })
 }
 
@@ -337,10 +349,20 @@ impl StopTarget<'_> {
     }
 }
 
+/// Unlists the run's registration once its group is seen empty: a pid-mode
+/// run holds no token, so it never unlists another registration of a
+/// reused id.
+fn unlist(listing: &mut Option<Listing>, seen_empty: bool) {
+    if seen_empty && let Some(registration) = listing.take() {
+        support::group::live().unlist(registration);
+    }
+}
+
 /// Watches a started run until its group is empty and its output read,
 /// stopping it at the cap, the `deadline` or the `cancel` sender's drop:
 /// SIGTERM, SIGKILL [`support::group::GRACE`] later while a member lives,
-/// then output read for at most [`support::group::DRAIN`] more. `reap` runs first on every pass, for a caller
+/// then output read for at most [`support::group::DRAIN`] more. `reap` runs
+/// first on every pass, for a caller
 /// that reaps the child itself instead of a waiter thread. A [`StopTarget::Pid`]
 /// run reaps the child on this thread and signals only its pid, never a
 /// group; a [`StopTarget::Group`] run leaves the reap to its waiter thread.
@@ -454,9 +476,7 @@ fn supervise(
             // an escaped descendant holding the pipe past here is dropped.
             let ran = ran_of(shared, status, false);
             lock(&shared.inner).discard = true;
-            if seen_empty && let Some(registration) = listing.take() {
-                support::group::live().unlist(registration);
-            }
+            unlist(&mut listing, seen_empty);
             return Ok(ran);
         } else if pid_mode && reaped {
             // The program ended behind a helper holding the pipe: EOF may
@@ -466,9 +486,7 @@ fn supervise(
             if clock.now() >= until {
                 let ran = ran_of(shared, status, false);
                 lock(&shared.inner).discard = true;
-                if seen_empty && let Some(registration) = listing.take() {
-                    support::group::live().unlist(registration);
-                }
+                unlist(&mut listing, seen_empty);
                 return Ok(ran);
             }
             park(clock, shared, seen_seq, Some(until));
@@ -487,9 +505,7 @@ fn supervise(
         if (eof && seen_empty) || clock.now() >= until {
             let ran = ran_of(shared, status, timed_out);
             lock(&shared.inner).discard = true;
-            if seen_empty && let Some(registration) = listing.take() {
-                support::group::live().unlist(registration);
-            }
+            unlist(&mut listing, seen_empty);
             if capped {
                 return Err(Box::new(ExecError {
                     code: contract::ErrorCode::TooLarge,
@@ -650,11 +666,13 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
 }
 
 /// Parks until the shared state moves or `until` on the injected clock.
-/// The condvar always times out at `support::group::GROUP_POLL`: a clock move whose wake
-/// lands between the register and the wait still surfaces within one poll.
+/// The condvar always times out at `support::group::GROUP_POLL`: a clock
+/// move whose wake lands between the register and the wait still surfaces
+/// within one poll.
 // Latency only: every caller re-reads the state and the clock after it
-// returns, and it never blocks past `support::group::GROUP_POLL`, so a mutant that waits
-// too long or not at all changes when a pass runs, never what it decides.
+// returns, and it never blocks past `support::group::GROUP_POLL`, so a
+// mutant that waits too long or not at all changes when a pass runs,
+// never what it decides.
 #[cfg_attr(false, mutants::skip)]
 fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     // The guard is held from the check into the condvar wait, so a wake
