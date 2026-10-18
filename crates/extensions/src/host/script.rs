@@ -179,7 +179,7 @@ impl HostScript {
                 .misses
                 .push(miss("exec", index, &redact_env(&request)));
             return Err(no_reply("exec"));
-        };
+        }
         state.exec_next = index.saturating_add(1);
         entry.reply
     }

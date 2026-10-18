@@ -1,7 +1,5 @@
 //! Scripted host-call matching (`docs/testing.md`, "Testing an extension").
 
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
-
 use contract::ErrorCode;
 use serde_json::{Value, json};
 

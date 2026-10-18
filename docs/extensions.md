@@ -639,7 +639,8 @@ A case may add `config`, written as the temporary home's global
 configuration. `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
 An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
-integer signal number the extension sees as a name such as `SIGKILL`. Requests match the fields the
+integer signal number the extension sees as a name such as `SIGKILL`.
+Requests match the fields the
 case gives; a mismatch, an unscripted call or an unused reply fails the case.
 These host replies prevent network requests and program execution.
 

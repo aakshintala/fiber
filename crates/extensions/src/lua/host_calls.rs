@@ -314,14 +314,14 @@ pub(super) fn admit<'a>(
                 cwd: request.cwd.clone(),
             });
             if let Some(script) = hub.host_script() {
-                let case_value = request.case_value();
-                match script.exec(case_value.clone()) {
+                let reply = script.exec(request.case_value());
+                drop(shared);
+                match reply {
                     Ok(ExecReply {
                         end,
                         stdout,
                         stderr,
                     }) => {
-                        drop(shared);
                         let (exit_code, signal) = match end {
                             ExecEnd::Code(code) => (Some(code), None),
                             ExecEnd::Signal(number) => {
@@ -338,10 +338,7 @@ pub(super) fn admit<'a>(
                         send_exec(&hub_exec, meta.as_ref(), &ran);
                         Admitted::Replied(Reply::Exec(Ok(ran)))
                     }
-                    Err(failed) => {
-                        drop(shared);
-                        Admitted::Replied(Reply::Exec(Err(failed)))
-                    }
+                    Err(failed) => Admitted::Replied(Reply::Exec(Err(failed))),
                 }
             } else {
                 // The stop sender stays in the hub, so the stop reaches the
