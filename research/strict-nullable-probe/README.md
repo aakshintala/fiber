@@ -13,8 +13,8 @@ Every request declared a `read` tool with this schema:
 {"type":"object","properties":{"path":{"type":"string"},"offset":{"type":["integer","null"]},"note":{"type":["string","null"]},"all":{"type":["boolean","null"]}},"required":["path","offset","note","all"],"additionalProperties":false}
 ```
 
-The prompt was: “Call the read tool with path 'a.txt'. Pass null for every
-other argument.” This tests acceptance and explicit null output, not whether
+The P1 through P5b prompt was: “Call the read tool with path 'a.txt'. Pass null
+for every other argument.” This tests acceptance and explicit null output, not whether
 a model spontaneously chooses null for an unspecified argument. Each successful
 call returned `{"path":"a.txt","offset":null,"note":null,"all":null}`
 (disregarding key order and whitespace).
@@ -41,6 +41,19 @@ responses do not echo the declaration: their raw records retain the sent
 schema and strict setting or Gemini mode. P5b reports Amazon Bedrock as its
 upstream provider. It is the OpenRouter Messages compatibility sample, not a
 direct Bedrock probe.
+
+## Path-only omission case
+
+These calls test the omission case: the prompt names only `path`, without
+asking for nulls or naming the other arguments. Each request uses the schema
+above with `strict: true`. Each model sends null for every unspecified argument.
+The owner accepted this evidence under ruling A on October 18, 2026.
+
+| Call | Vendor and model | HTTP | Prompt | Arguments sent |
+|---|---|---|---|---|
+| [A1](raw/A1_openai_responses_pathonly.json) | OpenAI Responses, `gpt-6-luna` | 200 | Call the read tool with path 'a.txt'. | `{"path":"a.txt","offset":null,"note":null,"all":null}` |
+| [A2](raw/A2_openai_chat_pathonly.json) | OpenAI Chat Completions, `gpt-6-luna` | 200 | Call the read tool with path 'a.txt'. | `{"path":"a.txt","offset":null,"note":null,"all":null}` |
+| [A3](raw/A3_anthropic_messages_pathonly.json) | Anthropic Messages, `claude-sonnet-5-5` | 200 | Call the read tool with path 'a.txt'. | `{"path":"a.txt","offset":null,"note":null,"all":null}` |
 
 ## Malformed first requests
 
