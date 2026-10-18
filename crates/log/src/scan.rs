@@ -199,8 +199,8 @@ pub enum FirstLineError {
     Corrupt,
 }
 
-/// The [`SessionStarted`] of the session in `dir`: the lenient read
-/// resume walks by, as today's `resume::first_line`. Reads only the
+/// The [`SessionStarted`] of the session in `dir`: the lenient
+/// first-line read requiring a string workspace. Reads only the
 /// first line, never the log past it.
 pub fn started_first(dir: &Path) -> Result<SessionStarted, FirstLineError> {
     let path = dir.join(EVENTS);

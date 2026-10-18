@@ -67,7 +67,7 @@ pub(crate) fn resume_exited(
 /// Whether `session`'s log ends in `fiber_exited`: it has exited, even
 /// while its process is still shutting down.
 pub(crate) fn exited(home: &Path, session: &SessionId) -> bool {
-    crate::recent::lookup_logged(home, &session.0)
+    crate::recent::lookup_logged(home, session)
         .as_ref()
         .is_some_and(|(_, dir)| exited_in(dir))
 }
@@ -147,7 +147,7 @@ fn attempt(
         }
         // One lookup per pass, shared by both predicates: a refused
         // connect resumes without one.
-        let found = crate::recent::lookup_logged(&hub.home, &session.0);
+        let found = crate::recent::lookup_logged(&hub.home, session);
         if found.as_ref().is_none_or(|(_, dir)| !exited_in(dir)) {
             return Step::Done(Ok(stream));
         }
@@ -159,7 +159,7 @@ fn attempt(
         // The exiting process still answers on its socket.
         return Step::Wait(None);
     }
-    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, &session.0) else {
+    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, session) else {
         return Step::Done(Err(not_found(session)));
     };
     let recorded = match log::started_first(&dir) {

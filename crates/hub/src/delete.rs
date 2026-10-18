@@ -160,7 +160,7 @@ fn confirm(set_ids: &BTreeSet<&SessionId>, expect: &BTreeSet<&SessionId>) -> Res
 
 /// `session`'s directory: a real directory, never a link, holding its log.
 fn session_dir(hub: &Hub, session: &SessionId) -> Option<PathBuf> {
-    let (_, dir) = crate::recent::lookup_logged(&hub.home, &session.0)?;
+    let (_, dir) = crate::recent::lookup_logged(&hub.home, session)?;
     fs::symlink_metadata(&dir)
         .is_ok_and(|meta| meta.is_dir())
         .then_some(dir)

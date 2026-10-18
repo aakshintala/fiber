@@ -238,7 +238,7 @@ pub(crate) static LOGGED_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
 /// and the directory, over [`log::find_session`]. The feed's lookup:
 /// a session that crashed before writing a line still gets its crashed
 /// row.
-pub(crate) fn lookup(home: &Path, id: &str) -> Option<(String, PathBuf)> {
+pub(crate) fn lookup(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
     #[cfg(test)]
     LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::find_session(home, id)
@@ -248,7 +248,7 @@ pub(crate) fn lookup(home: &Path, id: &str) -> Option<(String, PathBuf)> {
 /// key and the directory, over [`log::find_logged_session`]. The
 /// lookup resume, rejoin and the granted callers share, so a log-less
 /// directory cannot mask a later log.
-pub(crate) fn lookup_logged(home: &Path, id: &str) -> Option<(String, PathBuf)> {
+pub(crate) fn lookup_logged(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
     #[cfg(test)]
     LOGGED_LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     log::find_logged_session(home, id)

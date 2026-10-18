@@ -440,7 +440,7 @@ impl Feed {
         // and before any write, so the followed run's exit cannot land
         // before it. The end of the last complete line, never the raw
         // length: a resumed writer truncates a torn tail.
-        let found = recent::lookup(&self.home, &id).map(|(project, dir)| {
+        let found = recent::lookup(&self.home, &SessionId(id.clone())).map(|(project, dir)| {
             let from = log::complete_len_of(&dir);
             (project, dir, from)
         });

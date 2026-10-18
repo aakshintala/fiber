@@ -59,7 +59,7 @@ impl Mark {
     /// "Writing"), so the resumed `fiber_started` can land at that
     /// line's start. File IO: never under the relays lock.
     pub(crate) fn now(home: &Path, session: &str) -> Mark {
-        let found = crate::recent::lookup_logged(home, session);
+        let found = crate::recent::lookup_logged(home, &contract::SessionId(session.to_owned()));
         let read = found
             .as_ref()
             .map_or(0, |(_, dir)| log::complete_len_of(dir));
@@ -77,7 +77,7 @@ impl Mark {
 /// Never `Mark::now`: that would place the offset after the start the
 /// resumed run already wrote. File IO: never under the relays lock.
 fn discovered(home: &Path, session: &str, epoch: u64) -> Option<Mark> {
-    let (_, dir) = crate::recent::lookup_logged(home, session)?;
+    let (_, dir) = crate::recent::lookup_logged(home, &contract::SessionId(session.to_owned()))?;
     Some(Mark {
         log: Some(dir),
         read: 0,

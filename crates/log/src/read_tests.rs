@@ -103,35 +103,26 @@ fn complete_len_of_scans_back_across_chunk_edges() {
     // No newline across more than three chunks reads to the start.
     write(&dir, &vec![b'x'; tail * 3 + 7]);
     assert_eq!(complete_len_of(&dir), 0);
-    // A torn tail longer than two chunks is dropped.
-    let mut bytes = vec![b'x'; tail * 2 + 11];
-    bytes.extend_from_slice(b"ab\ncd\n");
+    // The last newline's distance past it decides the chunks read:
+    // one byte, exactly one chunk, and one past it.
+    for suffix in [1, tail, tail + 1] {
+        let mut bytes = vec![b'x'; tail * 2];
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&vec![b'y'; suffix]);
+        write(&dir, &bytes);
+        assert_eq!(
+            complete_len_of(&dir),
+            tail as u64 * 2 + 1,
+            "suffix {suffix} past the last newline"
+        );
+    }
+    // A torn tail longer than two chunks is dropped: the end stays at
+    // the last newline before it.
+    let mut bytes = vec![b'x'; 3];
+    bytes.push(b'\n');
+    bytes.extend_from_slice(&vec![b'y'; tail * 2 + 11]);
     write(&dir, &bytes);
-    assert_eq!(complete_len_of(&dir), bytes.len() as u64);
-    // A newline at exactly TAIL and TAIL+1 bytes from the end.
-    for at in [tail, tail + 1] {
-        let mut bytes = vec![b'x'; at];
-        bytes.extend_from_slice(b"\n");
-        bytes.extend_from_slice(&[b'y'; 9]);
-        write(&dir, &bytes);
-        assert_eq!(
-            complete_len_of(&dir),
-            at as u64 + 1,
-            "newline {at} from the end"
-        );
-    }
-    // One byte below and above the chunk edge.
-    for at in [tail - 1, tail + 2] {
-        let mut bytes = vec![b'x'; at];
-        bytes.extend_from_slice(b"\n");
-        bytes.extend_from_slice(&[b'y'; 9]);
-        write(&dir, &bytes);
-        assert_eq!(
-            complete_len_of(&dir),
-            at as u64 + 1,
-            "newline {at} from the end"
-        );
-    }
+    assert_eq!(complete_len_of(&dir), 4);
 }
 
 #[test]
@@ -276,10 +267,10 @@ fn lines_from_hands_complete_lines_from_an_offset() {
 #[test]
 fn find_session_returns_the_first_project_in_key_order() {
     let home = fakes::TempDir::new("log-find-session");
-    let id = "s_aaaaaaaaaaaaaa";
-    assert_eq!(find_session(home.path(), id), None);
-    project(home.path(), "b", id, false);
-    let (key, dir) = find_session(home.path(), id).unwrap();
+    let id = SessionId("s_aaaaaaaaaaaaaa".to_owned());
+    assert_eq!(find_session(home.path(), &id), None);
+    project(home.path(), "b", &id.0, false);
+    let (key, dir) = find_session(home.path(), &id).unwrap();
     assert_eq!(key, "b");
     assert_eq!(
         dir,
@@ -287,43 +278,47 @@ fn find_session_returns_the_first_project_in_key_order() {
             .join("projects")
             .join("b")
             .join("sessions")
-            .join(id)
+            .join(&id.0)
     );
     // Both hold it: the earlier key wins.
-    project(home.path(), "a", id, false);
-    let (key, _) = find_session(home.path(), id).unwrap();
+    project(home.path(), "a", &id.0, false);
+    let (key, _) = find_session(home.path(), &id).unwrap();
     assert_eq!(key, "a");
     // A directory without a log is still found.
-    assert!(find_session(home.path(), id).is_some());
+    assert!(find_session(home.path(), &id).is_some());
     // Bad ids give nothing.
     for bad in ["", "..", ".", "a/b", "a\\b"] {
-        assert_eq!(find_session(home.path(), bad), None, "{bad}");
+        assert_eq!(
+            find_session(home.path(), &SessionId(bad.to_owned())),
+            None,
+            "{bad}"
+        );
     }
 }
 
 #[test]
 fn find_logged_session_skips_a_directory_without_a_log() {
     let home = fakes::TempDir::new("log-find-logged");
-    let id = "s_aaaaaaaaaaaaaa";
-    project(home.path(), "a", id, false);
-    project(home.path(), "b", id, true);
+    let id = SessionId("s_aaaaaaaaaaaaaa".to_owned());
+    project(home.path(), "a", &id.0, false);
+    project(home.path(), "b", &id.0, true);
     // `find_session` sees the earlier directory; the logged lookup
     // skips it for the later log.
-    assert_eq!(find_session(home.path(), id).unwrap().0, "a");
-    assert_eq!(find_logged_session(home.path(), id).unwrap().0, "b");
+    assert_eq!(find_session(home.path(), &id).unwrap().0, "a");
+    assert_eq!(find_logged_session(home.path(), &id).unwrap().0, "b");
     // Both hold logs: the earlier key wins.
-    project(home.path(), "a2", id, true);
+    project(home.path(), "a2", &id.0, true);
     std::fs::write(
         home.path()
             .join("projects")
             .join("a")
             .join("sessions")
-            .join(id)
+            .join(&id.0)
             .join("events.jsonl"),
         b"x\n",
     )
     .unwrap();
-    assert_eq!(find_logged_session(home.path(), id).unwrap().0, "a");
+    assert_eq!(find_logged_session(home.path(), &id).unwrap().0, "a");
     // A directory named events.jsonl does not count.
     let home2 = fakes::TempDir::new("log-find-logged-dir");
     let dir = home2
@@ -331,12 +326,19 @@ fn find_logged_session_skips_a_directory_without_a_log() {
         .join("projects")
         .join("a")
         .join("sessions")
-        .join(id);
+        .join(&id.0);
     std::fs::create_dir_all(dir.join("events.jsonl")).unwrap();
-    assert_eq!(find_logged_session(home2.path(), id), None);
-    assert_eq!(find_logged_session(home.path(), "s_missing"), None);
+    assert_eq!(find_logged_session(home2.path(), &id), None);
+    assert_eq!(
+        find_logged_session(home.path(), &SessionId("s_missing".to_owned())),
+        None
+    );
     for bad in ["", "..", ".", "a/b"] {
-        assert_eq!(find_logged_session(home.path(), bad), None, "{bad}");
+        assert_eq!(
+            find_logged_session(home.path(), &SessionId(bad.to_owned())),
+            None,
+            "{bad}"
+        );
     }
 }
 

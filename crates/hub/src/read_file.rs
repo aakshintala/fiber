@@ -64,7 +64,7 @@ fn parse(args: &Map<String, Value>) -> Option<(SessionId, &str)> {
 /// home, which runs after `log` reports a missing or unreadable
 /// `artifacts/` so those keep today's codes.
 fn resolve(home: &Path, session: &SessionId, path: &str) -> Result<File, Refused> {
-    let Some((_, dir)) = crate::recent::lookup_logged(home, &session.0) else {
+    let Some((_, dir)) = crate::recent::lookup_logged(home, session) else {
         return Err(crate::resume::not_found(session));
     };
     let home_real = fs::canonicalize(home).map_err(|error| unreadable(path, &error))?;

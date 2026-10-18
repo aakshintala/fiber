@@ -25,7 +25,7 @@ use crate::start::{self, Bind};
 /// line is `rewound` naming a minted-shape new session, `None` otherwise,
 /// so a crash or an exit starts nothing.
 pub(crate) fn continued(home: &Path, session: &SessionId) -> Option<SessionId> {
-    let (_, dir) = crate::recent::lookup_logged(home, &session.0)?;
+    let (_, dir) = crate::recent::lookup_logged(home, session)?;
     continued_in(&dir)
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn reach(
     if let Ok(stream) = UnixStream::connect(&socket) {
         return Ok(stream);
     }
-    if crate::recent::lookup_logged(&hub.home, &next.0).is_some() {
+    if crate::recent::lookup_logged(&hub.home, next).is_some() {
         drop(held);
         return match crate::resume::resume(hub, next, None) {
             Ok(stream) => Ok(stream),
@@ -102,7 +102,7 @@ pub(crate) fn reach(
             }
         };
     }
-    let workspace = match crate::recent::lookup_logged(&hub.home, &from.0)
+    let workspace = match crate::recent::lookup_logged(&hub.home, from)
         .and_then(|(_, dir)| crate::resume::recorded(&dir))
     {
         Some(recorded) => recorded.workspace,

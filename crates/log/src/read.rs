@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use contract::{Envelope, Seq};
+use contract::{Envelope, Seq, SessionId};
 
 use crate::offsets::{After, Offsets, Page};
 use crate::{EVENTS, Error, io_at, open_log};
@@ -124,18 +124,18 @@ const TAIL: u64 = 64 * 1024;
 /// Whether `id` is one normal path component: non-empty with no
 /// separator, never `.` or `..`. The check sits where the path is
 /// joined, so no caller can escape `sessions/`.
-fn valid_id(id: &str) -> bool {
-    if id.is_empty() {
+fn valid_id(id: &SessionId) -> bool {
+    if id.0.is_empty() {
         return false;
     }
-    let mut parts = std::path::Path::new(id).components();
+    let mut parts = std::path::Path::new(&id.0).components();
     matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
 }
 
 /// The first project in key order holding `id`, with `logged` choosing
 /// the predicate: a directory, or a directory with a log file. One
 /// `read_dir` of `projects/` per call; no `sessions/` is ever scanned.
-fn walk(home: &Path, id: &str, logged: bool) -> Option<(String, PathBuf)> {
+fn walk(home: &Path, id: &SessionId, logged: bool) -> Option<(String, PathBuf)> {
     if !valid_id(id) {
         return None;
     }
@@ -149,7 +149,7 @@ fn walk(home: &Path, id: &str, logged: bool) -> Option<(String, PathBuf)> {
         .collect();
     projects.sort_by(|a, b| a.0.cmp(&b.0));
     projects.into_iter().find_map(|(key, project)| {
-        let dir = project.join("sessions").join(id);
+        let dir = project.join("sessions").join(&id.0);
         let held = if logged {
             dir.join(EVENTS).is_file()
         } else {
@@ -164,7 +164,7 @@ fn walk(home: &Path, id: &str, logged: bool) -> Option<(String, PathBuf)> {
 /// order where that path is a directory. `None` when `projects/` is
 /// unreadable, no project holds it, or `id` is not one normal path
 /// component.
-pub fn find_session(home: &Path, id: &str) -> Option<(String, PathBuf)> {
+pub fn find_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
     walk(home, id, false)
 }
 
@@ -172,7 +172,7 @@ pub fn find_session(home: &Path, id: &str) -> Option<(String, PathBuf)> {
 /// `sessions/<id>/events.jsonl` is a file: the filter runs per project
 /// before the first is chosen, so a log-less directory cannot mask a
 /// later log.
-pub fn find_logged_session(home: &Path, id: &str) -> Option<(String, PathBuf)> {
+pub fn find_logged_session(home: &Path, id: &SessionId) -> Option<(String, PathBuf)> {
     walk(home, id, true)
 }
 
