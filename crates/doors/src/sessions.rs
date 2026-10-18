@@ -116,7 +116,9 @@ impl SessionSockets {
         }
         'listing: loop {
             let mut wake_bytes = [0; 256];
-            let _ = wake_read.read(&mut wake_bytes);
+            match wake_read.read(&mut wake_bytes) {
+                Ok(_) | Err(_) => {}
+            }
             if cancel.is_cancelled() {
                 return Err(ListError::Cancelled);
             }
