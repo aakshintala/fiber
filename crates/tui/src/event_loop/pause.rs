@@ -1,9 +1,9 @@
-//! The one test-only pause seam holding the fold while a test counts
+//! The test-only pause seam holding the fold while a test counts
 //! live hub events: `Loop::run` waits in [`before_fold`] before it folds
-//! a hub chunk, and the test releases it chunk by chunk. A second seam,
-//! [`batch_ended`], reports each held batch's end with its taken count
-//! and waits there, before the frame and the next batch, until the test
-//! has queued the next part and releases it.
+//! a hub chunk, and the test releases it chunk by chunk. [`batch_ended`]
+//! reports each held batch's end with its taken count and waits there,
+//! before the frame and the next batch, until the test has queued the
+//! next part and releases it.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender};
