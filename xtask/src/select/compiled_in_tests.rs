@@ -56,6 +56,15 @@ fn main_src(source: &str) -> RustFile {
     }
 }
 
+fn config_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "config".to_owned(),
+        path: "crates/config/tests/providers_data.rs".to_owned(),
+        rel: "tests/providers_data.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
 fn provider_src(source: &str) -> RustFile {
     RustFile {
         krate: "provider".to_owned(),
@@ -98,6 +107,7 @@ fn listed_extensions_includes() -> String {
 fn listed_files() -> Vec<RustFile> {
     vec![
         contract_src(&listed_includes("contract")),
+        config_src(&listed_includes("config")),
         extensions_src(&listed_extensions_includes()),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),

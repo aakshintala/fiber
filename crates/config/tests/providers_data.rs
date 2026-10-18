@@ -18,19 +18,48 @@ fn a_shipped_reviewer_model_is_in_its_providers_list_and_is_not_a_contributor_mo
     // Every first-party `providers/<package>/providers/<name>.json`, compiled in:
     // listing them at run time would read the repository at test time
     // (`docs/ci.md`, "Selection").
-    const PROVIDER_FILES: &[&str] = &[
-        include_str!("../../../providers/anthropic/providers/anthropic.json"),
-        include_str!("../../../providers/codex/providers/codex.json"),
-        include_str!("../../../providers/gemini/providers/gemini.json"),
-        include_str!("../../../providers/muse/providers/muse.json"),
-        include_str!("../../../providers/openai/providers/openai.json"),
-        include_str!("../../../providers/opencode/providers/opencode-go.json"),
-        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
-        include_str!("../../../providers/openrouter/providers/openrouter.json"),
+    const PROVIDER_FILES: &[(&str, &str)] = &[
+        (
+            "anthropic",
+            include_str!("../../../providers/anthropic/providers/anthropic.json"),
+        ),
+        (
+            "codex",
+            include_str!("../../../providers/codex/providers/codex.json"),
+        ),
+        (
+            "databricks",
+            include_str!("../../../providers/databricks/providers/databricks.json"),
+        ),
+        (
+            "gemini",
+            include_str!("../../../providers/gemini/providers/gemini.json"),
+        ),
+        (
+            "muse",
+            include_str!("../../../providers/muse/providers/muse.json"),
+        ),
+        (
+            "openai",
+            include_str!("../../../providers/openai/providers/openai.json"),
+        ),
+        (
+            "opencode-go",
+            include_str!("../../../providers/opencode/providers/opencode-go.json"),
+        ),
+        (
+            "opencode-zen",
+            include_str!("../../../providers/opencode/providers/opencode-zen.json"),
+        ),
+        (
+            "openrouter",
+            include_str!("../../../providers/openrouter/providers/openrouter.json"),
+        ),
     ];
     let mut checked = 0;
-    for text in PROVIDER_FILES {
+    for (stem, text) in PROVIDER_FILES {
         let provider: config::ProviderData = serde_json::from_str(text).unwrap();
+        assert_eq!(provider.name, *stem, "{stem} names itself");
         let Some(model) = provider.reviewer_model.as_deref() else {
             continue;
         };
