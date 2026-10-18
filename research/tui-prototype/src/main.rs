@@ -8092,7 +8092,7 @@ mod tests {
             [
                 "--home full-sessions, full-empty, full-focus-exited, full-closing, full-picker, full-remote-empty, full-remote-picker, rail-focused, live",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, history-one, history-none, notice, notices, close-mouse",
-                "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty, prices, prices-empty, prices-free, prices-noprice, prices-tiered",
+                "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty, hub, prices, prices-empty, prices-free, prices-noprice, prices-tiered",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--reviewer-setup first, outside, rerun, struck, flipped, diff, notice",
