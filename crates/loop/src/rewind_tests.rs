@@ -1662,3 +1662,120 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
     assert_eq!(lines[0].payload["parent"]["delegate_id"], "j_fork");
     assert!(lines[0].payload.get("rewind").is_none());
 }
+
+/// The old log's last line for a rewound session: its kind with a payload.
+fn last_line_of(kind: &str, payload: serde_json::Value) -> Envelope {
+    serde_json::from_value(json!({
+        "kind": kind, "session_id": "s_aaaaaaaaaaaaaaaa",
+        "ts": 2, "schema_version": 1, "seq": 5, "payload": payload,
+    }))
+    .unwrap()
+}
+
+/// A `rewound` payload naming `new`, at `seq` 3, with no jobs.
+fn rewound_payload(new: &str, from: Option<&str>) -> serde_json::Value {
+    let mut payload = json!({"new_session_id": new, "seq": 3, "jobs": []});
+    if let Some(from) = from {
+        payload["from_session_id"] = from.into();
+    }
+    payload
+}
+
+#[test]
+fn rewound_from_reads_the_old_session_and_its_seq() {
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let new = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert_eq!(
+        rewound_from(
+            Some(last_line_of("rewound", rewound_payload(&new.0, None))),
+            &new,
+            &old
+        )
+        .unwrap(),
+        (
+            Point {
+                session_id: old.clone(),
+                seq: contract::Seq(3),
+            },
+            None
+        )
+    );
+}
+
+#[test]
+fn rewound_from_reads_the_ancestor_an_ancestor_point_names() {
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let ancestor = SessionId("s_cccccccccccccccc".to_owned());
+    let new = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert_eq!(
+        rewound_from(
+            Some(last_line_of(
+                "rewound",
+                rewound_payload(&new.0, Some(&ancestor.0))
+            )),
+            &new,
+            &old
+        )
+        .unwrap(),
+        (
+            Point {
+                session_id: ancestor,
+                seq: contract::Seq(3),
+            },
+            None
+        )
+    );
+}
+
+#[test]
+fn rewound_from_reads_the_summary_for_the_restarted_process() {
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".into());
+    let new = SessionId("s_bbbbbbbbbbbbbbbb".into());
+    let mut payload = rewound_payload(&new.0, None);
+    payload["summary"] = "Tried X.\nReverted it.".into();
+    assert_eq!(
+        rewound_from(Some(last_line_of("rewound", payload)), &new, &old).unwrap(),
+        (
+            Point {
+                session_id: old,
+                seq: contract::Seq(3)
+            },
+            Some("Tried X.\nReverted it.".into())
+        )
+    );
+}
+
+#[test]
+fn rewound_from_refuses_anything_but_a_rewound_naming_this_session() {
+    let old = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let new = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    let other = SessionId("s_dddddddddddddddd".to_owned());
+    let cases: Vec<(&str, Option<Envelope>)> = vec![
+        ("an empty log", None),
+        (
+            "a last line that is not rewound",
+            Some(last_line_of("fiber_exited", json!({}))),
+        ),
+        (
+            "a rewound naming another session",
+            Some(last_line_of("rewound", rewound_payload(&other.0, None))),
+        ),
+        (
+            "a rewound whose payload does not parse",
+            Some(last_line_of("rewound", json!({"new_session_id": new.0}))),
+        ),
+    ];
+    for (what, last) in cases {
+        match rewound_from(last, &new, &old) {
+            Err(error) => {
+                assert_eq!(error.code(), ErrorCode::InvalidArguments, "{what}");
+                let message = error.to_string();
+                assert!(
+                    message.contains(&old.0) && message.contains(&new.0),
+                    "{what}: {message}"
+                );
+            }
+            Ok(point) => panic!("{what} gives a point: {point:?}"),
+        }
+    }
+}

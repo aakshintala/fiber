@@ -695,6 +695,299 @@ fn depth_precedes_arguments_and_model_lookup_without_changing_the_definition() {
 }
 
 #[test]
+fn extension_starts_validate_depth_and_keys_before_binding_or_launching() {
+    for (depth, extra, code, message) in [
+        (
+            2,
+            true,
+            contract::ErrorCode::DepthExceeded,
+            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_spawn`; do the work in this session.",
+        ),
+        (
+            3,
+            false,
+            contract::ErrorCode::DepthExceeded,
+            "This delegate is at depth 2, the deepest a delegate can be, so it cannot use `delegate_spawn`; do the work in this session.",
+        ),
+        (
+            1,
+            true,
+            contract::ErrorCode::InvalidArguments,
+            "`/isolation`: not allowed",
+        ),
+    ] {
+        let rig = rig();
+        let mut spawned = tool(&rig);
+        spawned.depth = depth;
+        let mut args = arguments("fiber:fake/m");
+        if extra {
+            args.insert("isolation".into(), serde_json::json!(true));
+        }
+        let mut bound = Vec::new();
+        let error = spawned
+            .start_extension("a", &args, &mut |id| bound.push(id.clone()))
+            .unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, message);
+        assert!(bound.is_empty());
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+        assert!(contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty());
+    }
+}
+
+#[test]
+fn start_extension_refuses_with_no_inbox() {
+    let rig = rig();
+    let _guard = Watchdog::matching(&rig.sessions.display().to_string());
+    let mut spawned = tool(&rig);
+    spawned.registry = Registry::new(
+        rig.sessions.clone(),
+        rig.clock.clone(),
+        Arc::new(Recorder::default()),
+    );
+    let mut bound = Vec::new();
+    let error = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.push(id.clone())
+        })
+        .unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert_eq!(
+        error.message,
+        "No session is listening for this delegate's end, so nothing was started."
+    );
+    assert!(bound.is_empty());
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+    assert!(contract::jobs::Jobs::running(spawned.registry.as_ref()).is_empty());
+    let counted = rig.launch_count.clone();
+    spawned.launch = Arc::new(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Command::new("/no/such/fiber")
+    });
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        1,
+        "the model start still reaches spawn with no inbox"
+    );
+    assert!(
+        output
+            .error
+            .unwrap()
+            .message
+            .starts_with("Starting the delegate failed: ")
+    );
+}
+
+#[test]
+fn extension_spawn_failure_binds_once_but_records_nothing() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.launch = Arc::new(|_| Command::new("/no/such/fiber"));
+    let mut bound = Vec::new();
+    let error = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.push(id.clone())
+        })
+        .unwrap_err();
+    assert_eq!(error.code, contract::ErrorCode::ToolError);
+    assert!(error.message.starts_with("Starting the delegate failed: "));
+    assert_eq!(bound.len(), 1);
+    assert!(contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty());
+    assert_eq!(rig.registry.list_text(), "No jobs.\n");
+    assert!(rig.inbox.try_recv().is_err());
+}
+
+type Releases = Arc<std::sync::Mutex<Vec<std::fs::File>>>;
+
+fn held_children(rig: &Rig) -> (Launch, Releases) {
+    let releases = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held = releases.clone();
+    let home = rig._dir.path().to_path_buf();
+    let launch: Launch = Arc::new(move |child| {
+        let path = home.join(format!("release-{}", child.job_id.0));
+        fakes::fifo(&path);
+        // Keep both ends open until the child consumes its release, even
+        // when it has not opened the FIFO yet.
+        let release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        held.lock().unwrap().push(release);
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "read line < \"$1\"", "held-child"])
+            .arg(path);
+        command
+    });
+    (launch, releases)
+}
+
+#[test]
+fn an_immediate_exit_still_delivers_the_extension_start_before_its_end() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.launch = Arc::new(|_| {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+        command
+    });
+    let id = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |_| {})
+        .unwrap();
+    let deadline = Deadline::after(DEADLINE);
+    let Delivery::ExtensionJob(started, _) =
+        deadline.recv_or_fail(&rig.inbox, "immediate child's start")
+    else {
+        panic!("start must precede end");
+    };
+    assert_eq!(started.job_id, id);
+    let Delivery::Job(notice) = deadline.recv_or_fail(&rig.inbox, "immediate child's end") else {
+        panic!("end follows start");
+    };
+    assert_eq!(notice.completed.job_id, id);
+}
+
+#[test]
+fn extension_start_binds_before_launch_and_sends_start_before_end_at_depth_one() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    spawned.depth = 1;
+    let bound = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let checked = bound.clone();
+    let (launch, releases) = held_children(&rig);
+    spawned.launch = Arc::new(move |child| {
+        assert_eq!(child.depth, 2);
+        assert_eq!(*checked.lock().unwrap(), vec![child.job_id.clone()]);
+        launch(child)
+    });
+    let _guard = Watchdog::matching(&rig._dir.path().display().to_string());
+    let id = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.lock().unwrap().push(id.clone())
+        })
+        .unwrap();
+    let Delivery::ExtensionJob(started, delegate) = rig.inbox.try_recv().unwrap() else {
+        panic!("start precedes the end");
+    };
+    assert_eq!(started.job_id, id);
+    assert_eq!(delegate.job_id, id);
+    assert_eq!(started.extension.as_deref(), Some("a"));
+    assert_eq!(started.tool, None);
+    assert!(rig.inbox.try_recv().is_err());
+    use std::io::Write as _;
+    for release in releases.lock().unwrap().iter_mut() {
+        writeln!(release, "go").unwrap();
+    }
+    let Delivery::Job(notice) =
+        Deadline::after(DEADLINE).recv_or_fail(&rig.inbox, "delegate end after release")
+    else {
+        panic!("end follows the start");
+    };
+    assert_eq!(notice.completed.job_id, id);
+}
+
+#[test]
+fn both_starts_share_the_nine_ten_eleven_boundary_and_release_slots() {
+    for extension_tenth in [false, true] {
+        let rig = rig();
+        let mut spawned = tool(&rig);
+        let (launch, releases) = held_children(&rig);
+        let counted = rig.launch_count.clone();
+        spawned.launch = Arc::new(move |child| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            launch(child)
+        });
+        let _guard = Watchdog::matching(&rig._dir.path().display().to_string());
+        let shell = rig
+            .registry
+            .open(crate::support::opening("shell does not count"))
+            .unwrap();
+        let mut held = Vec::new();
+        for n in 0..9 {
+            let id = format!("j_{n}");
+            let delegate = crate::support::delegate_started(&id);
+            let finish = if n % 2 == 0 {
+                rig.registry.open_extension_started(
+                    contract::JobId(id),
+                    "a".into(),
+                    "scan".into(),
+                    "/child/events.jsonl".into(),
+                    contract::jobs::Stop(Box::new(|| {})),
+                    delegate,
+                )
+            } else {
+                rig.registry
+                    .open_started(
+                        contract::JobId(id),
+                        "delegate_spawn".into(),
+                        "scan".into(),
+                        "/child/events.jsonl".into(),
+                        contract::jobs::Stop(Box::new(|| {})),
+                        delegate,
+                    )
+                    .1
+            };
+            held.push(finish);
+        }
+        assert_eq!(
+            contract::jobs::Jobs::running(rig.registry.as_ref()).len(),
+            10
+        );
+        let start = |extension| {
+            if extension {
+                spawned
+                    .start_extension("a", &arguments("fiber:fake/m"), &mut |_| {})
+                    .map(|_| ())
+            } else {
+                let output = spawned.run(
+                    &arguments("fiber:fake/m"),
+                    &fakes::CancelToken::new(),
+                    &Recorder::default(),
+                );
+                output.error.map_or(Ok(()), Err)
+            }
+        };
+        start(extension_tenth).unwrap();
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            contract::jobs::Jobs::running(rig.registry.as_ref()).len(),
+            11
+        );
+        let error = start(!extension_tenth).unwrap_err();
+        assert_eq!(error.code, contract::ErrorCode::ToolError);
+        assert_eq!(error.message, crate::registry::runs::cap_message());
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 1);
+        held.pop()
+            .unwrap()
+            .report(crate::support::ended_ok("ignored"), None);
+        start(!extension_tenth).unwrap();
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 2);
+        use std::io::Write as _;
+        for release in releases.lock().unwrap().iter_mut() {
+            writeln!(release, "go").unwrap();
+        }
+        // Drain the two real children as well as the synthetic starts and end.
+        let deadline = Deadline::after(DEADLINE);
+        let mut children = 0;
+        while children < 2 {
+            let delivery = deadline.recv_or_fail(&rig.inbox, "released cap fixture children ended");
+            if let Delivery::Job(notice) = delivery
+                && notice.completed.job_id.0 != "j_8"
+            {
+                children += 1;
+            }
+        }
+        drop(shell);
+    }
+}
+
+#[test]
 fn minted_session_ids_differ_from_job_ids() {
     let session = mint_session_id();
     assert!(session.0.starts_with("s_"));

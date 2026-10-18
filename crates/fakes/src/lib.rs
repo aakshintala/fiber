@@ -37,6 +37,7 @@ mod tool_io;
 pub mod ustar;
 mod wait_output;
 mod watchdog;
+pub mod wire;
 mod within;
 
 use std::path::{Path, PathBuf};

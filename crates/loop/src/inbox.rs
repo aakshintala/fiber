@@ -18,6 +18,7 @@ use crate::jobs::Queued;
 use crate::{Error, Loop};
 
 mod asked;
+pub(crate) mod queue;
 pub(crate) mod session_message;
 
 /// A turn is running.
@@ -132,25 +133,32 @@ impl Loop {
         deadline: Option<Instant>,
         check: bool,
         warm: Option<Instant>,
-    ) -> InboxRecv {
+    ) -> Result<InboxRecv, Error> {
         loop {
             if self.shutting_down() {
-                return InboxRecv::Idle;
+                return Ok(InboxRecv::Idle);
             }
             match self.inbox.try_recv() {
-                Ok(delivery) => return InboxRecv::Delivery(delivery),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
+                Ok(delivery) => return Ok(InboxRecv::Delivery(delivery)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(InboxRecv::Closed),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
+            let running = self.running();
+            self.record_waiting_extension_jobs()?;
             let clock = Arc::clone(self.log.clock());
-            let idle = self.idle_until(deadline);
-            let due = if check { self.check_deadline() } else { None };
+            let model = self.model_running(running);
+            let idle = self.idle_until(deadline, &model);
+            let due = if check {
+                self.check_deadline(&model)
+            } else {
+                None
+            };
             if due.is_some_and(|until| clock.now() >= until) {
-                return InboxRecv::Unattended;
+                return Ok(InboxRecv::Unattended);
             }
-            let warm = warm.filter(|_| self.running().is_empty());
+            let warm = warm.filter(|_| model.is_empty());
             if warm.is_some_and(|until| clock.now() >= until) {
-                return InboxRecv::Warm;
+                return Ok(InboxRecv::Warm);
             }
             // Idle and a refresh need no job running and the check needs
             // one; a warming wait has no idle deadline. So at most one of
@@ -158,14 +166,16 @@ impl Loop {
             let deadline = idle.or(due).or(warm);
             if idle.is_some_and(|until| clock.now() >= until) {
                 match self.last_idle_check() {
-                    Ok(delivery) => return InboxRecv::Delivery(delivery),
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => return InboxRecv::Idle,
+                    Ok(delivery) => return Ok(InboxRecv::Delivery(delivery)),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return Ok(InboxRecv::Closed);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(InboxRecv::Idle),
                 }
             }
             match self.recv_bounded(deadline) {
-                Ok(delivery) => return InboxRecv::Delivery(delivery),
-                Err(RecvTimeoutError::Disconnected) => return InboxRecv::Closed,
+                Ok(delivery) => return Ok(InboxRecv::Delivery(delivery)),
+                Err(RecvTimeoutError::Disconnected) => return Ok(InboxRecv::Closed),
                 Err(RecvTimeoutError::Timeout) => {}
             }
         }
@@ -241,7 +251,7 @@ impl Loop {
                 // held deliveries are already admitted above: what arrived
                 // since is drained without blocking or re-announcing the
                 // queue, which did not move again.
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                for delivery in self.inbox.try_iter() {
                     self.admit_idle(delivery, &mut input)?;
                 }
                 if let Some(at) = self.warming.take_stopped() {
@@ -254,7 +264,7 @@ impl Loop {
                     warming = None;
                     deadline = self.idle_from(stop);
                 }
-                match self.recv_until(deadline, true, due) {
+                match self.recv_until(deadline, true, due)? {
                     InboxRecv::Delivery(first) => {
                         if let Some(hooks) = self.hooks.clone() {
                             self.drain_state(&hooks, None)?;
@@ -269,7 +279,7 @@ impl Loop {
                             deadline = self.idle_from(at);
                         }
                     }
-                    InboxRecv::Unattended => self.check_jobs(&mut input.pieces),
+                    InboxRecv::Unattended => self.check_jobs(&mut input)?,
                     InboxRecv::Warm => {
                         if let Some(stop) = warming
                             && let crate::warm::Refreshed::Stopped(at) = self.refresh(stop)?
@@ -345,11 +355,19 @@ impl Loop {
             if !input.pieces.is_empty() {
                 return Ok(Some(input));
             }
+            for delivery in self.inbox.try_iter() {
+                self.admit_idle(delivery, &mut input)?;
+            }
             let running = self.running();
+            self.record_waiting_extension_jobs()?;
+            let running = self.model_running(running);
+            if !input.pieces.is_empty() {
+                return Ok(Some(input));
+            }
             if running.is_empty() {
                 // A job's end is sent before `running` stops listing it, so
                 // what is waiting now holds the last ends.
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                for delivery in self.inbox.try_iter() {
                     self.admit_idle(delivery, &mut input)?;
                 }
                 return Ok((!input.pieces.is_empty()).then_some(input));
@@ -357,7 +375,7 @@ impl Loop {
             if self.notify_pending(running, &mut input.pieces) {
                 return Ok(Some(input));
             }
-            match self.recv_until(None, false, None) {
+            match self.recv_until(None, false, None)? {
                 InboxRecv::Delivery(first) => {
                     let mut batch = vec![first];
                     batch.extend(self.inbox.try_iter());
@@ -493,6 +511,7 @@ impl Loop {
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
@@ -582,6 +601,9 @@ impl Loop {
             // for the session's jobs; without them the claim is left
             // untaken. The claim is asked here, at admission: a refused
             // claim starts no turn.
+            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+                self.end_extension_job(notice)?;
+            }
             Delivery::Job(notice) => {
                 if self.closing && input.pieces.is_empty() && !self.has_jobs() {
                     // Left untaken: no pass, as the claim is never asked.
@@ -598,6 +620,9 @@ impl Loop {
                 }
             }
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
@@ -612,7 +637,7 @@ impl Loop {
     /// maps to `Err(Timeout)`, as the idle wait treats it as another
     /// turn of the loop and the step's receive as its wait ending.
     pub(crate) fn recv_bounded(
-        &self,
+        &mut self,
         until: Option<Instant>,
     ) -> Result<Delivery, RecvTimeoutError> {
         let clock = Arc::clone(self.log.clock());
@@ -750,10 +775,16 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
             Delivery::Cancelled => {}
+            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+                self.end_extension_job(notice)?;
+            }
             Delivery::Job(notice) => self.admit_job(notice, turn)?,
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,

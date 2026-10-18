@@ -14,7 +14,7 @@ use contract::events::{
     ContextAdded, DelegateFinished, Event, InputItem, JobCompleted, JobLine, JobsPendingNotified,
     Outcome, PendingReason,
 };
-use contract::inbox::{JobNotice, Message};
+use contract::inbox::{Delivery, JobNotice, Message};
 use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
@@ -101,6 +101,47 @@ pub(crate) fn claimed(
 }
 
 impl Loop {
+    /// Records an extension's delegate at intake, without starting a turn.
+    pub(crate) fn record_extension_job(
+        &mut self,
+        started: contract::events::JobStarted,
+        delegate: contract::events::DelegateStarted,
+    ) -> Result<(), Error> {
+        self.write(&Event::JobStarted(started), None, None)?;
+        self.write(&Event::DelegateStarted(delegate), None, None)?;
+        Ok(())
+    }
+
+    /// Folds starts sent during the running-list read without admitting other input.
+    pub(crate) fn record_waiting_extension_jobs(&mut self) -> Result<(), Error> {
+        for delivery in self.inbox.take_extension_jobs() {
+            if let Delivery::ExtensionJob(started, delegate) = delivery {
+                self.record_extension_job(started, delegate)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Records a claimed extension-owned end, after its delivery hooks,
+    /// without waking the model or joining a turn's input.
+    pub(crate) fn end_extension_job(&mut self, notice: JobNotice) -> Result<(), Error> {
+        self.redact_output(&notice.completed, None)?;
+        if let Some((ahead, completed, delegate)) = claimed(notice) {
+            let (ahead, completed, delegate) =
+                self.deliver_end(None, ahead, completed, delegate)?;
+            self.write_job_end(ahead, completed, delegate)?;
+        }
+        Ok(())
+    }
+
+    /// The model-owned ids in a running list, in the same order.
+    pub(crate) fn model_running(&self, running: Vec<JobId>) -> Vec<JobId> {
+        running
+            .into_iter()
+            .filter(|id| !self.handoff.carry.owned(&id.0))
+            .collect()
+    }
+
     /// The session's jobs: their ends wake the model, and the session does
     /// not end while one runs (`docs/tools.md`, "Background jobs"). Without
     /// them no job ever runs.
@@ -153,9 +194,9 @@ impl Loop {
     /// When the jobs check comes due: the idle delay after the last prompt,
     /// while it is armed and jobs run. `None` with no idle delay, no jobs
     /// running, or the check already given since the last prompt.
-    pub(crate) fn check_deadline(&self) -> Option<Instant> {
+    pub(crate) fn check_deadline(&self, model: &[JobId]) -> Option<Instant> {
         let after = self.idle_exit?;
-        if self.ending.checked || self.running().is_empty() {
+        if self.ending.checked || model.is_empty() {
             return None;
         }
         self.ending.attended?.checked_add(after)
@@ -165,10 +206,15 @@ impl Loop {
     /// listing the running jobs starts the next turn, and
     /// `jobs_pending_notified` with `reason` `unattended` is queued for its
     /// first step. The session does not end.
-    pub(crate) fn check_jobs(&mut self, input: &mut Vec<Queued>) {
-        self.ending.checked = true;
+    pub(crate) fn check_jobs(&mut self, input: &mut crate::inbox::TurnInput) -> Result<(), Error> {
         let running = self.running();
-        self.notice(running, PendingReason::Unattended, input);
+        self.record_waiting_extension_jobs()?;
+        let model = self.model_running(running);
+        if !model.is_empty() {
+            self.ending.checked = true;
+            self.notice(model, PendingReason::Unattended, &mut input.pieces);
+        }
+        Ok(())
     }
 
     /// One notice about `running`: its text, as a `message` from Fiber, is
@@ -193,12 +239,15 @@ impl Loop {
     /// The deadline an idle wait keeps, from the `deadline` it began with:
     /// none while a job runs, since idle means no jobs running, and never
     /// before the idle delay has passed since a wait saw the last job end
-    /// (`docs/invocation.md`, "Lifecycle"). `running` is read here, before
-    /// the caller's last look at the inbox: a job's end is sent there
-    /// before `running` stops listing it.
-    pub(crate) fn idle_until(&mut self, deadline: Option<Instant>) -> Option<Instant> {
+    /// (`docs/invocation.md`, "Lifecycle"). The caller reads the running
+    /// list and drains the inbox before filtering out extension-owned jobs.
+    pub(crate) fn idle_until(
+        &mut self,
+        deadline: Option<Instant>,
+        model: &[JobId],
+    ) -> Option<Instant> {
         let deadline = deadline?;
-        if !self.running().is_empty() {
+        if !model.is_empty() {
             self.ending.ran = true;
             return None;
         }
@@ -424,10 +473,12 @@ impl Loop {
                 let event = Event::JobCompleted(completed.clone());
                 self.log.append(&event, None, None)?;
                 self.handoff.carry.fold_jobs(&event);
-                self.held.push(Input::User {
-                    text: notice_text(&completed),
-                    images: Vec::new(),
-                });
+                if !self.handoff.carry.owned(&completed.job_id.0) {
+                    self.held.push(Input::User {
+                        text: notice_text(&completed),
+                        images: Vec::new(),
+                    });
+                }
                 continue;
             }
             self.write(&Event::JobCompleted(completed), None, None)?;

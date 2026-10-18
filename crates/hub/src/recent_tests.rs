@@ -359,3 +359,71 @@ fn find_names_the_project_holding_the_session() {
     assert_eq!(dir, session_dir(&temp.dir, "other", &id(1)));
     assert_eq!(find(&temp.dir, &id(2)), None);
 }
+
+/// An exited row's last `session_status`, as `close` reads it.
+fn exited_status(name: &str) -> contract::events::SessionStatus {
+    serde_json::from_value(status(name, "/w", "idle", None)).unwrap()
+}
+
+#[test]
+fn append_exited_writes_nothing_when_the_directory_is_gone() {
+    let temp = Temp::new();
+    let missing = temp.dir.join("projects/p/sessions").join(id(1));
+    append_exited(
+        &temp.dir,
+        &missing,
+        Path::new("/w"),
+        Some(exited_status("one")),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    // A deleted session leaves nothing behind: not even the file.
+    assert!(!temp.dir.join("recent.jsonl").exists());
+}
+
+#[test]
+fn append_exited_appends_the_exited_row_for_a_live_directory() {
+    let temp = Temp::new();
+    let dir = temp.dir.join("projects/myproj/sessions").join(id(1));
+    fs::create_dir_all(&dir).unwrap();
+    let status = exited_status("three");
+    append_exited(
+        &temp.dir,
+        &dir,
+        Path::new("/w"),
+        Some(status.clone()),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let rows = read_all(&temp.dir);
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.session_id.0, id(1));
+    // `projects/<key>/sessions/<id>`: the key names the grandparent.
+    assert_eq!(row.project, "myproj");
+    assert_eq!(row.ts, 1_700_000_000_000);
+    assert_eq!(row.workspace, "/w");
+    assert_eq!(row.name, "three");
+    assert_eq!(row.how, Left::Exited);
+    assert_eq!(row.status, Some(status));
+}
+
+#[test]
+fn append_exited_reports_an_unwritable_recent_file() {
+    let temp = Temp::new();
+    let dir = temp.dir.join("projects/myproj/sessions").join(id(1));
+    fs::create_dir_all(&dir).unwrap();
+    // `home` names a file, so `recent.jsonl` under it cannot be made.
+    let blocked = temp.dir.join("blocked");
+    fs::write(&blocked, "blocked").unwrap();
+    let error = append_exited(
+        &blocked,
+        &dir,
+        Path::new("/w"),
+        Some(exited_status("three")),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert!(error.to_string().contains("recent.jsonl"));
+}

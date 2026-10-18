@@ -19,7 +19,7 @@ use std::thread;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
+    Deadline, KillGroup, Output, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
 };
 
 impl Setup {
@@ -34,7 +34,7 @@ impl Setup {
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
     #[track_caller]
-    fn run_in_workspace(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -67,26 +67,21 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
-}
-
-#[derive(Debug)]
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
 }
 
 #[test]
 fn set_then_get_round_trips_the_value_and_its_layer() {
     let setup = Setup::new_with_fc_root();
     let set = setup.run_in_workspace(&["config", "set", "model", "a/b"]);
-    assert_eq!(set.code, Some(0), "{set:?}");
+    assert_eq!(
+        set.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
     assert_eq!(set.stdout, "");
     assert_eq!(set.stderr, "");
     let written: Value =
@@ -94,7 +89,13 @@ fn set_then_get_round_trips_the_value_and_its_layer() {
             .unwrap();
     assert_eq!(written, json!({"model": "a/b"}));
     let get = setup.run_in_workspace(&["config", "get", "model"]);
-    assert_eq!(get.code, Some(0), "{get:?}");
+    assert_eq!(
+        get.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
     assert_eq!(
         get.stdout,
         format!(
@@ -109,8 +110,19 @@ fn set_then_get_round_trips_the_value_and_its_layer() {
 fn set_repo_with_a_person_only_key_fails_and_writes_nothing() {
     let setup = Setup::new_with_fc_root();
     let set = setup.run_in_workspace(&["config", "set", "--repo", "session.idle_exit_ms", "60000"]);
-    assert_eq!(set.code, Some(2), "{set:?}");
-    assert!(set.stderr.contains("`session.idle_exit_ms`"), "{set:?}");
+    assert_eq!(
+        set.code,
+        Some(2),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
+    assert!(
+        set.stderr.contains("`session.idle_exit_ms`"),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
     assert!(!setup.root.path().join("w/.fiber/config.json").exists());
 }
 
@@ -118,7 +130,13 @@ fn set_repo_with_a_person_only_key_fails_and_writes_nothing() {
 fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
     let setup = Setup::new_with_fc_root();
     let set = setup.run_in_workspace(&["config", "set", "reviewer.context", "Our org is acme."]);
-    assert_eq!(set.code, Some(0), "{set:?}");
+    assert_eq!(
+        set.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
     assert_eq!(set.stdout, "");
     assert_eq!(set.stderr, "");
     let set = setup.run_in_workspace(&[
@@ -128,7 +146,13 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
         "reviewer.context",
         "Never touch infra/prod.",
     ]);
-    assert_eq!(set.code, Some(0), "{set:?}");
+    assert_eq!(
+        set.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        set.stdout,
+        set.stderr
+    );
     // A repository cannot set the person's notes: written by hand, since
     // `config set --repo` refuses it.
     fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
@@ -138,7 +162,13 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
     )
     .unwrap();
     let get = setup.run_in_workspace(&["config", "get", "reviewer.context"]);
-    assert_eq!(get.code, Some(0), "{get:?}");
+    assert_eq!(
+        get.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
     assert_eq!(
         get.stdout,
         "## Notes that hold everywhere\n\nOur org is acme.\n\n\
@@ -166,10 +196,26 @@ fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
     )
     .unwrap();
     let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
-    assert_eq!(get.code, Some(0), "{get:?}");
+    assert_eq!(
+        get.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
     // The role's model still applies, from the repository layer.
-    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
-    assert!(get.stdout.contains(".fiber/config.json"), "{get:?}");
+    assert!(
+        get.stdout.contains("\"fake/m\""),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
+    assert!(
+        get.stdout.contains(".fiber/config.json"),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
     // The ignored credential raises one notice naming the key and the file.
     let file = fs::canonicalize(setup.root.path().join("w/.fiber/config.json")).unwrap();
     assert_eq!(
@@ -178,7 +224,9 @@ fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
             "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.\n",
             file.display()
         ),
-        "{get:?}"
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
     );
     // The same notice reaches the person through the session's notice
     // event, as `diagnostics.rs` pins for its own ignored key.
@@ -222,7 +270,22 @@ fn a_repository_role_without_a_credential_raises_no_notice() {
     )
     .unwrap();
     let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
-    assert_eq!(get.code, Some(0), "{get:?}");
-    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
-    assert_eq!(get.stderr, "", "{get:?}");
+    assert_eq!(
+        get.code,
+        Some(0),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
+    assert!(
+        get.stdout.contains("\"fake/m\""),
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout,
+        get.stderr
+    );
+    assert_eq!(
+        get.stderr, "",
+        "stdout: {:?}, stderr: {:?}",
+        get.stdout, get.stderr
+    );
 }

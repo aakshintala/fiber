@@ -16,15 +16,15 @@ mod support;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, TOOL_NAMES, function_call, hello,
-    holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, StdoutRun, TOOL_NAMES, function_call,
+    hello, holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
 };
 
 impl Setup {
@@ -159,7 +159,7 @@ impl Setup {
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
     #[track_caller]
-    fn run(&self, args: &[&str]) -> Run {
+    fn run(&self, args: &[&str]) -> StdoutRun {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -194,7 +194,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        StdoutRun::from(output)
     }
 
     /// Runs `fiber` as [`Setup::run`] does, reading stdout as it is
@@ -207,7 +207,7 @@ impl Setup {
         args: &[&str],
         when: impl Fn(&[Value]) -> bool + Send + 'static,
         act: impl FnOnce(),
-    ) -> Run {
+    ) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -301,11 +301,13 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: status.code(),
+        StdoutRun {
+            run: support::Run {
+                code: status.code(),
+                lines,
+                stderr,
+            },
             stdout,
-            lines,
-            stderr,
         }
     }
 }
@@ -330,44 +332,7 @@ fn mkfifo(setup: &Setup, path: &Path) {
     assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
 }
 
-/// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            code: output.status.code(),
-            stdout,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-}
-
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
-    }
-
+impl StdoutRun {
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
@@ -383,7 +348,7 @@ impl Run {
 
 /// `preamble_built` for `reason`, with the five built-in tools and nothing
 /// replaced. A resume builds the same set again; it does not replace one.
-fn assert_preamble(run: &Run, reason: &str) {
+fn assert_preamble(run: &StdoutRun, reason: &str) {
     let preamble = run
         .lines
         .iter()
@@ -1113,7 +1078,7 @@ fn anthropic_read_kinds() -> Vec<&'static str> {
     kinds
 }
 
-fn completed_line(run: &Run) -> &Value {
+fn completed_line(run: &StdoutRun) -> &Value {
     run.lines
         .iter()
         .find(|line| line["kind"] == "tool_call_completed")
@@ -1375,7 +1340,7 @@ const HANDOFF_TURN: &[&str] = &[
 ];
 
 /// The lines of `run` of `kind`.
-fn of_kind<'a>(run: &'a Run, kind: &str) -> Vec<&'a Value> {
+fn of_kind<'a>(run: &'a StdoutRun, kind: &str) -> Vec<&'a Value> {
     run.lines
         .iter()
         .filter(|line| line["kind"] == kind)
@@ -1842,7 +1807,7 @@ fn allow_fetch_of(setup: &Setup, server: &ProviderServer) {
     .unwrap();
 }
 
-fn completed_call(run: &Run) -> &Value {
+fn completed_call(run: &StdoutRun) -> &Value {
     run.lines
         .iter()
         .find(|line| line["kind"] == "tool_call_completed")
@@ -2171,7 +2136,7 @@ fn blocked_write_kinds() -> Vec<&'static str> {
 /// bytes are unchanged. The `permission_resolved` line names the reviewer
 /// as decider, and the provider server saw the reviewer's two stages
 /// beside the session's two replies.
-fn assert_blocked_by_reviewer(run: &Run, server: &ProviderServer) {
+fn assert_blocked_by_reviewer(run: &StdoutRun, server: &ProviderServer) {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), blocked_write_kinds());
     let requested = run

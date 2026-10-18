@@ -13,6 +13,7 @@ use contract::events::{
     DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallCompleted,
     ToolCallRequested, TurnCompleted, TurnOutcome,
 };
+use contract::inbox::Delivery;
 use contract::{ActionId, Envelope, TurnId};
 
 use crate::calls::{self, Asked, Decided};
@@ -414,7 +415,13 @@ impl Loop {
         &mut self,
         mut suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
-        self.deferred.extend(self.inbox.try_iter());
+        for delivery in self.inbox.try_iter() {
+            if let Delivery::ExtensionJob(started, delegate) = delivery {
+                self.record_extension_job(started, delegate)?;
+            } else {
+                self.deferred.push_back(delivery);
+            }
+        }
         // The repository's offer resolves before the first request. A
         // process that ends on it writes the suspended approval again, so it
         // exits naming the approval and the next resume finishes the turn.

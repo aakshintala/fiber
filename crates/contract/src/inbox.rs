@@ -146,6 +146,9 @@ pub enum Delivery {
     /// A program an extension ran outside a tool call: written as
     /// `extension_exec`, starts nothing.
     ExtensionExec(crate::events::ExtensionExec),
+    /// An extension's delegate started: written as `job_started` then
+    /// `delegate_started`, without a turn or action. Sent before its end.
+    ExtensionJob(crate::events::JobStarted, crate::events::DelegateStarted),
     /// An extension's `host.ask` question: written at the drain that takes
     /// it as `interaction_requested`, with no turn and no action.
     Interaction(crate::events::InteractionRequested),

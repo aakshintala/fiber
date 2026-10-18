@@ -1,6 +1,6 @@
 //! Errors returned while a session's loop runs.
 
-use contract::ErrorCode;
+use contract::{ErrorCode, SessionId};
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +25,15 @@ pub enum Error {
     /// would push the error past clippy's large-`Err` bound.
     #[error("{}", .0.message)]
     HookFailed(Box<contract::shapes::Failure>),
+    /// The old log's last line is not `rewound` naming the new session,
+    /// so there is no point for it to continue from.
+    #[error("Session `{}` was not rewound for session `{}`.", old.0, new.0)]
+    NotRewound {
+        /// The session asked to continue.
+        old: SessionId,
+        /// The session that would continue it.
+        new: SessionId,
+    },
 }
 
 impl Error {
@@ -35,6 +44,7 @@ impl Error {
             Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
             Self::RepositoryCode(failure) => failure.code.clone(),
             Self::HookFailed(failure) => failure.code.clone(),
+            Self::NotRewound { .. } => ErrorCode::InvalidArguments,
         }
     }
 }

@@ -19,18 +19,26 @@ use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 
 pub(crate) mod package;
 pub(crate) mod pty;
 
+#[allow(
+    unused_imports,
+    reason = "each test binary uses its own subset of the helpers"
+)]
+pub(crate) use fakes::wire::{
+    function_call, hello, hello_inline_completed, hello_item_done, hello_single_delta, stream,
+    text_reply,
+};
 #[allow(
     unused_imports,
     reason = "each test binary uses its own subset of the helpers"
@@ -334,6 +342,7 @@ impl Setup {
 /// A finished `fiber` run whose stdout is one JSON line per line: every
 /// binary-level `ask` test reads the same shape, so the event kinds and
 /// the session id are shared here (`docs/testing.md`, "Levels").
+#[derive(Debug)]
 pub(crate) struct Run {
     pub(crate) code: Option<i32>,
     pub(crate) lines: Vec<Value>,
@@ -365,6 +374,76 @@ impl Run {
             .filter(|line| line["kind"] == kind)
             .collect()
     }
+}
+
+/// A finished `fiber` run that keeps stdout's text alongside its parsed
+/// lines: every binary-level test that pins stdout text while reading
+/// parsed events shares this shape (`docs/testing.md`, "Levels").
+/// `session_status` lines are dropped; file-specific readers live in local
+/// `impl` blocks.
+#[derive(Debug)]
+pub(crate) struct StdoutRun {
+    pub(crate) run: Run,
+    pub(crate) stdout: String,
+}
+
+impl std::ops::Deref for StdoutRun {
+    type Target = Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<std::process::Output> for StdoutRun {
+    fn from(output: std::process::Output) -> Self {
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+            .collect();
+        Self {
+            run: Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
+            stdout,
+        }
+    }
+}
+
+/// A finished `fiber` run with stdout and stderr as text: every
+/// binary-level text test reads the same shape, so the exit code and the
+/// two streams are shared here (`docs/testing.md`, "Levels").
+pub(crate) struct Output {
+    pub(crate) code: Option<i32>,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+impl From<std::process::Output> for Output {
+    fn from(output: std::process::Output) -> Self {
+        Self {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+}
+
+#[test]
+fn output_from_a_zero_exit_has_empty_text() {
+    use std::os::unix::process::ExitStatusExt;
+    let output = Output::from(std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    });
+    assert_eq!(output.code, Some(0));
+    assert_eq!(output.stdout, "");
+    assert_eq!(output.stderr, "");
 }
 
 pub(crate) fn write_json(file: &Path, value: &Value) {
@@ -701,37 +780,6 @@ impl Socket {
     }
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-pub(crate) fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-pub(crate) fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// Guards every session the hub starts in `workspace`: each carries the
 /// workspace path on its command line. Dropping it kills every process
 /// whose command line holds the path, and its process group; its watchdog
@@ -836,7 +884,11 @@ pub(crate) fn close_session(socket: &Socket) {
 /// the test's [`Deadline`], naming `what` on expiry, and checks it left no
 /// process in its group.
 #[track_caller]
-pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) -> Output {
+pub(crate) fn run_to_exit(
+    deadline: Deadline,
+    what: &str,
+    mut command: Command,
+) -> std::process::Output {
     let child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
@@ -886,30 +938,11 @@ pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
     );
 }
 
-/// A finished `function_call` for `name` with `arguments`.
-pub(crate) fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
 /// A `session_status` line: ephemeral, and written by an observer thread, so
 /// where it falls among the loop's own lines is not what these tests pin.
 /// `tests/socket.rs` reads it.
 pub(crate) fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
-}
-
-/// An `openai-responses` stream answering `text`: what a scripted
-/// reviewer verdict reads as.
-pub(crate) fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": text}]
-    }})])
 }
 
 pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
@@ -1107,43 +1140,6 @@ pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-pub(crate) fn hello_inline_completed() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-pub(crate) fn hello_single_delta() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hello."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-pub(crate) fn hello_item_done() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-    }})])
-}
-
 pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
     let child = command.process_group(0).spawn().unwrap();
     let group = child.id();
@@ -1171,7 +1167,7 @@ pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-pub(crate) const TOOL_NAMES: [&str; 15] = [
+pub(crate) const TOOL_NAMES: [&str; 16] = [
     "ask_user",
     "delegate_message",
     "delegate_models",
@@ -1182,6 +1178,7 @@ pub(crate) const TOOL_NAMES: [&str; 15] = [
     "name_session",
     "read",
     "session_list",
+    "session_message",
     "session_search",
     "shell",
     "skill",

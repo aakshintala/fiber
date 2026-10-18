@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 /// The `session_started` first line of session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace.
@@ -81,7 +81,7 @@ impl Setup {
 
     /// Runs `fiber sessions export` with `args` in the workspace.
     #[track_caller]
-    fn export(&self, args: &[&str]) -> Run {
+    fn export(&self, args: &[&str]) -> Output {
         let mut all = vec!["sessions", "export"];
         all.extend_from_slice(args);
         self.run_in_workspace(&all)
@@ -89,7 +89,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` in the workspace.
     #[track_caller]
-    fn run_in_workspace(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -111,18 +111,8 @@ impl Setup {
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
-}
-
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
 }
 
 /// The workspace as the child saw it: the current directory, resolved.

@@ -13,14 +13,73 @@ use crate::jobs::{Queued, claimed};
 use crate::{Error, Loop};
 
 impl Loop {
-    /// `result` once the jobs have settled, when a shutdown started; else
-    /// `result` unchanged. The first error wins.
+    /// `result` once the jobs have settled. A normal end stops only
+    /// extension-owned jobs; a shutdown stops every job. The first error wins.
     pub(crate) fn settled(&mut self, result: Result<(), Error>) -> Result<(), Error> {
-        if !self.shutting_down() {
+        if self.shutting_down() {
+            let settled = self.settle();
+            return result.and(settled);
+        }
+        if self.rewound {
             return result;
         }
-        let settled = self.settle();
+        let mut running = self.running();
+        if running.is_empty() {
+            return result;
+        }
+        let settled = (|| {
+            loop {
+                let deliveries = std::mem::take(&mut self.deferred)
+                    .into_iter()
+                    .chain(self.inbox.try_iter());
+                for delivery in deliveries {
+                    if let Delivery::Job(notice) = &delivery {
+                        running.retain(|id| id != &notice.completed.job_id);
+                    }
+                    self.settle_normal_one(delivery)?;
+                }
+                running.retain(|id| self.handoff.carry.owned(&id.0));
+                if running.is_empty() {
+                    return Ok(());
+                }
+                self.stop_jobs(&running);
+                match self.inbox.recv() {
+                    Ok(delivery) => self.settle_normal_one(delivery)?,
+                    Err(_) => return Ok(()),
+                }
+                running = self.running();
+            }
+        })();
         result.and(settled)
+    }
+
+    /// A normal end still runs delivery hooks on any job end it takes.
+    fn settle_normal_one(&mut self, delivery: Delivery) -> Result<(), Error> {
+        match delivery {
+            Delivery::Job(notice) => self.end_extension_job(notice),
+            delivery @ (Delivery::Steer(..)
+            | Delivery::SteerDrop(..)
+            | Delivery::Message(_)
+            | Delivery::Model(..)
+            | Delivery::Credential(..)
+            | Delivery::Reload(_)
+            | Delivery::Name(..)
+            | Delivery::Rewind(..)
+            | Delivery::Handoff(..)
+            | Delivery::Close(_)
+            | Delivery::Cancelled
+            | Delivery::JobLine(_)
+            | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionJob(..)
+            | Delivery::Interaction(_)
+            | Delivery::Resolved(..)
+            | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
+            | Delivery::Shell(..)
+            | Delivery::Reply(..)
+            | Delivery::Prompt(..)
+            | Delivery::InnerCall(_)) => self.settle_one(delivery),
+        }
     }
 
     /// Stops every running job and writes each job end the loop holds or
@@ -60,7 +119,7 @@ impl Loop {
             if running.is_empty() {
                 // A job's end is sent before `running` stops listing it, so
                 // what is waiting now holds the last ends.
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                for delivery in self.inbox.try_iter() {
                     self.settle_one(delivery)?;
                 }
                 return Ok(());
@@ -117,6 +176,9 @@ impl Loop {
             return Ok(());
         }
         match delivery {
+            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+                self.end_extension_job(notice)?;
+            }
             Delivery::Job(notice) => {
                 if let Some((ahead, completed, delegate)) = claimed(notice) {
                     self.write_job_end(ahead, completed, delegate)?;
@@ -125,6 +187,9 @@ impl Loop {
             // Written like any line still written; unlike a monitor batch,
             // it is not dropped.
             Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
+            Delivery::ExtensionJob(started, delegate) => {
+                self.record_extension_job(started, delegate)?
+            }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,

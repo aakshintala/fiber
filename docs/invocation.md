@@ -552,12 +552,19 @@ the running jobs and telling it to stop any that look hung or that it no
 longer needs, judging from each job's output file. The session does not end.
 The check fires once and is armed again only by the next prompt or steer, so a job
 the model keeps does not cost a turn every delay.
+A job an extension started with `host.delegate` holds no session open and is
+not in the jobs check: it does not make a session busy, and a session that
+ends normally stops it.
 
 **A delegate exits as soon as its run finishes**: its final answer is written
 and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 `delegate_message` resumes it (`docs/delegates.md`).
+The jobs in this rule do not include a job an extension started with
+`host.delegate`: it holds no session open and is not in the jobs check.
 
 **A `fiber ask` session exits when its turn ends** and its jobs are done.
+The jobs in this rule do not include a job an extension started with
+`host.delegate`: it holds no session open and is not in the jobs check.
 
 **A prompt sent to an exited session through the hub resumes it**, then
 delivers the prompt. A client showing a session that exits keeps showing it,

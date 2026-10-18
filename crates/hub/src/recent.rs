@@ -10,7 +10,9 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use contract::ErrorCode;
 use contract::SessionId;
+use contract::clock::Clock;
 use contract::events::SessionStatus;
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +80,29 @@ pub(crate) fn is_waiting(status: &SessionStatus) -> bool {
 /// Whether `status` names a parent: the session is a delegate.
 pub(crate) fn is_delegate(status: &SessionStatus) -> bool {
     status.parent.is_some()
+}
+
+/// What can go wrong appending an exited row: the session's log is
+/// unaffected, only its `recent.jsonl` listing.
+#[derive(Debug, thiserror::Error)]
+pub enum RecentError {
+    /// Writing `recent.jsonl` failed.
+    #[error("{}: {source}", path.display())]
+    Write {
+        /// The file the row could not be appended to.
+        path: PathBuf,
+        /// Why the append failed.
+        source: io::Error,
+    },
+}
+
+impl RecentError {
+    /// The code from `docs/errors.md`: a filesystem failure.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Write { .. } => ErrorCode::IoFailed,
+        }
+    }
 }
 
 /// Appends `row` to `home`'s `recent.jsonl` as one write of one line on a
@@ -211,6 +236,45 @@ pub(crate) fn find(home: &Path, id: &str) -> Option<(String, PathBuf)> {
 
 fn path(home: &Path) -> PathBuf {
     home.join("recent.jsonl")
+}
+
+/// Appends `dir`'s exited row to `home`'s `recent.jsonl`: the session's
+/// last `session_status` and the clock's time, under its exited name.
+/// Writes nothing and returns `Ok(())` when `dir` is not a directory, so
+/// a session deleted before it exits leaves nothing behind.
+pub fn append_exited(
+    home: &Path,
+    dir: &Path,
+    workspace: &Path,
+    status: Option<SessionStatus>,
+    clock: &dyn Clock,
+) -> Result<(), RecentError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+    let name = |path: Option<&Path>| {
+        path.and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+    let row = RecentRow {
+        session_id: SessionId(name(Some(dir))),
+        ts: contract::clock::wall_ms(clock.wall()),
+        // `projects/<key>/sessions/<id>`: the key names the grandparent.
+        project: name(dir.parent().and_then(Path::parent)),
+        workspace: workspace.to_string_lossy().into_owned(),
+        name: status
+            .as_ref()
+            .map(|status| status.name.clone())
+            .unwrap_or_default(),
+        how: Left::Exited,
+        status,
+    };
+    // A row that cannot be written loses only the listing, not the log.
+    append(home, &row).map_err(|source| RecentError::Write {
+        path: path(home),
+        source,
+    })
 }
 
 #[cfg(test)]

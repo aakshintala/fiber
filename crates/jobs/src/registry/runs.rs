@@ -172,6 +172,9 @@ impl Registry {
         let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
             return Target::Unknown;
         };
+        if job.started.extension.is_some() {
+            return Target::Unknown;
+        }
         let Some(delegate) = &job.delegate else {
             return Target::NotDelegate;
         };
@@ -214,6 +217,9 @@ impl Registry {
             let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
                 return Err(Resume::Unknown);
             };
+            if job.started.extension.is_some() {
+                return Err(Resume::Unknown);
+            }
             let Some(delegate) = &job.delegate else {
                 return Err(Resume::NotDelegate);
             };
@@ -416,6 +422,11 @@ impl Registry {
         } else {
             let ended = job.ends.iter().find(|ended| ended.run == run)?;
             (&ended.completed, ended.finished.as_ref())
+        };
+        let finished = if job.started.extension.is_some() {
+            None
+        } else {
+            finished
         };
         let text = final_text(&job.path, completed, finished);
         Some(Answer {

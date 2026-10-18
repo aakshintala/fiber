@@ -28,6 +28,9 @@ pub(crate) struct Carry {
     /// The jobs started and not completed, in start order, as
     /// `(job id, description)`.
     pub(crate) jobs: Vec<(String, String)>,
+    /// Extension-owned jobs, retained after completion so later ends and
+    /// orphan records never render for the model.
+    pub(crate) extension_jobs: HashSet<String>,
     /// The session log's path, from the latest opening message.
     pub(crate) session_log: String,
     /// Whether this context was nudged.
@@ -303,9 +306,17 @@ impl Carry {
         }
     }
 
+    /// Whether an extension, rather than the model, owns this job's end.
+    pub(crate) fn owned(&self, job_id: &str) -> bool {
+        self.extension_jobs.contains(job_id)
+    }
+
     /// Tracks the jobs running: started adds, completed removes.
     pub(crate) fn fold_jobs(&mut self, event: &Event) {
         if let Event::JobStarted(job) = event {
+            if job.extension.is_some() {
+                self.extension_jobs.insert(job.job_id.0.clone());
+            }
             self.jobs
                 .push((job.job_id.0.clone(), job.description.clone()));
         }

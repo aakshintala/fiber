@@ -16,14 +16,14 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, Setup, function_call, hello, is_status, spawn_watched,
+    Deadline, HELLO_KINDS, KillGroup, Setup, StdoutRun, function_call, hello, spawn_watched,
     stream, write_json,
 };
 
@@ -92,7 +92,7 @@ impl Setup {
     /// group. A watchdog beside it kills that group if this process dies
     /// first.
     #[track_caller]
-    fn run(&self, args: &[&str]) -> Run {
+    fn run(&self, args: &[&str]) -> StdoutRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -126,13 +126,13 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        StdoutRun::from(output)
     }
 
     /// Starts a server answering `responses`, installs the provider, and
     /// runs `fiber ask`.
     #[track_caller]
-    fn ask(&self, responses: Vec<Response>) -> (Run, ProviderServer) {
+    fn ask(&self, responses: Vec<Response>) -> (StdoutRun, ProviderServer) {
         let server = ProviderServer::start(responses).unwrap();
         self.provider(&server);
         let run = self.run(&["ask", "hi"]);
@@ -146,50 +146,8 @@ fn write_text(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
-/// One finished run: its exit code, stdout as text and parsed lines, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            code: output.status.code(),
-            stdout,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-}
-
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
-    }
-}
-
 /// Whether `extensions_loaded` lists the memory extension.
-fn loads_memory(run: &Run) -> bool {
+fn loads_memory(run: &StdoutRun) -> bool {
     run.first("extensions_loaded")["payload"]["extensions"]
         .as_array()
         .unwrap()
