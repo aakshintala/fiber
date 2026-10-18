@@ -90,6 +90,8 @@ fn a_hello_from_a_peer_that_already_closed_is_read() {
 #[test]
 fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     let (mut peer, reader) = UnixStream::pair().unwrap();
+    let line = hello_line();
+    peer.write_all(&line[..1]).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let (read_tx, read_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -112,8 +114,6 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
             }
         })
         .unwrap();
-    let line = hello_line();
-    peer.write_all(&line[..1]).unwrap();
     let wait = Deadline::after(Duration::from_secs(5));
     for n in 1..=2 {
         wait.recv(&read_rx)
