@@ -3730,26 +3730,32 @@ fn choosing_a_workspace_rereads_the_chips_at_once() {
     hub.start();
     let (app, _) = fold(app, hub_hello());
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
-    // With the link up the choice reads at once at the new workspace.
+    // With the link up the choice reads at once at the new workspace:
+    // nothing stays owed, and the chips are the hub's. Both fire before
+    // the hang guard below under the inverted link check.
     let app = choosing(app, "/hub/p");
-    Deadline::start().recv_or_fail(&hub.done, "wire script");
+    assert!(!app.chip_read_owed());
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     quiet(&hub.watcher);
 }
 
 #[test]
 fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
     let (mut app, hub) = scripted_remote(vec![chip_settings_at("/hub/p")]);
-    // With the link down the choice writes nothing and only owes;
-    // the chosen workspace reads directly, with no `global_file`.
+    // The player runs before the choice, so a wrong-state choice answers
+    // at once instead of parking the test thread: the asserts below fail
+    // before any hang guard. With the link down the choice writes nothing
+    // and only owes; the chosen workspace reads directly, with no
+    // `global_file`.
+    hub.start();
     app.choose_workspace("/hub/p".to_owned());
     assert!(app.chip_read_owed());
-    quiet(&hub.watcher);
-    hub.start();
+    assert!(!app.chip_read_failed());
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
     assert!(!app.chip_read_owed());
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     quiet(&hub.watcher);
 }
 
@@ -3935,7 +3941,11 @@ fn the_chip_answer_keeps_each_toggle() {
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
     // The remote home opens with the workspace picker showing; choosing
     // the hub's workspace closes it, owing the chips without writing.
+    // The player runs first, so a wrong-state choice answers at once and
+    // the asserts below fail before any hang guard.
+    hub.start();
     app.choose_workspace("/hub".to_owned());
+    assert!(!app.chip_read_failed());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, true, false]));
     // The person moves to row 2 and toggles it off: it joins the
@@ -3946,7 +3956,6 @@ fn the_chip_answer_keeps_each_toggle() {
     // The hello's answer lists rows 1 and 2, with an uninstalled
     // `gone/x`: row 1 adopts the answer, row 2 keeps the person's
     // mark, row 3 stays unmarked.
-    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert_eq!(marks(&app), Some(vec![true, false, false]));
     let (app, effect) = saving(app);
@@ -3971,7 +3980,11 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
     // The remote home opens with the workspace picker showing; choosing
     // the hub's workspace closes it, owing the chips without writing.
+    // The player runs first, so a wrong-state choice answers at once and
+    // the asserts below fail before any hang guard.
+    hub.start();
     app.choose_workspace("/hub".to_owned());
+    assert!(!app.chip_read_failed());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     // Toggling row 2 twice leaves it marked; the answer omits row 2,
     // but the touched row keeps its mark.
@@ -3979,7 +3992,6 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, true, false]));
-    hub.start();
     let (app, _) = fold(app, hub_hello());
     Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(marks(&app), Some(vec![true, true, false]));
@@ -4003,13 +4015,16 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
     ]);
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
+    // The player runs first, so a wrong-state choice answers at once and
+    // the assert below fails before any hang guard.
+    hub.start();
     app.choose_workspace("/hub".to_owned());
+    assert!(!app.chip_read_failed());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(press_key(&mut app, Key::Down), Effect::None);
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
     // The rejection notices once and leaves the marks as they were.
-    hub.start();
     let (app, _) = fold(app, hub_hello());
     let lines = app.notices.lines();
     assert_eq!(lines.len(), 1);
@@ -4024,13 +4039,24 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
 
 #[test]
 fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
-    let (mut app, hub) = scripted_remote(Vec::new());
-    // No fold reads: starting releases the player, whose empty script
-    // ends at once.
+    // The hello reads the chips with the placeholder scope, and the
+    // link-up choice re-reads them at once at the new workspace: the
+    // placeholder survives both reads.
+    let (app, hub) = scripted_remote(vec![
+        global_file(),
+        chip_settings_scoped("[\"acme/m2\"]"),
+        chip_settings_scoped_at("/hub", "[\"acme/m2\"]"),
+    ]);
     hub.start();
+    let (mut app, _) = fold(app, hub_hello());
+    assert!(!app.chip_read_owed());
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
-    app.choose_workspace("/hub".to_owned());
+    // With the link up the choice reads at once: nothing stays owed.
+    // Under the inverted link check this fails before the hang guard.
+    let app = choosing(app, "/hub");
+    assert!(!app.chip_read_owed());
+    let mut app = app;
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(press_key(&mut app, Key::Down), Effect::None);
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
@@ -4047,6 +4073,7 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
             .map(|open| open.toggled.clone()),
         Some(vec![true, false, false])
     );
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     quiet(&hub.watcher);
 }
 
@@ -4067,14 +4094,17 @@ fn a_mark_cell_click_joins_the_toggled_set() {
     ]);
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
+    // The player runs first, so a wrong-state choice answers at once and
+    // the asserts below fail before any hang guard.
+    hub.start();
     app.choose_workspace("/hub".to_owned());
+    assert!(!app.chip_read_failed());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, true, false]));
     // The mark cell click toggles row 2 the way Enter does: layout
     // rows 0 the filter, 1 the buttons, 2 the heading, 3 row 1.
     assert_eq!(app.model_picker.click_cell(4, 0), None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
-    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert_eq!(marks(&app), Some(vec![true, false, false]));
     let (app, effect) = saving(app);
