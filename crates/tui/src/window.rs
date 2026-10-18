@@ -1453,6 +1453,11 @@ impl Pages {
         self.anchor = Some((seq, offset));
     }
 
+    /// Releases the held pass's landing position.
+    pub(crate) fn clear_anchor(&mut self) {
+        self.anchor = None;
+    }
+
     /// The held anchor's row as the pages count now, as
     /// [`Pages::seq_row`] finds it; `None` with no anchor held. The
     /// anchor lets go once every stale page is counted again or failed,

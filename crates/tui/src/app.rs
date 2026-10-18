@@ -403,6 +403,21 @@ impl App {
     /// then the input box.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
+        if matches!(
+            key,
+            Key::PageUp
+                | Key::PageDown
+                | Key::End
+                | Key::Up
+                | Key::Down
+                | Key::Tab
+                | Key::BackTab
+                | Key::Esc
+                | Key::CtrlL
+                | Key::CtrlR
+        ) {
+            self.screen.pages_mut().clear_anchor();
+        }
         // The key map opens above the picker: Esc closes whatever is
         // on top, so its keys never reach the picker underneath.
         if let Some(effect) = self.keymap_key(&key) {
@@ -766,7 +781,10 @@ impl App {
             let pages = self.attached_screen_mut().pages_mut();
             pages.hold_anchor(seq, offset);
             match pages.anchored_row() {
-                Some(row) => self.jump(row),
+                Some(row) => {
+                    self.screen.jump(row);
+                    self.settle();
+                }
                 None => self.attached_screen_mut().follow(),
             }
         }
@@ -1273,6 +1291,9 @@ impl App {
     /// A failed page ends a whole-turn copy waiting on dropped pages.
     pub(crate) fn load_failed(&mut self, range: &RangeInclusive<Seq>, message: &str) {
         self.screen.pages_mut().fail(*range.start());
+        if !self.pass_open() {
+            self.screen.pages_mut().clear_anchor();
+        }
         self.cancel_pending_turn();
         self.notices
             .push("io_failed", format!("Could not load history: {message}"));
@@ -1280,6 +1301,7 @@ impl App {
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
     pub(crate) fn jump(&mut self, row: usize) {
+        self.screen.pages_mut().clear_anchor();
         self.screen.jump(row);
         self.settle();
     }
