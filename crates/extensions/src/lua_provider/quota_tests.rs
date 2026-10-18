@@ -542,6 +542,53 @@ fn quota_now_refetches_only_after_the_freshness_boundary() {
 }
 
 #[test]
+fn quota_cached_never_starts_a_fetch_even_after_the_freshness_boundary() {
+    let root = fakes::TempDir::new("fiber-quota-cached");
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
+    let clock = FakeClock::new();
+    let provider = http_quota_provider(&root, &server.url(), clock.clone());
+    assert_eq!(
+        provider.quota_cached(&pair()),
+        QuotaEntry::Unreachable { last: None }
+    );
+    assert!(
+        lock(&provider.quotas.state)
+            .get(&pair())
+            .unwrap()
+            .flight
+            .is_none()
+    );
+    assert!(server.requests().is_empty());
+    let value = QuotaEntry::Reported(percent("primary", 10.0, None));
+    assert_eq!(read(&provider), value);
+    clock.advance(FRESH_FOR + Duration::from_nanos(1));
+    assert_eq!(provider.quota_cached(&pair()), value);
+    assert!(
+        lock(&provider.quotas.state)
+            .get(&pair())
+            .unwrap()
+            .flight
+            .is_none()
+    );
+    assert_eq!(server.requests().len(), 1);
+    server.hold();
+    assert_eq!(provider.quota_now(&pair(), None), value);
+    assert!(
+        server.await_requests(2, WAIT),
+        "quota_now starts the overdue fetch"
+    );
+    server.release();
+    assert_eq!(
+        read(&provider),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
+}
+
+#[test]
 fn quota_now_expires_an_overdue_flight_without_waiting() {
     let root = fakes::TempDir::new("fiber-quota-now-expire");
     let (provider, clock) = quota_provider(&root, "nil");

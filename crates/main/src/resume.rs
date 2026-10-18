@@ -455,7 +455,11 @@ fn resumed_session(
             "the session directory has no parent",
         ));
     };
-    let (quota, model_quota) = switching.quota_readers();
+    let crate::switch::quota::QuotaReaders {
+        door: quota,
+        model: model_quota,
+        notice: _notice,
+    } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),

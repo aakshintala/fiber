@@ -357,7 +357,11 @@ pub(crate) fn run_new(
     let fiber_path = fiber
         .clone()
         .map_err(|message| failed(ErrorCode::IoFailed, message))?;
-    let (quota, model_quota) = switching.quota_readers();
+    let crate::switch::quota::QuotaReaders {
+        door: quota,
+        model: model_quota,
+        notice: _notice,
+    } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
         home.clone(),
