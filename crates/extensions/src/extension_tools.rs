@@ -85,7 +85,9 @@ impl Tool for LuaTool {
                             "the effects function of the tool `{name}` failed: {e}"
                         ))
                     })?;
-                effects_from(&value).map_err(|why| {
+                effects_from(&value)
+                    .map(|(declared, _)| declared)
+                    .map_err(|why| {
                     EffectsError::Tool(format!(
                         "the effects function of the tool `{name}` of `{}` returned effects that do not read: {why}",
                         self.extension()
