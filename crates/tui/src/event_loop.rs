@@ -133,6 +133,7 @@ pub(crate) fn run_with(
     } else {
         app.set_configure(seams.seam);
     }
+    app.set_models(models.clone());
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.
@@ -147,7 +148,8 @@ pub(crate) fn run_with(
     app.set_home(launch);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
-        app.open_model_picker(crate::model_picker::Mode::Choose);
+        app.owe_start_pick();
+        let _ = app.start_model_pick();
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);

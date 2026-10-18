@@ -87,6 +87,9 @@ pub(in crate::app) struct ConfigViews {
     seam: Option<Arc<dyn Configure>>,
     /// Hub-only operations; the configuration seam also points here remotely.
     remote: Option<Arc<crate::remote::Remote>>,
+    /// The model-list reader the loop thread and the start pick read
+    /// through: the same function take_reads hands the thread.
+    models: Option<crate::ReadModels>,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -108,6 +111,16 @@ impl App {
     /// Sets the seam the views read and write through.
     pub(crate) fn set_configure(&mut self, seam: Option<Arc<dyn Configure>>) {
         self.config_views.seam = seam;
+    }
+
+    /// Sets the model-list reader the start pick reads through.
+    pub(crate) fn set_models(&mut self, models: Option<crate::ReadModels>) {
+        self.config_views.models = models;
+    }
+
+    /// The model-list reader, absent with no list to read.
+    pub(in crate::app) fn models_reader(&self) -> Option<crate::ReadModels> {
+        self.config_views.models.clone()
     }
 
     /// Installs the hub seam and its remote editor and search operations.

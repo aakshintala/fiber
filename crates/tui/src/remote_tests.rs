@@ -5,6 +5,7 @@ use fakes::Deadline;
 use serde_json::json;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -1143,4 +1144,75 @@ fn remote_seams_replace_the_client_reader_and_drop_it_without_one() {
         &router,
     );
     assert!(hubbed.models.is_some());
+}
+
+#[test]
+fn chip_read_takes_the_hub_model_thinking_and_scope() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+    });
+    let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
+    assert_eq!(line["command"], "configure");
+    assert_eq!(line["args"], json!({"operation":"global_file"}));
+    hub.reply(&line, json!({"file": "/hub/config.json"}));
+    let line = Deadline::start().recv_or_fail(&hub.lines, "settings");
+    assert_eq!(line["command"], "configure");
+    assert_eq!(
+        line["args"],
+        json!({"operation":"settings","workspace":"/hub"})
+    );
+    hub.reply(
+        &line,
+        json!({"rows": [
+            {"key":"model","shown":"value","value":"\"hub/m\"",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"models.\"hub/m\".thinking","shown":"value","value":"\"high\"",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"scoped_models","shown":"value","value":"[\"hub/m\"]",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+        ]}),
+    );
+    assert_eq!(
+        Deadline::start().recv_or_fail(&rx, "chip").unwrap(),
+        Chip {
+            model: "hub/m".to_owned(),
+            thinking: "high".to_owned(),
+            scoped: vec!["hub/m".to_owned()],
+        }
+    );
+}
+
+#[test]
+fn chip_read_unsets_what_is_not_a_value() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+    });
+    let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
+    hub.reply(&line, json!({"file": "/hub/config.json"}));
+    let line = Deadline::start().recv_or_fail(&hub.lines, "settings");
+    hub.reply(
+        &line,
+        json!({"rows": [
+            {"key":"model","shown":"value","value":"\"hub/m\"",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"models.\"hub/m\".thinking","shown":"unset",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"scoped_models","shown":"value","value":"not json",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+        ]}),
+    );
+    assert_eq!(
+        Deadline::start().recv_or_fail(&rx, "chip").unwrap(),
+        Chip {
+            model: "hub/m".to_owned(),
+            thinking: String::new(),
+            scoped: Vec::new(),
+        }
+    );
 }

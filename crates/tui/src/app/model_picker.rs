@@ -43,14 +43,47 @@ impl App {
         read
     }
 
+    /// Runs the owed start pick: opening Choose, asking the open's
+    /// read now (`Stale`, or the read the open owes), and installing
+    /// the answer. A remote terminal with no hub yet keeps the pick
+    /// owed: the sync read would park on the link the loop itself
+    /// brings up. With no reader nothing runs; a models error is a
+    /// notice as today, opening nothing.
+    pub(crate) fn start_model_pick(&mut self) -> Vec<String> {
+        if self.remote().is_some() && self.link != super::Link::Up {
+            self.owe_start_pick();
+            return Vec::new();
+        }
+        if !self.take_start_pick() {
+            return Vec::new();
+        }
+        let Some(read) = self.models_reader() else {
+            return Vec::new();
+        };
+        // The open reads for itself: take its read and ask it now, so
+        // the loop owes the thread nothing more.
+        self.open_model_picker(Mode::Choose);
+        let refresh = self.model_picker.take_read().unwrap_or(Refresh::Stale);
+        match read(refresh) {
+            Ok(catalogue) => self.on_models(Ok(catalogue)),
+            Err(error) => {
+                self.on_models(Err(error));
+                self.model_picker.close();
+            }
+        }
+        Vec::new()
+    }
+
     /// Opens the model picker: each open starts fresh, on the on-screen
     /// model's row, else the first row. On home the pending session-only
     /// choice names it, else the chips; attached, the panel fold does.
     /// Each open asks `Stale`. One swapped view shows at a time, so
-    /// another swapped view closes.
+    /// another swapped view closes. A fresh open reads for itself, so
+    /// an owed start pick drops: the open's own read supersedes it.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
         self.close_session_view();
+        let _ = self.take_start_pick();
         let on_screen = if self.on_home() {
             self.home_model()
         } else {

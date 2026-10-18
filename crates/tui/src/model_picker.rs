@@ -68,6 +68,10 @@ pub(crate) struct Open {
     /// Each row marked for the saved list, by catalogue index: only the
     /// checklist keeps marks, starting from the saved list.
     pub(crate) marks: Vec<bool>,
+    /// Each row the checklist toggled, by catalogue index: the store's
+    /// marks read through this, so a read answering over the open keeps
+    /// each kept model's toggle, and a new row starts from the list.
+    pub(crate) toggled: Vec<bool>,
     /// The on-screen model and level the open is for, kept until a read
     /// answers: an open before the first catalogue still lands on it.
     pub(crate) target: Option<(String, Option<String>)>,
@@ -210,6 +214,24 @@ pub(crate) struct ModelPicker {
 }
 
 impl ModelPicker {
+    /// Adopts a new scoped list while the open stays: its checklist
+    /// marks re-derive from the new list, toggles with them.
+    pub(crate) fn adopt_scoped(&mut self, scoped: Vec<String>) {
+        self.scoped = scoped;
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        if open.mode != Mode::Scope {
+            return;
+        }
+        open.toggled = self
+            .catalogue
+            .models
+            .iter()
+            .map(|entry| self.scoped.contains(&entry.reference))
+            .collect();
+        open.marks = open.toggled.clone();
+    }
     /// Stores a read's answer: the catalogue, or the error with the old
     /// catalogue kept. What the loop owes is taken, never cleared here:
     /// an answer to the startup read must not drop a meanwhile opened
@@ -326,8 +348,9 @@ impl ModelPicker {
         // A read answering over the checklist keeps each kept model's
         // mark, and a new row starts marked from the saved list, even
         // when the open began with no catalogue. Any other open keeps
-        // no marks.
-        open.marks = if open.mode == Mode::Scope {
+        // no marks. The toggles carry the same way, and the marks follow
+        // them.
+        open.toggled = if open.mode == Mode::Scope {
             self.catalogue
                 .models
                 .iter()
@@ -335,13 +358,14 @@ impl ModelPicker {
                     old.models
                         .iter()
                         .position(|old_entry| old_entry.reference == entry.reference)
-                        .and_then(|at| open.marks.get(at).copied())
+                        .and_then(|at| open.toggled.get(at).copied())
                         .unwrap_or_else(|| self.scoped.contains(&entry.reference))
                 })
                 .collect()
         } else {
             Vec::new()
         };
+        open.marks = open.toggled.clone();
     }
 
     /// The read the loop owes, if one is owed.
@@ -389,8 +413,9 @@ impl ModelPicker {
             .collect();
         let mut touched = vec![false; self.catalogue.models.len()];
         // The checklist starts marked from the saved list; any other
-        // open keeps no marks.
-        let marks = if mode == Mode::Scope {
+        // open keeps no marks. The toggles start the same, and the two
+        // stay together: every toggle sets both.
+        let toggled = if mode == Mode::Scope {
             self.catalogue
                 .models
                 .iter()
@@ -399,6 +424,7 @@ impl ModelPicker {
         } else {
             Vec::new()
         };
+        let marks = toggled.clone();
         // The current model's row starts touched: choosing it is a level
         // choice, saving only the level.
         if mode == Mode::Thinking
@@ -418,6 +444,7 @@ impl ModelPicker {
             chips,
             touched,
             marks,
+            toggled,
             show_all: false,
             target,
             // Every open starts with an empty query.
@@ -569,8 +596,12 @@ impl ModelPicker {
         if !rows.contains(&open.selected) {
             return;
         }
+        // Every toggle sets both: the marks stay the toggles' copy.
         if let Some(mark) = open.marks.get_mut(open.selected) {
             *mark = !*mark;
+        }
+        if let Some(toggled) = open.toggled.get_mut(open.selected) {
+            *toggled = !*toggled;
         }
     }
 
@@ -755,10 +786,15 @@ impl ModelPicker {
                 if self.is_scope() {
                     let open = self.open.as_mut()?;
                     open.selected = index;
-                    if cell == 0
-                        && let Some(mark) = open.marks.get_mut(index)
-                    {
-                        *mark = !*mark;
+                    // Every toggle sets both: the marks stay the
+                    // toggles' copy.
+                    if cell == 0 {
+                        if let Some(mark) = open.marks.get_mut(index) {
+                            *mark = !*mark;
+                        }
+                        if let Some(toggled) = open.toggled.get_mut(index) {
+                            *toggled = !*toggled;
+                        }
                     }
                     return None;
                 }
@@ -882,7 +918,9 @@ impl ModelPicker {
                     } else {
                         open.chips.get(*index).copied().flatten()
                     },
-                    mark: checklist.then(|| open.marks.get(*index).copied()).flatten(),
+                    mark: checklist
+                        .then(|| open.toggled.get(*index).copied())
+                        .flatten(),
                     session_only: !checklist && only,
                 });
             }

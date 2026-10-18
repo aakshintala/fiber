@@ -18,8 +18,8 @@ use crate::ThemeSetting;
 use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
-    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, SkillsDisabled, Stored,
-    SwitchScope, ToolGroup, ToolSwitches,
+    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
+    Stored, SwitchScope, ToolGroup, ToolSwitches,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
@@ -30,6 +30,15 @@ use std::sync::Mutex;
 
 pub(crate) use login::RemoteLogin;
 pub(crate) use router::{AskError, Caller, Cancel, Pending, Router};
+
+/// The home chips' configuration: the hub model and thinking level on
+/// screen, and the scoped models the checklist marks.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Chip {
+    pub(crate) model: String,
+    pub(crate) thinking: String,
+    pub(crate) scoped: Vec<String>,
+}
 
 /// The hub's configuration, with client-owned terminal settings kept local.
 pub(crate) struct Remote {
@@ -125,6 +134,44 @@ impl Remote {
         decode::file(&decode::result(&line, "global_file")?)
             .ok_or_else(|| decode::io_error("global_file"))
     }
+    /// Reads the home chips' configuration at the workspace in use: the
+    /// model and thinking rows, and the scoped models list. The loop
+    /// path asks, so the read rides the connection the loop holds.
+    pub(crate) fn chip(&self, workspace: &Path) -> Result<Chip, ConfigureError> {
+        let workspace = self.workspace_as(workspace, Caller::Loop)?;
+        let rows = self.call(
+            "settings",
+            json!({"workspace":workspace}),
+            Caller::Loop,
+            decode::settings,
+        )?;
+        let text = |key: &str| {
+            rows.iter()
+                .find(|row| row.key == key)
+                .and_then(|row| match &row.value {
+                    Shown::Value(text) => Some(text.clone()),
+                    Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
+                })
+        };
+        let model: String = text("model")
+            .and_then(|text| serde_json::from_str::<String>(&text).ok())
+            .unwrap_or_default();
+        let thinking: String = if model.is_empty() {
+            String::new()
+        } else {
+            text(&format!("models.\"{model}\".thinking"))
+                .and_then(|text| serde_json::from_str::<String>(&text).ok())
+                .unwrap_or_default()
+        };
+        let scoped: Vec<String> = text("scoped_models")
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .unwrap_or_default();
+        Ok(Chip {
+            model,
+            thinking,
+            scoped,
+        })
+    }
     /// Reads the hub's catalogue at `refresh` for the workspace in use,
     /// copied out before anything is sent: the mutex is never held across
     /// a wait. The picker's refresh rides as a word, one per level.
@@ -148,7 +195,7 @@ impl Remote {
     }
     /// Reads the hub's catalogue as the picker's `ReadModels`: a hub
     /// rejection keeps its message, so the picker's notice shows it.
-    fn catalogue_reader(self: &Arc<Self>) -> crate::ReadModels {
+    pub(crate) fn catalogue_reader(self: &Arc<Self>) -> crate::ReadModels {
         let remote = Arc::clone(self);
         Arc::new(move |refresh| remote.models(refresh).map_err(|error| error.message))
     }

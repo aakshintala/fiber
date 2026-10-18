@@ -12,6 +12,20 @@ use super::{Home, typed};
 use crate::home::PickerScreen;
 use crate::keys::Key;
 
+/// Whether the home chips' configuration is read: owed until one
+/// read answers, failed until a new workspace or link owes it again.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) enum ChipRead {
+    /// The next outgoing pass reads and folds the chips.
+    #[default]
+    Owed,
+    /// One read answered: the chips are the hub's.
+    Answered,
+    /// The read failed: a notice says why, until a new workspace or
+    /// link owes the next read.
+    Failed,
+}
+
 /// The workspace chooser: the picked workspace, whether it is in git,
 /// the new worktree switch and the picker.
 #[derive(Default)]
@@ -28,6 +42,10 @@ pub(super) struct Chooser {
     worktree: bool,
     /// The workspace picker above the box, while open.
     picker: Option<Picker>,
+    /// Whether the home chips' configuration is read.
+    pub(super) chip_read: ChipRead,
+    /// Whether the loop owes the pick the picker opens for.
+    pub(super) start_pick: bool,
 }
 
 /// The workspace picker: the recent workspaces shown by the picker, the
@@ -308,10 +326,17 @@ impl App {
 
     /// The open picker's queued `directories` lines, once the link is
     /// up: queued directories go out at the end of every `on_line`.
+    /// Before them the home chips read once: the hub model, thinking
+    /// and scope fold into the launch, and a failed read is a notice
+    /// until a new workspace or link owes the next one.
     pub(super) fn picker_asks(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
         }
+        if self.home.is_none() {
+            return Vec::new();
+        }
+        self.read_chips();
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
@@ -326,10 +351,81 @@ impl App {
             .collect()
     }
 
+    /// Reads the home chips' configuration when one is owed, folding
+    /// it into the launch: the hub model and thinking on screen, and
+    /// the scoped list the checklist marks. With no remote nothing is
+    /// owed and nothing is read; a failed read is a notice.
+    fn read_chips(&mut self) {
+        let owed = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.chip_read == ChipRead::Owed);
+        if !owed {
+            return;
+        }
+        let Some(remote) = self.remote() else {
+            return;
+        };
+        let read = remote.chip(&self.workspace());
+        match read {
+            Ok(chip) => {
+                let Some(home) = self.home.as_mut() else {
+                    return;
+                };
+                home.launch.model = if chip.model.is_empty() {
+                    None
+                } else {
+                    Some(chip.model)
+                };
+                home.launch.thinking = if chip.thinking.is_empty() {
+                    None
+                } else {
+                    Some(chip.thinking)
+                };
+                home.launch.scoped_models = chip.scoped.clone();
+                home.chooser.chip_read = ChipRead::Answered;
+                self.model_picker.adopt_scoped(chip.scoped);
+            }
+            Err(error) => {
+                if let Some(home) = self.home.as_mut() {
+                    home.chooser.chip_read = ChipRead::Failed;
+                }
+                self.push_notice("io_failed", error.to_string());
+            }
+        }
+    }
+
+    /// Owes the home chips' next read: a new workspace or link folds
+    /// what the hub says now.
+    pub(in crate::app) fn chip_read_owed(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.chip_read = ChipRead::Owed;
+        }
+    }
+
+    /// Owes the pick the picker opens for: the next outgoing pass
+    /// reads it, opening on the answered catalogue.
+    pub(crate) fn owe_start_pick(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.start_pick = true;
+        }
+    }
+
+    /// Takes the owed start pick, if one waits.
+    pub(crate) fn take_start_pick(&mut self) -> bool {
+        self.home
+            .as_mut()
+            .map(|home| std::mem::replace(&mut home.chooser.start_pick, false))
+            .unwrap_or(false)
+    }
+
     /// Forgets the picker's in-flight `directories` ids: with a typed
     /// text open their directories queue again, asked once more, while
     /// with the recents alone open they drop. The cache stays either way.
+    /// The chips read again on the next pass: the hub and its levels
+    /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
+        self.chip_read_owed();
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
@@ -459,11 +555,13 @@ impl App {
     }
 
     /// Chooses `workspace` for the next `start` and names its project
-    /// for `prompt_history`.
+    /// for `prompt_history`. The chips belong to the old workspace, so
+    /// the next pass reads them again.
     pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
         if let Some(home) = self.home.as_mut() {
             home.choose(workspace);
         }
+        self.chip_read_owed();
         self.sync_project();
     }
 
