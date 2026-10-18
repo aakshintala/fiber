@@ -159,9 +159,9 @@ pub(crate) fn serve_connection(
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                // The kept line feed, and any carriage return a client sends
-                // with it, are JSON whitespace: `classify` reads the line
-                // with them still on, so there is nothing to strip.
+                while buf.last().is_some_and(|byte| is_line_ending(*byte)) {
+                    buf.pop();
+                }
                 on_line(&buf, &mut conn);
                 if conn.gone {
                     break;
@@ -176,6 +176,11 @@ pub(crate) fn serve_connection(
         outbox.cancel_settles();
         outbox.stop(&conn.gate.session_id);
     }
+}
+
+/// A carriage return and a line feed both end a command line.
+fn is_line_ending(byte: u8) -> bool {
+    byte == b'\n' || byte == b'\r'
 }
 
 /// Ends a client connection's reader: stops its stoppable read, then shuts

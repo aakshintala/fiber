@@ -208,6 +208,12 @@ fn diagnose_with(
     }
 }
 
+/// Whether a devices error means there are no devices: any other error
+/// fails the read.
+fn is_missing(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::NotFound
+}
+
 /// The global `hub.port`; a project's value is never read.
 fn port(home: &Path) -> Result<Option<u16>, Failure> {
     let Some(value) = config::get_global(home, "hub.port").map_err(|e| failed(e.code(), e))? else {
@@ -240,8 +246,7 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
     };
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
-        // No devices dir means no devices: any other error fails the read.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if is_missing(e.kind()) => return Ok(Vec::new()),
         Err(e) => return Err(lost(e)),
     };
     let mut names = Vec::new();
@@ -343,25 +348,10 @@ fn ask(
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
             if let Some(reply) = answer(&line)? {
-                restore_blocking(stream.set_nonblocking(false)).map_err(lost)?;
+                ignore_closed_peer(stream.set_nonblocking(false)).map_err(lost)?;
                 return Ok(reply);
             }
         }
-    }
-}
-
-/// Restores `stream` to blocking after the answer is read, ignoring the
-/// closed-peer refusal: macOS refuses the option once the peer has closed
-/// (`InvalidInput`), while its buffered bytes stay readable and a read of
-/// the closed socket does not block, so the refusal is ignored. Any other
-/// failure still fails the exchange. A live socket's restore cannot fail
-/// on Linux, so the refusal arm is unreachable through `ask` there.
-// Exempt: no Linux `ask` reaches `InvalidInput`, and the macOS-only refusal is covered by the macOS job's tests.
-#[cfg_attr(false, mutants::skip)]
-fn restore_blocking(set: io::Result<()>) -> io::Result<()> {
-    match set {
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-        other => other,
     }
 }
 
@@ -384,6 +374,22 @@ fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFla
         )]
         let _ = poll(&mut fds, spec.as_ref());
     });
+}
+
+/// Whether a status exchange error is the closed-peer refusal to ignore:
+/// macOS refuses the option once the peer has closed, while its buffered
+/// bytes stay readable and a read of the closed socket does not block.
+fn is_closed_peer(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::InvalidInput
+}
+
+/// Folds a `set_nonblocking` result, ignoring the closed-peer refusal,
+/// so tests inject each outcome.
+fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(error) if is_closed_peer(error.kind()) => Ok(()),
+        other => other,
+    }
 }
 
 /// The version, client count and environment from the hub's answer to

@@ -3,15 +3,6 @@
 use contract::clock::Clock;
 use serde_json::json;
 
-impl super::SharedState {
-    /// Whether any pending slot holds a response; read on a guard the
-    /// caller already holds, inside `cv.wait_timeout_while`, so the wait
-    /// never locks twice. Test-only: production waits go through `park`.
-    pub(crate) fn holds_a_response(&self) -> bool {
-        self.pending.values().any(|slot| slot.is_some())
-    }
-}
-
 #[test]
 fn login_refusal_wins_over_a_later_result_but_is_not_sticky() {
     use super::{NoCancel, Outcome, Shared};
@@ -60,6 +51,22 @@ fn shared_slots_deliver_remove_and_mark_gone() {
     assert_eq!(missing.response, None);
     shared.gone();
     assert!(shared.view(9, &cancel).gone);
+}
+
+#[test]
+fn the_wait_ends_on_a_new_response_or_cancel() {
+    // All four combinations: `||` into `&&` misses the two mixed rows,
+    // and `!=` into `==` flips the two uncancelled rows.
+    assert!(!super::should_stop(7, 7, false));
+    assert!(super::should_stop(8, 7, false));
+    assert!(super::should_stop(7, 7, true));
+    assert!(super::should_stop(8, 7, true));
+}
+
+#[test]
+fn no_cancel_never_cancels() {
+    use contract::tool::Cancel;
+    assert!(!super::NoCancel.is_cancelled());
 }
 
 #[test]
@@ -288,49 +295,4 @@ fn queueing_wakes_a_waiter() {
         crate::registry::lock(&shared.inner).seq != before,
         "the sequence moves so every parked call wakes",
     );
-}
-
-#[test]
-fn park_returns_at_once_when_only_a_response_arrived() {
-    use super::{NoCancel, Outcome, Shared};
-    // A response landed but nobody cancelled: exactly one end condition
-    // holds, so the wait ends at once. With the `||` flipped to `&&` the
-    // wait never ends, and this fails at the deadline on the mutant.
-    let shared = Shared::default();
-    shared.insert(7);
-    let seen = crate::registry::lock(&shared.inner).seq;
-    shared.deliver(7, Outcome::Http("gone".to_owned()));
-    let clock = fakes::clock::FakeClock::new();
-    let until = clock.now() + std::time::Duration::from_secs(60);
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        super::park(&*clock, &shared, &NoCancel, until, seen);
-        tx.send(()).unwrap_or(());
-    });
-    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&rx)
-        .expect("a delivered response ends the wait");
-}
-
-#[test]
-fn park_returns_at_once_when_only_cancel_fired() {
-    use super::Shared;
-    // The call was cancelled but no response landed: exactly one end
-    // condition holds, so the wait ends at once. With the `||` flipped to
-    // `&&` the wait never ends, and this fails at the deadline on the mutant.
-    let shared = Shared::default();
-    shared.insert(7);
-    let seen = crate::registry::lock(&shared.inner).seq;
-    let cancel = fakes::CancelToken::new();
-    cancel.cancel();
-    let clock = fakes::clock::FakeClock::new();
-    let until = clock.now() + std::time::Duration::from_secs(60);
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        super::park(&*clock, &shared, &cancel, until, seen);
-        tx.send(()).unwrap_or(());
-    });
-    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&rx)
-        .expect("a fired cancel ends the wait");
 }
