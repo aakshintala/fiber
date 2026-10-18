@@ -723,6 +723,91 @@ fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
     assert!(first.contains("reply 13"), "{shown}");
 }
 
+fn held_landing_with_dropped_pages() -> (App, Vec<contract::Envelope>) {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    let total = fold.index().total();
+    fold.trim(total - 1, 1);
+    app.land(fold, true);
+    (app, envelopes(&lines))
+}
+
+fn landing_top_text(app: &App) -> String {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    let conversation = app.conversation_area();
+    (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect()
+}
+
+#[test]
+fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    app.load_failed(&range, "page failed");
+    // Following leaves the failed page for the resident, unrelated tail.
+    app.on_key(crate::keys::Key::End, std::time::Instant::now());
+    let before = landing_top_text(&app);
+    assert_eq!(app.attached_screen().top(), None, "End follows the tail");
+    let top = app.attached_screen().top();
+    let tail: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq > *range.end()))
+        .collect();
+    assert!(!tail.is_empty());
+    app.load(tail);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
 #[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);
