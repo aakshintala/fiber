@@ -11,7 +11,6 @@
 use crate::test_support::write_record;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -736,19 +735,7 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut mkfifo = Command::new("mkfifo").arg(&fifo).spawn().unwrap();
-    let mkfifo_pid = mkfifo.id();
-    let (mkfifo_tx, mkfifo_rx) = mpsc::channel();
-    thread::spawn(move || mkfifo_tx.send(mkfifo.wait()));
-    let Ok(mkfifo_status) = Deadline::after(CHILD_DEADLINE).recv(&mkfifo_rx) else {
-        fakes::kill_pid(mkfifo_pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for mkfifo to exit");
-    };
-    assert!(
-        mkfifo_status.unwrap().success(),
-        "mkfifo {}",
-        fifo.display()
-    );
+    fakes::fifo(&fifo);
     // The stub's write blocks until a reader opens the FIFO, and the
     // reader gets EOF when the stub exits: completion is the signal.
     let (fifo_tx, fifo_rx) = mpsc::channel();
