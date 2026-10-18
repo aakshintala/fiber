@@ -52,6 +52,118 @@ fn decision(repo: &Repo, item: &OfferedItem) -> Option<Decision> {
 }
 
 #[test]
+fn file_returns_a_listed_files_text() {
+    let repo = Repo::new();
+    repo.write("tools/db.sh", "echo db\n");
+    repo.hooks(&json!({"db": {"command": "tools/db.sh"}}));
+    let offered = one(&repo, OfferedKind::Hook, "db");
+    assert_eq!(offered.files, ["tools/db.sh"]);
+    assert_eq!(session(&repo).file(&offered.files[0]).unwrap(), "echo db\n");
+}
+
+fn file_failure(repo: &Repo, path: &str, code: ErrorCode) -> String {
+    let failure = session(repo).file(path).unwrap_err();
+    assert_eq!(failure.code, code);
+    assert!(failure.message.contains(path), "{}", failure.message);
+    failure.message
+}
+
+#[test]
+fn a_missing_file_is_io_failed_naming_it() {
+    file_failure(&Repo::bare(), "missing", ErrorCode::IoFailed);
+}
+
+#[test]
+fn a_link_now_pointing_outside_is_invalid_arguments() {
+    let repo = Repo::new();
+    repo.write("tools/db.sh", "echo db");
+    repo.hooks(&json!({"db": {"command": "tools/db.sh"}}));
+    let item = one(&repo, OfferedKind::Hook, "db");
+    let outside = repo.elsewhere("secret", "PROTECTED_BYTES");
+    std::fs::remove_file(repo.root().join("tools/db.sh")).unwrap();
+    repo.link("tools/db.sh", &outside);
+    let message = file_failure(&repo, &item.files[0], ErrorCode::InvalidArguments);
+    assert!(!message.contains("PROTECTED_BYTES"));
+}
+
+#[test]
+fn a_directory_is_invalid_arguments() {
+    let repo = Repo::bare();
+    std::fs::create_dir(repo.root().join("directory")).unwrap();
+    file_failure(&repo, "directory", ErrorCode::InvalidArguments);
+}
+
+#[test]
+fn a_fifo_is_invalid_arguments_and_does_not_block() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let repo = Repo::bare();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        repo.root().join("fifo"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::RUSR,
+        0,
+    )
+    .unwrap();
+    let code = session(&repo);
+    let (tx, rx) = mpsc::channel();
+    let _reader = std::thread::spawn(move || {
+        tx.send(code.file("fifo")).unwrap();
+    });
+    let deadline = fakes::Deadline::after(Duration::from_secs(5));
+    let failure = deadline
+        .recv_or_fail(&rx, "refuse the offered FIFO without blocking")
+        .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::InvalidArguments);
+    assert!(failure.message.contains("fifo"));
+}
+
+#[test]
+fn a_file_that_is_not_utf8_is_invalid_arguments() {
+    let repo = Repo::bare();
+    std::fs::write(repo.root().join("binary"), [0xff]).unwrap();
+    file_failure(&repo, "binary", ErrorCode::InvalidArguments);
+}
+
+#[test]
+fn a_path_with_dotdot_that_leaves_the_workspace_is_invalid_arguments() {
+    let repo = Repo::bare();
+    repo.elsewhere("secret", "PROTECTED_BYTES");
+    let message = file_failure(&repo, "../secret", ErrorCode::InvalidArguments);
+    assert!(!message.contains("PROTECTED_BYTES"));
+}
+
+#[test]
+fn an_absolute_path_outside_is_invalid_arguments() {
+    let repo = Repo::bare();
+    let outside = repo.elsewhere("secret", "PROTECTED_BYTES");
+    let message = file_failure(
+        &repo,
+        outside.to_str().unwrap(),
+        ErrorCode::InvalidArguments,
+    );
+    assert!(!message.contains("PROTECTED_BYTES"));
+}
+
+#[test]
+fn an_unreadable_file_is_io_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    assert!(
+        !rustix::process::geteuid().is_root(),
+        "run tests as a non-root user: root bypasses file modes"
+    );
+    let repo = Repo::bare();
+    repo.write("unreadable", "secret");
+    std::fs::set_permissions(
+        repo.root().join("unreadable"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    file_failure(&repo, "unreadable", ErrorCode::IoFailed);
+}
+
+#[test]
 fn a_repository_that_declares_nothing_lists_nothing_and_writes_no_index() {
     let repo = Repo::new();
     assert!(unapproved(&repo).is_empty());

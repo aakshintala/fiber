@@ -641,8 +641,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "repository_code_offered",
             json!({"request_id": "r", "items": [
                 {"kind": "extension", "name": "n", "hash": "h", "required": true,
-                 "summary": "s", "version": "1.0.0", "diff": "d"},
-                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s"}]}),
+                 "summary": "s", "version": "1.0.0", "diff": "d", "files": ["tools/init.lua"]},
+                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s", "files": []}]}),
         ),
         (
             "repository_code_resolved",
@@ -1682,6 +1682,14 @@ fn an_empty_skills_result_reads_as_skills() {
 
 #[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"text": "t"}})),
+        CommandResult::OfferedFile { text: "t".into() }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"text": "t", "size": 1}})),
+        CommandResult::ArtifactPage { .. }
+    ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
         CommandResult::Quota { .. }
@@ -1751,6 +1759,16 @@ fn an_mcp_tool_names_its_server_and_its_own_name() {
         }
     );
     assert_eq!(serde_json::to_value(&info).unwrap(), payload);
+}
+
+#[test]
+fn an_old_offered_item_without_files_reads_as_empty() {
+    let item: OfferedItem = serde_json::from_value(
+        json!({"kind": "hook", "name": "h", "hash": "h", "required": false, "summary": "s"}),
+    )
+    .unwrap();
+    assert!(item.files.is_empty());
+    assert_eq!(serde_json::to_value(item).unwrap()["files"], json!([]));
 }
 
 #[test]

@@ -33,6 +33,16 @@ pub trait RepositoryCode: Send + Sync {
     /// When the declaration or a declared file cannot be read.
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure>;
 
+    /// The text of the workspace file at `path`, relative to the workspace,
+    /// read now. The caller has checked that a pending offer lists `path`.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_arguments` when it resolves outside the workspace, is not a
+    /// regular file, or is not UTF-8; `io_failed` when it cannot be read. The
+    /// message names `path`.
+    fn file(&self, path: &str) -> Result<String, Failure>;
+
     /// Records `approve` or `never` for the content `item` names, after
     /// gathering the repository again. `skip` is never passed.
     ///

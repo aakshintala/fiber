@@ -56,6 +56,7 @@ pub fn pending(
                 hash,
                 required: item.required,
                 summary: summary.join("\n"),
+                files: item.files.iter().map(|file| file.listed.clone()).collect(),
                 version,
                 diff,
             },
