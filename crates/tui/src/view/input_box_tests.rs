@@ -53,7 +53,7 @@ fn input_box_with_completions_above_its_edge() {
 #[test]
 fn every_cell_of_the_box_rows_is_surface() {
     let app = typed(80, 12, "hi");
-    let area = Rect::new(0, 0, 200, 40);
+    let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     // One draft row in a room of 11: the box is three rows at the bottom.
@@ -73,7 +73,7 @@ fn every_cell_of_the_box_rows_is_surface() {
 #[test]
 fn the_prompt_is_info_and_the_cursor_is_a_dim_block() {
     let app = typed(80, 12, "hi");
-    let area = Rect::new(0, 0, 200, 40);
+    let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     // The prompt in `info`, the draft after it, and the cursor as a dim
@@ -98,7 +98,7 @@ fn the_box_fill_covers_empty_and_wrapped_drafts() {
     // "The input box").
     for draft in ["", "hi", &"w".repeat(200)] {
         let app = typed(80, 12, draft);
-        let area = Rect::new(0, 0, 200, 40);
+        let area = Rect::new(0, 0, 80, 12);
         let mut buf = Buffer::empty(area);
         crate::view::render(&app, area, &mut buf, None);
         let edge = Role::Surface.color();
@@ -137,7 +137,7 @@ fn the_cursor_hides_with_search_open() {
         fakes::clock::FakeClock::new().now(),
     );
     assert!(app.find_bar().is_some());
-    let area = Rect::new(0, 0, 200, 40);
+    let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     // Typing goes to the search box: the draft shows without a cursor
@@ -529,7 +529,7 @@ fn no_color_draws_the_editing_hint_inside_the_sides() {
     app.select_steering(0);
     // One step left: the caret leaves the hint's first cell free.
     app.on_edit(crate::keys::Edit::Left);
-    let area = Rect::new(0, 0, 200, 40);
+    let area = Rect::new(0, 0, 80, 12);
     let (buf, _, _) = no_color_drawn(&app, area);
     let y = (0..12)
         .find(|y| {
@@ -702,7 +702,7 @@ fn an_open_search_panel_reserves_no_rows() {
     open.on_key(Key::CtrlR, now);
     assert!(open.completions().is_some());
     let closed = typed(80, 12, "hi");
-    let area = Rect::new(0, 0, 200, 40);
+    let area = Rect::new(0, 0, 80, 12);
     let mut buf = Buffer::empty(area);
     let mut bottom = area.bottom();
     let top = draw(&open, area, &mut bottom, &mut buf, &mut Vec::new());

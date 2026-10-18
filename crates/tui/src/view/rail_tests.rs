@@ -1043,9 +1043,14 @@ fn drawn(app: &App) -> (Buffer, Vec<Target>) {
 fn focused_rect(targets: &[Target], focus: u64) -> Rect {
     targets
         .iter()
-        .find_map(|target| match target.id {
-            TargetId::Rail(Spot::Card(key)) if key == focus => Some(target.rect),
-            _ => None,
+        .find_map(|target| {
+            if let TargetId::Rail(Spot::Card(key)) = target.id
+                && key == focus
+            {
+                Some(target.rect)
+            } else {
+                None
+            }
         })
         .unwrap_or_else(|| panic!("a focused card target"))
 }
@@ -1073,9 +1078,14 @@ fn a_focused_card_lifts_with_the_hover_tint() {
     assert_eq!(buf[header].bg, plain[header].bg, "the header");
     let other = targets
         .iter()
-        .find_map(|target| match target.id {
-            TargetId::Rail(Spot::Card(key)) if key != focus => Some(target.rect),
-            _ => None,
+        .find_map(|target| {
+            if let TargetId::Rail(Spot::Card(key)) = target.id
+                && key != focus
+            {
+                Some(target.rect)
+            } else {
+                None
+            }
         })
         .expect("a second card");
     let neighbour = (other.x.saturating_add(2), other.y);
@@ -1157,9 +1167,14 @@ fn no_color_an_unfocused_card_keeps_its_dim_box() {
     let (buf, targets) = no_color_drawn(&app);
     let rect = targets
         .iter()
-        .find_map(|target| match target.id {
-            TargetId::Rail(Spot::Card(key)) if key != focus => Some(target.rect),
-            _ => None,
+        .find_map(|target| {
+            if let TargetId::Rail(Spot::Card(key)) = target.id
+                && key != focus
+            {
+                Some(target.rect)
+            } else {
+                None
+            }
         })
         .expect("a second card");
     let card_w = rect.width;

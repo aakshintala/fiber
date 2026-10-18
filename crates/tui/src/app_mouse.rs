@@ -2,6 +2,7 @@
 //! hover").
 
 use super::{App, Effect, Target};
+use crate::app::rail::Spot;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
 use ratatui::layout::Position;
@@ -19,7 +20,11 @@ impl App {
     /// notices, and a paste token opens in the editor as Ctrl+G on it does.
     /// A recall waiting for a page waits no more. A click clears "Copied".
     pub(crate) fn on_click(&mut self, target: TargetId) -> Effect {
-        self.clear_rail_focus();
+        // A click drops the rail's focus, except the ✕ that dismisses:
+        // the dismiss keeps the focus until its hub answer arrives.
+        if !matches!(target, TargetId::Rail(Spot::Dismiss(_))) {
+            self.clear_rail_focus();
+        }
         self.history.cancel();
         self.copied = false;
         let effect = match target {
