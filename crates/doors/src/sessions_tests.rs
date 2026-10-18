@@ -132,8 +132,10 @@ impl Peer {
             // macOS inherits the listener's nonblocking mode; peer I/O must
             // block up to its socket timeout, not fail before the client closes.
             stream.set_nonblocking(false).unwrap();
-            stream.set_read_timeout(Some(deadline.left())).unwrap();
-            stream.set_write_timeout(Some(deadline.left())).unwrap();
+            // Socket timeouts reject zero, even when the deadline has expired.
+            let timeout = deadline.left().max(Duration::from_millis(1));
+            stream.set_read_timeout(Some(timeout)).unwrap();
+            stream.set_write_timeout(Some(timeout)).unwrap();
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
@@ -145,7 +147,8 @@ impl Peer {
             assert!(command.starts_with("c_"));
             if let Ok(()) = sub_tx.send(command.to_owned()) {}
             script(command, &mut stream);
-            stream.set_read_timeout(Some(deadline.left())).unwrap();
+            let timeout = deadline.left().max(Duration::from_millis(1));
+            stream.set_read_timeout(Some(timeout)).unwrap();
             let mut rest = Vec::new();
             match stream.read_to_end(&mut rest) {
                 Ok(_) => assert!(rest.is_empty()),
