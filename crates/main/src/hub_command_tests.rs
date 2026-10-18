@@ -364,12 +364,9 @@ fn the_session_command_starts_with_a_model_and_never_a_prompt() {
         args_of(&command),
         [
             "session",
-            "--id",
-            "s_0123456789abcdef",
-            "--workspace",
-            "/w",
-            "--model",
-            "fake/m"
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--model=fake/m"
         ]
     );
 }
@@ -415,10 +412,8 @@ fn the_session_command_resumes_with_the_recorded_workspace_and_no_model() {
         args_of(&command),
         [
             "session",
-            "--id",
-            "s_0123456789abcdef",
-            "--workspace",
-            "/w",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
             "--resume"
         ]
     );
@@ -555,12 +550,9 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
         args_of(&command),
         [
             "session",
-            "--id",
-            "s_0123456789abcdef",
-            "--workspace",
-            "/w",
-            "--model",
-            "fake/m",
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--model=fake/m",
             "-c",
             "retry.attempts=2",
             "-c",
@@ -577,7 +569,7 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
     );
     assert_eq!(
         args_of(&bare),
-        ["session", "--id", "s_0123456789abcdef", "--workspace", "/w"]
+        ["session", "--id=s_0123456789abcdef", "--workspace=/w"]
     );
 }
 
@@ -749,7 +741,7 @@ fn rewind_runs_with_the_published_environment_and_the_flag() {
     assert_eq!(exit_of(started).message, "recorded");
     let (args, env) = reported(&root);
     assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
-    assert!(args.contains(&"--rewound-from".to_owned()));
+    assert!(args.contains(&"--rewound-from=s0".to_owned()));
     assert_eq!(env, "start /h unset");
 }
 
@@ -799,12 +791,9 @@ fn the_session_command_rewinds_with_the_old_session_and_no_model() {
         args_of(&command),
         [
             "session",
-            "--id",
-            "s_0123456789abcdef",
-            "--workspace",
-            "/w",
-            "--rewound-from",
-            "s_aaaaaaaaaaaaaaaa"
+            "--id=s_0123456789abcdef",
+            "--workspace=/w",
+            "--rewound-from=s_aaaaaaaaaaaaaaaa"
         ]
     );
 }
