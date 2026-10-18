@@ -99,9 +99,10 @@ pub use attention::Attention;
 
 pub use catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, ReadModels, Refresh};
 pub use configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginKind, LoginShow, LoginTarget,
-    ReviewerModels, Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown,
-    SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, KeyEdit, Layer, LoginKind,
+    LoginShow, LoginTarget, NotesFile, NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes,
+    Revoked, RuleRow, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored,
+    SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 
 pub use home::{Launch, LaunchLocation};

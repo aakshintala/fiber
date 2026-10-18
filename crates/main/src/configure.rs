@@ -102,6 +102,15 @@ fn section(listing: config::RulesListing) -> RulesSection {
     }
 }
 
+/// One notes layer's file, text and version for the view.
+fn notes_file(file: config::NotesFile) -> tui::NotesFile {
+    tui::NotesFile {
+        file: file.file,
+        text: file.text,
+        version: file.version,
+    }
+}
+
 /// A layer's name, as `/settings` shows it, and its file when it has one.
 fn layer_of(source: &Source) -> (&'static str, Option<PathBuf>) {
     match source {
@@ -270,6 +279,57 @@ impl tui::Configure for Seam {
 
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError> {
         login::set_reviewer(&self.home, name, id)
+    }
+
+    fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {
+        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let notes = config::reviewer_notes(&self.home, &project).map_err(from_config)?;
+        Ok(tui::ReviewerNotes {
+            global: notes_file(notes.global),
+            project: notes_file(notes.project),
+        })
+    }
+
+    fn save_reviewer_notes(
+        &self,
+        workspace: &Path,
+        global: Option<tui::NotesWrite>,
+        project: Option<tui::NotesWrite>,
+    ) -> Result<tui::NotesSaved, ConfigureError> {
+        let (_, key) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let saved = config::save_reviewer_notes(
+            &self.home,
+            &key,
+            global.map(|write| config::NotesWrite {
+                version: write.version,
+                text: write.text,
+            }),
+            project.map(|write| config::NotesWrite {
+                version: write.version,
+                text: write.text,
+            }),
+        )
+        .map_err(from_config)?;
+        Ok(match saved {
+            config::NotesSaved::Stale => tui::NotesSaved::Stale,
+            config::NotesSaved::Written(files) => tui::NotesSaved::Written(
+                files
+                    .into_iter()
+                    .map(|saved| tui::FileSaved {
+                        file: saved.file,
+                        outcome: match saved.outcome {
+                            config::FileOutcome::Saved => tui::FileOutcome::Saved,
+                            config::FileOutcome::SavedUnsynced(error) => {
+                                tui::FileOutcome::SavedUnsynced(from_config(error))
+                            }
+                            config::FileOutcome::NotSaved(error) => {
+                                tui::FileOutcome::NotSaved(from_config(error))
+                            }
+                        },
+                    })
+                    .collect(),
+            ),
+        })
     }
 
     fn themes(&self, workspace: &Path) -> Vec<String> {
