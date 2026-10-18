@@ -64,9 +64,8 @@ fn hub_session(
     let (stream, hello) =
         doors::hub::connect_target(&home, &target, &mut start, clock).map_err(io::Error::other)?;
     let mut stdout = io::stdout();
-    serde_json::to_writer(&mut stdout, &hello).map_err(io::Error::other)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()?;
+    let hello = serde_json::to_vec(&hello).map_err(io::Error::other)?;
+    support::framing::write_line(&mut stdout, &hello)?;
     relay(Ok(stream), io::stdin(), &mut stdout)
 }
 
@@ -111,7 +110,7 @@ fn relay(
             }
         }
     }
-    stdout.flush()
+    Ok(())
 }
 
 fn copy_stdin(stdin: impl Read, writer: &mut UnixStream) {

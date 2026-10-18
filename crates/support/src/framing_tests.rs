@@ -107,6 +107,10 @@ fn an_interrupted_fill_is_retried() {
         read_line(&mut read, super::MAX_LINE).unwrap(),
         Some(b"a".to_vec())
     );
+}
+
+#[test]
+fn any_other_fill_error_is_returned() {
     let mut read = Failing(io::ErrorKind::Other);
     assert!(read_line(&mut read, super::MAX_LINE).is_err());
 }

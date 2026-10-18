@@ -30,12 +30,7 @@ pub fn read_line<R: BufRead>(reader: &mut R, max: usize) -> io::Result<Option<Ve
             if line.is_empty() {
                 return Ok(None);
             }
-            while line
-                .last()
-                .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-            {
-                line.pop();
-            }
+            strip_trailing_cr(&mut line);
             return Ok(Some(line));
         }
         if line.len() + chunk.len() > max {
@@ -48,14 +43,15 @@ pub fn read_line<R: BufRead>(reader: &mut R, max: usize) -> io::Result<Option<Ve
         line.extend_from_slice(&chunk);
         reader.consume(take + if found { 1 } else { 0 });
         if found {
-            while line
-                .last()
-                .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-            {
-                line.pop();
-            }
+            strip_trailing_cr(&mut line);
             return Ok(Some(line));
         }
+    }
+}
+
+fn strip_trailing_cr(line: &mut Vec<u8>) {
+    while line.last().is_some_and(|byte| *byte == b'\r') {
+        line.pop();
     }
 }
 
