@@ -12,6 +12,7 @@ use contract::shapes::{ContentPart, Origin};
 use serde_json::{Value, json};
 
 use super::commands::{Completions, Rows};
+use super::overlay::Overlay;
 use super::{App, Effect, Link, mint};
 use crate::keys::{Edit, Key};
 use crate::slash::{SHOWN, window_start};
@@ -512,6 +513,14 @@ impl App {
         if !self.screen.pages().holding() {
             self.screen.settle(height);
         }
+        // The pass folds into the second `Pages`, trimmed to the bottom
+        // window while nothing holds it.
+        if let Overlay::Folding { fold, .. } = &mut self.overlay
+            && !fold.holding()
+        {
+            let total = fold.index().total();
+            fold.trim(total.saturating_sub(height), height);
+        }
         // Lines folded into the attached screen while a transcript is
         // swapped in settle it too, so its top never sits past the
         // bottom when the view closes.
@@ -534,15 +543,23 @@ impl App {
     }
 
     /// Holds the open page's recount while a batch of hub lines folds:
-    /// the batch's lines mark it, and `end_batch` counts it once.
+    /// the batch's lines mark it, and `end_batch` counts it once. A
+    /// pass in flight holds its second `Pages` the same way.
     pub(crate) fn begin_batch(&mut self) {
         self.screen.pages_mut().hold();
+        if let Overlay::Folding { fold, .. } = &mut self.overlay {
+            fold.hold();
+        }
     }
 
     /// Counts the batch's open page once and settles: the pages the
-    /// batch changed are exact before the frame pages anything in.
+    /// batch changed are exact before the frame pages anything in. A
+    /// pass in flight flushes its second `Pages` the same way.
     pub(crate) fn end_batch(&mut self) {
         self.screen.pages_mut().flush();
+        if let Overlay::Folding { fold, .. } = &mut self.overlay {
+            fold.flush();
+        }
         self.settle();
     }
 

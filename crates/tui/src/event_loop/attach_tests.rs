@@ -2566,7 +2566,7 @@ fn the_raise_is_written_after_the_frame_draws() {
         release,
     };
     let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let mut lp = super::super::Loop {
+    let lp = super::super::Loop {
         app,
         parser: crate::keys::Parser::default(),
         screen,
@@ -2604,17 +2604,41 @@ fn the_raise_is_written_after_the_frame_draws() {
             Err(_) => None,
         }
     };
-    let (tx, rx) = mpsc::channel();
-    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    // The first park: the writer is slow from the start, so the first
+    // frame parks in its flush; the launch open's lines still arrive.
+    block.store(true, Ordering::SeqCst);
+    let (tx1, rx1) = mpsc::channel();
+    let mut connect = Some((ours, hello()));
+    let first = std::thread::Builder::new()
+        .name("first-frame".to_owned())
+        .spawn(move || {
+            let (ours, hello) = connect.take().unwrap_or_else(|| panic!("once"));
+            let mut lp = lp;
+            let out = lp.step(Input::Connected(ours, hello), &rx1);
+            (lp, out)
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
     let wait = Deadline::after(DEADLINE);
-    let first = wait.recv_or_fail(&events, "the first frame");
-    assert!(first.starts_with("frame\n"), "{first:?}");
-    // The launch open went out whole: feed, recent, the `summary`
-    // subscribe and commands, no `full`.
+    let frame = wait.recv_or_fail(&events, "the first frame");
+    assert!(frame.starts_with("frame\n"), "{frame:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked first flush"),
+        "frame-enter"
+    );
+    // The launch open went out whole while the writer was slow: feed,
+    // recent, the `summary` subscribe and commands, no `full`.
     let mut seen = Vec::new();
     for _ in 0..4 {
         seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
     }
+    // One release, then disarmed: the first frame finishes.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    let (mut lp, out) = first.join().unwrap_or_else(|_| panic!("the worker"));
+    assert_eq!(out, None);
+    drop(tx1);
     let lines: Vec<serde_json::Value> = seen
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
@@ -2650,6 +2674,7 @@ fn the_raise_is_written_after_the_frame_draws() {
             .into_iter()
             .collect(),
     });
+    let (tx, rx) = mpsc::channel();
     let worker = std::thread::Builder::new()
         .name("raise-frame".to_owned())
         .spawn(move || lp.step(Input::Hub(ack), &rx))

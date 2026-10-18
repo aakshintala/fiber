@@ -399,7 +399,25 @@ impl App {
             home.subs.sent(id.clone(), session.clone(), Level::Full);
             home.subs.raise(id);
         }
+        let busy = matches!(&self.phase, Phase::Attached { busy: true, .. });
+        self.overlay = crate::app::overlay::Overlay::Shown {
+            session,
+            busy: Some(busy),
+        };
+        self.attached_screen_mut().set_frozen(true);
         Some(line)
+    }
+
+    /// Whether `id` answers the open's raise for `session`: the ack
+    /// `pass_line` reads while the overlay is shown.
+    pub(in crate::app) fn raise_ack(&self, session: &SessionId, id: &str) -> bool {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.opening.as_ref())
+            .is_some_and(|opening| {
+                matches!(opening, Opening::Raised { ack, .. } if ack == id)
+                    && opening.session() == session
+            })
     }
 
     /// Whether `session` is opening: its lines fold into its row and are

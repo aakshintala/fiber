@@ -1104,7 +1104,9 @@ impl Pages {
 
     /// The call id of the call `id` names, anywhere resident.
     fn call_action(&self, id: usize) -> Option<String> {
-        self.calls().find(|(at, _)| *at == id).map(|(_, action)| action)
+        self.calls()
+            .find(|(at, _)| *at == id)
+            .map(|(_, action)| action)
     }
 
     /// The id the fold gives the call `action` names, if it folds it.
@@ -1119,7 +1121,10 @@ impl Pages {
         self.turns().flat_map(|turn| {
             turn.groups().flat_map(|group| {
                 group.sections.iter().flat_map(|section| {
-                    section.calls.iter().map(|call| (call.id, call.action.clone()))
+                    section
+                        .calls
+                        .iter()
+                        .map(|call| (call.id, call.action.clone()))
                 })
             })
         })

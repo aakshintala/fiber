@@ -22,6 +22,8 @@ pub(crate) struct Screen {
     height: u16,
     pages: Pages,
     scroll: Scroll,
+    frozen: bool,
+    pending_width: Option<u16>,
 }
 
 impl Screen {
@@ -32,7 +34,23 @@ impl Screen {
             height: 24,
             pages: Pages::new(80),
             scroll: Scroll::default(),
+            frozen: false,
+            pending_width: None,
         }
+    }
+
+    /// Freezes the scroll position while an open holds the preview: the
+    /// scroll keys wait, and clearing applies one stored resize.
+    pub(super) fn set_frozen(&mut self, frozen: bool) {
+        self.frozen = frozen;
+        if !frozen && let Some(width) = self.pending_width.take() {
+            self.pages.set_width(width);
+        }
+    }
+
+    /// Whether the scroll position is frozen.
+    pub(super) fn frozen(&self) -> bool {
+        self.frozen
     }
 
     /// Sets the size, each side at least 1. The pages wrap at what
@@ -43,9 +61,14 @@ impl Screen {
     }
 
     /// Wraps the pages at `width` columns; a new width re-counts every
-    /// page. Returns whether the width changed.
+    /// page. While frozen the width is stored for the unfreeze and
+    /// nothing moves. Returns whether the width changed.
     pub(super) fn wrap_at(&mut self, width: u16) -> bool {
         let width = width.max(1);
+        if self.frozen {
+            self.pending_width = Some(width);
+            return false;
+        }
         let changed = width != self.pages.wrap_width();
         self.pages.set_width(width);
         changed
@@ -92,7 +115,11 @@ impl Screen {
     }
 
     /// Scrolls so `row` is the top row; the next settle clamps it.
+    /// While frozen the top does not move.
     pub(super) fn jump(&mut self, row: usize) {
+        if self.frozen {
+            return;
+        }
         self.scroll.top = Some(row);
     }
 
@@ -123,14 +150,22 @@ impl Screen {
     }
 
     /// PageUp and PageDown move by `height` less one, at least one row.
+    /// While frozen the top does not move.
     pub(super) fn page(&mut self, up: bool, height: usize) {
+        if self.frozen {
+            return;
+        }
         self.scroll_rows(up, height.saturating_sub(1).max(1), height);
     }
 
     /// Scrolls by `step` rows: up from the top row, or from the bottom
     /// while following, saturating at the top; down follows again on
     /// reaching the bottom (`docs/tui.md`, "History and paging").
+    /// While frozen the top does not move.
     pub(super) fn scroll_rows(&mut self, up: bool, step: usize, height: usize) {
+        if self.frozen {
+            return;
+        }
         let bottom = self.bottom_top(height);
         if up {
             self.scroll.up(step, bottom);
@@ -143,8 +178,9 @@ impl Screen {
     /// when it fits and following again at the bottom. With no
     /// conversation rows there is nothing to show, and the scroll stays as
     /// it was.
+    /// While frozen the top does not move.
     pub(super) fn reveal(&mut self, row: usize, height: usize) {
-        if height == 0 {
+        if height == 0 || self.frozen {
             return;
         }
         let Some((_, rows, _)) = self

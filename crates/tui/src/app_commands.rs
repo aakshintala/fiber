@@ -555,6 +555,7 @@ impl App {
         // wishes are marked detached, so their lowering waits behind a
         // `full` still in flight without a running check.
         self.leave_item();
+        self.end_overlay();
         if matches!(self.phase, Phase::Pending { .. }) {
             return;
         }

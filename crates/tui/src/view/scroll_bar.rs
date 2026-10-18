@@ -57,7 +57,7 @@ pub(crate) fn thumb(top: usize, total: usize, track: u16) -> Option<Range<u16>> 
 /// empty or the conversation fits, else the thumb's cells alone, so the
 /// cells off the thumb stay as they were.
 pub(crate) fn draw(app: &App, bar: Rect, buf: &mut Buffer) {
-    if bar.is_empty() {
+    if bar.is_empty() || !app.counts_exact() {
         return;
     }
     let total = app.scroll().1;
