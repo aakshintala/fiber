@@ -337,6 +337,7 @@ pub(crate) fn run_new(
         idle,
         warm,
         caps,
+        shell_read_only,
         home,
         project,
         workspace,
@@ -413,6 +414,7 @@ pub(crate) fn run_new(
         skills,
         extensions.tools(),
         timing.clone(),
+        shell_read_only,
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
