@@ -1655,6 +1655,10 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     use std::io::Write as _;
 
     let dir = fakes::TempDir::new("fiber-schedule-hold-release");
+    // The watchdog kills the gated child and its group when the test
+    // fails before completion: dropping the hold cannot release the gate
+    // FIFO, and the frozen fake clock cannot expire the exec.
+    let watchdog = fakes::Watchdog::matching(&dir.path().display().to_string());
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let (log, done) = log_pauses();
     let _guard = SettleGuard;
@@ -1729,6 +1733,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         fakes::group_empties(started[0], WAIT_FOR_TIMER),
         "the released exec left its group behind"
     );
+    watchdog.stand_down(WAIT_FOR_TIMER);
 }
 
 /// A non-timer call that finishes records no `TimerDone`. Without the
