@@ -29,10 +29,13 @@ impl Loop {
         }
         let settled = (|| {
             loop {
-                for delivery in std::mem::take(&mut self.deferred) {
-                    self.settle_normal_one(delivery)?;
-                }
-                for delivery in self.inbox.try_iter() {
+                let deliveries = std::mem::take(&mut self.deferred)
+                    .into_iter()
+                    .chain(self.inbox.try_iter());
+                for delivery in deliveries {
+                    if let Delivery::Job(notice) = &delivery {
+                        running.retain(|id| id != &notice.completed.job_id);
+                    }
                     self.settle_normal_one(delivery)?;
                 }
                 running.retain(|id| self.handoff.carry.owned(&id.0));

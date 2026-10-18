@@ -38,6 +38,7 @@ const IDLE: Duration = Duration::from_secs(60);
 struct Listed {
     ids: Mutex<Vec<JobId>>,
     stops: Mutex<Sender<JobId>>,
+    snapshot_pause: Mutex<Option<(Sender<()>, Receiver<()>)>>,
 }
 
 impl Listed {
@@ -46,6 +47,7 @@ impl Listed {
         let listed = Arc::new(Self {
             ids: Mutex::new(ids.iter().map(|id| JobId((*id).into())).collect()),
             stops: Mutex::new(stops),
+            snapshot_pause: Mutex::new(None),
         });
         (listed, stopped)
     }
@@ -144,7 +146,12 @@ impl Jobs for Listed {
     fn foreground(&self, _: Foreground) {}
 
     fn running(&self) -> Vec<JobId> {
-        self.ids.lock().unwrap().clone()
+        let ids = self.ids.lock().unwrap().clone();
+        if let Some((reached, release)) = self.snapshot_pause.lock().unwrap().take() {
+            reached.send(()).unwrap();
+            let _released = release.recv();
+        }
+        ids
     }
 
     fn deliver_to(&self, _: Sender<Delivery>) {}
@@ -401,6 +408,78 @@ fn a_normal_end_stops_only_extension_jobs_and_waits_for_their_ends() {
             .iter()
             .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
     );
+}
+
+#[test]
+fn a_normal_end_does_not_wait_again_for_an_end_drained_after_its_running_snapshot() {
+    for remaining in [false, true] {
+        let ids = if remaining {
+            vec!["j_finished", "j_running"]
+        } else {
+            vec!["j_finished"]
+        };
+        let (jobs, stops) = Listed::new(&ids);
+        let mut world = World::new(jobs.clone());
+        for id in &ids {
+            world
+                .looped
+                .write(
+                    &contract::events::Event::JobStarted(contract::events::JobStarted {
+                        job_id: JobId((*id).into()),
+                        tool: None,
+                        extension: Some("test/scan".into()),
+                        description: "scan".into(),
+                        output_path: "/child/events.jsonl".into(),
+                    }),
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+        let (reached, snapshot) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        *jobs.snapshot_pause.lock().unwrap() = Some((reached, resume));
+        let (done, finished) = mpsc::channel();
+        let inbox = world.inbox.clone();
+        let held = world.held;
+        thread::spawn(move || {
+            let _sent = done.send(world.looped.settled(Ok(())));
+        });
+        Deadline::after(DEADLINE).recv_or_fail(&snapshot, "the running snapshot was read");
+        let Delivery::Job(mut end) = notice("j_finished") else {
+            unreachable!()
+        };
+        end.completed.status = Outcome::Completed;
+        jobs.send_and_forget("j_finished", &inbox, end);
+        release.send(()).unwrap();
+        if remaining {
+            assert_eq!(stopped(&stops, &Deadline::after(DEADLINE)), "j_running");
+            jobs.end("j_running", &inbox);
+        }
+        ran(&finished);
+        assert!(stops.try_recv().is_err(), "no ended job is stopped");
+        let expected = if remaining {
+            vec![
+                "session_started",
+                "job_started",
+                "job_started",
+                "job_completed",
+                "job_completed",
+            ]
+        } else {
+            vec!["session_started", "job_started", "job_completed"]
+        };
+        assert_eq!(held.kinds(), expected);
+        let lines = held.durable();
+        let end = &lines[ids.len() + 1];
+        assert_eq!(end.payload["job_id"], "j_finished");
+        assert_eq!(end.payload["status"], "completed");
+        assert!(end.turn_id.is_none() && end.action_id.is_none());
+        if remaining {
+            assert_eq!(lines.last().unwrap().payload["job_id"], "j_running");
+            assert_eq!(lines.last().unwrap().payload["status"], "cancelled");
+        }
+    }
 }
 
 #[test]

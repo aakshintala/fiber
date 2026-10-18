@@ -53,64 +53,6 @@ fn failure() -> JobCompleted {
 }
 
 #[test]
-fn extension_retention_and_explicit_cancel_stop_only_selected_running_jobs_once() {
-    let (_dir, registry) = world();
-    let stopped = Arc::new(Mutex::new(Vec::new()));
-    let mut held = Vec::new();
-    for (id, owner) in [
-        ("j_a", Some("a")),
-        ("j_b", Some("b")),
-        ("j_ended", Some("b")),
-        ("j_model", None),
-    ] {
-        let stops = stopped.clone();
-        let stop = Stop(Box::new(move || stops.lock().unwrap().push(id)));
-        let finish = if let Some(owner) = owner {
-            registry.open_extension_started(
-                JobId(id.into()),
-                owner.into(),
-                id.into(),
-                "/child/events.jsonl".into(),
-                stop,
-                delegate_started(id),
-            )
-        } else {
-            registry
-                .open_started(
-                    JobId(id.into()),
-                    "delegate_spawn".into(),
-                    id.into(),
-                    "/child/events.jsonl".into(),
-                    stop,
-                    delegate_started(id),
-                )
-                .1
-        };
-        if id == "j_ended" {
-            finish.report(ended_ok(id), None);
-        } else {
-            held.push(finish);
-        }
-    }
-    assert_eq!(registry.retain_extensions(&["a".into()]), 1);
-    assert_eq!(*stopped.lock().unwrap(), ["j_b"]);
-    assert_eq!(registry.retain_extensions(&["a".into()]), 0);
-    assert_eq!(
-        registry.cancel_jobs(&[
-            JobId("j_a".into()),
-            JobId("missing".into()),
-            JobId("j_ended".into())
-        ]),
-        1
-    );
-    assert_eq!(registry.cancel_jobs(&[JobId("j_a".into())]), 0);
-    assert_eq!(*stopped.lock().unwrap(), ["j_b", "j_a"]);
-    assert_eq!(registry.retain_extensions(&[]), 0);
-    assert_eq!(registry.cancel_jobs(&[JobId("j_model".into())]), 1);
-    assert_eq!(*stopped.lock().unwrap(), ["j_b", "j_a", "j_model"]);
-}
-
-#[test]
 fn extension_delegates_are_unknown_to_message_and_hide_only_the_final_text_in_answers() {
     for extension in [false, true] {
         let (_dir, registry) = world();

@@ -859,7 +859,8 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
     world.send(prompt("go"));
     let origin = world.clock.now();
     let rx = world.spawn();
-    let _suspended_on: RequestId = id_rx.recv().expect("the approval was raised");
+    let _suspended_on: RequestId =
+        Deadline::after(DEADLINE).recv_or_fail(&id_rx, "the approval was raised");
     world.clock.advance_when_parked(
         Some(origin + Duration::from_secs(60)),
         None,
@@ -930,11 +931,10 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
     if send_start {
         world.send(extension_start(DELEGATE));
     }
+    let mut watcher = world.log.watch();
     let answered = thread::spawn({
-        let log = Arc::clone(&world.log);
         let inbox = world.inbox.clone();
         move || {
-            let mut watcher = log.watch();
             for _ in 0..2 {
                 let (next, lines) = read_until(watcher, "a permission_requested line", |line| {
                     line.kind == "permission_requested"
