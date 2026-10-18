@@ -2297,3 +2297,104 @@ fn only_the_cross_turn_rows_change_at_landing() {
         .collect();
     assert!(bad.is_empty(), "only allowed rows change, got: {bad:?}");
 }
+
+/// Ending the tail read marks it ended: a fresh read is open, and
+/// `end` closes it for every path that ends one (failed, abandoned,
+/// or lost).
+#[test]
+fn ending_the_tail_read_marks_it_ended() {
+    use crate::app::overlay::Tail;
+    let tail = Tail::new();
+    assert!(!tail.ended(), "a fresh read is open");
+    let mut tail = tail;
+    tail.end();
+    assert!(tail.ended(), "ending the read marks it");
+}
+
+/// A failed load lets the held landing go only without a pass: with
+/// one the landing holds until its pages load.
+#[test]
+fn a_failed_load_clears_the_held_anchor_only_without_a_pass() {
+    use contract::Seq;
+    let mut app = app();
+    let mut seq = 0u64;
+    for line in turn(&mut seq, "a_m", "the held reply") {
+        app.on_line(line);
+    }
+    let range = Seq(0)..=Seq(seq.saturating_sub(1));
+    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.load_failed(&range, "boom");
+    assert!(
+        app.screen.pages_mut().anchored_row().is_none(),
+        "with no pass the landing lets go"
+    );
+    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.passes.push((id(SESSION), Pass::Until(Seq(1_000))));
+    app.load_failed(&range, "boom");
+    assert!(
+        app.screen.pages_mut().anchored_row().is_some(),
+        "with a pass the landing holds"
+    );
+}
+
+/// A fold starts only on the shown session's raise ack: a wrong ack,
+/// or another session, leaves the preview where it is.
+#[test]
+fn a_fold_starts_only_on_the_shown_sessions_raise_ack() {
+    let mut app = app();
+    app.overlay = Overlay::Shown {
+        session: id(SESSION),
+        busy: None,
+        held: false,
+    };
+    app.begin_fold(&id(SESSION), "a-wrong-ack");
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "a wrong ack starts no fold"
+    );
+    app.begin_fold(&id("s_bbbbbbbbbbbbbbbb"), "whatever");
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "another session starts no fold"
+    );
+}
+
+/// A reopening for another session keeps the running fold: only its
+/// own session restarts the second `Pages`.
+#[test]
+fn a_reopening_for_another_session_keeps_the_running_fold() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let fold_lines = turn(&mut seq, "a_f", "the fold reply");
+    let mut app = folding(&preview, &fold_lines, 100);
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("a fold runs");
+    };
+    let held = fold.index().total();
+    app.on_line(hub("stream_reopened", "s_bbbbbbbbbbbbbbbb", Some(50)));
+    let Overlay::Folding { session, fold, .. } = &app.overlay else {
+        panic!("the other session's reopen keeps the fold");
+    };
+    assert_eq!(session, &id(SESSION));
+    assert_eq!(fold.index().total(), held, "the fold keeps its lines");
+}
+
+/// A close for another session keeps the running fold: only its own
+/// session keeps the preview or lands the pass's lines.
+#[test]
+fn a_close_for_another_session_keeps_the_running_fold() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let fold_lines = turn(&mut seq, "a_f", "the fold reply");
+    let mut app = folding(&preview, &fold_lines, 100);
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("a fold runs");
+    };
+    let held = fold.index().total();
+    app.on_line(hub("stream_closed", "s_bbbbbbbbbbbbbbbb", None));
+    let Overlay::Folding { session, fold, .. } = &app.overlay else {
+        panic!("the other session's close keeps the fold");
+    };
+    assert_eq!(session, &id(SESSION));
+    assert_eq!(fold.index().total(), held, "the fold keeps its lines");
+}
