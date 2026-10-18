@@ -3666,6 +3666,147 @@ fn quota_without_a_reader_answers_empty() {
     opened.close();
 }
 
+#[test]
+fn credentials_answers_without_waiting_for_the_inbox() {
+    let opened = Opened::open(vec![]);
+    let rows = serde_json::json!({"provider":"fake", "credentials":["default","home","work"], "credential":"home"});
+    let labels: contract::events::CredentialLabels = serde_json::from_value(rows.clone()).unwrap();
+    opened.session.credentials(
+        Arc::new(move || Some(labels.clone())),
+        Arc::new(|| "fake".into()),
+    );
+    let socket = opened.socket.clone();
+    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        let client = Client::connect(&socket).unwrap();
+        send(&client, r#"{"id":"early","command":"credentials"}"#);
+        assert_eq!(rejection(&response(&client, "early")), ("not_subscribed", NOT_SUBSCRIBED));
+        subscribe(&client, "sub", "full");
+        send(&client, r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#);
+        send(&client, r#"{"id":"labels","command":"credentials"}"#);
+        let answer = response(&client, "labels");
+        assert_eq!(kind(&answer), "command_accepted");
+        assert_eq!(answer["payload"]["result"], rows);
+        send(&client, r#"{"id":"bad","command":"credentials","args":{"future":1}}"#);
+        assert_eq!(rejection(&response(&client, "bad")), ("invalid_arguments", UNFIT));
+        Ok(())
+    }).unwrap();
+    opened.close();
+}
+
+#[test]
+fn credentials_without_a_reader_is_unknown() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(
+                &client,
+                r#"{"id":"labels","command":"credentials","args":{}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "labels")),
+                (
+                    "unknown_command",
+                    "`credentials` is not built in this Fiber yet."
+                )
+            );
+            send(
+                &client,
+                r#"{"id":"switch","command":"credential","args":{"label":"work"}}"#,
+            );
+            let Delivery::Credential(_, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            ack.0(Ok(None));
+            let answer = response(&client, "switch");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert!(answer["payload"].get("result").is_none());
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn credentials_after_its_session_is_gone_is_closing() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .credentials(Arc::new(|| None), Arc::new(|| "fake".into()));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(&client, r#"{"id":"labels","command":"credentials"}"#);
+            assert_eq!(rejection(&response(&client, "labels")), ("closing", ENDED));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn a_credential_acceptance_names_the_provider_read_when_the_loop_answers() {
+    let opened = Opened::open(vec![]);
+    let provider = Arc::new(Mutex::new(String::from("fake")));
+    let read = Arc::clone(&provider);
+    opened.session.credentials(
+        Arc::new(|| None),
+        Arc::new(move || read.lock().unwrap().clone()),
+    );
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(
+                &client,
+                r#"{"id":"switch","command":"credential","args":{"label":"work"}}"#,
+            );
+            let Delivery::Credential(args, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            assert_eq!(args.label, "work");
+            *provider.lock().unwrap() = "other".into();
+            ack.0(Ok(None));
+            let answer = response(&client, "switch");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"provider":"other"})
+            );
+            send(
+                &client,
+                r#"{"id":"reject","command":"credential","args":{"label":"nope"}}"#,
+            );
+            let Delivery::Credential(_, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "rejected credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            ack.0(Err(Rejection {
+                code: ErrorCode::CredentialMissing,
+                message: "no such label".into(),
+            }));
+            let answer = response(&client, "reject");
+            assert_eq!(rejection(&answer), ("credential_missing", "no such label"));
+            assert!(answer["payload"].get("result").is_none());
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
 struct FakeDoor {
     calls: Mutex<Vec<(String, String)>>,
 }
