@@ -809,6 +809,31 @@ fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
 }
 
 #[test]
+fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    app.on_key(crate::keys::Key::PageDown, std::time::Instant::now());
+    let top = app.attached_screen().top();
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+#[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);
     let lines: Vec<Value> = app
