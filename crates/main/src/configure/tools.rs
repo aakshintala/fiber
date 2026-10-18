@@ -10,13 +10,11 @@ use tui::{ConfigureError, SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 
 use super::{Seam, from_config, from_failure};
 
-/// The `tools` lists' dotted prefix for `group`.
-fn prefix(group: &ToolGroup) -> String {
+/// `group` as the owner `config` keys its `tools` lists under.
+fn owner(group: &ToolGroup) -> config::ToolOwner<'_> {
     match group {
-        ToolGroup::Mcp(server) => format!("mcp.servers.\"{server}\".tools"),
-        ToolGroup::Extension(name) => {
-            format!("extensions.\"{}\".tools", config::full_name(name))
-        }
+        ToolGroup::Mcp(server) => config::ToolOwner::Mcp(server),
+        ToolGroup::Extension(name) => config::ToolOwner::Extension(name),
     }
 }
 
@@ -65,7 +63,7 @@ impl Seam {
         groups
             .into_iter()
             .map(|group| {
-                let prefix = prefix(&group);
+                let prefix = owner(&group).key();
                 Ok(ToolSwitches {
                     group,
                     project: lists(
@@ -102,10 +100,7 @@ impl Seam {
     ) -> Result<(), ConfigureError> {
         let config = self.load(workspace)?;
         let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
-        let owner = match group {
-            ToolGroup::Mcp(server) => config::ToolOwner::Mcp(server),
-            ToolGroup::Extension(name) => config::ToolOwner::Extension(name),
-        };
+        let owner = owner(group);
         let layer = match scope {
             SwitchScope::Project => config::SwitchLayer::Project,
             SwitchScope::Everywhere => config::SwitchLayer::Global,
