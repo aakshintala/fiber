@@ -430,6 +430,11 @@ impl Paging<'_> {
     /// searches never share one. Returns how long the scan took and how
     /// many matches it kept (`docs/tui.md`, "History and paging":
     /// search of the whole log).
+    // Mutants `<=` to `>` in the first-window bound and `==` to `!=` in the
+    // empty-log check change only the first window: an emptied window still
+    // settles the search through later `from_seq` fetches, so no consumer
+    // sees them.
+    #[cfg_attr(false, mutants::skip)]
     fn search(&mut self, query: &str) -> Result<(Duration, usize), String> {
         if self.app.find_bar().is_some() {
             let now = self.clock.now();
@@ -466,15 +471,32 @@ impl Paging<'_> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             let args = command.get("args");
-            let from = args
+            let from_opt = args
                 .and_then(|args| args.get("from_seq"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
+                .and_then(serde_json::Value::as_u64);
             let to = args
                 .and_then(|args| args.get("to_seq"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(u64::MAX);
-            let held = self.range_lines(from, to)?;
+            // Without `from_seq` the doors answer the last lines up to
+            // `to_seq`, or up to the latest, at most 256; on an empty
+            // log, with none.
+            let held = match from_opt {
+                Some(from) => self.range_lines(from, to)?,
+                None => {
+                    let end = self.log.partition_point(|(seq, _)| seq.0 <= to);
+                    // An empty log holds no window; otherwise the window
+                    // starts at the first of the last 256 lines at or
+                    // below `to`.
+                    if end == 0 {
+                        Vec::new()
+                    } else if let Some((first, _)) = self.log.get(end.saturating_sub(256)) {
+                        self.range_lines(first.0, to)?
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
             let answer = contract::Envelope {
                 kind: "command_accepted".to_owned(),
                 session_id: self

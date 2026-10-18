@@ -539,3 +539,178 @@ fn a_frame_names_the_range_the_log_does_not_hold() {
         "the missing range errors: {error}"
     );
 }
+
+/// The paging fake answers a `history` with no `from_seq` as the doors
+/// do: the last lines up to `to_seq`, or up to the latest, at most 256.
+/// Exercised through `Paging::search`, which pages the fake's window:
+/// a marker in the last window and one before it are each found once.
+#[test]
+fn the_paging_fake_answers_history_without_from_seq() {
+    // Fifty turns, six lines each: 300 lines, so the first fetch holds
+    // the last 256 and older lines page in behind it.
+    let mut lines: Vec<(contract::Seq, String)> = Vec::new();
+    for turn in 0u64..50 {
+        let base = turn * 6;
+        let message = format!("a_m{turn}");
+        let marker = format!("zzquokka{turn}zz");
+        lines.push((
+            contract::Seq(base),
+            lined(base, "turn_started", None, json!({"input": []})),
+        ));
+        lines.push((
+            contract::Seq(base + 1),
+            lined(
+                base + 1,
+                "assistant_message_started",
+                Some(&message),
+                json!({}),
+            ),
+        ));
+        lines.push((
+            contract::Seq(base + 2),
+            lined(
+                base + 2,
+                "text_completed",
+                Some(&message),
+                json!({"text": marker}),
+            ),
+        ));
+        lines.push((
+            contract::Seq(base + 3),
+            lined(
+                base + 3,
+                "assistant_message_completed",
+                Some(&message),
+                json!({"outcome": "completed"}),
+            ),
+        ));
+        lines.push((
+            contract::Seq(base + 4),
+            lined(
+                base + 4,
+                "turn_completed",
+                None,
+                json!({"outcome": "completed"}),
+            ),
+        ));
+        lines.push((
+            contract::Seq(base + 5),
+            numbered(base + 5, "usage_recorded"),
+        ));
+    }
+    let app = silent_app(&lines);
+    assert!(app.pages().part(0).is_none(), "the first page drops");
+    let clock = fakes::clock::FakeClock::new();
+    let log: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    let mut paging = super::Paging {
+        app,
+        log,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    // The last turn's marker sits in the first window: found exactly
+    // once through the fake's absent-`from_seq` answer. The first
+    // turn's marker pages in behind it through a `to_seq` fetch, so
+    // the jig connects first, as the smoke run does. A fresh paging
+    // per search keeps the settled state of one out of the other.
+    paging
+        .app
+        .on_line(crate::link::Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }));
+    let (_, found) = paging
+        .search("zzquokka49zz")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(found, 1, "the last window's marker");
+    let app = silent_app(&lines);
+    assert!(app.pages().part(0).is_none(), "the first page drops");
+    let clock = fakes::clock::FakeClock::new();
+    let log: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    let mut paging = super::Paging {
+        app,
+        log,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    paging
+        .app
+        .on_line(crate::link::Line::Hub(contract::HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: serde_json::Map::new(),
+        }));
+    let (_, found) = paging
+        .search("zzquokka0zz")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(found, 1, "the marker before the first window");
+}
+
+/// A search over a small log answers its first window from the whole
+/// log: with no `from_seq` the doors hold the last lines up to `to`,
+/// so every match in a settled scan is found.
+#[test]
+fn a_search_answers_its_first_window_from_the_whole_log() {
+    let lines: Vec<(contract::Seq, String)> = vec![
+        (
+            contract::Seq(0),
+            lined(0, "turn_started", None, json!({"input": []})),
+        ),
+        (
+            contract::Seq(1),
+            lined(1, "assistant_message_started", Some("a_m"), json!({})),
+        ),
+        (
+            contract::Seq(2),
+            lined(
+                2,
+                "text_completed",
+                Some("a_m"),
+                json!({"text": "this turn uses the shell"}),
+            ),
+        ),
+        (
+            contract::Seq(3),
+            lined(
+                3,
+                "assistant_message_completed",
+                Some("a_m"),
+                json!({"outcome": "completed"}),
+            ),
+        ),
+        (
+            contract::Seq(4),
+            lined(4, "turn_completed", None, json!({"outcome": "completed"})),
+        ),
+    ];
+    let app = silent_app(&lines);
+    let clock = fakes::clock::FakeClock::new();
+    let log: Vec<(contract::Seq, &str)> = lines
+        .iter()
+        .map(|(seq, line)| (*seq, line.as_str()))
+        .collect();
+    let mut paging = super::Paging {
+        app,
+        log,
+        area: ratatui::layout::Rect::new(0, 0, 60, 12),
+        clock,
+        most: 0,
+    };
+    let (_, matches) = paging.search("shell").expect("a small log settles");
+    assert_eq!(matches, 1, "the first window holds the whole log");
+    let (_, absent) = paging
+        .search("qqq-no-such-match")
+        .expect("a small log settles");
+    assert_eq!(absent, 0, "an absent query matches nothing");
+}

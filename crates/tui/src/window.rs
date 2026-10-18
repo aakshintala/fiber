@@ -18,7 +18,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{Entry, Fold, Row, Turn};
+use crate::turn::{Entry, Fold, Row, Turn, target_id};
 
 mod images;
 mod live;
@@ -281,6 +281,17 @@ pub(crate) struct Pages {
     table: Vec<Option<bool>>,
     /// Focus stops by page, with row offsets within each page.
     focus: Vec<FocusItems>,
+    /// Where each page's pieces start, by page: each row offset at
+    /// which a piece drawn from another line's `seq` begins, with that
+    /// `seq`. A row with no source, an edge or a gap, belongs to the
+    /// piece above, and the first piece starts at the page's first row.
+    /// Counting sets it with the rows, so it keeps their width.
+    row_seqs: Vec<Vec<(usize, Seq)>>,
+    /// A held landing's top, its `seq` and offset as [`Pages::seq_row`]
+    /// takes them, kept while a dropped page waits to be counted at the
+    /// width: its rows and pieces keep the old width until it loads, so
+    /// each load finds the top again.
+    anchor: Option<(Seq, usize)>,
     /// What the person opened or closed since, by target.
     overrides: BTreeMap<Target, bool>,
     /// Dropped pages whose row counts wait for a reload.
@@ -327,6 +338,8 @@ impl Pages {
             shell_index: HashMap::new(),
             table: vec![None],
             focus: vec![Vec::new()],
+            row_seqs: Vec::new(),
+            anchor: None,
             overrides: BTreeMap::new(),
             stale: BTreeSet::new(),
             failed: BTreeSet::new(),
@@ -1017,6 +1030,204 @@ impl Pages {
         self.count(at);
     }
 
+    /// An empty conversation at this one's wrap width, zone, ledger
+    /// default and image sizing; nothing else: no overrides, shells or
+    /// summaries, and the open page's recount not held.
+    pub(crate) fn fresh(&self) -> Pages {
+        let mut fresh = Pages::new(self.width);
+        fresh.fold.ledgers = self.fold.ledgers;
+        fresh.open.fold.ledgers = self.fold.ledgers;
+        fresh.zone = self.zone.clone();
+        fresh.images.sizing = self.images.sizing;
+        fresh
+    }
+
+    /// What `target` names on the fold, by the identity that survives a
+    /// refold: calls key on the call id, groups and thoughts on the
+    /// action that made them, copy targets on their reply's ordinal
+    /// with the block kept, images on their path, and `Login` as is. A
+    /// target the fold lacks is dropped: notes and orphaned-job lines
+    /// carry no identity the fold can match, so they never carry.
+    pub(crate) fn same_target(&self, target: Target, fold: &Pages) -> Option<Target> {
+        match target {
+            Target::Call(id) => self
+                .call_action(id)
+                .and_then(|action| fold.find_call(&action))
+                .map(Target::Call),
+            Target::CallView(id) => self
+                .call_action(id)
+                .and_then(|action| fold.find_call(&action))
+                .map(Target::CallView),
+            Target::Group(id) => self
+                .group_key(id)
+                .and_then(|key| fold.find_group(&key))
+                .map(Target::Group),
+            Target::Thought(id) => self
+                .thought_action(id)
+                .and_then(|action| fold.find_thought(&action))
+                .map(Target::Thought),
+            Target::Copy { reply, block } => self
+                .reply_ordinal(reply)
+                .and_then(|at| fold.reply_at(at))
+                .map(|id| Target::Copy { reply: id, block }),
+            Target::Image(id) => self
+                .image_path(id)
+                .and_then(|path| fold.images.ids.get(path).copied())
+                .map(Target::Image),
+            Target::Login => Some(Target::Login),
+            Target::Note(_) | Target::Orphans(_) => None,
+        }
+    }
+
+    /// Carries what the person opened into the fold before the swap: the
+    /// ledger default, then each override the fold resolves. A target
+    /// the fold lacks is dropped, and the fold counts once at the end.
+    pub(crate) fn carry_opens(&self, fold: &mut Pages) {
+        if self.fold.ledgers != fold.fold.ledgers {
+            fold.set_ledgers(self.fold.ledgers);
+        }
+        for (target, open) in &self.overrides {
+            let Some(resolved) = self.same_target(*target, fold) else {
+                continue;
+            };
+            for part in fold.resident_mut() {
+                set(part, &resolved, *open);
+            }
+            fold.overrides.insert(resolved, *open);
+        }
+        fold.recount();
+    }
+
+    /// Every resident part and the pending pair, for opening what
+    /// `carry_opens` resolved.
+    fn resident_mut(&mut self) -> impl Iterator<Item = &mut Part> {
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|pending| [&mut pending.before, &mut pending.next]);
+        self.closed
+            .iter_mut()
+            .flatten()
+            .chain(std::iter::once(&mut self.open))
+            .chain(pending)
+    }
+
+    /// The call id of the call `id` names, anywhere resident.
+    fn call_action(&self, id: usize) -> Option<String> {
+        self.calls()
+            .find(|(at, _)| *at == id)
+            .map(|(_, action)| action)
+    }
+
+    /// The id the fold gives the call `action` names, if it folds it.
+    fn find_call(&self, action: &str) -> Option<usize> {
+        self.calls()
+            .find(|(_, name)| name == action)
+            .map(|(id, _)| id)
+    }
+
+    /// Every resident call's id and call id.
+    fn calls(&self) -> impl Iterator<Item = (usize, String)> {
+        self.turns().flat_map(|turn| {
+            turn.groups().flat_map(|group| {
+                group.sections.iter().flat_map(|section| {
+                    section
+                        .calls
+                        .iter()
+                        .map(|call| (call.id, call.action.clone()))
+                })
+            })
+        })
+    }
+
+    /// The key of the group `id` names, anywhere resident.
+    fn group_key(&self, id: usize) -> Option<String> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .filter_map(|group| group.key.clone())
+            .find(|key| target_id(key) == id)
+    }
+
+    /// The id the fold gives the group `key` names, if it folds it.
+    fn find_group(&self, key: &str) -> Option<usize> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .filter_map(|group| group.key.as_deref())
+            .find(|name| *name == key)
+            .map(target_id)
+    }
+
+    /// Every resident thought's id and action, in fold order.
+    fn thoughts(&self) -> impl Iterator<Item = (usize, String)> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .flat_map(|group| {
+                group
+                    .sections
+                    .iter()
+                    .flat_map(|section| section.thoughts.iter())
+            })
+            .map(|thought| (thought.id, thought.action.clone()))
+    }
+
+    /// The action of the thought `id` names, anywhere resident.
+    fn thought_action(&self, id: usize) -> Option<String> {
+        self.thoughts()
+            .find(|(at, _)| *at == id)
+            .map(|(_, action)| action)
+    }
+
+    /// The id the fold gives the thought `action` names, if it folds it.
+    fn find_thought(&self, action: &str) -> Option<usize> {
+        self.thoughts()
+            .find(|(_, name)| name == action)
+            .map(|(id, _)| id)
+    }
+
+    /// The ordinal of the reply `id` names among the resident replies.
+    fn reply_ordinal(&self, id: usize) -> Option<usize> {
+        self.replies().position(|at| at == id)
+    }
+
+    /// The id of the `at`th resident reply, if one folds that far.
+    fn reply_at(&self, at: usize) -> Option<usize> {
+        self.replies().nth(at)
+    }
+
+    /// Every resident reply's copy-target id, in fold order.
+    fn replies(&self) -> impl Iterator<Item = usize> {
+        self.turns().flat_map(|turn| {
+            turn.entries.iter().filter_map(|entry| match entry {
+                Entry::Reply { reply, .. } => Some(reply.id()),
+                Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Aside(_)
+                | Entry::Band(_)
+                | Entry::Answers(_) => None,
+            })
+        })
+    }
+
+    /// The path of the image `id` names, if it drew.
+    fn image_path(&self, id: u32) -> Option<&str> {
+        self.images.parts.get(&id).map(|part| part.path.as_str())
+    }
+
+    /// Every resident turn, closed pages first.
+    fn turns(&self) -> impl Iterator<Item = &Turn> {
+        let pending = self
+            .pending
+            .as_ref()
+            .into_iter()
+            .flat_map(|pending| [&pending.before, &pending.next]);
+        self.closed
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&self.open))
+            .chain(pending)
+            .flat_map(|part| part.turns.iter())
+    }
+
     /// Ctrl+O: closes every ledger when all on the resident pages are open,
     /// else opens them all, and sets the default the dropped pages and
     /// groups made later take. The dropped pages are counted again.
@@ -1037,6 +1248,13 @@ impl Pages {
                 !ledgers.all(|group| group.open)
             }
         };
+        self.set_ledgers(open);
+    }
+
+    /// Sets the ledger default, the dropped seeds and every resident
+    /// group, dropping group overrides; the dropped pages take it on
+    /// load. Counts every resident page again.
+    fn set_ledgers(&mut self, open: bool) {
         self.fold.ledgers = open;
         self.open.fold.ledgers = open;
         for seed in &mut self.seeds {
@@ -1185,6 +1403,82 @@ impl Pages {
         out.into_parts().0
     }
 
+    /// The `seq` of the line whose piece draws conversation row `row`,
+    /// and the row's offset in that piece: the piece starting at or
+    /// above it on its page, else the page's first `seq` at offset 0.
+    /// `None` past the last row or on a page with no line.
+    pub(crate) fn row_seq(&self, row: usize) -> Option<(Seq, usize)> {
+        let (at, offset) = self.index.locate(row)?;
+        let page = self.index.pages().get(at).filter(|page| page.lines > 0)?;
+        let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
+        let before = runs.partition_point(|(start, _)| *start <= offset);
+        Some(
+            before
+                .checked_sub(1)
+                .and_then(|run| runs.get(run))
+                .map_or((page.first_seq, 0), |(start, seq)| {
+                    (*seq, offset.saturating_sub(*start))
+                }),
+        )
+    }
+
+    /// The conversation row `offset` rows into the piece drawn from
+    /// `seq`'s line, kept within the piece; else the first row of the
+    /// first piece after it on its page, else the page's first row.
+    /// `None` when no page holds `seq`. No test pins `>` against `>=`
+    /// below: the exact arm takes every `seq` a run starts at, so where
+    /// the search runs `>=` matches `>` on every input.
+    #[cfg_attr(false, mutants::skip)]
+    pub(crate) fn seq_row(&self, seq: Seq, offset: usize) -> Option<usize> {
+        let at = self.index.page_of(seq)?;
+        let runs = self.row_seqs.get(at).map_or(&[][..], Vec::as_slice);
+        let rows = self.index.pages().get(at).map_or(0, |page| page.rows);
+        let exact = runs.iter().position(|(_, from)| *from == seq);
+        let within = match exact {
+            Some(run) => runs.get(run).map_or(0, |(start, _)| {
+                let end = runs
+                    .get(run.saturating_add(1))
+                    .map_or(rows, |(end, _)| *end);
+                start.saturating_add(offset.min(end.saturating_sub(start.saturating_add(1))))
+            }),
+            None => runs
+                .iter()
+                .find(|(_, from)| *from > seq)
+                .map_or(0, |(start, _)| *start),
+        };
+        Some(self.index.start(at).saturating_add(within))
+    }
+
+    /// Holds a landing's top at `seq` and `offset` until no dropped page
+    /// waits to be counted at the width: [`Pages::anchored_row`] finds
+    /// it again after each load.
+    pub(crate) fn hold_anchor(&mut self, seq: Seq, offset: usize) {
+        self.anchor = Some((seq, offset));
+    }
+
+    /// Releases the held pass's landing position.
+    pub(crate) fn clear_anchor(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Whether a dropped page still waits to be counted at the width:
+    /// the pass stays live while one is owed.
+    pub(crate) fn stale_owed(&self) -> bool {
+        self.stale.iter().any(|at| !self.failed.contains(at))
+    }
+
+    /// The held anchor's row as the pages count now, as
+    /// [`Pages::seq_row`] finds it; `None` with no anchor held. The
+    /// anchor lets go once every stale page is counted again or failed,
+    /// since then its row no longer moves.
+    pub(crate) fn anchored_row(&mut self) -> Option<usize> {
+        let (seq, offset) = self.anchor?;
+        if self.stale.iter().all(|at| self.failed.contains(at)) {
+            self.anchor = None;
+        }
+        self.seq_row(seq, offset)
+    }
+
     /// The page index.
     pub(crate) fn index(&self) -> &Index {
         &self.index
@@ -1249,6 +1543,11 @@ impl Pages {
 
     /// A page's lines, their turn ranges, and stable focus stops.
     fn draw_data(&self, page: usize, part: &Part, mode: Draw) -> DrawData {
+        self.draw_sourced(page, part, mode).0
+    }
+
+    /// [`Pages::draw_data`], and each line's source `seq`.
+    fn draw_sourced(&self, page: usize, part: &Part, mode: Draw) -> (DrawData, Vec<Option<Seq>>) {
         let mut out = match mode {
             Draw::Shown => Rows::default(),
             Draw::AllOpen => Rows::all_open(),
@@ -1334,8 +1633,8 @@ impl Pages {
                 TargetId::Line(target),
             ))
         }));
-        let (rows, texts) = out.into_parts();
-        (rows, texts, focus, turns)
+        let (rows, texts, sources) = out.into_sourced_parts();
+        ((rows, texts, focus, turns), sources)
     }
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
@@ -1351,12 +1650,20 @@ impl Pages {
         // so no session-size-dependent walk hides here.
         let (page_table, sources) = classify(part);
         crate::work::add(|work| work.search_order_pages += sources);
-        let (lines, _, focus, _) = self.draw_data(at, part, Draw::Shown);
+        let ((lines, _, focus, _), sources) = self.draw_sourced(at, part, Draw::Shown);
         let width = self.width;
         let open = at == self.closed.len();
         let mut wrapped = HashMap::new();
         let mut rows = 0usize;
-        for (line, _) in &lines {
+        let mut runs: Vec<(usize, Seq)> = Vec::new();
+        for ((line, _), source) in lines.iter().zip(sources) {
+            if let Some(seq) = source
+                && runs.last().is_none_or(|(_, last)| *last != seq)
+            {
+                // Rows above the page's first piece, edges and gaps,
+                // belong to it.
+                runs.push((if runs.is_empty() { 0 } else { rows }, seq));
+            }
             let count = if !open || line.width() <= usize::from(width) {
                 crate::view::rows(line.clone(), width)
             } else {
@@ -1385,6 +1692,12 @@ impl Pages {
             .resize(self.table.len().max(at.saturating_add(1)), None);
         if let Some(slot) = self.table.get_mut(at) {
             *slot = Some(page_table);
+        }
+        if at >= self.row_seqs.len() {
+            self.row_seqs.resize_with(at.saturating_add(1), Vec::new);
+        }
+        if let Some(slot) = self.row_seqs.get_mut(at) {
+            *slot = runs;
         }
         if at >= self.focus.len() {
             self.focus.resize_with(at, Vec::new);
@@ -1458,6 +1771,9 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
     let kind = envelope.kind.as_str();
     let was_open = part.turns.last().is_some_and(Turn::is_open);
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
+    if let Some(turn) = part.turns.last_mut() {
+        turn.note_seq(envelope.seq);
+    }
     match kind {
         "turn_started" if changed => Folded::Started,
         // Only a resume that cuts an open turn changes the card.

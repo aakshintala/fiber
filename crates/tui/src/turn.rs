@@ -120,6 +120,13 @@ pub(crate) struct Turn {
     /// The `assistant_message_started` lines of the model request in flight:
     /// a start after a failed call continues the count, any other restarts it.
     attempts: u32,
+    /// The `seq` of the first line folded into the card: the source of
+    /// its bubble's rows.
+    first_seq: Option<contract::Seq>,
+    /// One per entry: the `seq` of the line that added it.
+    entry_seqs: Vec<Option<contract::Seq>>,
+    /// The `seq` of the line that closed the card.
+    end_seq: Option<contract::Seq>,
 }
 
 /// How a turn ended.

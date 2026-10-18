@@ -286,6 +286,19 @@ fn accepted(session: &str, id: &str) -> Line {
     from(session, "command_accepted", None, json!({"command_id": id}))
 }
 
+/// `session`'s `command_accepted` for `id` with the opening fold's
+/// boundary: the real raise acknowledgement carries `last_seq`, and
+/// the pass opens on it. A held reconnect keeps the screen's rows,
+/// so only the pass keeps the replay from folding twice.
+fn lasted(session: &str, id: &str, last: u64) -> Line {
+    from(
+        session,
+        "command_accepted",
+        None,
+        json!({"command_id": id, "result": {"last_seq": last}}),
+    )
+}
+
 /// `session`'s `command_rejected` for `id` with `code` and `message`.
 fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     from(
@@ -333,6 +346,16 @@ fn id_of(line: &Value) -> String {
     line["id"]
         .as_str()
         .unwrap_or_else(|| panic!("an id: {line}"))
+        .to_owned()
+}
+
+/// The `full` raise the first frame releases, parsed to its id: the
+/// staged open's second subscribe, whose answer ends the gate.
+fn raise_id(app: &mut App) -> String {
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    serde_json::from_str::<Value>(&line).unwrap_or_else(|err| panic!("{line}: {err}"))["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
         .to_owned()
 }
 
@@ -455,7 +478,7 @@ fn reconnecting_reopens_the_attached_session_and_keeps_the_draft() {
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], S_A);
-    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[0]["args"]["level"], "summary");
     assert_eq!(lines[1]["command"], "commands");
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(S_A));
     assert_eq!(app.draft(), "half typed");
@@ -521,6 +544,11 @@ fn lines_from_before_the_drop_are_not_folded_twice() {
     assert!(once.iter().any(|line| line.contains("hello")), "{once:?}");
     let lines = parsed(&reconnect(&mut app));
     fold(&mut app, accepted(S_A, &id_of(&lines[0])));
+    // The first frame releases the raise; its answer ends the gate
+    // and opens the pass, so the replay folds once into the fresh
+    // fold and lands.
+    let raise = raise_id(&mut app);
+    fold(&mut app, lasted(S_A, &raise, 1));
     for line in turn(S_A) {
         fold(&mut app, line);
     }
@@ -534,12 +562,19 @@ fn the_open_gate_holds_after_a_reconnect() {
     let opening = started(&mut app, S_A);
     fold(&mut app, accepted(S_A, &id_of(&opening[0])));
     let lines = parsed(&reconnect(&mut app));
-    // Before the subscribe's answer, the session's lines are dropped.
+    // Before the subscribes' answers, the session's lines are dropped.
     for line in turn(S_A) {
         fold(&mut app, line);
     }
     assert!(conversation(&app).is_empty());
+    // The first answer keeps the gate; the raise's ends it.
     fold(&mut app, accepted(S_A, &id_of(&lines[0])));
+    for line in turn(S_A) {
+        fold(&mut app, line);
+    }
+    assert!(conversation(&app).is_empty());
+    let raise = raise_id(&mut app);
+    fold(&mut app, accepted(S_A, &raise));
     for line in turn(S_A) {
         fold(&mut app, line);
     }
@@ -828,6 +863,9 @@ fn a_duplicate_command_rejection_closes_the_entry_silently() {
     let opening = started(&mut app, S_A);
     let lines = parsed(&reconnect(&mut app));
     fold(&mut app, accepted(S_A, &id_of(&lines[0])));
+    // The kept prompt's refusal lands after the gate ends.
+    let raise = raise_id(&mut app);
+    fold(&mut app, accepted(S_A, &raise));
     fold(
         &mut app,
         refused(S_A, &prompt_id(&opening), "duplicate_command", "Seen."),
@@ -844,6 +882,9 @@ fn another_rejection_still_returns_the_draft() {
     let opening = started(&mut app, S_A);
     let lines = parsed(&reconnect(&mut app));
     fold(&mut app, accepted(S_A, &id_of(&lines[0])));
+    // The kept prompt's refusal lands after the gate ends.
+    let raise = raise_id(&mut app);
+    fold(&mut app, accepted(S_A, &raise));
     fold(
         &mut app,
         refused(S_A, &prompt_id(&opening), "busy", "Busy."),
@@ -992,7 +1033,7 @@ fn a_reconnect_after_an_accepted_open_carries_no_credential() {
     assert_eq!(subscribe["session_id"], S_A);
     assert_eq!(
         subscribe["args"],
-        json!({"level": "full"}),
+        json!({"level": "summary"}),
         "a reconnect carries no earlier asked label"
     );
 }
@@ -1014,7 +1055,7 @@ fn a_reconnect_before_the_open_is_answered_carries_no_credential() {
     assert_eq!(subscribe["session_id"], S_A);
     assert_eq!(
         subscribe["args"],
-        json!({"level": "full"}),
+        json!({"level": "summary"}),
         "an unanswered opening subscribe is not replayed with a label"
     );
     assert!(

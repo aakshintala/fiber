@@ -1230,9 +1230,11 @@ fn a_batch_settles_once_at_its_end() {
     assert!(app.pages().part(0).is_none());
 }
 
-/// `fiber resume` opens through the hub: feed, recent, the subscribe and
-/// the session's commands, then the 150 turns / 1,348 envelopes stream as
-/// live lines. The loop folds every batch and draws the tail: the last
+/// `fiber resume` opens through the hub: feed, recent, the `summary`
+/// subscribe and the session's commands, then one `history` window for
+/// the tail the first frame draws, then the `full` raise with the last
+/// line read, and the 150 turns / 1,348 envelopes replay as live lines.
+/// The loop folds every batch and lands the whole session: the last
 /// reply shows, and no page is fetched twice.
 #[test]
 fn resume_open_replays_the_log_to_the_tail() {
@@ -1351,18 +1353,27 @@ fn resume_open_replays_the_log_to_the_tail() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
                     Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
                     Some("subscribe") => {
-                        // A command naming a session is relayed, never
-                        // answered by the hub itself: only the session's
-                        // accept arrives, carrying its id, then the log.
-                        // The hub parks here until the test releases it: held
-                        // past DRAIN, the drain wait fails every run.
+                        if command["args"]["level"] == "full" {
+                            // The raise, released by the first frame: the
+                            // last line read ends the preview, so the
+                            // replay folds from its first line.
+                            let last = stream
+                                .iter()
+                                .filter_map(|envelope| envelope.seq.map(|seq| seq.0))
+                                .max()
+                                .unwrap_or(0);
+                            write(session_ack(&id, json!({"last_seq": last})));
+                            for envelope in &stream {
+                                write(serde_json::to_value(envelope).unwrap_or(Value::Null));
+                            }
+                            break;
+                        }
+                        // The first stage: park until the test releases
+                        // it, then answer only. The raise follows the
+                        // first frame.
                         subscribed_tx.send(()).unwrap_or(());
                         release.recv().unwrap_or(());
                         write(session_ack(&id, json!({})));
-                        for envelope in &stream {
-                            write(serde_json::to_value(envelope).unwrap_or(Value::Null));
-                        }
-                        break;
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));
@@ -1424,7 +1435,19 @@ fn resume_open_replays_the_log_to_the_tail() {
     let drain_wait = Deadline::after(DRAIN);
     let (code, lp) = drain_wait.recv_or_fail(&finished, "the loop to drain");
     assert_eq!(code, 0);
-    assert!(ranges(&seen).is_empty(), "{:?}", ranges(&seen));
+    // The one history command is the tail's first window: the replay
+    // lands the whole session, so no page fetch follows.
+    let histories: Vec<Value> = seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .filter(|command| command["command"] == "history")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(histories.len(), 1, "{histories:?}");
+    assert_eq!(histories[0]["args"], json!({}));
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");
 }

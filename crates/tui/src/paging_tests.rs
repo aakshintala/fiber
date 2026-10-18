@@ -17,7 +17,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Entry, Row, Turn};
+use crate::turn::{Entry, Row, Turn, target_id};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -3338,4 +3338,364 @@ fn trim_drops_only_pages_outside_the_window_and_keeps_pins() {
         }
     }
     pages.unwant(0);
+}
+
+/// One turn per call: a prompt, one step and one requested call.
+fn call_stream(calls: &[&str]) -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    for (turn, call) in calls.iter().enumerate() {
+        stream.durable(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        stream.durable("step_started", None, json!({}));
+        stream.durable("assistant_message_started", Some("a_m"), json!({}));
+        stream.request("a_m", 0, call, "read", "src/lib.rs");
+        stream.durable(
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        );
+        stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    stream.lines
+}
+
+/// Whether each resident call for `action` draws open, in fold order.
+fn call_states(pages: &Pages, action: &str) -> Vec<bool> {
+    pages
+        .closed
+        .iter()
+        .flatten()
+        .chain(std::iter::once(&pages.open))
+        .flat_map(|part| part.turns.iter())
+        .flat_map(Turn::groups)
+        .flat_map(|group| group.sections.iter())
+        .flat_map(|section| section.calls.iter())
+        .filter(|call| call.action == action)
+        .map(|call| call.open)
+        .collect()
+}
+
+#[test]
+fn a_fresh_pages_keeps_its_settings_and_nothing_else() {
+    let mut pages = Pages::new(37);
+    for line in &call_stream(&["a_t"]) {
+        pages.apply(line);
+    }
+    pages.zone = new_york();
+    pages.toggle_ledgers();
+    pages.open(&Target::Call(target_id("a_t")));
+    pages.hold();
+    let fresh = pages.fresh();
+    assert_eq!(fresh.wrap_width(), 37);
+    assert_eq!(fresh.zone, new_york());
+    assert!(fresh.fold.ledgers);
+    assert_eq!(fresh.images.sizing, pages.images.sizing);
+    assert_eq!(fresh.index().total(), Pages::new(37).index().total());
+    assert_eq!(fresh.resident(), Pages::new(37).resident());
+    assert!(call_states(&fresh, "a_t").is_empty());
+    assert!(fresh.overrides.is_empty());
+    assert!(fresh.shells.is_empty());
+    assert!(fresh.summaries.is_empty());
+    assert!(!fresh.holding());
+}
+
+#[test]
+fn opens_in_the_preview_carry_to_the_fold_by_call() {
+    let mut preview = Pages::new(80);
+    for line in &call_stream(&["a_dup"]) {
+        preview.apply(line);
+    }
+    preview.open(&Target::Call(target_id("a_dup")));
+    preview
+        .overrides
+        .insert(Target::Call(target_id("a_ghost")), true);
+    // The fold asks for the same call twice: the same card id names two
+    // calls, and only the first is the one the preview opened.
+    let mut fold = preview.fresh();
+    for line in &call_stream(&["a_dup", "a_dup"]) {
+        fold.apply(line);
+    }
+    preview.carry_opens(&mut fold);
+    assert_eq!(call_states(&fold, "a_dup"), vec![true, false]);
+    assert_eq!(
+        fold.overrides.get(&Target::Call(target_id("a_dup"))),
+        Some(&true)
+    );
+    assert!(
+        !fold
+            .overrides
+            .contains_key(&Target::Call(target_id("a_ghost"))),
+        "a target the fold lacks is dropped"
+    );
+}
+
+#[test]
+fn a_ctrl_o_in_the_preview_carries_to_the_fold() {
+    let lines = call_stream(&["a_t"]);
+    let mut preview = Pages::new(80);
+    for line in &lines {
+        preview.apply(line);
+    }
+    // The fold is made before Ctrl+O: carrying the overrides only would
+    // leave it shut.
+    let mut fold = preview.fresh();
+    for line in &lines {
+        fold.apply(line);
+    }
+    preview.toggle_ledgers();
+    preview.carry_opens(&mut fold);
+    assert!(fold.fold.ledgers);
+    let ledgers: Vec<bool> = fold
+        .closed
+        .iter()
+        .flatten()
+        .chain(std::iter::once(&fold.open))
+        .flat_map(|part| part.turns.iter())
+        .flat_map(Turn::groups)
+        .filter(|group| group.has_ledger())
+        .map(|group| group.open)
+        .collect();
+    assert!(!ledgers.is_empty());
+    assert!(ledgers.iter().all(|open| *open));
+}
+
+/// A row's `seq` and its offset among that line's rows find the row
+/// again, on the live fold and on every page folded again from its
+/// lines; an offset past the piece stays on the piece's last row, and
+/// a `seq` no page holds, or a row past the end, finds none.
+#[test]
+fn a_rows_seq_and_offset_find_the_row_again() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(60);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(pages.index().pages().len() > 2, "too few pages");
+    let total = pages.index().total();
+    let check = |pages: &Pages| {
+        for row in 0..total {
+            let (seq, offset) = pages
+                .row_seq(row)
+                .unwrap_or_else(|| panic!("row {row} has a seq"));
+            assert_eq!(pages.seq_row(seq, offset), Some(row), "row {row}");
+            let last = pages
+                .seq_row(seq, usize::MAX)
+                .unwrap_or_else(|| panic!("row {row}'s piece has a last row"));
+            assert!(last >= row, "row {row}");
+            assert_eq!(
+                pages.row_seq(last).map(|(seq, _)| seq),
+                Some(seq),
+                "row {row}"
+            );
+            assert_ne!(
+                pages.row_seq(last.saturating_add(1)).map(|(at, _)| at),
+                Some(seq),
+                "row {row}'s piece ends at {last}"
+            );
+        }
+    };
+    check(&pages);
+    drop_all(&mut pages);
+    joined(&mut pages, &lines);
+    assert_eq!(pages.index().total(), total);
+    check(&pages);
+    let end = lines.iter().filter_map(|line| line.seq).max();
+    let past = end.map(|seq| Seq(seq.0.saturating_add(1)));
+    assert_eq!(past.and_then(|seq| pages.seq_row(seq, 0)), None);
+    assert_eq!(pages.row_seq(total), None);
+}
+
+/// Two steps with thinking and a reply each, folded into fresh pages:
+/// two groups keyed by their thought's action, two thoughts and two
+/// replies, in fold order.
+fn small() -> Pages {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "look at the code"}]}]}),
+    );
+    for (thought, message, reply) in [
+        ("a_r0", "a_m0", "reply zero here"),
+        ("a_r1", "a_m1", "reply one here"),
+    ] {
+        stream.durable("step_started", None, json!({}));
+        stream.durable("assistant_message_started", Some(message), json!({}));
+        stream.think(thought, "weigh it");
+        stream.text(message, reply);
+        stream.durable(
+            "assistant_message_completed",
+            Some(message),
+            json!({"outcome": "completed"}),
+        );
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    pages
+}
+
+/// Groups resolve by the action that keyed them, both ways: the
+/// target a reload carries (`same_target`) is the key out and the
+/// fold's id back in.
+#[test]
+fn group_targets_resolve_by_action() {
+    let pages = small();
+    for key in ["a_r0", "a_r1"] {
+        let id = target_id(key);
+        assert_eq!(
+            pages.group_key(id),
+            Some(key.to_owned()),
+            "{key} names its group"
+        );
+        assert_eq!(pages.find_group(key), Some(id), "{key} resolves back");
+    }
+    assert_eq!(pages.group_key(target_id("a_missing")), None, "no group");
+    assert_eq!(pages.find_group("a_missing"), None, "no group");
+}
+
+/// Thoughts resolve by action both ways, and the fold lists every
+/// resident thought in fold order.
+#[test]
+fn thought_targets_resolve_by_action() {
+    let pages = small();
+    assert_eq!(
+        pages.thoughts().collect::<Vec<_>>(),
+        vec![
+            (target_id("a_r0"), "a_r0".to_owned()),
+            (target_id("a_r1"), "a_r1".to_owned()),
+        ],
+        "every resident thought in fold order"
+    );
+    for action in ["a_r0", "a_r1"] {
+        assert_eq!(
+            pages.thought_action(target_id(action)),
+            Some(action.to_owned()),
+            "{action} names its thought"
+        );
+        assert_eq!(
+            pages.find_thought(action),
+            Some(target_id(action)),
+            "{action} resolves back"
+        );
+    }
+    assert_eq!(
+        pages.thought_action(target_id("a_missing")),
+        None,
+        "no thought"
+    );
+    assert_eq!(pages.find_thought("a_missing"), None, "no thought");
+}
+
+/// Copy targets resolve by reply ordinal both ways: the ordinal out
+/// and the reply at an ordinal back in, over every resident reply.
+#[test]
+fn copy_targets_resolve_by_reply_ordinal() {
+    let pages = small();
+    let replies: Vec<usize> = pages.replies().collect();
+    assert_eq!(replies.len(), 2, "two resident replies");
+    let (first, second) = (replies[0], replies[1]);
+    assert_ne!(first, second, "each reply has its own id");
+    assert_eq!(pages.reply_ordinal(first), Some(0));
+    assert_eq!(pages.reply_ordinal(second), Some(1));
+    assert_eq!(pages.reply_ordinal(usize::MAX), None, "no reply");
+    assert_eq!(pages.reply_at(0), Some(first));
+    assert_eq!(pages.reply_at(1), Some(second));
+    assert_eq!(pages.reply_at(2), None, "two replies only");
+}
+
+/// Image targets resolve by path: the folded image's id names its
+/// path back, and unknown ids name nothing.
+#[test]
+fn image_targets_resolve_by_path() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+        "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}]}),
+    );
+    let mut pages = Pages::new(80);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    assert_eq!(pages.image_path(1), Some("artifacts/shot.png"));
+    assert_eq!(pages.image_path(0), None, "no image at zero");
+    assert_eq!(pages.image_path(2), None, "one image only");
+}
+
+/// A page with rows but no line holds no seq: the row's piece starts
+/// at or above it only once a line drew it.
+#[test]
+fn row_seq_needs_a_line_on_the_page() {
+    let mut pages = Pages::new(80);
+    pages.index.set_rows(0, 3);
+    assert_eq!(pages.row_seq(0), None, "a page with no line holds no seq");
+    assert_eq!(pages.row_seq(2), None, "a page with no line holds no seq");
+    assert_eq!(pages.row_seq(3), None, "past the last row");
+    let pages = small();
+    let (seq, offset) = pages.row_seq(0).expect("the first row has a seq");
+    assert_eq!(offset, 0);
+    assert_eq!(
+        pages.seq_row(seq, offset),
+        Some(0),
+        "the first row round-trips"
+    );
+}
+
+/// A seq no piece starts at lands on the first piece after it: the
+/// exact arm never sees it, so only `>` (not `<`, which lands on the
+/// first piece, or `==`, which lands on the page's first row) picks
+/// the next piece.
+#[test]
+fn seq_row_skips_seqs_without_a_piece() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(60);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let mut gap = None;
+    for (at, runs) in pages.row_seqs.iter().enumerate() {
+        for pair in runs.windows(2) {
+            let ((_, from), (second_start, next)) = (pair[0], pair[1]);
+            // The next piece must start below the page's first row:
+            // both mutants land on the page's first row, so a piece
+            // starting there would not tell them apart.
+            if next.0 > from.0.saturating_add(1) && second_start > 0 {
+                gap = Some((at, Seq(from.0.saturating_add(1)), second_start));
+            }
+        }
+    }
+    let (at, between, second_start) = gap.expect("a seq between two pieces");
+    assert_eq!(
+        pages.seq_row(between, 0),
+        Some(pages.index.start(at).saturating_add(second_start)),
+        "a seq without a piece lands on the next one"
+    );
+}
+
+/// A dropped page still waits while it is neither counted nor failed:
+/// the pass stays live only while one is owed.
+#[test]
+fn stale_owed_names_an_uncounted_dropped_page() {
+    assert!(
+        !Pages::new(80).stale_owed(),
+        "an empty conversation owes nothing"
+    );
+    let mut pages = Pages::new(80);
+    pages.stale.insert(0);
+    assert!(pages.stale_owed(), "a dropped page waits to be counted");
+    pages.failed.insert(0);
+    assert!(!pages.stale_owed(), "a failed page is owed nothing");
 }

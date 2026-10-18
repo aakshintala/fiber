@@ -870,7 +870,7 @@ fn start_session(app: &mut App, session: &str) {
 }
 
 #[test]
-fn enter_on_a_focused_live_row_subscribes_full_asks_commands_and_attaches() {
+fn enter_on_a_focused_live_row_subscribes_summary_asks_commands_and_attaches() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live(
@@ -910,7 +910,7 @@ fn enter_on_a_focused_live_row_subscribes_full_asks_commands_and_attaches() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], "s_bbbbbbbbbbbbbbbb");
-    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[0]["args"]["level"], "summary");
     assert_eq!(lines[1]["command"], "commands");
     assert_eq!(lines[1]["session_id"], "s_bbbbbbbbbbbbbbbb");
     assert_ne!(lines[0]["id"], lines[1]["id"]);
@@ -930,7 +930,7 @@ fn opening_an_exited_row_sends_the_same_and_the_hub_resumes() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(lines[0]["args"]["level"], "full");
+    assert_eq!(lines[0]["args"]["level"], "summary");
     assert_eq!(lines[1]["command"], "commands");
     assert_eq!(
         app.session().map(|session| session.0.as_str()),
@@ -962,7 +962,7 @@ fn a_started_session_is_recorded_full_and_leaving_lowers_it() {
 }
 
 #[test]
-fn opening_a_summary_session_sends_one_full_subscribe() {
+fn opening_a_summary_session_sends_no_subscribe_then_raises() {
     let mut app = home();
     linked(&mut app);
     start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
@@ -974,10 +974,25 @@ fn opening_a_summary_session_sends_one_full_subscribe() {
         json!({"state": "streaming"}),
     ));
     assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    // The connection holds `summary`, so no subscribe goes out; the
+    // `full` raise follows the first frame instead.
     let lines = open_first(&mut app);
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0]["args"]["level"], "full");
-    assert_eq!(lines[1]["command"], "commands");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"].as_str().unwrap_or_else(|| panic!("raise id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
+            .is_empty()
+    );
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
 }
 
 #[test]
@@ -986,16 +1001,20 @@ fn opening_a_full_session_sends_summary_then_full() {
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
-    assert_eq!(first[0]["args"]["level"], "full");
+    assert_eq!(first[0]["args"]["level"], "summary");
     // Home during the open, before any answer: the row is not live, so no
     // lowering goes out.
     assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    // The `summary` is already asked for, so only `commands` goes out;
+    // the `full` raise follows the first frame.
     let lines = open_first(&mut app);
-    assert_eq!(lines.len(), 3);
-    assert_eq!(lines[0]["args"]["level"], "summary");
-    assert_eq!(lines[1]["args"]["level"], "full");
-    assert_eq!(lines[2]["command"], "commands");
-    assert_ne!(lines[0]["id"], lines[1]["id"]);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"]["level"], "full");
+    assert_ne!(first[0]["id"], raise["id"]);
 }
 
 #[test]
@@ -1175,7 +1194,19 @@ fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
         json!({"state": "streaming"}),
     ));
     let lines = open_first(&mut app);
-    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    let summary = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", summary))
+            .is_empty()
+    );
+    // The staged open raises `full` after the first frame; only the
+    // raise's acknowledgement ends the gate.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
             .is_empty()
@@ -1271,7 +1302,9 @@ fn a_refused_open_after_going_home_keeps_the_draft() {
         .as_str()
         .unwrap_or_else(|| panic!("ack id"))
         .to_owned();
-    assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    // Leaving mid-open lowers nothing: only `summary` is in flight.
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    assert!(app.on_home());
     type_text(&mut app, "keep me");
     assert!(
         app.on_line(session_refused(
@@ -1302,9 +1335,13 @@ fn a_stale_refusal_for_an_earlier_open_is_ignored() {
         .as_str()
         .unwrap_or_else(|| panic!("first id"))
         .to_owned();
-    assert!(matches!(enter_text(&mut app, "/home"), Effect::Send(_)));
+    // Leaving mid-open lowers nothing: only `summary` is in flight.
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    assert!(app.on_home());
+    // The `summary` is already asked for, so only `commands` goes out.
     let second = open_first(&mut app);
-    assert_eq!(second[0]["args"]["level"], "full");
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["command"], "commands");
     assert!(
         app.on_line(session_refused(
             "s_aaaaaaaaaaaaaaaa",
@@ -1318,7 +1355,11 @@ fn a_stale_refusal_for_an_earlier_open_is_ignored() {
         app.session().map(|session| session.0.as_str()),
         Some("s_aaaaaaaaaaaaaaaa")
     );
-    let ack = second[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    // The raise still completes the second open.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
             .is_empty()
@@ -1332,7 +1373,7 @@ fn a_stale_refusal_for_an_earlier_open_is_ignored() {
 }
 
 #[test]
-fn a_refused_raise_leaves_the_level_and_the_next_open_sends_full_again() {
+fn a_refused_first_stage_leaves_the_level_and_the_next_open_sends_summary_again() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
@@ -1353,7 +1394,7 @@ fn a_refused_raise_leaves_the_level_and_the_next_open_sends_full_again() {
     assert!(app.session().is_none());
     let second = open_first(&mut app);
     assert_eq!(second.len(), 2);
-    assert_eq!(second[0]["args"]["level"], "full");
+    assert_eq!(second[0]["args"]["level"], "summary");
     assert_eq!(second[1]["command"], "commands");
 }
 
@@ -1362,18 +1403,17 @@ fn a_rejected_summary_step_alone_does_not_fail_the_open() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
-    open_first(&mut app);
-    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
-    let lines = open_first(&mut app);
-    assert_eq!(lines.len(), 3);
-    let summary = lines[0]["id"]
+    let first = open_first(&mut app);
+    let summary = first[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("summary id"))
         .to_owned();
-    let ack = lines[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("ack id"))
-        .to_owned();
+    assert_eq!(enter_text(&mut app, "/home"), Effect::None);
+    // The `summary` is already asked for, so only `commands` goes out.
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    // Refusing the superseded first stage alone does not fail the open.
     assert!(
         app.on_line(session_refused(
             "s_aaaaaaaaaaaaaaaa",
@@ -1387,8 +1427,13 @@ fn a_rejected_summary_step_alone_does_not_fail_the_open() {
         app.session().map(|session| session.0.as_str()),
         Some("s_aaaaaaaaaaaaaaaa")
     );
+    // The raise completes the second open.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
-        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &ack))
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
             .is_empty()
     );
     assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
@@ -1407,7 +1452,14 @@ fn a_refused_two_step_open_fails_the_open() {
     open_first(&mut app);
     assert_eq!(enter_text(&mut app, "/home"), Effect::None);
     let lines = open_first(&mut app);
-    let ack = lines[1]["id"]
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    // The raise is the open's subscribe in flight: refusing it fails
+    // the open.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"]
         .as_str()
         .unwrap_or_else(|| panic!("ack id"))
         .to_owned();
@@ -1432,14 +1484,14 @@ fn a_refused_one_step_open_fails_without_a_retry() {
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
     assert_eq!(first.len(), 2);
-    let full = first[0]["id"]
+    let first_stage = first[0]["id"]
         .as_str()
-        .unwrap_or_else(|| panic!("full id"))
+        .unwrap_or_else(|| panic!("first stage id"))
         .to_owned();
     assert!(
         app.on_line(session_refused(
             "s_aaaaaaaaaaaaaaaa",
-            &full,
+            &first_stage,
             "invalid_arguments",
             "already at full"
         ))
@@ -1452,19 +1504,19 @@ fn a_refused_one_step_open_fails_without_a_retry() {
 }
 
 #[test]
-fn after_a_refused_open_the_next_open_sends_one_full_and_attaches() {
+fn after_a_refused_open_the_next_open_sends_summary_raises_and_attaches() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
-    let full = first[0]["id"]
+    let first_stage = first[0]["id"]
         .as_str()
-        .unwrap_or_else(|| panic!("full id"))
+        .unwrap_or_else(|| panic!("first stage id"))
         .to_owned();
     assert!(
         app.on_line(session_refused(
             "s_aaaaaaaaaaaaaaaa",
-            &full,
+            &first_stage,
             "invalid_arguments",
             "the log cannot be read"
         ))
@@ -1475,7 +1527,7 @@ fn after_a_refused_open_the_next_open_sends_one_full_and_attaches() {
     let second = open_first(&mut app);
     assert_eq!(second.len(), 2);
     assert_eq!(second[0]["command"], "subscribe");
-    assert_eq!(second[0]["args"]["level"], "full");
+    assert_eq!(second[0]["args"]["level"], "summary");
     assert_eq!(second[1]["command"], "commands");
     let again = second[0]["id"]
         .as_str()
@@ -1483,6 +1535,15 @@ fn after_a_refused_open_the_next_open_sends_one_full_and_attaches() {
         .to_owned();
     assert!(
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &again))
+            .is_empty()
+    );
+    // The raise ends the gate; the replay then folds.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let raised = raise["id"].as_str().unwrap_or_else(|| panic!("raised id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", raised))
             .is_empty()
     );
     assert_eq!(
@@ -1569,12 +1630,12 @@ fn home_without_home_state_sends_nothing_on_leave() {
 }
 
 #[test]
-fn home_during_an_open_of_a_resuming_session_lowers_it_once_its_status_is_live() {
+fn home_during_an_open_of_a_resuming_session_sends_no_lowering() {
     let mut app = home();
     let (_, recent) = linked(&mut app);
     answer_recent(&mut app, &recent, &[("s_aaaaaaaaaaaaaaaa", "old work")]);
     let first = open_first(&mut app);
-    assert_eq!(first[0]["args"]["level"], "full");
+    assert_eq!(first[0]["args"]["level"], "summary");
     assert_eq!(enter_text(&mut app, "/home"), Effect::None);
     let ack = first[0]["id"]
         .as_str()
@@ -1584,6 +1645,7 @@ fn home_during_an_open_of_a_resuming_session_lowers_it_once_its_status_is_live()
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &ack))
             .is_empty()
     );
+    // Nothing is held at `full`, so the live status lowers nothing.
     let out = app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
         "old work",
@@ -1591,11 +1653,7 @@ fn home_during_an_open_of_a_resuming_session_lowers_it_once_its_status_is_live()
         "-w",
         json!({"state": "idle"}),
     ));
-    assert_eq!(out.len(), 1);
-    let line: Value = serde_json::from_str(&out[0]).unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(line["command"], "subscribe");
-    assert_eq!(line["session_id"], "s_aaaaaaaaaaaaaaaa");
-    assert_eq!(line["args"]["level"], "summary");
+    assert!(out.is_empty());
     assert!(app.session().is_none());
 }
 
@@ -3766,16 +3824,24 @@ fn a_rejected_lower_while_home_sends_no_subscribe() {
         "-w",
         json!({"state": "streaming"}),
     ));
-    // The second row opens at `full`; going home lowers it, with the
-    // lowering subscribe in flight.
+    // The second row opens at `summary`, then raises to `full`;
+    // going home lowers it, with the lowering subscribe in flight.
     let second = keys(&app)[1];
     let lines = open(&mut app, second);
-    let full = lines[0]["id"]
+    let first_stage = lines[0]["id"]
         .as_str()
-        .unwrap_or_else(|| panic!("full id"))
+        .unwrap_or_else(|| panic!("first stage id"))
         .to_owned();
     assert!(
-        app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &full))
+        app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &first_stage))
+            .is_empty()
+    );
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let raised = raise["id"].as_str().unwrap_or_else(|| panic!("raised id"));
+    assert!(
+        app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", raised))
             .is_empty()
     );
     let Effect::Send(lines) = enter_text(&mut app, "/home") else {

@@ -13,21 +13,27 @@ use crate::home::{Level, opening};
 impl App {
     /// Opens `session` the way a row opens (`docs/tui.md`, "Home"):
     /// through the hub, so an exited session is resumed by it and a
-    /// refusal shows on home. With no level expected, one `full`
-    /// subscribe goes out; at `full` a `summary` first, since the hub
-    /// resumes an exited session at the level last held and a lone
-    /// `full` would be refused as already held. The last subscribe's
-    /// acknowledgement ends the gate.
+    /// refusal shows on home. The first stage, one `summary` unless the
+    /// connection already holds `summary`, goes out now; the `full`
+    /// raise follows the first frame. The raise's acknowledgement ends
+    /// the gate. With `held` the screen keeps its rows for a reconnect:
+    /// home is reset without clearing them, nothing is read, and the
+    /// raise goes as the first frame sends it.
     pub(in crate::app) fn open_session(
         &mut self,
         session: SessionId,
         expected: Option<Level>,
         credential: Option<String>,
+        held: bool,
     ) -> Vec<String> {
-        self.go_home();
+        if held {
+            self.reset_session();
+        } else {
+            self.go_home();
+        }
         self.attach(session.clone());
         let levels = opening(expected);
-        let mut ack = String::new();
+        let mut ack: Option<String> = None;
         let mut lines = Vec::new();
         // The label applies to the first subscribe only: it may be the
         // one that starts the process, and no later subscribe, reconnect
@@ -38,12 +44,12 @@ impl App {
             if let Some(home) = self.home.as_mut() {
                 home.subs.sent(id.clone(), session.clone(), *level);
             }
-            ack = id;
+            ack = Some(id);
             lines.push(line);
         }
         lines.push(self.ask_commands(&session));
         if let Some(home) = self.home.as_mut() {
-            home.subs.gate(session, ack);
+            home.subs.gate(session, ack, held);
         }
         lines
     }
@@ -65,7 +71,7 @@ impl App {
             }
             Some(OpenAt::Home | OpenAt::List) | None => return Vec::new(),
         };
-        self.open_session(session, None, credential)
+        self.open_session(session, None, credential, false)
     }
 
     /// Folds the launch's list request into the first `recent` answer:
