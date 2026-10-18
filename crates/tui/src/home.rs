@@ -400,17 +400,17 @@ impl Subs {
     }
 }
 
-/// The subscribes opening a session sends from `expected`: none or
-/// `summary` needs one `full`; `full` needs `summary` then `full`, since
-/// the hub resumes an exited session at the level last held and a lone
-/// `full` would be refused as already at that level.
-const ONE_FULL: [Level; 1] = [Level::Full];
-const SUMMARY_THEN_FULL: [Level; 2] = [Level::Summary, Level::Full];
+/// The subscribes opening a session sends from `expected`: the first
+/// stage is one `summary`, unless the connection already holds
+/// `summary`, when no subscribe goes out and the raise follows the
+/// first frame at once. The `full` raise follows the first frame in
+/// every case, sent by `take_raise` after `draw`.
+const SUMMARY_ONLY: [Level; 1] = [Level::Summary];
 
 pub(crate) fn opening(expected: Option<Level>) -> &'static [Level] {
     match expected {
-        Some(Level::Full) => &SUMMARY_THEN_FULL,
-        _ => &ONE_FULL,
+        Some(Level::Summary) => &[],
+        _ => &SUMMARY_ONLY,
     }
 }
 

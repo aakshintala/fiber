@@ -24,6 +24,7 @@ pub use listed::{Target, connect_target, connect_unpaired, load_target, target};
 
 use std::io::{self, Read};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -278,66 +279,6 @@ fn connect_with(
     Err(Poll::Failed(unreachable_race()))
 }
 
-/// Whether the path at `socket` can still be a hub socket: it is missing,
-/// or it is a socket file (one a hub left behind when it exited). Any other
-/// filesystem object at the path never listened: on Linux its connect
-/// refuses exactly like an absent hub, while macOS reports a non-socket
-/// error, so the caller fails instead of starting or missing a hub.
-fn is_socket_or_missing(socket: &Path) -> bool {
-    match std::fs::metadata(socket) {
-        Err(_) => true,
-        Ok(meta) => {
-            use std::os::unix::fs::FileTypeExt;
-            meta.file_type().is_socket()
-        }
-    }
-}
-
-/// Whether a connect error means no hub runs, so the client starts one
-/// and keeps polling: the socket is absent or nobody listens yet. Any
-/// other error fails as is.
-fn is_absent(kind: io::ErrorKind) -> bool {
-    matches!(
-        kind,
-        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-    )
-}
-
-/// Whether a handshake read error is the deadline passing, so the connect
-/// fails `TimedOut`: any other read error fails as is.
-fn is_hello_timeout(kind: io::ErrorKind) -> bool {
-    matches!(kind, io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
-}
-
-/// Whether another handshake read fits before the deadline: at it or past
-/// it none is left.
-fn has_time_left(left: &Duration) -> bool {
-    !left.is_zero()
-}
-
-/// Whether the hello line's last byte is a carriage return to strip: a
-/// `\r\n` ending speaks `hub_hello` too.
-fn strips_cr(last: Option<&u8>) -> bool {
-    last == Some(&b'\r')
-}
-
-/// Whether the first line's kind is not the opening `hub_hello`.
-fn rejects_hello(kind: &str) -> bool {
-    kind != "hub_hello"
-}
-
-/// Whether the hello's schema version is not this build's.
-fn rejects_schema(version: u32) -> bool {
-    version != SCHEMA_VERSION
-}
-
-/// Whether a read-timeout error is the closed-peer refusal to ignore:
-/// macOS refuses the option once the peer has closed, while its buffered
-/// bytes stay readable and a read of the closed socket does not block.
-fn is_closed_peer(kind: io::ErrorKind) -> bool {
-    kind == io::ErrorKind::InvalidInput
-}
-
 /// What one handshake byte-read means.
 enum HelloRead {
     /// One byte towards the line.
@@ -357,18 +298,16 @@ fn classify_hello_read(read: io::Result<usize>) -> HelloRead {
     match read {
         Ok(0) => HelloRead::Race,
         Ok(_) => HelloRead::Byte,
-        Err(error) if is_hello_timeout(error.kind()) => HelloRead::TimedOut,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            HelloRead::TimedOut
+        }
         Err(error) if error.kind() == io::ErrorKind::ConnectionReset => HelloRead::Race,
         Err(error) => HelloRead::Failed(error),
-    }
-}
-
-/// Folds a `set_read_timeout` result, ignoring the closed-peer refusal,
-/// so tests inject each outcome.
-fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
-    match set {
-        Err(error) if is_closed_peer(error.kind()) => Ok(()),
-        other => other,
     }
 }
 
@@ -567,8 +506,25 @@ fn attempt(
                     Deferred::Connected(hub) => return Ok(hub),
                     Deferred::Direct(fd, errno) => {
                         let error = io::Error::from(errno);
-                        if is_absent(error.kind()) {
-                            if !is_socket_or_missing(&socket) {
+                        // No hub runs when the socket is absent or nobody
+                        // listens yet: the client starts one and keeps
+                        // polling. Any other error fails as is.
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                        ) {
+                            // The path can still be a hub socket when it is
+                            // missing, or a socket file one left behind when
+                            // it exited. Any other filesystem object never
+                            // listened: on Linux its connect refuses exactly
+                            // like an absent hub, while macOS reports a
+                            // non-socket error, so the caller fails instead
+                            // of starting or missing a hub.
+                            let socket_or_missing = match std::fs::metadata(&socket) {
+                                Err(_) => true,
+                                Ok(meta) => meta.file_type().is_socket(),
+                            };
+                            if !socket_or_missing {
                                 return Err(Poll::Failed(error));
                             }
                             wait_for_start(
@@ -737,7 +693,7 @@ fn finish_connect(
     ) {
         Ok((stream, line)) => {
             stream.set_nonblocking(false).map_err(Poll::Accepted)?;
-            ignore_closed_peer(stream.set_read_timeout(None)).map_err(Poll::Accepted)?;
+            set_read_timeout(&stream, None).map_err(Poll::Accepted)?;
             Ok((stream, line))
         }
         Err(Poll::Race) => Err(Poll::Race),
@@ -781,7 +737,8 @@ fn poll_hello(
         if let Some(deadline) = deadline
             && !deadline
                 .checked_duration_since(clock.now())
-                .is_some_and(|left| has_time_left(&left))
+                // At the deadline or past it no further read fits.
+                .is_some_and(|left| !left.is_zero())
         {
             return Err(timed_out());
         }
@@ -837,7 +794,8 @@ fn poll_hello(
 /// Requires the handshake line's `hub_hello` on this build's
 /// `schema_version`: a carriage return ends the line too.
 fn check_line(buf: &mut Vec<u8>) -> Result<HubLine, Poll> {
-    while strips_cr(buf.last()) {
+    // A `\r\n` ending speaks `hub_hello` too.
+    while buf.last() == Some(&b'\r') {
         buf.pop();
     }
     let hello: HubLine = serde_json::from_slice(buf).map_err(|_| {
@@ -846,13 +804,13 @@ fn check_line(buf: &mut Vec<u8>) -> Result<HubLine, Poll> {
             "the hub did not speak `hub_hello` first",
         ))
     })?;
-    if rejects_hello(&hello.kind) {
+    if hello.kind != "hub_hello" {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",
         )));
     }
-    if rejects_schema(hello.schema_version) {
+    if hello.schema_version != SCHEMA_VERSION {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
@@ -890,16 +848,21 @@ fn read_hello(
         &mut || {},
     )?;
     stream.set_nonblocking(false).map_err(Poll::Failed)?;
-    ignore_closed_peer(stream.set_read_timeout(None)).map_err(Poll::Failed)?;
+    set_read_timeout(&stream, None).map_err(Poll::Failed)?;
     Ok((stream, hello))
 }
 
-/// Sets `stream`'s read timeout, ignoring the closed-peer refusal (see
-/// [`is_closed_peer`]): macOS refuses the option once the peer has closed,
+/// Sets `stream`'s read timeout, ignoring the closed-peer refusal:
+/// macOS refuses the option once the peer has closed (`InvalidInput`),
 /// while its buffered bytes stay readable and a read of the closed socket
 /// does not block.
+// Exempt: no Linux caller produces `InvalidInput`; the macOS-only closed-peer refusal is covered by the macOS job's tests.
+#[cfg_attr(false, mutants::skip)]
 fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
-    ignore_closed_peer(stream.set_read_timeout(timeout))
+    match stream.set_read_timeout(timeout) {
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
+    }
 }
 
 #[cfg(test)]

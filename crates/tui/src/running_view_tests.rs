@@ -145,6 +145,17 @@ fn opened(app: &mut App) {
         .unwrap_or_else(|| panic!("a subscribe"))
         .to_owned();
     app.on_line(session_accepted(SESSION, &id));
+    // The staged open holds the gate past the first ack: the first
+    // frame releases the `full` raise, whose ack ends the gate. One
+    // ack would drop the session's later lines.
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value =
+        serde_json::from_str(&line).unwrap_or_else(|error| panic!("{line}: {error}"));
+    let raise_id = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
+        .to_owned();
+    app.on_line(session_accepted(SESSION, &raise_id));
 }
 
 /// Folds a delegate as `job` with session `delegate`.

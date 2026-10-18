@@ -11,11 +11,12 @@ use crate::image;
 /// One `read_file` out for a viewer open: what its answer needs to
 /// queue the open.
 struct Fetch {
-    /// The image's id.
+    /// The image's id on the screen that drew it.
     id: u32,
     /// The session the image came from, for the viewer's copy.
     session: String,
-    /// The logged path, for the `read_file` line.
+    /// The logged path, for the `read_file` line: the fetch's
+    /// identity, so a refusal survives the swap's new ids.
     path: String,
 }
 
@@ -25,10 +26,10 @@ struct Fetch {
 #[derive(Default)]
 pub(crate) struct Images {
     fetches: BTreeMap<String, Fetch>,
-    /// Images whose file would not open: missing, too large or
-    /// refused. They stay their line, with the notice said once, and
-    /// are not asked for again in this session.
-    refused: BTreeSet<u32>,
+    /// Images whose file would not open, by logged path: missing, too
+    /// large or refused. They stay their line, with the notice said
+    /// once, and are not asked for again in this session.
+    refused: BTreeSet<String>,
     out: image::Out,
     generation: u64,
 }
@@ -44,8 +45,8 @@ impl App {
             return Effect::None;
         };
         let path = part.path.clone();
-        if self.images.refused.contains(&id)
-            || self.images.fetches.values().any(|fetch| fetch.id == id)
+        if self.images.refused.contains(&path)
+            || self.images.fetches.values().any(|fetch| fetch.path == path)
         {
             return Effect::None;
         }
@@ -84,7 +85,8 @@ impl App {
             .and_then(|result| result.get("data"))
             .and_then(Value::as_str)
         else {
-            self.images.refused.insert(fetch.id);
+            let name = file_name(&fetch.path);
+            self.images.refused.insert(fetch.path);
             self.cant_open(&name, "the answer carried no file");
             return true;
         };
@@ -104,8 +106,8 @@ impl App {
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };
-        self.images.refused.insert(fetch.id);
         let name = file_name(&fetch.path);
+        self.images.refused.insert(fetch.path);
         self.cant_open(&name, message);
         true
     }
@@ -125,7 +127,9 @@ impl App {
             return;
         }
         if let Err(reason) = result {
-            self.images.refused.insert(id);
+            if let Some(path) = self.screen.pages().image(id).map(|part| part.path.clone()) {
+                self.images.refused.insert(path);
+            }
             self.cant_open(name, &reason);
         }
     }

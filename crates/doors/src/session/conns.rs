@@ -256,8 +256,10 @@ impl State {
 /// and the grace has not been reached. A `match` on the count, not a
 /// comparison, so no operator here widens into a wait that parks forever:
 /// the `0` arm returns at once without reading the clock, and the open arm
-/// defers to [`grace_remains`]. The boundary table in `session_tests` pins
-/// every corner.
+/// holds while now is before the deadline. An equal instant is the deadline
+/// itself. Waiting on through it would spin: the clock does not park for a
+/// time that has already arrived. The boundary table in `session_tests`
+/// pins every corner.
 pub(super) fn should_wait(
     writers_open: u32,
     now: std::time::Instant,
@@ -265,15 +267,8 @@ pub(super) fn should_wait(
 ) -> bool {
     match writers_open {
         0 => false,
-        _ => grace_remains(now, until),
+        _ => now < until,
     }
-}
-
-/// True while the grace has not been reached. An equal instant is the
-/// deadline itself. Waiting on through it would spin: the clock does not
-/// park for a time that has already arrived.
-pub(super) fn grace_remains(now: std::time::Instant, until: std::time::Instant) -> bool {
-    now < until
 }
 
 /// Stops the reader and shuts the socket through the stored closure, then

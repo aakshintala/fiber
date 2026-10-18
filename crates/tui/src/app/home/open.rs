@@ -53,11 +53,60 @@ impl Subscriptions {
         self.levels.pending(session)
     }
 
-    /// Opens the gate for `session`: lines for it fold into its row and
-    /// are dropped until the last subscribe's acknowledgement, whose id
-    /// is `ack`.
-    pub(super) fn gate(&mut self, session: SessionId, ack: String) {
-        self.opening = Some(Opening { session, ack });
+    /// Opens the gate for `session`: the first stage's acknowledgement
+    /// is `ack` when a first-stage subscribe went out, and `None` when
+    /// the connection already holds `summary`, when the raise is due at
+    /// once. `held` keeps the screen's rows: the tail read is skipped
+    /// and the raise goes out after the first frame draws, once the
+    /// preview is up. Until the raise's acknowledgement the gate holds.
+    pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
+        self.opening = Some(match ack {
+            Some(ack) => Opening::Summary { session, ack, held },
+            None => Opening::Due { session, held },
+        });
+    }
+
+    /// Records the raise sent with `id`: the first stage is answered,
+    /// so the open moves from due to raised; a read preview moves from
+    /// reading to raised.
+    pub(super) fn raise(&mut self, id: String) {
+        let session = match self.opening.take() {
+            Some(Opening::Due { session, .. }) | Some(Opening::Reading { session }) => session,
+            opening => {
+                self.opening = opening;
+                return;
+            }
+        };
+        self.opening = Some(Opening::Raised { session, ack: id });
+    }
+
+    /// The session opening, if any.
+    pub(super) fn opening_session(&self) -> Option<SessionId> {
+        self.opening
+            .as_ref()
+            .map(|opening| opening.session().clone())
+    }
+
+    /// Moves a due open to the tail read for the attached session: the
+    /// read before the raise. A held open reads nothing and stays due;
+    /// an open whose session is no longer attached drops. Some with the
+    /// session to read when the move happened.
+    pub(super) fn tail_due(&mut self, attached: Option<&SessionId>) -> Option<SessionId> {
+        let (session, held) = match self.opening.as_ref() {
+            Some(Opening::Due { session, held }) => (session.clone(), *held),
+            _ => return None,
+        };
+        if Some(&session) != attached {
+            self.opening = None;
+            return None;
+        }
+        if held {
+            return None;
+        }
+        self.opening = Some(Opening::Reading {
+            session: session.clone(),
+        });
+        Some(session)
     }
 
     /// Clears the old connection's levels and open gate, keeping the
@@ -73,13 +122,36 @@ impl Subscriptions {
     }
 }
 
-/// A session opening from home and its last subscribe, whose
-/// acknowledgement ends the gate.
-struct Opening {
+/// A session opening from home: the first stage in flight, the raise
+/// due after the first frame, the tail reading before the raise, or
+/// the raise in flight. Either acknowledgement's rejection fails the
+/// open; the raise's acceptance ends the gate.
+enum Opening {
+    /// The first-stage `summary` subscribe in flight.
+    Summary {
+        session: SessionId,
+        ack: String,
+        held: bool,
+    },
+    /// The first stage answered: the `full` raise goes out after the
+    /// first frame draws, once the tail read installs the preview.
+    Due { session: SessionId, held: bool },
+    /// The tail read in flight: the raise goes once it installs.
+    Reading { session: SessionId },
+    /// The `full` raise in flight.
+    Raised { session: SessionId, ack: String },
+}
+
+impl Opening {
     /// The session opening.
-    session: SessionId,
-    /// The last subscribe's id: only its rejection fails the open.
-    ack: String,
+    fn session(&self) -> &SessionId {
+        match self {
+            Self::Summary { session, .. }
+            | Self::Due { session, .. }
+            | Self::Reading { session }
+            | Self::Raised { session, .. } => session,
+        }
+    }
 }
 
 /// A `subscribe` line for `session` at `level`, with its id. With
@@ -195,7 +267,7 @@ impl App {
             .home
             .as_ref()
             .and_then(|home| home.subs.expected(&session));
-        Effect::Send(self.open_session(session, expected, None))
+        Effect::Send(self.open_session(session, expected, None, false))
     }
 
     /// Records the acknowledgement of the in-flight subscribe `id`:
@@ -207,13 +279,17 @@ impl App {
             .and_then(|home| home.subs.answered(id, accepted))
     }
 
-    /// Whether `id` is the open's last subscribe: only its rejection
-    /// fails the open, and only its acceptance ends the gate.
+    /// Whether `id` is the open's subscribe in flight: the first
+    /// stage's or the raise's. Only its rejection fails the open, and
+    /// only the raise's acceptance ends the gate.
     fn is_ack(&self, id: &str) -> bool {
         self.home
             .as_ref()
             .and_then(|home| home.subs.opening.as_ref())
-            .is_some_and(|opening| opening.ack == id)
+            .is_some_and(|opening| match opening {
+                Opening::Summary { ack, .. } | Opening::Raised { ack, .. } => ack == id,
+                Opening::Due { .. } | Opening::Reading { .. } => false,
+            })
     }
 
     /// Lowers `session` to `summary` when this connection holds it at
@@ -241,15 +317,16 @@ impl App {
         }
     }
 
-    /// A rejection of the open's last subscribe fails the open: home again
-    /// when still attached, with the message as the row's note and a
-    /// notice. A rejection of an earlier step changes nothing by itself.
+    /// A rejection of the open's subscribe in flight fails the open:
+    /// home again when still attached, with the message as the row's
+    /// note and a notice. A rejection of an earlier step changes nothing
+    /// by itself.
     fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
         let session = self
             .home
             .as_mut()
             .and_then(|home| home.subs.opening.take())
-            .map(|opening| opening.session);
+            .map(|opening| opening.session().clone());
         let Some(session) = session else {
             return Vec::new();
         };
@@ -292,7 +369,8 @@ impl App {
     }
 
     /// Folds an accepted subscribe on `session`'s stream past the gate:
-    /// a session held at `full` reconciles first, then the open's last
+    /// a session held at `full` reconciles first, then the first stage's
+    /// subscribe keeps the gate and makes the raise due, and the raise's
     /// subscribe ends the gate and its line goes on to `on_line`. Some
     /// with the lines to send, or `None` when the gate ended.
     pub(super) fn subscribe_accepted(
@@ -308,6 +386,22 @@ impl App {
             self.reconcile(session);
         }
         if self.is_ack(id) {
+            let due = self
+                .home
+                .as_ref()
+                .and_then(|home| home.subs.opening.as_ref())
+                .is_some_and(|opening| matches!(opening, Opening::Summary { .. }));
+            if due {
+                if let Some(home) = self.home.as_mut() {
+                    let opening = home.subs.opening.take();
+                    if let Some(Opening::Summary { session, held, .. }) = opening {
+                        home.subs.opening = Some(Opening::Due { session, held });
+                    } else {
+                        home.subs.opening = opening;
+                    }
+                }
+                return Some(Vec::new());
+            }
             if let Some(home) = self.home.as_mut() {
                 home.subs.opening = None;
             }
@@ -316,12 +410,92 @@ impl App {
         Some(Vec::new())
     }
 
+    /// The `full` raise due after the first frame drew: one `full`
+    /// subscribe for the opening session, written after `draw` returns
+    /// so no `full` line goes out before the first frame. The raise goes
+    /// when the open is due with no read started, due for a held screen,
+    /// or reading with the tail installed; a read open raises over the
+    /// installed preview. When the attached session is not the opening
+    /// one the open was left, so it drops and nothing goes out. Else
+    /// `None`: no raise is due.
+    pub(crate) fn take_raise(&mut self) -> Option<String> {
+        let opening = self
+            .home
+            .as_ref()
+            .and_then(|home| home.subs.opening.as_ref());
+        let due = opening.as_ref().and_then(|opening| match opening {
+            Opening::Due { held, .. } => Some(*held),
+            Opening::Summary { .. } | Opening::Reading { .. } | Opening::Raised { .. } => None,
+        });
+        let reading_done = opening.is_some_and(|opening| {
+            matches!(opening, Opening::Reading { .. })
+                && matches!(&self.overlay, crate::app::overlay::Overlay::Shown { session: shown, .. } if shown == opening.session())
+        });
+        let held = due.or(if reading_done { Some(false) } else { None })?;
+        let session = self
+            .home
+            .as_ref()
+            .and_then(|home| home.subs.opening.as_ref())
+            .map(|opening| opening.session().clone());
+        let session = session?;
+        if self.session() != Some(&session) {
+            if let Some(home) = self.home.as_mut() {
+                home.subs.opening = None;
+            }
+            return None;
+        }
+        let (id, line) = subscribe_line(&session, Level::Full, None);
+        if let Some(home) = self.home.as_mut() {
+            home.subs.sent(id.clone(), session.clone(), Level::Full);
+            home.subs.raise(id);
+        }
+        if due.is_some() {
+            let busy = matches!(&self.phase, Phase::Attached { busy: true, .. });
+            self.overlay = crate::app::overlay::Overlay::Shown {
+                session,
+                busy: Some(busy),
+                held,
+            };
+            self.attached_screen_mut().set_frozen(true);
+        }
+        Some(line)
+    }
+
+    /// Whether `id` answers the open's raise for `session`: the ack
+    /// `pass_line` reads while the overlay is shown.
+    pub(in crate::app) fn raise_ack(&self, session: &SessionId, id: &str) -> bool {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.opening.as_ref())
+            .is_some_and(|opening| {
+                matches!(opening, Opening::Raised { ack, .. } if ack == id)
+                    && opening.session() == session
+            })
+    }
+
+    /// Moves a due open to the tail read and starts it: the loop reads
+    /// the session's last lines before the raise. Some with the session
+    /// to read when the move happened.
+    pub(crate) fn tail_due(&mut self) -> Option<SessionId> {
+        let attached = self.session().cloned();
+        let session = self.home.as_mut()?.subs.tail_due(attached.as_ref())?;
+        self.overlay = crate::app::overlay::Overlay::Reading(crate::app::overlay::Tail::new());
+        Some(session)
+    }
+
+    /// The session opening, if any.
+    pub(crate) fn opening_session(&self) -> Option<SessionId> {
+        self.home
+            .as_ref()
+            .and_then(|home| home.subs.opening_session())
+    }
+
     /// Whether `session` is opening: its lines fold into its row and are
-    /// dropped until the last subscribe's acknowledgement.
+    /// dropped until the raise's acknowledgement.
     pub(super) fn gated(&self, session: &SessionId) -> bool {
         self.home
             .as_ref()
             .and_then(|home| home.subs.opening.as_ref())
-            .is_some_and(|opening| opening.session == *session)
+            .is_some_and(|opening| opening.session() == session)
     }
 }

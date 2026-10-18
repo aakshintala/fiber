@@ -772,6 +772,8 @@ fn pad_with_a_missing_text_row_leaves_the_rows() {
     let mut out = Rows {
         rows: vec![(Line::raw("abc"), None)],
         texts: Vec::new(),
+        sources: Vec::new(),
+        source: None,
         scopes: Vec::new(),
         all_open: false,
     };

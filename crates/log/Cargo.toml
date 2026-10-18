@@ -22,15 +22,13 @@ libc = "0.2"
 fakes = { path = "../fakes" }
 proptest.workspace = true
 
-# The jigs (docs/testing.md, "Jigs"). `test = true` runs each jig's own tests
-# with the crate's.
+# The jigs (docs/testing.md, "Jigs"): binary jigs tested by
+# `tests/dump_jig.rs` and `tests/check_jig.rs`, which run the built binaries.
 [[example]]
 name = "dump"
-test = true
 
 [[example]]
 name = "check"
-test = true
 
 [lints]
 workspace = true

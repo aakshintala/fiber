@@ -813,7 +813,10 @@ fn opened(app: &mut App) -> Vec<Value> {
     open_first(app)
 }
 
-/// The acknowledgement of the last subscribe in `out`.
+/// The acknowledgement of the staged open in `out`: ack the first-stage
+/// `summary`, then the `full` raise the first frame releases. Only the
+/// raise's acknowledgement ends the gate, so one ack would leave the
+/// session's later lines gated.
 fn ack(app: &mut App, out: &[Value]) -> Vec<String> {
     let id = out
         .iter()
@@ -821,7 +824,14 @@ fn ack(app: &mut App, out: &[Value]) -> Vec<String> {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("a subscribe"))
         .to_owned();
-    app.on_line(session_accepted(SESSION, &id))
+    let _ = app.on_line(session_accepted(SESSION, &id));
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
+    let raise_id = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a raise id"))
+        .to_owned();
+    app.on_line(session_accepted(SESSION, &raise_id))
 }
 
 /// Asserts `lines` hold one branch query, returning its id.

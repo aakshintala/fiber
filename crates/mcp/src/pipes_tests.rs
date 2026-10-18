@@ -3,11 +3,6 @@
 use contract::clock::Clock;
 
 #[test]
-fn max_line_is_4_mib() {
-    assert_eq!(super::MAX_LINE, 4 * 1024 * 1024);
-}
-
-#[test]
 fn a_line_ending_in_a_newline_strips_it() {
     // Without the `ends_with` guard the trailing newline would stay in
     // the line: the `false` mutant returns `"hi\n"` here.

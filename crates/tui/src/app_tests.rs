@@ -1886,3 +1886,27 @@ fn the_more_row_is_a_focus_stop() {
         "the more row is a focus stop"
     );
 }
+
+/// An until wait is the session's own `Until` pass: another session's
+/// boundary, or a pass that holds no boundary, waits for nothing.
+#[test]
+fn until_waited_needs_the_sessions_own_until_pass() {
+    use super::Pass;
+    let session = contract::SessionId(S_A.to_owned());
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    let mut app = app();
+    assert!(!app.until_waited(&session), "no pass waits");
+    app.passes.push((other, Pass::Until(contract::Seq(0))));
+    assert!(
+        !app.until_waited(&session),
+        "another session's boundary waits"
+    );
+    app.passes.push((session.clone(), Pass::Pending));
+    assert!(
+        !app.until_waited(&session),
+        "a pending pass holds no boundary"
+    );
+    app.passes
+        .push((session.clone(), Pass::Until(contract::Seq(7))));
+    assert!(app.until_waited(&session), "its own boundary waits");
+}

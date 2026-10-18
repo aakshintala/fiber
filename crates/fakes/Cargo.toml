@@ -18,11 +18,10 @@ rustix.workspace = true
 flate2.workspace = true
 serde_json.workspace = true
 
-# The jig (docs/testing.md, "Jigs"). `test = true` runs its own tests with the
-# crate's.
+# The jig (docs/testing.md, "Jigs"): a binary jig tested by
+# `tests/provider_server_jig.rs`, which runs the built binary.
 [[example]]
 name = "provider-server"
-test = true
 
 [lints]
 workspace = true

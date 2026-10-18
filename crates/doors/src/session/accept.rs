@@ -7,6 +7,8 @@ use std::sync::{Arc, mpsc};
 use super::{Gate, join, spawn};
 use crate::client;
 
+// Exempt: `Interrupted` needs a signal delivered mid-accept, which no test stages; the non-`Interrupted` wait is pinned through this loop by `accept_waits_for_room_on_a_non_interrupted_error`.
+#[cfg_attr(false, mutants::skip)]
 pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
     loop {
         if gate.conns.stopped() {
@@ -63,16 +65,12 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                 if gate.conns.stopped() {
                     return;
                 }
-                if accept_error_waits(error.kind()) {
+                // `Interrupted` is a stale wake and is retried. Any other
+                // accept error waits so the loop does not spin.
+                if error.kind() != io::ErrorKind::Interrupted {
                     gate.conns.wait_for_room();
                 }
             }
         }
     }
-}
-
-/// `Interrupted` is a stale wake and is retried. Any other accept error waits
-/// so the loop does not spin.
-pub(super) fn accept_error_waits(kind: io::ErrorKind) -> bool {
-    kind != io::ErrorKind::Interrupted
 }

@@ -1,0 +1,125 @@
+//! The plain-data session argv (`docs/invocation.md`, "Commands and
+//! flags"): the one writer of every session command line. The hub and the
+//! delegates build it; `main`'s clap `SessionArgs` parses and converts
+//! into it.
+
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use crate::{JobId, SessionId};
+
+/// One session command line, as data: the order and the `--name=value`
+/// rules live in [`SessionArgv::to_argv`], the only code that writes a
+/// session argv.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionArgv {
+    /// The session's id, minted by whoever starts it.
+    pub id: SessionId,
+    /// The workspace the session runs in.
+    pub workspace: PathBuf,
+    /// The model for this run, as a person types it.
+    pub model: Option<String>,
+    /// One configuration key for this run, `<key>=<value>`, in order.
+    pub overrides: Vec<String>,
+    /// The first prompt. With none the session waits for a client.
+    pub prompt: Option<String>,
+    /// Resume the session `--id` names instead of starting it.
+    pub resume: bool,
+    /// The credential label the resumed session starts on.
+    pub credential: Option<String>,
+    /// Run the session in a new worktree.
+    pub worktree: bool,
+    /// Continue the session this rewind names as the session its
+    /// `rewound` line points at.
+    pub rewound_from: Option<SessionId>,
+    /// The parent session: its id.
+    pub parent: Option<SessionId>,
+    /// The delegate's job id in its parent session.
+    pub delegate_id: Option<JobId>,
+    /// This session's depth in the delegate tree, passed by its parent.
+    pub depth: Option<u32>,
+    /// The session's environment came from the login-shell capture.
+    pub login_shell: bool,
+}
+
+impl Default for SessionArgv {
+    fn default() -> Self {
+        Self {
+            id: SessionId(String::new()),
+            workspace: PathBuf::new(),
+            model: None,
+            overrides: Vec::new(),
+            prompt: None,
+            resume: false,
+            credential: None,
+            worktree: false,
+            rewound_from: None,
+            parent: None,
+            delegate_id: None,
+            depth: None,
+            login_shell: false,
+        }
+    }
+}
+
+impl SessionArgv {
+    /// The argv of this session command, starting with `session`: each
+    /// `--name=<value>` is one argument so a value starting with `-`
+    /// never reads as another flag, and a `-c` value starting with `-`
+    /// travels attached for the same reason. The order is fixed, so a
+    /// caller and its test read the same list: `session`, `--id`,
+    /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
+    /// `--credential`, `--worktree`, `--rewound-from`, `--parent`,
+    /// `--delegate-id`, `--depth`, `--login-shell`, each only when set.
+    #[must_use]
+    pub fn to_argv(&self) -> Vec<OsString> {
+        let mut argv = vec![OsString::from("session")];
+        argv.push(OsString::from(format!("--id={}", self.id.0)));
+        let mut workspace = OsString::from("--workspace=");
+        workspace.push(&self.workspace);
+        argv.push(workspace);
+        if let Some(model) = &self.model {
+            argv.push(OsString::from(format!("--model={model}")));
+        }
+        for override_text in &self.overrides {
+            if override_text.starts_with('-') {
+                argv.push(OsString::from(format!("-c{override_text}")));
+            } else {
+                argv.push(OsString::from("-c"));
+                argv.push(OsString::from(override_text));
+            }
+        }
+        if self.resume {
+            argv.push(OsString::from("--resume"));
+        }
+        if let Some(prompt) = &self.prompt {
+            argv.push(OsString::from(format!("--prompt={prompt}")));
+        }
+        if let Some(credential) = &self.credential {
+            argv.push(OsString::from(format!("--credential={credential}")));
+        }
+        if self.worktree {
+            argv.push(OsString::from("--worktree"));
+        }
+        if let Some(rewound_from) = &self.rewound_from {
+            argv.push(OsString::from(format!("--rewound-from={}", rewound_from.0)));
+        }
+        if let Some(parent) = &self.parent {
+            argv.push(OsString::from(format!("--parent={}", parent.0)));
+        }
+        if let Some(delegate_id) = &self.delegate_id {
+            argv.push(OsString::from(format!("--delegate-id={}", delegate_id.0)));
+        }
+        if let Some(depth) = self.depth {
+            argv.push(OsString::from(format!("--depth={depth}")));
+        }
+        if self.login_shell {
+            argv.push(OsString::from("--login-shell"));
+        }
+        argv
+    }
+}
+
+#[cfg(test)]
+#[path = "session_argv_tests.rs"]
+mod tests;

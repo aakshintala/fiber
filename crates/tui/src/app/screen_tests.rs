@@ -268,3 +268,33 @@ fn wrap_at_reports_a_new_width() {
     assert!(screen.wrap_at(0), "0 wraps at 1, a new width");
     assert!(!screen.wrap_at(1));
 }
+
+#[test]
+fn a_frozen_screen_does_not_scroll() {
+    let mut screen = screen(4);
+    let height = 5;
+    screen.scroll_rows(true, 3, height);
+    let top = screen.top();
+    assert!(top.is_some(), "scrolled up from the bottom");
+    screen.set_frozen(true);
+    assert!(screen.frozen());
+    screen.scroll_rows(true, 2, height);
+    screen.page(true, height);
+    screen.jump(0);
+    screen.reveal(1, height);
+    assert_eq!(screen.top(), top, "nothing moved while frozen");
+    assert!(
+        !screen.wrap_at(40),
+        "a frozen width stores without recounting"
+    );
+    assert_eq!(screen.pages().wrap_width(), 80);
+    screen.set_frozen(false);
+    assert!(!screen.frozen());
+    assert_eq!(
+        screen.pages().wrap_width(),
+        40,
+        "unfreezing applies the stored width once"
+    );
+    screen.scroll_rows(true, 2, height);
+    assert_ne!(screen.top(), top, "unfrozen scrolls again");
+}

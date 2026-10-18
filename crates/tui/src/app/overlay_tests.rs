@@ -1,0 +1,2400 @@
+//! Tests for the open's overlay: the second fold never changes the
+//! screen, the landing swaps exactly at the pass boundary, and every
+//! abnormal end keeps the preview (`docs/tui.md`, "History and paging").
+
+use std::path::PathBuf;
+
+use contract::{ActionId, JobId, SessionId};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use serde_json::{Value, json};
+
+use super::super::{App, Effect, Kind, Pass, Phase};
+use super::Overlay;
+use crate::app::Target;
+use crate::input::Draft;
+use crate::keys::{Button, Mouse, MouseKind};
+use crate::link::Line;
+use crate::mouse::TargetId;
+use crate::turn::target_id;
+use crate::view::scroll_bar::THUMB;
+
+const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+
+fn id(session: &str) -> SessionId {
+    SessionId(session.to_owned())
+}
+
+/// An app attached to [`SESSION`] with the link up, 80x24.
+fn app() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(80, 24);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(id(SESSION));
+    app
+}
+
+/// An app on home at 80x24, launched to open `open_at`.
+fn home_at(open_at: crate::OpenAt) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at,
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    app
+}
+
+/// One durable session line numbered `seq`.
+fn line(kind: &str, seq: u64, action: Option<&str>, payload: Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: id(SESSION),
+        ts: seq,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|action| ActionId(action.to_owned())),
+        seq: Some(contract::Seq(seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A turn's lines from `seq`: prompt, step, message, text, complete.
+fn turn(seq: &mut u64, message: &str, text: &str) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, *seq, action, payload));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(message), json!({}));
+    push("text_completed", Some(message), json!({"text": text}));
+    push(
+        "assistant_message_completed",
+        Some(message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// A turn's lines from `seq` with one requested call.
+fn call_turn(seq: &mut u64, message: &str, call: &str) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, *seq, action, payload));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(message), json!({}));
+    push(
+        "tool_call_requested",
+        Some(call),
+        json!({"name": "read", "arguments": {}}),
+    );
+    push(
+        "assistant_message_completed",
+        Some(message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// A session `command_accepted` for `id`, without a result.
+fn session_accepted(session: &str, command: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), Value::String(command.to_owned()))]
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// The raise's acceptance for `id`: the pass ends at `last`.
+fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: id(session),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [
+            ("command_id".to_owned(), Value::String(command.to_owned())),
+            ("result".to_owned(), json!({"last_seq": last})),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A hub line for `session` carrying `last_seq` when set.
+fn hub(kind: &str, session: &str, last: Option<u64>) -> Line {
+    let mut payload = serde_json::Map::new();
+    payload.insert("session_id".to_owned(), Value::String(session.to_owned()));
+    if let Some(last) = last {
+        payload.insert("last_seq".to_owned(), json!(last));
+    }
+    Line::Hub(contract::HubLine {
+        kind: kind.to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload,
+    })
+}
+
+/// A hub `command_rejected` for `id` with `message`.
+fn hub_refused(id: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            (
+                "code".to_owned(),
+                Value::String("invalid_arguments".to_owned()),
+            ),
+            ("message".to_owned(), Value::String(message.to_owned())),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// Folds `lines` into a fresh 80-column `Pages`.
+fn folded(lines: &[Line]) -> crate::window::Pages {
+    let mut pages = crate::window::Pages::new(80);
+    for line in lines {
+        if let Line::Session(envelope) = line {
+            pages.apply(envelope);
+        }
+    }
+    pages
+}
+
+/// Opens [`SESSION`] from home through the raise, whose acceptance ends
+/// the pass at `last`: the overlay folds the second `Pages`.
+fn opening(last: u64) -> App {
+    let mut app = home_at(crate::OpenAt::Home);
+    let lines: Vec<Value> = app
+        .open_session(id(SESSION), None, None, false)
+        .into_iter()
+        .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe"));
+    let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(
+        app.on_line(session_accepted(SESSION, summary_id))
+            .is_empty()
+    );
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"]["level"], "full");
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(
+        app.on_line(raise_accepted(SESSION, raise_id, last))
+            .is_empty()
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Folding { .. }),
+        "the raise's ack starts the pass"
+    );
+    app
+}
+
+/// Holds the preview's lines over `fold` with the pass ending at `last`:
+/// the screen freezes as the raise's take leaves it.
+fn folding(preview: &[Line], fold: &[Line], last: u64) -> App {
+    let mut app = app();
+    for line in preview {
+        app.on_line(line.clone());
+    }
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(fold)),
+        busy: None,
+        held: false,
+        landing: false,
+    };
+    app.passes
+        .push((id(SESSION), Pass::Until(contract::Seq(last))));
+    app.attached_screen_mut().set_frozen(true);
+    app
+}
+
+/// The app drawn at 80x24.
+fn rendered(app: &App) -> Buffer {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    buf
+}
+
+/// The thumb's rows within the bar's top-relative column.
+fn thumb_rows(app: &App, buf: &Buffer) -> Vec<u16> {
+    let conversation = app.conversation_area();
+    (conversation.top()..conversation.bottom())
+        .filter(|y| buf[(79, *y)].symbol() == THUMB)
+        .map(|y| y - conversation.y)
+        .collect()
+}
+
+#[test]
+fn landing_swaps_exactly_at_last_seq() {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..10 {
+        let text = if n == 8 {
+            "the boundary reply"
+        } else {
+            "a passing reply"
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), text));
+    }
+    assert_eq!(seq, 60);
+    // The boundary reply's text folds at seq 51, one line over a batch
+    // boundary of 50: the lines under, at and over the boundary each
+    // land exactly.
+    for last in [49u64, 50, 51] {
+        let mut app = opening(last);
+        let at = usize::try_from(last).unwrap_or(0);
+        for line in &lines[..at] {
+            app.on_line(line.clone());
+        }
+        let held = total_of(&app);
+        assert_eq!(total_of(&app), held);
+        assert!(
+            !crate::view::text(&rendered(&app)).contains("boundary"),
+            "the lines under {last} change nothing"
+        );
+        app.on_line(lines[at].clone());
+        assert!(total_of(&app) > held, "the line at {last} swaps");
+        if last == 51 {
+            assert!(
+                crate::view::text(&rendered(&app)).contains("boundary"),
+                "the boundary line swaps with its text"
+            );
+        }
+        let swapped = total_of(&app);
+        let mut following = seq;
+        for line in turn(&mut following, "a_next", "a following reply") {
+            app.on_line(line);
+        }
+        assert!(total_of(&app) > swapped, "the next line appends below");
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(!app.attached_screen().frozen());
+    }
+}
+
+#[test]
+fn a_second_fold_never_changes_the_screen() {
+    let mut app = opening(1_000_000);
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..1000 {
+        lines.extend(turn(&mut seq, "a_m", &format!("reply {n}")));
+    }
+    assert_eq!(lines.len(), 6_000);
+    let drawn = crate::view::text(&rendered(&app));
+    assert!(idle(&app));
+    for batch in lines.chunks(50) {
+        for line in batch {
+            app.on_line(line.clone());
+        }
+        assert_eq!(
+            crate::view::text(&rendered(&app)),
+            drawn,
+            "the screen holds the preview"
+        );
+        assert!(
+            thumb_rows(&app, &rendered(&app)).is_empty(),
+            "the bar stays hidden"
+        );
+        assert!(!app.counts_exact());
+        assert!(idle(&app), "busy stays the preview's");
+    }
+    assert!(matches!(app.overlay, Overlay::Folding { .. }));
+}
+
+#[test]
+fn landing_clears_the_selection_and_remaps_focus() {
+    let mut seq = 0u64;
+    let preview = call_turn(&mut seq, "a_m", "a_c");
+    let last = seq;
+    // A selection set on the preview, and focus on its call.
+    let mut app = folding(&preview, &preview, last);
+    let (_, targets) = {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        (buf, targets)
+    };
+    let rows: Vec<String> = {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        (area.top()..area.bottom())
+            .map(|y| {
+                (area.left()..area.right())
+                    .map(|x| buf.cell((x, y)).map_or(" ", |cell| cell.symbol()))
+                    .collect()
+            })
+            .collect()
+    };
+    let col = rows
+        .iter()
+        .position(|row| row.contains("prompt"))
+        .map(|y| {
+            let byte = rows[y].find("prompt").unwrap_or(0);
+            (
+                u16::try_from(byte).unwrap_or(0),
+                u16::try_from(y).unwrap_or(0),
+            )
+        })
+        .unwrap_or_else(|| panic!("the prompt shows"));
+    assert_eq!(
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col: col.0,
+                row: col.1,
+            },
+            &targets
+        ),
+        Effect::None
+    );
+    assert_eq!(
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Drag(Button::Left),
+                col: col.0 + 4,
+                row: col.1,
+            },
+            &targets
+        ),
+        Effect::None
+    );
+    assert!(app.select.span().is_some(), "a selection is set");
+    let call = Target::Call(target_id("a_c"));
+    app.focus = Some(TargetId::Line(call));
+    app.on_line(line(
+        "turn_completed",
+        last,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert_eq!(app.select.span(), None, "the swap clears the selection");
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Line(call)),
+        "focus follows the same call"
+    );
+    // A focused line the fold lacks leaves focus empty.
+    let mut app = folding(&preview, &preview, last + 1);
+    app.focus = Some(TargetId::Line(Target::Call(target_id("a_ghost"))));
+    app.on_line(line(
+        "turn_completed",
+        last + 1,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert_eq!(app.focused(), None);
+}
+
+/// A held landing keeps the second copy of a repeated line: the anchor
+/// is the top row's `seq`, applied after the unfreeze. The fold carries
+/// the same lines with a longer first reply, so the later pages start
+/// on later rows: matching on text would point at the first copy, and
+/// jumping while frozen would leave the stale row, so both defects fail
+/// this test.
+#[test]
+fn a_held_landing_keeps_the_second_copy_by_seq() {
+    // Twenty-three turns, six lines each: three pages, with one reply
+    // text shared by turns 18 and 19. The top sits on the second copy,
+    // with turns below so the jump never clamps at the bottom.
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    for n in 0..23 {
+        let text = if n == 18 || n == 19 {
+            "same reply".to_owned()
+        } else {
+            format!("reply {n}")
+        };
+        preview.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &preview {
+        app.on_line(line.clone());
+    }
+    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    // Following keeps a suffix resident: the absolute row adds the
+    // rows trimmed above the resident window.
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let copies: Vec<usize> = resident
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (line, _))| line.to_string().contains("same reply"))
+        .map(|(at, _)| start + at)
+        .collect();
+    assert_eq!(copies.len(), 2, "two copies draw");
+    app.jump(copies[1]);
+    assert_eq!(app.attached_screen().top(), Some(copies[1]));
+    // Only the second copy shows, on the top row: the first sits
+    // above the window.
+    let buf = rendered(&app);
+    let shown = crate::view::text(&buf);
+    assert_eq!(shown.matches("same reply").count(), 1, "{shown}");
+    let area = app.conversation_area();
+    let first: String = (area.left()..area.right())
+        .map(|x| buf.cell((x, area.top())).map_or(" ", |cell| cell.symbol()))
+        .collect();
+    assert!(first.contains("same reply"), "{shown}");
+    // The same lines with a longer first reply: the splits stay on the
+    // same lines, but every later page starts on a later row.
+    let mut then = 0u64;
+    let mut fold_lines = turn(&mut then, "a_m0", &"x".repeat(200));
+    fold_lines.extend(preview.iter().skip(6).cloned());
+    // The fold wraps at the attached width, so its pages split on the
+    // same lines with the same rows inside each page.
+    let width = app.attached_screen().pages().wrap_width();
+    let mut fold = crate::window::Pages::new(width);
+    for line in &fold_lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&preview)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.land(fold, true);
+    assert!(
+        !app.attached_screen().frozen(),
+        "landing unfreezes before the jump"
+    );
+    let top = app
+        .attached_screen()
+        .top()
+        .unwrap_or_else(|| panic!("a top row"));
+    assert_ne!(top, copies[1], "the jump applies after the unfreeze");
+    // The first copy scrolled off above: only the second shows, on the
+    // top row. A text match would sit on the first copy, and a frozen
+    // jump would leave both copies showing.
+    let buf = rendered(&app);
+    let shown = crate::view::text(&buf);
+    assert_eq!(shown.matches("same reply").count(), 1, "{shown}");
+    let area = app.conversation_area();
+    let first: String = (area.left()..area.right())
+        .map(|x| buf.cell((x, area.top())).map_or(" ", |cell| cell.symbol()))
+        .collect();
+    assert!(first.contains("same reply"), "{shown}");
+}
+
+/// A held landing with a resize deferred while frozen keeps the top on
+/// the row with the same `seq`: the two long replies above the top on
+/// its page wrap to more rows at the new width, so the top's old offset
+/// in the page points into them. Anchoring by the page's first `seq`
+/// plus that offset lands on a long reply; anchoring by the top row's
+/// own `seq` lands on the same reply again.
+#[test]
+fn a_held_landing_after_a_deferred_resize_keeps_the_top_seq() {
+    // Twenty-three turns, six lines each: three pages, the second from
+    // turn 11. Turns 11 and 12 reply at length; the top sits on turn
+    // 13's reply, with turns below so the jump never clamps.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert_eq!(app.attached_screen().pages().wrap_width(), 79);
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    assert_eq!(app.attached_screen().top(), Some(top));
+    let (page, _) = app
+        .attached_screen()
+        .pages()
+        .index()
+        .locate(top)
+        .unwrap_or_else(|| panic!("a page holds the top"));
+    assert_eq!(
+        app.attached_screen()
+            .pages()
+            .index()
+            .page_of(contract::Seq(66)),
+        Some(page),
+        "the top shares its page with the long replies"
+    );
+    // The open holds the preview: the resize waits for the unfreeze.
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    assert_eq!(
+        app.attached_screen().pages().wrap_width(),
+        79,
+        "the resize is deferred"
+    );
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    app.land(fold, true);
+    assert!(!app.attached_screen().frozen());
+    assert!(
+        app.attached_screen().pages().wrap_width() < 79,
+        "the unfreeze applies the resize"
+    );
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let conversation = app.conversation_area();
+    let first: String = (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect();
+    assert!(first.contains("reply 13"), "{shown}");
+}
+
+/// A held landing with a resize deferred while frozen keeps the top on
+/// the same `seq` when the fold dropped the top's page: the unfreeze
+/// only marks a dropped page stale, so its rows and pieces keep the old
+/// width until it loads. The anchor holds through the loads and applies
+/// again once they count the pages at the new width.
+#[test]
+fn a_held_landing_keeps_the_top_seq_when_the_fold_dropped_its_page() {
+    // As above: three pages, the second from turn 11, whose long
+    // replies sit above the top on turn 13's reply.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    assert_eq!(app.attached_screen().top(), Some(top));
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    // The fold keeps only its last row's page: the top's page drops.
+    let total = fold.index().total();
+    fold.trim(total - 1, 1);
+    let page = fold
+        .index()
+        .page_of(contract::Seq(66))
+        .unwrap_or_else(|| panic!("a page holds turn 11"));
+    let range = fold
+        .index()
+        .pages()
+        .get(page)
+        .map(|page| page.first_seq..=page.last_seq)
+        .unwrap_or_else(|| panic!("the top's page"));
+    assert!(
+        fold.needs(0, total).contains(&range),
+        "the fold dropped the top's page"
+    );
+    app.land(fold, true);
+    assert!(app.attached_screen().pages().wrap_width() < 79);
+    // The frame's loads, as the loop pages them in.
+    let log = envelopes(&lines);
+    for _ in 0..8 {
+        let Some(range) = app.needs().into_iter().next() else {
+            break;
+        };
+        let held: Vec<contract::Envelope> = log
+            .iter()
+            .filter(|envelope| envelope.seq.is_some_and(|seq| range.contains(&seq)))
+            .cloned()
+            .collect();
+        app.load(held);
+    }
+    assert!(app.needs().is_empty(), "every page loaded");
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let shown = crate::view::text(&buf);
+    let conversation = app.conversation_area();
+    let first: String = (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect();
+    assert!(first.contains("reply 13"), "{shown}");
+}
+
+fn held_landing_with_dropped_pages() -> (App, Vec<contract::Envelope>) {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..23 {
+        let text = if n == 11 || n == 12 {
+            format!("long {n} {}", "word ".repeat(200))
+        } else {
+            format!("reply {n}")
+        };
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &text));
+    }
+    let mut app = app();
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    let resident = app.attached_screen().pages().rows();
+    let start = app.attached_screen().pages().index().total() - resident.len();
+    let top = resident
+        .iter()
+        .position(|(line, _)| line.to_string().contains("reply 13"))
+        .map(|at| start + at)
+        .unwrap_or_else(|| panic!("turn 13's reply draws"));
+    app.jump(top);
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&lines)),
+        busy: None,
+        held: true,
+        landing: false,
+    };
+    app.attached_screen_mut().set_frozen(true);
+    app.set_size(60, 24);
+    let mut fold = crate::window::Pages::new(79);
+    for line in &lines {
+        if let Line::Session(envelope) = line {
+            fold.apply(envelope);
+        }
+    }
+    let total = fold.index().total();
+    fold.trim(total - 1, 1);
+    app.land(fold, true);
+    (app, envelopes(&lines))
+}
+
+fn landing_top_text(app: &App) -> String {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    let conversation = app.conversation_area();
+    (conversation.left()..conversation.right())
+        .map(|x| {
+            buf.cell((x, conversation.top()))
+                .map_or(" ", |cell| cell.symbol())
+        })
+        .collect()
+}
+
+#[test]
+fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    app.load_failed(&range, "page failed");
+    // Following leaves the failed page for the resident, unrelated tail.
+    app.on_key(
+        crate::keys::Key::End,
+        contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref()),
+    );
+    let before = landing_top_text(&app);
+    assert_eq!(app.attached_screen().top(), None, "End follows the tail");
+    let top = app.attached_screen().top();
+    let tail: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq > *range.end()))
+        .collect();
+    assert!(!tail.is_empty());
+    app.load(tail);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+#[test]
+fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    app.on_key(
+        crate::keys::Key::PageDown,
+        contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref()),
+    );
+    let top = app.attached_screen().top();
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+/// A wheel-up after a held landing releases the anchor: the wheel
+/// scrolls past `route_key`, straight through `Screen::scroll_rows`,
+/// so a later load must not jump the top back.
+#[test]
+fn a_wheel_up_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `scroll_conversation` runs for a wheel-up over the
+    // conversation: three rows up, past the key router.
+    app.attached_screen_mut().scroll_rows(true, 3, 5);
+    let top = app.attached_screen().top();
+    assert!(top.is_some(), "the wheel scrolled up from the landing");
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+/// Clicking "new below" after a held landing releases the anchor: the
+/// click follows past `route_key`, straight through `Screen::follow`,
+/// so a later load must not jump the top back.
+#[test]
+fn a_follow_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `on_click` runs for "new below": follow, past the key router.
+    app.attached_screen_mut().follow();
+    assert_eq!(app.attached_screen().top(), None, "the click follows");
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        None,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+/// A search jump after a held landing releases the anchor: the reveal
+/// jumps past `route_key`, straight through `Screen::jump`, so a later
+/// load must not jump the top back.
+#[test]
+fn a_search_jump_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `reveal_current` runs for a match on a resident page: jump,
+    // past the key router and past `App::jump`.
+    app.attached_screen_mut().jump(0);
+    assert_eq!(app.attached_screen().top(), Some(0));
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        Some(0),
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+#[test]
+fn an_empty_log_opens_no_pass() {
+    let mut app = home_at(crate::OpenAt::Home);
+    let lines: Vec<Value> = app
+        .open_session(id(SESSION), None, None, false)
+        .into_iter()
+        .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe"));
+    let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(
+        app.on_line(session_accepted(SESSION, summary_id))
+            .is_empty()
+    );
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    assert!(app.attached_screen().frozen());
+    // The raise's ack without a result ends the overlay.
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(app.on_line(session_accepted(SESSION, raise_id)).is_empty());
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(!app.attached_screen().frozen());
+    assert!(!app.pass_open());
+    assert_eq!(app.session(), Some(&id(SESSION)));
+}
+
+#[test]
+fn reopening_resets_the_second_pages_and_keeps_the_screen() {
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    preview.extend(turn(&mut seq, "a_m", "the preview reply"));
+    let mut fold_lines = Vec::new();
+    for n in 0..4 {
+        fold_lines.extend(turn(
+            &mut seq,
+            &format!("a_f{n}"),
+            &format!("fold reply {n}"),
+        ));
+    }
+    let last = seq + 100;
+    let mut app = folding(&preview, &fold_lines, last);
+    let held = app.attached_screen().pages().index().total();
+    assert!(matches!(app.overlay, Overlay::Folding { .. }));
+    app.on_line(hub("stream_reopened", SESSION, Some(last + 50)));
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("the pass runs on");
+    };
+    assert_eq!(
+        fold.index().total(),
+        crate::window::Pages::new(80).index().total(),
+        "the second Pages starts over"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        held,
+        "the preview keeps its lines"
+    );
+    assert!(matches!(
+        app.overlay,
+        Overlay::Folding { landing: false, .. }
+    ));
+}
+
+#[test]
+fn stream_closed_keeps_the_screen_unfreezes_and_skips_replayed_lines() {
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    for n in 0..5 {
+        preview.extend(turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("held reply {n}"),
+        ));
+    }
+    let last_preview = seq - 1;
+    let mut fold_lines = Vec::new();
+    for n in 0..2 {
+        fold_lines.extend(turn(
+            &mut seq,
+            &format!("a_f{n}"),
+            &format!("fold reply {n}"),
+        ));
+    }
+    let mut app = folding(&preview, &fold_lines, 100);
+    // Scrollback set before the freeze, so the unfreeze restores scrolls.
+    app.attached_screen_mut().set_frozen(false);
+    app.attached_screen_mut().scroll_rows(true, 3, 5);
+    let top = app.attached_screen().top();
+    assert!(top.is_some());
+    app.attached_screen_mut().set_frozen(true);
+    app.on_line(hub("stream_closed", SESSION, None));
+    let Overlay::Kept { last } = &app.overlay else {
+        panic!("the preview is kept");
+    };
+    assert_eq!(*last, Some(contract::Seq(last_preview)));
+    assert!(!app.attached_screen().frozen());
+    assert!(!app.counts_exact(), "the bar stays hidden");
+    app.attached_screen_mut().scroll_rows(true, 1, 5);
+    assert_ne!(app.attached_screen().top(), top, "the screen scrolls");
+    let held = total_of(&app);
+    // The preview's last turn replayed folds nowhere: every seq sits
+    // at or under the preview's last.
+    let mut replay = last_preview + 1 - 6;
+    for line in turn(&mut replay, "a_m4", "held reply 4") {
+        app.on_line(line);
+    }
+    assert_eq!(total_of(&app), held, "the replayed turn folds nowhere");
+    // A turn above it appends, the pass's last line included.
+    let mut fresh = last_preview + 1;
+    for line in turn(&mut fresh, "a_new", "a fresh reply") {
+        app.on_line(line);
+    }
+    assert!(total_of(&app) > held);
+    let grown = total_of(&app);
+    let mut boundary = 100u64;
+    for line in turn(&mut boundary, "a_last", "the pass's last reply") {
+        app.on_line(line);
+    }
+    assert!(total_of(&app) > grown);
+    assert!(
+        matches!(app.overlay, Overlay::Kept { .. }),
+        "the kept preview never lands"
+    );
+    // With no line held, nothing is skipped.
+    let mut app = folding(&[], &fold_lines, 100);
+    let held = total_of(&app);
+    app.on_line(hub("stream_closed", SESSION, None));
+    assert!(matches!(app.overlay, Overlay::Kept { last: None }));
+    let mut first = 0u64;
+    for line in turn(&mut first, "a_m", "the first replayed reply") {
+        app.on_line(line);
+    }
+    assert!(total_of(&app) > held, "Kept with no last skips nothing");
+}
+
+/// A `stream_closed` with no preview lands the pass's lines: the tail
+/// read failed and installed nothing, so the fold is the only copy. It
+/// becomes the screen, unfrozen, and the kept pass still skips nothing.
+#[test]
+fn stream_closed_with_no_preview_lands_the_pass_lines() {
+    let mut seq = 0u64;
+    let mut fold_lines = Vec::new();
+    for n in 0..2 {
+        fold_lines.extend(turn(
+            &mut seq,
+            &format!("a_f{n}"),
+            &format!("fold reply {n}"),
+        ));
+    }
+    let mut app = folding(&[], &fold_lines, 100);
+    assert_eq!(total_of(&app), 0, "no preview installed");
+    app.on_line(hub("stream_closed", SESSION, None));
+    assert!(matches!(app.overlay, Overlay::Kept { last: None }));
+    assert!(!app.attached_screen().frozen(), "the screen unfreezes");
+    assert!(total_of(&app) > 0, "the pass lines land as the screen");
+    let first = app
+        .attached_screen()
+        .pages()
+        .turn_text(0)
+        .unwrap_or_default();
+    assert!(
+        first.contains("fold reply 0"),
+        "the first reply shows: {first}"
+    );
+}
+
+/// Whether the attached screen sits idle.
+fn idle(app: &App) -> bool {
+    matches!(app.phase, Phase::Attached { busy: false, .. })
+}
+
+/// The attached screen's indexed rows.
+fn total_of(app: &App) -> usize {
+    app.attached_screen().pages().index().total()
+}
+
+#[test]
+fn session_left_keeps_and_disconnect_ends_the_overlay() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let mut app = folding(&preview, &preview, seq + 10);
+    assert!(app.attached_screen().frozen());
+    app.on_line(hub("session_left", SESSION, None));
+    // A pinned expectation this ticket changes: the pass ended
+    // without its boundary, so the preview is kept, unfrozen, with
+    // the bar still hidden, as `stream_closed` keeps it.
+    let Overlay::Kept { .. } = &app.overlay else {
+        panic!("the preview is kept");
+    };
+    assert!(!app.attached_screen().frozen());
+    assert!(!app.counts_exact(), "the bar stays hidden");
+    let mut app = folding(&preview, &preview, seq + 10);
+    app.disconnected();
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(!app.attached_screen().frozen());
+}
+
+#[test]
+fn go_home_and_leave_mid_pass_end_the_overlay() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let last = seq + 10;
+    let mut app = home_at(crate::OpenAt::Home);
+    app.attach(id(SESSION));
+    for line in &preview {
+        app.on_line(line.clone());
+    }
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(folded(&preview)),
+        busy: None,
+        held: false,
+        landing: false,
+    };
+    app.passes
+        .push((id(SESSION), Pass::Until(contract::Seq(last))));
+    app.attached_screen_mut().set_frozen(true);
+    app.go_home();
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(!app.screen.frozen());
+    // The pass's last line arriving at home swaps nothing.
+    app.on_line(line(
+        "turn_completed",
+        last,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(!app.screen.frozen());
+}
+
+#[test]
+fn a_resize_during_the_pass_recounts_once_at_landing() {
+    // A resize while the raise is out stores without recounting.
+    let mut app = opening(200);
+    let held = app.attached_screen().pages().wrap_width();
+    app.set_size(100, 24);
+    assert!(app.attached_screen().frozen());
+    assert_eq!(app.attached_screen().pages().wrap_width(), held);
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..4 {
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
+    }
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    assert_eq!(app.attached_screen().pages().wrap_width(), held);
+    app.on_line(line(
+        "turn_completed",
+        200,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert!(matches!(app.overlay, Overlay::None));
+    assert_ne!(
+        app.attached_screen().pages().wrap_width(),
+        held,
+        "unfreezing applies the stored width"
+    );
+    // Back to the old width before landing recounts nothing.
+    let mut app = opening(200);
+    let held = app.attached_screen().pages().wrap_width();
+    app.set_size(100, 24);
+    app.set_size(80, 24);
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..4 {
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
+    }
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    app.on_line(line(
+        "turn_completed",
+        200,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert_eq!(app.attached_screen().pages().wrap_width(), held);
+}
+
+#[test]
+fn a_gate_state_line_folds_live_during_the_pass() {
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    preview.extend(call_turn(&mut seq, "a_m", "a_c"));
+    let last = seq + 50;
+    let mut app = folding(&preview, &preview, last);
+    let held = total_of(&app);
+    app.on_line(line(
+        "permission_requested",
+        seq,
+        Some("a_c"),
+        json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "rg"},
+            "decision": "allow_once"}),
+    ));
+    assert!(app.panel().is_some(), "the approval folds live");
+    app.on_line(line(
+        "notice",
+        seq,
+        None,
+        json!({"code": "extension_failed", "message": "the extension fell over"}),
+    ));
+    assert_eq!(app.notice(), Some("the extension fell over"));
+    assert_eq!(total_of(&app), held, "the screen's Pages sit out the pass");
+}
+
+#[test]
+fn the_second_pages_holds_only_the_window() {
+    let mut app = opening(1_000_000);
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..1000 {
+        lines.extend(turn(&mut seq, "a_m", &format!("reply {n}")));
+    }
+    for line in &lines {
+        app.on_line(line.clone());
+    }
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("the pass runs on");
+    };
+    assert!(
+        fold.index().total() > lines.len(),
+        "the fold holds every line's rows"
+    );
+    assert!(
+        fold.resident() <= 6,
+        "the fold holds only the bottom window, not {} pages",
+        fold.resident()
+    );
+}
+
+#[test]
+fn replayed_shell_lines_fold_into_the_second_pages() {
+    let last = 100u64;
+    let mut app = folding(&[], &[], last);
+    let held = total_of(&app);
+    app.on_line(line(
+        "shell_command",
+        10,
+        None,
+        json!({"command": "echo hi", "output": "hi"}),
+    ));
+    let shell_id = "c_shell000000000001";
+    let mut draft = Draft::default();
+    draft.set("!!echo hi");
+    app.pending
+        .insert(shell_id.to_owned(), (Kind::Shell, draft));
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: id(SESSION),
+        ts: 11,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(11)),
+        payload: [
+            ("command_id".to_owned(), Value::String(shell_id.to_owned())),
+            (
+                "result".to_owned(),
+                json!({"output": "hi", "process": {"exit_code": 0, "timed_out": false}}),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    }));
+    assert_eq!(total_of(&app), held, "the screen's Pages sit out the pass");
+    app.on_line(line(
+        "turn_completed",
+        last,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(total_of(&app) > held, "the shell shows after the swap");
+}
+
+#[test]
+fn a_delegate_transcript_open_mid_pass_leaves_the_pass_on_the_attached_screen() {
+    let mut seq = 0u64;
+    let mut preview = Vec::new();
+    for n in 0..3 {
+        preview.extend(turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("parent reply {n}"),
+        ));
+    }
+    let mut fold_lines = preview.clone();
+    for n in 3..5 {
+        fold_lines.extend(turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("parent reply {n}"),
+        ));
+    }
+    let last = seq;
+    let mut app = folding(&preview, &fold_lines, last);
+    // The item view swaps in over the frozen parent.
+    let stashed = std::mem::replace(
+        app.attached_screen_mut(),
+        super::super::screen::Screen::new(),
+    );
+    let mut item_seq = 0u64;
+    for line in turn(&mut item_seq, "a_d", "the delegate reply") {
+        if let Line::Session(envelope) = line {
+            app.screen.pages_mut().apply(&envelope);
+        }
+    }
+    app.screen.scroll_rows(true, 2, 5);
+    let item_top = app.screen.top();
+    assert!(item_top.is_some());
+    app.items.open = Some(crate::app::items::Open {
+        job_id: JobId("j_1".to_owned()),
+        stashed: Some(stashed),
+        message: None,
+    });
+    // The stashed parent stays frozen while the item scrolls with its bar.
+    assert!(app.attached_screen().frozen());
+    assert!(app.counts_exact());
+    app.screen.scroll_rows(true, 1, 5);
+    assert_ne!(app.screen.top(), item_top);
+    let item_total = app.screen.pages().index().total();
+    // The boundary line lands the swap in the stashed screen.
+    app.on_line(line(
+        "turn_completed",
+        last,
+        None,
+        json!({"outcome": "completed"}),
+    ));
+    assert!(matches!(app.overlay, Overlay::None));
+    let stashed_total = app
+        .items
+        .open
+        .as_ref()
+        .and_then(|open| open.stashed.as_ref())
+        .map(|stashed| stashed.pages().index().total())
+        .unwrap_or(0);
+    assert!(stashed_total > item_total);
+    assert_eq!(app.screen.pages().index().total(), item_total);
+    assert!(
+        !app.attached_screen().frozen(),
+        "the swap unfreezes the parent"
+    );
+}
+
+#[test]
+fn no_thumb_while_the_screen_is_frozen() {
+    let mut app = app();
+    let mut seq = 0u64;
+    for n in 0..14 {
+        for line in turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")) {
+            app.on_line(line);
+        }
+    }
+    app.attached_screen_mut().jump(0);
+    let following = thumb_rows(&app, &rendered(&app));
+    assert!(!following.is_empty(), "a thumb shows unfrozen");
+    app.attached_screen_mut().set_frozen(true);
+    assert!(!app.counts_exact());
+    assert!(
+        thumb_rows(&app, &rendered(&app)).is_empty(),
+        "no thumb while frozen"
+    );
+    app.attached_screen_mut().set_frozen(false);
+    assert!(app.counts_exact());
+    assert_eq!(thumb_rows(&app, &rendered(&app)), following);
+}
+
+/// A turn whose prompt carried an image at `path`.
+fn started_with_image(app: &mut App, path: &str) {
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: id(SESSION),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "image", "path": path,
+                    "mime_type": "image/png",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+}
+
+#[test]
+fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
+    let mut app = app();
+    started_with_image(&mut app, "artifacts/one.png");
+    started_with_image(&mut app, "artifacts/x.png");
+    // X draws second.
+    let lines = match app.view_image(2) {
+        Effect::Send(lines) => lines,
+        Effect::None
+        | Effect::Quit
+        | Effect::Exit(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::FindPause { .. }
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::OpenFile(_) => panic!("a read for X"),
+    };
+    assert_eq!(lines.len(), 1);
+    let read: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|panic| panic!("{panic}"));
+    assert_eq!(read["args"]["path"], "artifacts/x.png");
+    let fetch = read["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an id"))
+        .to_owned();
+    app.on_line(hub_refused(&fetch, "gone"));
+    assert_eq!(app.view_image(2), Effect::None, "refused at id 2");
+    // A new fold draws X fifth; the landing swaps it in.
+    let mut fold = crate::window::Pages::new(80);
+    for path in [
+        "artifacts/a.png",
+        "artifacts/b.png",
+        "artifacts/c.png",
+        "artifacts/d.png",
+        "artifacts/x.png",
+    ] {
+        fold_image(&mut fold, path);
+    }
+    let held = total_of(&app);
+    app.overlay = Overlay::Folding {
+        session: id(SESSION),
+        fold: Box::new(fold),
+        busy: None,
+        held: false,
+        landing: false,
+    };
+    app.land_pass();
+    assert!(matches!(app.overlay, Overlay::None));
+    assert!(total_of(&app) > held);
+    assert_eq!(
+        app.view_image(5),
+        Effect::None,
+        "X's refusal survives its new id"
+    );
+    assert!(
+        matches!(app.view_image(2), Effect::Send(_)),
+        "another image at id 2 sends"
+    );
+}
+
+/// Folds a prompt carrying an image at `path` into `pages`.
+fn fold_image(pages: &mut crate::window::Pages, path: &str) {
+    pages.apply(&contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: id(SESSION),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "image", "path": path,
+                    "mime_type": "image/png",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+}
+
+/// The tail read's window answers, as the doors answer history: the last
+/// 256 lines at or below the asked `to_seq`, oldest first, or the last
+/// 256 when the args hold none.
+fn doors(lines: &[contract::Envelope], args: &Value) -> Vec<contract::Envelope> {
+    let end = args
+        .get("to_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let mut out: Vec<contract::Envelope> = lines
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= end))
+        .cloned()
+        .collect();
+    out.drain(..out.len().saturating_sub(256));
+    out
+}
+
+/// The session lines as durable envelopes.
+fn envelopes(lines: &[Line]) -> Vec<contract::Envelope> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            if let Line::Session(envelope) = line {
+                Some(envelope.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `count` plain lines numbered from zero.
+fn plain(count: u64) -> Vec<contract::Envelope> {
+    (0..count)
+        .map(|seq| {
+            if let Line::Session(envelope) = line("usage_recorded", seq, None, json!({})) {
+                envelope
+            } else {
+                unreachable!("a session line");
+            }
+        })
+        .collect()
+}
+
+/// Reads `all` through a fresh tail, following the answers' windows, and
+/// returns each `next_args` in order.
+fn read_all(all: Vec<contract::Envelope>) -> (Vec<Value>, crate::app::overlay::Tail) {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    let mut asked = Vec::new();
+    loop {
+        let args = tail.next_args();
+        asked.push(args.clone());
+        let answer = doors(&all, &args);
+        let empty = answer.is_empty();
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        if tail.start_reached() || empty {
+            break;
+        }
+    }
+    (asked, tail)
+}
+
+/// A read ends after one window when the log fits it, and walks
+/// `to_seq` down to zero when it does not: the exact args sequence at
+/// 255, 256, 257 and 258 lines.
+#[test]
+fn reads_follow_the_answer_window_at_the_edges() {
+    for (count, expected) in [
+        (255u64, vec![json!({})]),
+        (256, vec![json!({})]),
+        (257, vec![json!({}), json!({"to_seq": 0})]),
+        (258, vec![json!({}), json!({"to_seq": 1})]),
+    ] {
+        let (asked, tail) = read_all(plain(count));
+        let many = usize::try_from(count).unwrap_or(usize::MAX);
+        assert_eq!(asked, expected, "{count} lines");
+        assert!(tail.start_reached(), "{count} lines");
+        assert_eq!(
+            tail.turn_lines().map(|lines| lines.len()),
+            Some(many),
+            "{count} lines"
+        );
+    }
+}
+
+/// The read stops when the held lines starting at a turn fill the screen:
+/// at one row below the total the tail asks again, at the total and
+/// above it is filled. Lines cut before the turn's start never count.
+#[test]
+fn reads_stop_when_the_held_lines_fill_the_screen() {
+    use crate::app::overlay::Tail;
+    let mut seq = 0u64;
+    // Lines cut inside an older turn: no `turn_started` among them.
+    let mut cut = turn(&mut seq, "a_cut", "a cut reply");
+    cut.drain(..3);
+    let mut held = cut;
+    for at in 0..3 {
+        held.extend(turn(&mut seq, &format!("a_m{at}"), &format!("reply {at}")));
+    }
+    let all = envelopes(&held);
+    // The held window starts past zero, so only the row count fills.
+    let all: Vec<contract::Envelope> = all
+        .into_iter()
+        .map(|mut envelope| {
+            envelope.seq = envelope.seq.map(|seq| contract::Seq(seq.0 + 1000));
+            envelope
+        })
+        .collect();
+    let mut tail = Tail::new();
+    tail.prepend(all)
+        .unwrap_or_else(|_| panic!("a contiguous answer"));
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("a turn start in the window"));
+    assert_eq!(
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started"),
+        "the cut lines never count"
+    );
+    let app = app();
+    let mut fresh = app.attached_screen().pages().fresh();
+    for envelope in from {
+        fresh.apply(envelope);
+    }
+    let total = fresh.index().total();
+    assert!(!tail.filled(&fresh, total + 1), "one row short asks again");
+    assert!(tail.filled(&fresh, total), "at the total it is filled");
+    assert!(
+        tail.filled(&fresh, total - 1),
+        "past the total it is filled"
+    );
+}
+
+/// A 700-line turn reads to the start with no cap: three windows, the
+/// first two partial and never filled at conversation height.
+#[test]
+fn a_long_turn_reads_until_the_screen_is_full_with_no_cap() {
+    use crate::app::overlay::Tail;
+    let message = "a_m";
+    let mut all = vec![if let Line::Session(envelope) = line(
+        "turn_started",
+        0,
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "prompt"}]}]}),
+    ) {
+        envelope
+    } else {
+        unreachable!("a session line");
+    }];
+    for seq in 1..=697 {
+        let kind = if seq == 1 {
+            "step_started"
+        } else if seq == 2 {
+            "assistant_message_started"
+        } else {
+            "text_completed"
+        };
+        let action = if kind == "step_started" || kind == "turn_started" {
+            None
+        } else {
+            Some(message)
+        };
+        if let Line::Session(envelope) = line(kind, seq, action, json!({"text": "part"})) {
+            all.push(envelope);
+        }
+    }
+    for (seq, kind) in [
+        (698, "assistant_message_completed"),
+        (699, "turn_completed"),
+    ] {
+        if let Line::Session(envelope) =
+            line(kind, seq, Some(message), json!({"outcome": "completed"}))
+        {
+            all.push(envelope);
+        }
+    }
+    let mut tail = Tail::new();
+    let mut reads = 0;
+    loop {
+        let args = tail.next_args();
+        let answer = doors(&all, &args);
+        let empty = answer.is_empty();
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        reads += 1;
+        if tail.start_reached() || empty {
+            break;
+        }
+    }
+    assert_eq!(reads, 3, "256, 256 and 188 lines");
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the turn start"));
+    assert_eq!(from.len(), 700);
+    assert_eq!(
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started")
+    );
+}
+
+/// An empty answer ends the read with nothing held.
+#[test]
+fn an_empty_log_ends_with_nothing_held() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(Vec::new())
+        .unwrap_or_else(|_| panic!("an empty answer"));
+    assert!(tail.start_reached());
+    assert!(tail.turn_lines().is_none());
+}
+
+/// One line at seq zero starts at the beginning and ends the read.
+#[test]
+fn a_log_of_one_line_starts_at_zero() {
+    use crate::app::overlay::Tail;
+    let mut tail = Tail::new();
+    tail.prepend(plain(1))
+        .unwrap_or_else(|_| panic!("one line"));
+    assert!(tail.start_reached());
+    assert_eq!(tail.turn_lines().map(|lines| lines.len()), Some(1));
+}
+
+/// An answer that leaves a gap, or a line carrying no seq, is refused:
+/// the tail ends as failed with the out-of-order notice.
+#[test]
+fn an_answer_that_leaves_a_gap_is_refused() {
+    use crate::app::overlay::{Overlay, Tail};
+    let mut tail = Tail::new();
+    let window: Vec<contract::Envelope> = plain(200).drain(100..).collect();
+    tail.prepend(window.clone())
+        .unwrap_or_else(|_| panic!("the first answer"));
+    assert!(tail.prepend(plain(51)).is_err(), "a gap is refused");
+    let mut noseq = window.clone();
+    noseq[0].seq = None;
+    assert!(tail.prepend(noseq).is_err(), "a missing seq is refused");
+    let mut app = app();
+    app.overlay = Overlay::Reading(Tail::new());
+    app.tail_lines(window);
+    assert_eq!(app.notice(), None);
+    app.tail_lines(plain(51));
+    assert_eq!(
+        app.notice(),
+        Some("Could not load history: the answer was out of order")
+    );
+}
+
+// ---- Task 7: turn-boundary reading ----
+
+/// A turn from `seq` with `texts` reply lines.
+fn roomy_turn(seq: &mut u64, message: &str, text: &str, texts: usize) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, *seq, action, payload));
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(message), json!({}));
+    for _ in 0..texts {
+        push("text_completed", Some(message), json!({"text": text}));
+    }
+    push(
+        "assistant_message_completed",
+        Some(message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// Opens [`SESSION`] from home through the summary ack, with the tail
+/// read running.
+fn reading() -> App {
+    let mut app = home_at(crate::OpenAt::Home);
+    let lines: Vec<Value> = app
+        .open_session(id(SESSION), None, None, false)
+        .into_iter()
+        .map(|line| serde_json::from_str(&line).unwrap_or_else(|panic| panic!("{panic}")))
+        .collect();
+    let summary = lines
+        .iter()
+        .find(|line| line["command"] == "subscribe")
+        .unwrap_or_else(|| panic!("a summary subscribe"));
+    let summary_id = summary["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    assert!(
+        app.on_line(session_accepted(SESSION, summary_id))
+            .is_empty()
+    );
+    assert!(app.tail_due().is_some(), "the tail read starts");
+    assert!(
+        matches!(app.overlay, Overlay::Reading(_)),
+        "the tail read runs"
+    );
+    app
+}
+
+/// Reads `all` through the open's tail until it reports filled, then
+/// installs the preview.
+fn install_preview(app: &mut App, all: &[contract::Envelope]) {
+    while let Some(args) = app.tail_next() {
+        app.tail_lines(doors(all, &args));
+    }
+    app.install_tail();
+}
+
+/// The attached screen's conversation rows as text.
+fn row_texts(app: &App) -> Vec<String> {
+    app.lines().iter().map(ToString::to_string).collect()
+}
+
+/// The read stops at the turn start that fills the screen: the newest
+/// turn starts inside the first answer, and the tail below the height
+/// asks once more while the tail reaching it fills, through the real
+/// path. The boundary is `>=`: each tail's own total fills it, and one
+/// past asks again.
+#[test]
+fn reads_stop_at_the_turn_start_that_fills_the_screen() {
+    let height = app().conversation_height();
+    // The reply length per row total: each text draws two rows.
+    let mut totals: Vec<(usize, usize)> = Vec::new();
+    for texts in 0..200 {
+        let total = turn_start_total(texts);
+        if !totals.iter().any(|(seen, _)| *seen == total) {
+            totals.push((total, texts));
+        }
+        if totals.iter().any(|(total, _)| *total < height)
+            && totals.iter().any(|(total, _)| *total >= height)
+        {
+            break;
+        }
+    }
+    let below = totals
+        .iter()
+        .filter(|(total, _)| *total < height)
+        .max_by_key(|(total, _)| *total)
+        .unwrap_or_else(|| panic!("a reply short of {height}"));
+    let above = totals
+        .iter()
+        .filter(|(total, _)| *total >= height)
+        .min_by_key(|(total, _)| *total)
+        .unwrap_or_else(|| panic!("a reply reaching {height}"));
+    for (total, texts) in [below, above] {
+        let tail = turn_start_tail(*texts);
+        // The newest turn starts inside the first answer; lines cut
+        // before its start never count.
+        let from = tail
+            .turn_lines()
+            .unwrap_or_else(|| panic!("the newest turn start"));
+        assert_eq!(
+            from.first().map(|line| line.kind.as_str()),
+            Some("turn_started"),
+            "the cut lines never count"
+        );
+        let probe = app();
+        let mut fresh = probe.attached_screen().pages().fresh();
+        for line in from {
+            fresh.apply(line);
+        }
+        assert_eq!(fresh.index().total(), *total);
+        // The boundary itself is `>=`: the total fills, one past asks.
+        assert!(tail.filled(&fresh, *total), "the total itself fills");
+        assert!(
+            !tail.filled(&fresh, total + 1),
+            "one past the total asks again"
+        );
+        // The real path agrees at the conversation height.
+        let mut probe = app();
+        probe.overlay = Overlay::Reading(tail);
+        assert_eq!(
+            probe.tail_next().is_none(),
+            *total >= height,
+            "the real path agrees at the height"
+        );
+    }
+}
+
+/// A tail holding lines cut inside an older turn plus a newest turn
+/// with `texts` reply lines.
+fn turn_start_tail(texts: usize) -> crate::app::overlay::Tail {
+    use crate::app::overlay::Tail;
+    let mut seq = 0u64;
+    let mut cut = turn(&mut seq, "a_old", "an old reply");
+    cut.drain(..3);
+    let mut held = cut;
+    held.extend(roomy_turn(&mut seq, "a_new", "a new reply", texts));
+    let mut tail = Tail::new();
+    tail.prepend(envelopes(&held))
+        .unwrap_or_else(|_| panic!("the first answer"));
+    tail
+}
+
+/// The rows a [`turn_start_tail`] with `texts` reply lines reports.
+fn turn_start_total(texts: usize) -> usize {
+    let tail = turn_start_tail(texts);
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the newest turn start"));
+    let probe = app();
+    let mut fresh = probe.attached_screen().pages().fresh();
+    for line in from {
+        fresh.apply(line);
+    }
+    fresh.index().total()
+}
+
+/// A turn longer than one answer reads until its start with no cap: the
+/// rows pass the height while the `turn_started` is still unread, so the
+/// read keeps going down to it.
+#[test]
+fn a_turn_longer_than_one_answer_reads_until_its_start() {
+    use crate::app::overlay::Tail;
+    // Sixty older lines, then one 700-line turn starting past zero.
+    let mut all = plain(60);
+    let mut seq = 60u64;
+    all.extend(envelopes(&roomy_turn(&mut seq, "a_m", "part", 695)));
+    assert_eq!(all.len(), 760);
+    for envelope in &mut all {
+        envelope.seq = envelope.seq.map(|seq| contract::Seq(seq.0 + 1000));
+    }
+    let probe = app();
+    let height = probe.conversation_height();
+    let mut tail = Tail::new();
+    let mut reads = 0;
+    loop {
+        let mut fresh = probe.attached_screen().pages().fresh();
+        if let Some(from) = tail.turn_lines() {
+            for line in from {
+                fresh.apply(line);
+            }
+        }
+        if tail.filled(&fresh, height) {
+            break;
+        }
+        let args = tail.next_args();
+        let answer = doors(&all, &args);
+        tail.prepend(answer)
+            .unwrap_or_else(|_| panic!("a contiguous answer"));
+        reads += 1;
+    }
+    assert_eq!(reads, 3, "256, 256 and 248 lines");
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("the turn start"));
+    assert_eq!(from.len(), 700);
+    assert_eq!(
+        from.first().map(|line| line.kind.as_str()),
+        Some("turn_started")
+    );
+}
+
+/// A failed or abandoned read keeps whole turns or nothing: the preview
+/// is the turn-start lines when the first answer holds one, else an
+/// empty conversation, and no frame shows a cut turn.
+#[test]
+fn a_failed_read_keeps_whole_turns_or_nothing() {
+    use crate::app::overlay::Tail;
+    // A first answer holding a turn start keeps from that start.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..50 {
+        lines.extend(turn(&mut seq, &format!("a_m{n}"), &format!("reply {n}")));
+    }
+    let all = envelopes(&lines);
+    let first = doors(&all, &json!({}));
+    assert!(first.len() < all.len(), "the first answer is a window");
+    let mut app = reading();
+    assert!(app.tail_next().is_some());
+    app.tail_lines(first.clone());
+    app.tail_ended(Some("gone"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let cut = (all.len() - first.len()) / 6;
+    let mut tail = Tail::new();
+    tail.prepend(first)
+        .unwrap_or_else(|_| panic!("the first answer"));
+    let from = tail
+        .turn_lines()
+        .unwrap_or_else(|| panic!("a turn start in the window"));
+    let mut fresh = app.attached_screen().pages().fresh();
+    for line in from {
+        fresh.apply(line);
+    }
+    let expect: Vec<String> = fresh
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert_eq!(row_texts(&app), expect, "the preview is the whole turns");
+    assert!(
+        !row_texts(&app)
+            .iter()
+            .any(|row| row.contains(&format!("reply {cut}"))),
+        "no cut turn shows"
+    );
+    // A first answer holding no turn start keeps nothing.
+    let all = plain(300);
+    let first = doors(&all, &json!({}));
+    let mut app = reading();
+    app.tail_lines(first);
+    app.tail_ended(Some("gone"));
+    app.install_tail();
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    assert_eq!(
+        app.attached_screen().pages().index().total(),
+        0,
+        "an empty conversation"
+    );
+}
+
+/// The preview is exact for the last turns: folding the tail's
+/// turn-start lines draws the last screenful, the totals line, the open
+/// ledger's step numbers and the prompt bubble exactly as the whole log
+/// does. A log with an orphaned job completion, an automatic handoff
+/// trigger and a ledger call from before the held turns lands with only
+/// those allowed kinds differing (B3).
+#[test]
+fn the_preview_is_exact_for_the_last_turns() {
+    // Three long turns, then one short turn with a tool call, so the
+    // last screenful holds the short turn's bubble, ledger and totals:
+    // more than one window in all.
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    for n in 0..3 {
+        lines.extend(roomy_turn(
+            &mut seq,
+            &format!("a_m{n}"),
+            &format!("reply {n}"),
+            90,
+        ));
+    }
+    let message = "a_m3".to_owned();
+    let call = "a_c3".to_owned();
+    let mut turn = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        turn.push(line(kind, seq, action, payload));
+        seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some(&message), json!({}));
+    push(
+        "tool_call_requested",
+        Some(&call),
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    );
+    push(
+        "tool_call_completed",
+        Some(&call),
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+    );
+    push("text_completed", Some(&message), json!({"text": "reply 3"}));
+    push(
+        "assistant_message_completed",
+        Some(&message),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines.extend(turn);
+    let all = envelopes(&lines);
+    assert!(all.len() > 256, "the log needs more than one window");
+    let mut app = reading();
+    // The whole log folded at the screen's own wrap width.
+    let mut whole = app.attached_screen().pages().fresh();
+    for envelope in &all {
+        whole.apply(envelope);
+    }
+    install_preview(&mut app, &all);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    // The open ledger draws its step numbers in both folds.
+    app.toggle_ledgers();
+    whole.toggle_ledgers();
+    let height = app.conversation_height();
+    let preview = row_texts(&app);
+    let whole_rows: Vec<String> = whole
+        .rows()
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect();
+    assert!(preview.len() >= height && whole_rows.len() >= height);
+    let screen = &preview[preview.len() - height..];
+    assert_eq!(
+        screen,
+        &whole_rows[whole_rows.len() - height..],
+        "the last screenful is exact"
+    );
+    let screenful = screen.join("\n");
+    assert!(screenful.contains("▣"), "the totals line shows");
+    assert!(
+        screenful
+            .lines()
+            .any(|row| row.trim_start().starts_with(|c: char| c.is_ascii_digit())),
+        "the open ledger's step numbers show: {screenful:?}"
+    );
+    assert!(
+        screenful.contains("prompt"),
+        "the prompt bubble shows: {screenful:?}"
+    );
+}
+
+/// Only the rows that depend on turns before the held lines change in
+/// the frame where the full fold replaces the preview: an orphaned job
+/// completion, an automatic handoff trigger, and a ledger call requested
+/// before the held turns (B3).
+#[test]
+fn only_the_cross_turn_rows_change_at_landing() {
+    let mut seq = 0u64;
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, seq, action, payload));
+        seq += 1;
+    };
+    for _ in 0..10 {
+        push("usage_recorded", None, json!({}));
+    }
+    // Before the held lines: a job starts, a handoff starts, a tool
+    // call is requested.
+    push(
+        "job_started",
+        None,
+        json!({"job_id": "j_1", "description": "build the docs",
+            "output_path": "/tmp/o"}),
+    );
+    push("handoff_started", None, json!({"trigger": "person"}));
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_early"), json!({}));
+    push(
+        "tool_call_requested",
+        Some("a_c0"),
+        json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_early"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    // Filler the first window skips over.
+    for _ in 0..260 {
+        push("usage_recorded", None, json!({}));
+    }
+    // The held turns: the orphaned completion, the handoff trigger's
+    // completion, and the ledger call's result.
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_held"), json!({}));
+    push(
+        "text_completed",
+        Some("a_held"),
+        json!({"text": "a held reply"}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_held"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    push(
+        "job_completed",
+        None,
+        json!({"job_id": "j_1", "status": "failed",
+            "error": {"code": "orphaned", "message": "j_1 orphaned."}}),
+    );
+    push(
+        "handoff_completed",
+        None,
+        json!({"outcome": "completed", "tokens_before": 300_000,
+            "note_text": "From the hook.", "extension": "notes"}),
+    );
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "prompt"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_last"), json!({}));
+    push(
+        "tool_call_completed",
+        Some("a_c0"),
+        json!({"status": "completed",
+            "content": [{"type": "text", "text": "ok"}]}),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_last"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    let all = envelopes(&lines);
+    assert!(all.len() > 256, "the early turns leave the first window");
+    let mut app = reading();
+    install_preview(&mut app, &all);
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "the preview shows"
+    );
+    let before = row_texts(&app);
+    // Raise, then replay the whole log through the pass to its end.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    let last = all.len() as u64 - 1;
+    assert!(
+        app.on_line(raise_accepted(SESSION, raise_id, last))
+            .is_empty()
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Folding { .. }),
+        "the pass folds"
+    );
+    for envelope in &all {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the pass lands");
+    let after = row_texts(&app);
+    // Every row the landing rewrites within the held lines is one of
+    // the allowed kinds: an orphaned job's completion, an automatic
+    // handoff's trigger, or a ledger call from before the held lines.
+    // The preview and the landed screen both follow to the bottom, so
+    // the held rows align at the tail; early turns' own rows stand
+    // above the preview and never align.
+    let offset = after.len().saturating_sub(before.len());
+    let mut changed = Vec::new();
+    for (at, row) in before.iter().enumerate() {
+        if after.get(offset + at) != Some(row) {
+            changed.push(("preview", row.clone()));
+            if let Some(landed) = after.get(offset + at) {
+                changed.push(("landed", landed.clone()));
+            }
+        }
+    }
+    if after.len() < before.len() {
+        for row in &after[..before.len() - after.len()] {
+            changed.push(("landed-only", row.clone()));
+        }
+    }
+    assert!(!changed.is_empty(), "the landing changes some row");
+    let bad: Vec<_> = changed
+        .iter()
+        .filter(|(_, row)| {
+            !(row.to_lowercase().contains("orphan")
+                || row.contains("handoff")
+                || row.contains("⇄")
+                || row.contains("src/a.rs")
+                || row.trim_start().starts_with('●'))
+        })
+        .collect();
+    assert!(bad.is_empty(), "only allowed rows change, got: {bad:?}");
+}
+
+/// Ending the tail read marks it ended: a fresh read is open, and
+/// `end` closes it for every path that ends one (failed, abandoned,
+/// or lost).
+#[test]
+fn ending_the_tail_read_marks_it_ended() {
+    use crate::app::overlay::Tail;
+    let tail = Tail::new();
+    assert!(!tail.ended(), "a fresh read is open");
+    let mut tail = tail;
+    tail.end();
+    assert!(tail.ended(), "ending the read marks it");
+}
+
+/// A failed load lets the held landing go only without a pass: with
+/// one the landing holds until its pages load.
+#[test]
+fn a_failed_load_clears_the_held_anchor_only_without_a_pass() {
+    use contract::Seq;
+    let mut app = app();
+    let mut seq = 0u64;
+    for line in turn(&mut seq, "a_m", "the held reply") {
+        app.on_line(line);
+    }
+    let range = Seq(0)..=Seq(seq.saturating_sub(1));
+    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.load_failed(&range, "boom");
+    assert!(
+        app.screen.pages_mut().anchored_row().is_none(),
+        "with no pass the landing lets go"
+    );
+    app.screen.pages_mut().hold_anchor(Seq(0), 0);
+    app.passes.push((id(SESSION), Pass::Until(Seq(1_000))));
+    app.load_failed(&range, "boom");
+    assert!(
+        app.screen.pages_mut().anchored_row().is_some(),
+        "with a pass the landing holds"
+    );
+}
+
+/// A fold starts only on the shown session's raise ack: a wrong ack,
+/// or another session, leaves the preview where it is.
+#[test]
+fn a_fold_starts_only_on_the_shown_sessions_raise_ack() {
+    let mut app = app();
+    app.overlay = Overlay::Shown {
+        session: id(SESSION),
+        busy: None,
+        held: false,
+    };
+    app.begin_fold(&id(SESSION), "a-wrong-ack");
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "a wrong ack starts no fold"
+    );
+    app.begin_fold(&id("s_bbbbbbbbbbbbbbbb"), "whatever");
+    assert!(
+        matches!(app.overlay, Overlay::Shown { .. }),
+        "another session starts no fold"
+    );
+}
+
+/// A reopening for another session keeps the running fold: only its
+/// own session restarts the second `Pages`.
+#[test]
+fn a_reopening_for_another_session_keeps_the_running_fold() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let fold_lines = turn(&mut seq, "a_f", "the fold reply");
+    let mut app = folding(&preview, &fold_lines, 100);
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("a fold runs");
+    };
+    let held = fold.index().total();
+    app.on_line(hub("stream_reopened", "s_bbbbbbbbbbbbbbbb", Some(50)));
+    let Overlay::Folding { session, fold, .. } = &app.overlay else {
+        panic!("the other session's reopen keeps the fold");
+    };
+    assert_eq!(session, &id(SESSION));
+    assert_eq!(fold.index().total(), held, "the fold keeps its lines");
+}
+
+/// A close for another session keeps the running fold: only its own
+/// session keeps the preview or lands the pass's lines.
+#[test]
+fn a_close_for_another_session_keeps_the_running_fold() {
+    let mut seq = 0u64;
+    let preview = turn(&mut seq, "a_m", "the preview reply");
+    let fold_lines = turn(&mut seq, "a_f", "the fold reply");
+    let mut app = folding(&preview, &fold_lines, 100);
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("a fold runs");
+    };
+    let held = fold.index().total();
+    app.on_line(hub("stream_closed", "s_bbbbbbbbbbbbbbbb", None));
+    let Overlay::Folding { session, fold, .. } = &app.overlay else {
+        panic!("the other session's close keeps the fold");
+    };
+    assert_eq!(session, &id(SESSION));
+    assert_eq!(fold.index().total(), held, "the fold keeps its lines");
+}

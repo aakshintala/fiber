@@ -2444,3 +2444,1392 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         drop(wire);
     }
 }
+
+/// A backend sending each flush's buffer text to the test's channel, so
+/// the test orders the first frame against the hub's reads. Like
+/// `loop_tests` `CountingBackend`, but recording instead of counting.
+/// While armed, the flush reports and then waits for the test's release:
+/// the raise reaching the socket before the release proves it was
+/// written before `draw` returned.
+struct RecordBackend {
+    inner: ratatui::backend::TestBackend,
+    events: mpsc::Sender<String>,
+    block: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: mpsc::Receiver<()>,
+}
+
+impl crate::screen::SyncEmit for RecordBackend {
+    fn emit(&mut self, _begin: bool) -> std::result::Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl ratatui::backend::Backend for RecordBackend {
+    type Error = <ratatui::backend::TestBackend as ratatui::backend::Backend>::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::result::Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(
+        &mut self,
+    ) -> std::result::Result<ratatui::layout::Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(
+        &mut self,
+        clear_type: ratatui::backend::ClearType,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> std::result::Result<ratatui::layout::Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> std::result::Result<ratatui::backend::WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), Self::Error> {
+        let text = crate::view::text(self.inner.buffer());
+        self.events.send(format!("frame\n{text}")).unwrap_or(());
+        if self.block.load(std::sync::atomic::Ordering::SeqCst) {
+            self.events.send("frame-enter".to_owned()).unwrap_or(());
+            fakes::Deadline::after(DEADLINE)
+                .recv(&self.release)
+                .unwrap_or_else(|err| panic!("the frame never released: {err}"));
+        }
+        self.inner.flush()
+    }
+}
+
+/// The open's `full` raise is written after the first frame draws, never
+/// before it. The recording backend's armed flush parks the frame's
+/// worker mid-`draw`: a raise on the socket before the test's release
+/// fails, and the raise after it passes. Moving the raise before `draw`
+/// in a scratch copy fails this test at the parked read.
+#[test]
+fn the_raise_is_written_after_the_frame_draws() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "\u{2318}".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let block = std::sync::Arc::new(AtomicBool::new(false));
+    let (release_tx, release) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx,
+        block: std::sync::Arc::clone(&block),
+        release,
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let lp = super::super::Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: true,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: std::path::PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (ours, theirs) = pair();
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = std::io::BufReader::new(theirs);
+    let socket_line = |reader: &mut std::io::BufReader<UnixStream>| {
+        let mut text = String::new();
+        match std::io::BufRead::read_line(reader, &mut text) {
+            Ok(0) => panic!("the hub hung up"),
+            Ok(_) => Some(text),
+            Err(_) => None,
+        }
+    };
+    // The first park: the writer is slow from the start, so the first
+    // frame parks in its flush; the launch open's lines still arrive.
+    block.store(true, Ordering::SeqCst);
+    let (tx1, rx1) = mpsc::channel();
+    let mut connect = Some((ours, hello()));
+    let first = std::thread::Builder::new()
+        .name("first-frame".to_owned())
+        .spawn(move || {
+            let (ours, hello) = connect.take().unwrap_or_else(|| panic!("once"));
+            let mut lp = lp;
+            let out = lp.step(Input::Connected(ours, hello), &rx1);
+            (lp, out)
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let wait = Deadline::after(DEADLINE);
+    let frame = wait.recv_or_fail(&events, "the first frame");
+    assert!(frame.starts_with("frame\n"), "{frame:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked first flush"),
+        "frame-enter"
+    );
+    // The launch open went out whole while the writer was slow: feed,
+    // recent, the `summary` subscribe and commands, no `full`. One
+    // deadline for the whole wait: a scoped thread reads the lines
+    // into a channel, and the four takes share what remains of it.
+    let (open_tx, open_rx) = mpsc::channel();
+    let mut seen = Vec::new();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..4 {
+                let line = socket_line(&mut reader).unwrap_or_else(|| panic!("an open line"));
+                open_tx.send(line).unwrap_or(());
+            }
+        });
+        let open = Deadline::after(DEADLINE);
+        for _ in 0..4 {
+            seen.push(open.recv_or_fail(&open_rx, "an open line"));
+        }
+    });
+    // One release, then disarmed: the first frame finishes.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    let (mut lp, out) = first.join().unwrap_or_else(|_| panic!("the worker"));
+    assert_eq!(out, None);
+    drop(tx1);
+    let lines: Vec<serde_json::Value> = seen
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let subscribes: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "subscribe")
+        .collect();
+    assert_eq!(subscribes.len(), 1, "{lines:?}");
+    assert_eq!(subscribes[0]["args"]["level"], "summary");
+    let summary = subscribes[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a summary id"))
+        .to_owned();
+    // The next frame repaints whole: the resize drops `last`, so the
+    // armed flush parks inside `draw` even when the screen did not change.
+    lp.screen
+        .resize(60, 12)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    while events.try_recv().is_ok() {}
+    // Acking the summary makes the raise due; the worker parks in the
+    // next frame's flush, before `draw` returns.
+    block.store(true, Ordering::SeqCst);
+    let ack = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), serde_json::Value::String(summary))]
+            .into_iter()
+            .collect(),
+    });
+    let (tx, rx) = mpsc::channel();
+    let worker = std::thread::Builder::new()
+        .name("raise-frame".to_owned())
+        .spawn(move || lp.step(Input::Hub(ack), &rx))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The tail read's `history` goes out before `draw`: answer it with
+    // no lines, as an empty log would, so the frame installs its
+    // preview and parks. No reader thread bridges the socket here, so
+    // the answer goes straight onto the worker's channel.
+    let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
+    let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
+    assert_eq!(read["command"], "history");
+    let history = read["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a history id"))
+        .to_owned();
+    let mut answer = serde_json::to_value(super::line("command_accepted", None, None, json!({})))
+        .unwrap_or_default();
+    answer["payload"] = json!({"command_id": history, "result": {"lines": []}});
+    let answer: contract::Envelope =
+        serde_json::from_value(answer).unwrap_or_else(|err| panic!("an answer: {err}"));
+    tx.send(Input::Hub(Line::Session(answer)))
+        .unwrap_or_else(|err| panic!("answer: {err}"));
+    let flushed = wait.recv_or_fail(&events, "the parked frame");
+    assert!(flushed.starts_with("frame\n"), "{flushed:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked flush"),
+        "frame-enter"
+    );
+    // The raise is not on the socket yet: it goes out after `draw`
+    // returns, which waits on the release below. A raise here fails.
+    // The parked flush already proves no raise was written yet, so the
+    // absence check takes no wait: the socket reads non-blocking.
+    reader
+        .get_mut()
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("non-blocking: {err}"));
+    assert!(
+        socket_line(&mut reader).is_none(),
+        "the raise was written before `draw` returned"
+    );
+    reader
+        .get_mut()
+        .set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    // One release, then disarmed: later flushes in this step run
+    // through, so the frame always finishes after exactly one park.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    reader
+        .get_mut()
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
+    let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    assert_eq!(worker.join().unwrap_or_else(|_| panic!("the worker")), None);
+}
+
+// The open's tail read: the scripted hub, the loop it drives, and the
+// cases below (`docs/tui.md`, "History and paging"). The hub answers
+// feed, recent, the summary subscribe and the session's commands at
+// once, the tail's history windows from the log, and the `full` raise
+// per the script; every command it reads is recorded in order.
+
+/// What the scripted hub answers to the `full` raise.
+enum Full {
+    /// Accepts with the log's last seq, streams the log, then hangs up.
+    Replay,
+    /// Accepts with no result: no pass opens.
+    Accepted,
+    /// Reads the raise and hangs up without answering.
+    Hung,
+}
+
+/// What the scripted hub answers to a `history` read.
+enum History {
+    /// The doors' window: the last 256 lines at or below `to_seq`.
+    Windows,
+    /// Rejects with the message.
+    Reject(&'static str),
+    /// Answers no lines.
+    Empty,
+    /// Drops the stream without answering.
+    Drop,
+    /// Answers the first read's window, rejects the rest with the message.
+    FailSecond(&'static str),
+}
+
+/// The loop an open's tail read drives: the recording backend's frames,
+/// the hub's answers, and the channels the test steps and drains. The
+/// loop is stepped through the summary ack, so the frame ran the read,
+/// installed the preview and sent the raise.
+struct TailOpen {
+    lp: super::super::Loop<RecordBackend>,
+    events: mpsc::Receiver<String>,
+    seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    tx: mpsc::Sender<Input>,
+    rx: mpsc::Receiver<Input>,
+}
+
+/// The doors' history window over `log`: the last 256 lines at or below
+/// the args' `to_seq`, oldest first.
+fn doors_window(log: &[contract::Envelope], args: &serde_json::Value) -> Vec<contract::Envelope> {
+    let end = args
+        .get("to_seq")
+        .and_then(|to| to.as_u64())
+        .unwrap_or(u64::MAX);
+    let mut out: Vec<contract::Envelope> = log
+        .iter()
+        .filter(|line| line.seq.is_some_and(|seq| seq.0 <= end))
+        .cloned()
+        .collect();
+    out.drain(..out.len().saturating_sub(256));
+    out
+}
+
+/// One open through the scripted hub: feed, recent, the summary ack,
+/// the tail's history windows from `log` with `extra` hub lines before
+/// each answer, then the scripted `full` answer. Stepped through the
+/// summary ack, so the frame ran the read and sent the raise.
+fn tail_open(
+    log: Vec<contract::Envelope>,
+    full: Full,
+    history: History,
+    extra: Vec<serde_json::Value>,
+) -> TailOpen {
+    use std::sync::Mutex;
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    let (events_tx, events) = mpsc::channel();
+    let backend = RecordBackend {
+        inner: ratatui::backend::TestBackend::new(60, 12),
+        events: events_tx,
+        block: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        release: mpsc::channel().1,
+    };
+    let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop {
+        app,
+        parser: crate::keys::Parser::default(),
+        screen,
+        hub: Connection::new(None),
+        tty: None,
+        on_attach: Box::new(|_| {}),
+        clock: fakes::clock::FakeClock::new(),
+        wakeups: 0,
+        files_out: None,
+        search: None,
+        reader: None,
+        model_reader: crate::catalogue::Reader::new(None),
+        paste_reader: None,
+        pointer: crate::mouse::Pointer::default(),
+        hover: false,
+        var: Box::new(|_| None),
+        copy_command: None,
+        open_command: None,
+        viewer: Vec::new(),
+        images_dir: std::path::PathBuf::new(),
+        title: crate::osc::Title::default(),
+        shape: crate::osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
+    let (ours, hub_end) = pair();
+    let (tx, rx) = mpsc::channel();
+    let read_end = ours
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let read_tx = tx.clone();
+    let feed = Feed::new(read_tx, lp.hub.credits());
+    let (reader_done_tx, reader_done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("tail-read".to_owned())
+        .spawn(move || {
+            read_lines(read_end, &feed);
+            reader_done_tx.send(()).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    let want_full = matches!(full, Full::Replay | Full::Accepted | Full::Hung);
+    let want_drop = matches!(history, History::Drop);
+    let (hub_done_tx, hub_done) = mpsc::channel();
+    let (full_tx, full_seen) = mpsc::channel();
+    let replay = matches!(full, Full::Replay);
+    std::thread::Builder::new()
+        .name("tail-hub".to_owned())
+        .spawn(move || {
+            let mut reader = std::io::BufReader::new(hub_end);
+            let mut text = String::new();
+            let mut writer = reader
+                .get_mut()
+                .try_clone()
+                .unwrap_or_else(|err| panic!("clone: {err}"));
+            let mut write = move |value: serde_json::Value| {
+                use std::io::Write;
+                let mut bytes = serde_json::to_string(&value).unwrap_or_default();
+                bytes.push('\n');
+                writer
+                    .write_all(bytes.as_bytes())
+                    .unwrap_or_else(|err| panic!("hub write: {err}"));
+            };
+            let hub_ack = |id: &serde_json::Value, result: serde_json::Value| {
+                json!({"kind": "command_accepted", "ts": 0,
+                    "schema_version": contract::SCHEMA_VERSION,
+                    "payload": {"command_id": id, "result": result}})
+            };
+            let session_ack = |id: &serde_json::Value, result: serde_json::Value| {
+                let envelope = super::line("command_accepted", None, None, json!({}));
+                let mut value = serde_json::to_value(&envelope).unwrap_or_default();
+                value["payload"] = json!({"command_id": id, "result": result});
+                value
+            };
+            let session_rejected = |id: &serde_json::Value, message: &str| {
+                let envelope = super::line("command_rejected", None, None, json!({}));
+                let mut value = serde_json::to_value(&envelope).unwrap_or_default();
+                value["payload"] = json!({"command_id": id, "message": message});
+                value
+            };
+            let mut reads = 0usize;
+            while std::io::BufRead::read_line(&mut reader, &mut text).is_ok_and(|read| read > 0) {
+                let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                let id = command["id"].clone();
+                match command["command"].as_str() {
+                    Some("feed") => write(hub_ack(&id, json!({}))),
+                    Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
+                    Some("commands") => write(session_ack(&id, json!({"commands": []}))),
+                    Some("subscribe") if command["args"]["level"] == "full" => {
+                        full_tx.send(()).unwrap_or(());
+                        match full {
+                            Full::Replay => {
+                                let last = log
+                                    .iter()
+                                    .filter_map(|envelope| envelope.seq.map(|seq| seq.0))
+                                    .max()
+                                    .unwrap_or(0);
+                                write(session_ack(&id, json!({"last_seq": last})));
+                                for envelope in &log {
+                                    write(serde_json::to_value(envelope).unwrap_or_default());
+                                }
+                            }
+                            Full::Accepted => {
+                                write(session_ack(&id, json!({})));
+                            }
+                            Full::Hung => {}
+                        }
+                        break;
+                    }
+                    Some("subscribe") => write(session_ack(&id, json!({}))),
+                    Some("history") => {
+                        for line in &extra {
+                            write(line.clone());
+                        }
+                        reads += 1;
+                        match &history {
+                            History::Windows => write(session_ack(
+                                &id,
+                                json!({"lines": doors_window(&log, &command["args"])}),
+                            )),
+                            History::Reject(message) => write(session_rejected(&id, message)),
+                            History::Empty => write(session_ack(&id, json!({"lines": []}))),
+                            History::Drop => break,
+                            History::FailSecond(message) if reads > 1 => {
+                                write(session_rejected(&id, message));
+                            }
+                            History::FailSecond(_) => write(session_ack(
+                                &id,
+                                json!({"lines": doors_window(&log, &command["args"])}),
+                            )),
+                        }
+                    }
+                    _ => write(hub_ack(&id, json!({}))),
+                }
+            }
+            hub_done_tx.send(()).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
+    // The hub answers feed and recent: neither frame reads yet.
+    for what in ["the feed answer", "the recent answer"] {
+        let input = wait.recv_or_fail(&rx, what);
+        assert_eq!(lp.step(input, &rx), None);
+    }
+    // The launch open answers: the summary ack starts the tail read, so
+    // the commands ack steps first and the read cannot stash it.
+    let mut first = wait.recv_or_fail(&rx, "the first open answer");
+    let mut second = wait.recv_or_fail(&rx, "the second open answer");
+    let is_commands = |input: &Input| matches!(input, Input::Hub(Line::Session(envelope)) if envelope.payload.get("result").is_some_and(|result| result.get("commands").is_some()));
+    if !is_commands(&first) && is_commands(&second) {
+        std::mem::swap(&mut first, &mut second);
+    }
+    assert_eq!(lp.step(first, &rx), None);
+    assert_eq!(lp.step(second, &rx), None);
+    if want_full && !want_drop {
+        wait.recv_or_fail(&full_seen, "the hub to read the raise");
+    }
+    if want_drop {
+        wait.recv_or_fail(&hub_done, "the hub to drop the stream");
+        wait.recv_or_fail(&reader_done, "the reader to reach EOF");
+    } else if !replay {
+        wait.recv_or_fail(&hub_done, "the hub to hang up");
+        wait.recv_or_fail(&reader_done, "the reader to reach EOF");
+    }
+    TailOpen {
+        lp,
+        events,
+        seen,
+        tx,
+        rx,
+    }
+}
+
+/// The hub's commands in order, as (command, level or empty) pairs.
+fn seen_commands(open: &TailOpen) -> Vec<(String, String)> {
+    open.seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .map(|command| {
+                    (
+                        command["command"].as_str().unwrap_or_default().to_owned(),
+                        command["args"]["level"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The recording backend's frame texts, oldest first.
+fn frames(open: &TailOpen) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(event) = open.events.try_recv() {
+        if let Some(text) = event.strip_prefix("frame\n") {
+            out.push(text.to_owned());
+        }
+    }
+    out
+}
+
+/// The first frame draws the last page of the tail before the `full`
+/// raise: the preview's last reply shows, and the raise goes out after
+/// the frame's history read.
+#[test]
+fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
+    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let open = tail_open(log, Full::Hung, History::Windows, Vec::new());
+    assert_eq!(
+        seen_commands(&open),
+        [
+            ("feed".to_owned(), String::new()),
+            ("recent".to_owned(), String::new()),
+            ("subscribe".to_owned(), "summary".to_owned()),
+            ("commands".to_owned(), String::new()),
+            ("history".to_owned(), String::new()),
+            ("subscribe".to_owned(), "full".to_owned()),
+        ]
+    );
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    assert!(frame.contains("quokkas"), "{frame}");
+}
+
+/// Older reads ask `to_seq` just below the earliest held line: a
+/// 304-line session reads the last 256, then the window below line 48.
+#[test]
+fn older_reads_use_to_seq_just_below_the_earliest_held_line() {
+    let log = usage_log();
+    assert!(log.len() > 256, "two windows");
+    let open = tail_open(log.clone(), Full::Accepted, History::Windows, Vec::new());
+    let histories: Vec<serde_json::Value> = open
+        .seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .filter(|command| command["command"] == "history")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(histories.len(), 2, "{histories:?}");
+    assert_eq!(histories[0]["args"], json!({}));
+    let earliest = log.len() as u64 - 256;
+    assert_eq!(histories[1]["args"], json!({"to_seq": earliest - 1}));
+}
+
+/// A rejected history read shows the notice and still raises: the tail
+/// ends as failed with the answer's message, and the raise goes out.
+#[test]
+fn a_history_rejection_shows_the_notice_and_still_raises() {
+    let log = super::handoff_log(3, "the last reply");
+    let open = tail_open(log, Full::Accepted, History::Reject("boom"), Vec::new());
+    assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
+    let levels: Vec<String> = seen_commands(&open)
+        .into_iter()
+        .filter(|(command, _)| command == "subscribe")
+        .map(|(_, level)| level)
+        .collect();
+    assert_eq!(levels, ["summary".to_owned(), "full".to_owned()]);
+}
+
+/// A reopening during the read abandons it and still raises: the live
+/// `stream_reopened` ends the tail without a notice, the pass stays
+/// open, and the raise goes out.
+#[test]
+fn a_reopening_during_the_read_abandons_it_and_still_raises() {
+    let log = super::handoff_log(3, "the last reply");
+    let reopened = json!({"kind": "stream_reopened", "ts": 0,
+        "schema_version": contract::SCHEMA_VERSION,
+        "payload": {"session_id": "s_aaaaaaaaaaaaaaaa"}});
+    let open = tail_open(log, Full::Accepted, History::Windows, vec![reopened]);
+    assert!(open.lp.app.pass_open(), "the reopening holds the pass");
+    assert_eq!(open.lp.app.notice(), None);
+    let levels: Vec<String> = seen_commands(&open)
+        .into_iter()
+        .filter(|(command, _)| command == "subscribe")
+        .map(|(_, level)| level)
+        .collect();
+    assert_eq!(levels, ["summary".to_owned(), "full".to_owned()]);
+}
+
+/// A lost connection during the read ends everything: the link drops,
+/// the tail never installs, and no raise goes out.
+#[test]
+fn a_lost_connection_during_the_read_ends_everything() {
+    let log = super::handoff_log(3, "the last reply");
+    let mut open = tail_open(log, Full::Hung, History::Drop, Vec::new());
+    assert!(!open.lp.app.connected());
+    assert!(!open.lp.hub.has_stream());
+    assert_eq!(
+        open.lp.app.notice(),
+        Some("Connection lost."),
+        "a lost read ends through disconnected, never as a failed tail"
+    );
+    assert_eq!(open.lp.app.take_raise(), None);
+    assert!(
+        !seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        "no raise"
+    );
+}
+
+/// An empty log draws no history and raises: the frame holds no rows,
+/// the install holds nothing, and the ack without a result opens no
+/// pass.
+#[test]
+fn an_empty_log_draws_no_history_and_raises() {
+    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let mut open = tail_open(log, Full::Accepted, History::Empty, Vec::new());
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    assert!(!frame.contains("quokkas"), "{frame}");
+    assert_eq!(open.lp.app.pages().index().total(), 0);
+    assert!(
+        seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        "the raise"
+    );
+    let wait = Deadline::after(DEADLINE);
+    let ack = wait.recv_or_fail(&open.rx, "the raise's ack");
+    assert_eq!(open.lp.step(ack, &open.rx), None);
+    assert!(!open.lp.app.pass_open());
+    assert_eq!(open.lp.app.take_raise(), None);
+}
+
+/// The tail read stashes other inputs and replays them in order: two
+/// notices arriving mid-read wait the answer out, then fold oldest
+/// first with the answer wait holding at most two.
+#[test]
+fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
+    let log = super::handoff_log(3, "the last reply");
+    let notice = |text: &str| {
+        let envelope = super::line("notice", None, None, json!({"message": text}));
+        let mut value = serde_json::to_value(&envelope).unwrap_or_default();
+        value["session_id"] = json!("s_aaaaaaaaaaaaaaaa");
+        value
+    };
+    let mut open = tail_open(
+        log,
+        Full::Accepted,
+        History::Windows,
+        vec![notice("first"), notice("second")],
+    );
+    assert!(open.lp.hub.answer_stash_peak() <= 2);
+    drop(open.tx);
+    assert_eq!(open.lp.run(&open.rx), 0);
+    let texts: Vec<String> = open
+        .lp
+        .app
+        .notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { text, .. } => Some(text),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    // The run's EOF notice lands after the replayed pair.
+    assert!(texts.len() >= 2, "{texts:?}");
+    assert_eq!(&texts[..2], ["first".to_owned(), "second".to_owned()]);
+}
+
+/// No frame shows part of the replay through a slow channel: the test
+/// is the slow producer, sending the replay in parts and each part only
+/// after the loop reports the held batch before it ended. The loop
+/// waits at each batch end until the next part is wholly queued, so
+/// every batch takes exactly the part meant for it. The first
+/// part fills one `HUB_BATCH` batch, the next empties the channel short
+/// of the boundary, a scroll key goes in mid-pass, and the last part
+/// holds the boundary with two live lines above it. Neither the full
+/// batch, the emptied channel nor the key writes a frame; the landing
+/// writes the one frame, the whole session with the live lines below.
+#[test]
+fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
+    use crate::event_loop::batch::HUB_BATCH;
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    // The lines the emptied channel takes behind the full batch.
+    const SHORT: usize = 50;
+    // Nine lines a turn bar the last: the replay overfills one batch,
+    // with a tail behind the short part.
+    let log = super::handoff_log(479, "the last reply holds quokkas");
+    // The ack and `HUB_BATCH - 1` lines fill the first batch.
+    let head = HUB_BATCH - 1;
+    assert!(
+        log.len() > head + SHORT + 1,
+        "the boundary sits behind the emptied channel"
+    );
+    let last = last_seq(&log);
+    let live = [
+        super::line(
+            "turn_started",
+            Some(last + 1),
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "live otters"}]}]}),
+        ),
+        // A whole turn, so the quit below finds nothing running to
+        // interrupt.
+        super::line(
+            "turn_completed",
+            Some(last + 2),
+            None,
+            json!({"outcome": "completed"}),
+        ),
+    ];
+    let open = tail_open(log.clone(), Full::Accepted, History::Windows, Vec::new());
+    let first = frames(&open)
+        .pop()
+        .unwrap_or_else(|| panic!("a preview frame"));
+    assert!(first.contains("quokkas"), "{first}");
+    // Drain first: the hub's own ack may still sit queued, and the
+    // worker must see exactly one pass, this ack, then the replay.
+    while open.rx.try_recv().is_ok() {}
+    let raise_id = open
+        .seen
+        .lock()
+        .map(|held| {
+            held.iter()
+                .find(|command| {
+                    command["command"] == "subscribe" && command["args"]["level"] == "full"
+                })
+                .and_then(|command| command["id"].as_str().map(str::to_owned))
+        })
+        .unwrap_or_default()
+        .unwrap_or_else(|| panic!("the raise"));
+    let TailOpen {
+        mut lp,
+        events,
+        seen: _,
+        tx,
+        rx,
+    } = open;
+    let send = |input: Input| tx.send(input).unwrap_or_else(|error| panic!("{error}"));
+    let send_lines = |lines: &[contract::Envelope]| {
+        for envelope in lines {
+            send(Input::Hub(Line::Session(envelope.clone())));
+        }
+    };
+    // The first part: the ack carrying the boundary and enough replay
+    // to fill a batch.
+    send(Input::Hub(raise_accepted(SESSION, &raise_id, last)));
+    send_lines(&log[..head]);
+    let (ended_tx, ended) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        pause::report_ends(ended_tx, release);
+        let code = lp.run(&rx);
+        done_tx.send((code, lp)).unwrap_or(());
+    });
+    let wait = Deadline::after(DEADLINE);
+    let mut taken = Vec::new();
+    // Each batch end holds the loop until this send: the next part is
+    // queued whole by then.
+    let resume = || {
+        release_tx
+            .send(())
+            .unwrap_or_else(|error| panic!("{error}"))
+    };
+    let mut batch_end = |what: &str| {
+        let count = wait.recv_or_fail(&ended, what);
+        taken.push(count);
+        count
+    };
+    let drawn = || {
+        let mut out = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let Some(text) = event.strip_prefix("frame\n") {
+                out.push(text.to_owned());
+            }
+        }
+        out
+    };
+    assert_eq!(batch_end("the full batch"), HUB_BATCH);
+    // The second part, sent after the full batch ended: it empties the
+    // channel short of the boundary.
+    send_lines(&log[head..head + SHORT]);
+    resume();
+    assert_eq!(batch_end("the emptied channel"), SHORT);
+    // A scroll key mid-pass, then the last part: the rest of the replay
+    // with the live lines pushed behind the boundary line.
+    send(Input::Bytes(b"\x1b[5~".to_vec()));
+    send_lines(&log[head + SHORT..]);
+    send_lines(&live);
+    resume();
+    let landing = batch_end("the landing batch");
+    // The landing batch began after the full batch's, the emptied
+    // channel's and the key's frames were all written: none was.
+    assert!(
+        drawn().is_empty(),
+        "no frame before the landing: neither the full batch, the emptied channel nor the key draws"
+    );
+    assert_eq!(landing, log.len() - head - SHORT + live.len());
+    // Every later batch end runs through.
+    drop(release_tx);
+    send(quit());
+    let (code, lp) =
+        Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after the replay");
+    assert_eq!(code, 0);
+    assert!(
+        taken.contains(&HUB_BATCH),
+        "a full batch was taken: {taken:?}"
+    );
+    assert!(
+        taken[..taken.len() - 1]
+            .iter()
+            .any(|count| *count < HUB_BATCH),
+        "the channel emptied mid-pass: {taken:?}"
+    );
+    // Every frame written: the landing's alone, holding the session's
+    // last reply with the live lines below it.
+    let written = drawn();
+    assert_eq!(written.len(), 1, "the landing frame alone: {written:?}");
+    let shown = &written[0];
+    assert_ne!(*shown, first, "the landing draws");
+    let otters = shown
+        .find("live otters")
+        .unwrap_or_else(|| panic!("the live lines show: {shown}"));
+    if let Some(quokkas) = shown.find("quokkas") {
+        assert!(quokkas < otters, "the live lines sit below: {shown}");
+    }
+    assert!(!lp.app.pass_open());
+    let mut whole = lp.app.pages().fresh();
+    for envelope in log.iter().chain(&live) {
+        whole.apply(envelope);
+    }
+    assert_eq!(lp.app.pages().index().total(), whole.index().total());
+}
+
+#[test]
+fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
+    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let mut open = tail_open(log.clone(), Full::Replay, History::Windows, Vec::new());
+    let drawn = frames(&open);
+    let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
+    assert!(frame.contains("quokkas"), "{frame}");
+    assert!(open.lp.app.pages().index().total() > 0);
+    let mut whole = open.lp.app.pages().fresh();
+    for envelope in &log {
+        whole.apply(envelope);
+    }
+    drop(open.tx);
+    assert_eq!(open.lp.run(&open.rx), 0);
+    assert_eq!(open.lp.app.pages().index().total(), whole.index().total());
+    assert!(!open.lp.app.pass_open());
+    assert_eq!(open.lp.app.take_raise(), None);
+}
+
+/// A log whose last 256 lines hold the second turn's start with about
+/// one row: the first read installs them without filling the screen, so
+/// the read continues to the second window.
+fn push_line(
+    log: &mut Vec<contract::Envelope>,
+    seq: &mut u64,
+    kind: &str,
+    action: Option<&str>,
+    payload: serde_json::Value,
+) {
+    log.push(super::line(kind, Some(*seq), action, payload));
+    *seq += 1;
+}
+
+fn usage_payload() -> serde_json::Value {
+    json!({"generation_id": "g1", "model": "fake/m",
+        "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 1},
+        "input_bytes": 0, "cost": null})
+}
+
+fn usage_log() -> Vec<contract::Envelope> {
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    // The first turn fills the lines above the window: its usage lines
+    // fold to no rows.
+    push_line(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "first"}]}]}),
+    );
+    push_line(&mut log, &mut seq, "step_started", None, json!({}));
+    push_line(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        Some("a_m0"),
+        json!({"text": "the first reply"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "assistant_message_completed",
+        Some("a_m0"),
+        json!({"outcome": "completed"}),
+    );
+    for _ in 0..39 {
+        push_line(
+            &mut log,
+            &mut seq,
+            "usage_recorded",
+            Some("a_m0"),
+            usage_payload(),
+        );
+    }
+    push_line(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"}),
+    );
+    // The second turn's start sits at line 44 with usage behind it.
+    push_line(
+        &mut log,
+        &mut seq,
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "second"}]}]}),
+    );
+    while log.len() < 300 {
+        push_line(
+            &mut log,
+            &mut seq,
+            "usage_recorded",
+            Some("a_m1"),
+            usage_payload(),
+        );
+    }
+    log
+}
+
+/// A failed read keeps the preview and drops the partial fold: the
+/// second read rejected, the screen holds the first answer's lines with
+/// the refusal, and the raise still goes out.
+#[test]
+fn a_failed_read_keeps_the_preview_and_drops_the_partial_fold() {
+    let log = usage_log();
+    assert!(log.len() > 256);
+    let first: Vec<contract::Envelope> = log[log.len() - 256..].to_vec();
+    let open = tail_open(log, Full::Accepted, History::FailSecond("boom"), Vec::new());
+    assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
+    let mut installed = crate::window::Pages::new(60);
+    for envelope in &first {
+        installed.apply(envelope);
+    }
+    assert!(installed.index().total() > 0);
+    assert_eq!(
+        open.lp.app.pages().index().total(),
+        installed.index().total()
+    );
+    assert!(
+        seen_commands(&open)
+            .iter()
+            .any(|(command, level)| command == "subscribe" && level == "full"),
+        "the raise"
+    );
+}
+
+/// An attached app at 60x12 with the hub up and the session live: lines
+/// fold straight in, with no open in flight.
+fn live_app() -> crate::app::App {
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Home,
+        ..Default::default()
+    });
+    app.set_size(60, 12);
+    app.on_line(Line::Hub(hello()));
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app
+}
+
+/// A session `command_accepted` carrying the command's id.
+fn session_accepted(session: &str, command: &str) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), json!(command))]
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// The raise's acceptance with the pass ending at `last`.
+fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [
+            ("command_id".to_owned(), json!(command)),
+            ("result".to_owned(), json!({"last_seq": last})),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// The launched open's summary id: the summary subscribe among the
+/// lines the reconnect returns.
+fn summary_id(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap_or_default())
+        .find(|line| line["command"] == "subscribe" && line["args"]["level"] == "summary")
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("a summary subscribe in {lines:?}"))
+}
+
+/// The whole 60x12 screen text.
+fn rendered(app: &crate::app::App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+/// Drops the disconnect notice: the place asserts compare the
+/// conversation, and the disconnect notice is covered by the loop's
+/// lost-connection case.
+fn dismiss_notices(app: &mut crate::app::App) {
+    let ids: Vec<usize> = app
+        .notices()
+        .into_iter()
+        .filter_map(|line| match line {
+            crate::app::NoticeLine::Notice { id, .. } => Some(id),
+            crate::app::NoticeLine::More(_) => None,
+        })
+        .collect();
+    for id in ids {
+        app.dismiss_notice(id);
+    }
+}
+
+/// The last seq in `log`.
+fn last_seq(log: &[contract::Envelope]) -> u64 {
+    log.iter()
+        .filter_map(|envelope| envelope.seq.map(|seq| seq.0))
+        .max()
+        .unwrap_or(0)
+}
+
+/// A reconnect to the session on screen reads nothing and keeps its
+/// place: no `history` goes out, the rows and the jumped top stay, and
+/// the replay from zero lands with the same rows on screen. Without
+/// the anchor the landing follows the end instead, and a row open
+/// still reads and follows.
+#[test]
+fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    // The held rows stay the preview through the reconnect.
+    let log = super::handoff_log(5, "the held reply holds quokkas");
+    let last = last_seq(&log);
+    let mut app = live_app();
+    for envelope in &log {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    let total = app.pages().index().total();
+    assert!(total > 12, "taller than the screen");
+    app.jump(2);
+    let before = rendered(&app);
+    app.disconnected();
+    let lines = app.on_line(Line::Hub(hello()));
+    dismiss_notices(&mut app);
+    assert!(
+        !lines.iter().any(|line| line.contains("\"history\"")),
+        "reads nothing: {lines:?}"
+    );
+    assert_eq!(app.tail_due(), None);
+    assert_eq!(app.pages().index().total(), total);
+    assert_eq!(rendered(&app), before);
+    let summary = summary_id(&lines);
+    app.on_line(session_accepted(SESSION, &summary));
+    let raise: serde_json::Value =
+        serde_json::from_str(&app.take_raise().expect("a raise")).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"]["level"], "full");
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    app.on_line(raise_accepted(SESSION, raise_id, last));
+    assert!(app.pass_open());
+    for envelope in &log {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(!app.pass_open());
+    assert_eq!(app.pages().index().total(), total);
+    assert_eq!(rendered(&app), before);
+
+    // Without the anchor the landing follows the end: the replay
+    // lacks the top row's reply, so the top row's text is gone and
+    // the last lines show.
+    let log = super::handoff_log(2, "the first reply");
+    let mut app = live_app();
+    for envelope in &log {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    app.jump(app.pages().index().total() - 1);
+    app.disconnected();
+    let lines = app.on_line(Line::Hub(hello()));
+    assert!(
+        !lines.iter().any(|line| line.contains("\"history\"")),
+        "reads nothing: {lines:?}"
+    );
+    let other = super::handoff_log(1, "the other last reply");
+    let summary = summary_id(&lines);
+    app.on_line(session_accepted(SESSION, &summary));
+    let raise: serde_json::Value =
+        serde_json::from_str(&app.take_raise().expect("a raise")).unwrap_or_default();
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    app.on_line(raise_accepted(SESSION, raise_id, last_seq(&other)));
+    for envelope in &other {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(!app.pass_open());
+    let mut whole = app.pages().fresh();
+    for envelope in &other {
+        whole.apply(envelope);
+    }
+    assert_eq!(app.pages().index().total(), whole.index().total());
+    let screen = rendered(&app);
+    assert!(screen.contains("the other last reply"), "{screen}");
+    assert!(!screen.contains("the first reply"), "{screen}");
+
+    // A row open still reads and follows: the tail read goes out,
+    // and the landed screen shows the end of a session taller than
+    // the screen.
+    let log = super::handoff_log(5, "the last reply holds quokkas");
+    let mut open = tail_open(log, Full::Replay, History::Windows, Vec::new());
+    assert!(
+        open.seen
+            .lock()
+            .map(|held| held.iter().any(|command| command["command"] == "history"))
+            .unwrap_or_default(),
+        "the tail read goes out"
+    );
+    drop(open.tx);
+    assert_eq!(open.lp.run(&open.rx), 0);
+    let screen = rendered(&open.lp.app);
+    assert!(screen.contains("quokkas"), "{screen}");
+    assert!(!screen.contains("turn 0"), "{screen}");
+}
+
+/// A log with one delegate job between two turns.
+fn job_log() -> Vec<contract::Envelope> {
+    let mut log = Vec::new();
+    let mut seq = 0u64;
+    let prompt = |text: &str| {
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": text}]}]})
+    };
+    push_line(&mut log, &mut seq, "turn_started", None, prompt("first"));
+    push_line(&mut log, &mut seq, "step_started", None, json!({}));
+    push_line(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        Some("a_m0"),
+        json!({"text": "the first reply"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "assistant_message_completed",
+        Some("a_m0"),
+        json!({"outcome": "completed"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "job_started",
+        Some("a_1"),
+        json!({"job_id": "j_1", "description": "task 1", "output_path": "/tmp/out"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "delegate_started",
+        Some("a_1"),
+        json!({"job_id": "j_1", "delegate_session_id": "s_j_00000000000001",
+            "harness": "fiber", "model": "test/model", "workspace": "/w"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"}),
+    );
+    push_line(&mut log, &mut seq, "turn_started", None, prompt("second"));
+    push_line(&mut log, &mut seq, "step_started", None, json!({}));
+    push_line(
+        &mut log,
+        &mut seq,
+        "text_completed",
+        Some("a_m1"),
+        json!({"text": "the last reply"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "assistant_message_completed",
+        Some("a_m1"),
+        json!({"outcome": "completed"}),
+    );
+    push_line(
+        &mut log,
+        &mut seq,
+        "turn_completed",
+        None,
+        json!({"outcome": "completed"}),
+    );
+    log
+}
+
+/// A held reconnect replay leaves one job card: the same log replayed
+/// through the held pass and through the loop's read shows one card
+/// and the same panel.
+#[test]
+fn a_held_reconnect_replay_leaves_one_job_card() {
+    const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
+    let log = job_log();
+    let last = last_seq(&log);
+    let mut held = live_app();
+    for envelope in &log {
+        held.on_line(Line::Session(envelope.clone()));
+    }
+    held.disconnected();
+    let lines = held.on_line(Line::Hub(hello()));
+    dismiss_notices(&mut held);
+    let summary = summary_id(&lines);
+    held.on_line(session_accepted(SESSION, &summary));
+    let raise: serde_json::Value =
+        serde_json::from_str(&held.take_raise().expect("a raise")).unwrap_or_default();
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    held.on_line(raise_accepted(SESSION, raise_id, last));
+    for envelope in &log {
+        held.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(!held.pass_open());
+    let mut open = tail_open(log.clone(), Full::Replay, History::Windows, Vec::new());
+    let wait = Deadline::after(DEADLINE);
+    for _ in 0..log.len() + 1 {
+        let input = wait.recv_or_fail(&open.rx, "the replay");
+        assert_eq!(open.lp.step(input, &open.rx), None);
+    }
+    assert!(!open.lp.app.pass_open());
+    assert_eq!(rendered(&held).matches("task 1").count(), 1);
+    assert_eq!(rendered(&open.lp.app).matches("task 1").count(), 1);
+    assert_eq!(held.panel(), open.lp.app.panel());
+    // The running delegate's spinner animates, so the screens can show
+    // different frames of the same card: the counts above pin the one
+    // card, the panel pins its state.
+}

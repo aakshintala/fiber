@@ -3,6 +3,7 @@
 //! handoff's band (`docs/tui.md`, "Look", "Turns", "Handoff"). A child of
 //! `turn`, so it reads the card's fields.
 
+use contract::Seq;
 use contract::events::TurnOutcome;
 use jiff::tz::TimeZone;
 
@@ -44,6 +45,30 @@ fn block(
 }
 
 impl Turn {
+    /// Notes `seq`, the line just folded into the card, as the source of
+    /// what it began: the bubble on the card's first line, each entry it
+    /// added, and the ending once the card closes. Entries a line with
+    /// no `seq` added take the next line's that has one.
+    pub(crate) fn note_seq(&mut self, seq: Option<Seq>) {
+        if self.first_seq.is_none() {
+            self.first_seq = seq;
+        }
+        self.entry_seqs.resize(self.entries.len(), None);
+        if let Some(seq) = seq {
+            for slot in self
+                .entry_seqs
+                .iter_mut()
+                .rev()
+                .take_while(|slot| slot.is_none())
+            {
+                *slot = Some(seq);
+            }
+        }
+        if self.ended.is_some() && self.end_seq.is_none() {
+            self.end_seq = seq;
+        }
+    }
+
     /// The bubble and its time row, then the card's pieces on `turn`,
     /// each broken at a handoff's band; `edges` says whether the first
     /// piece draws its top edge and the last its bottom one
@@ -60,6 +85,7 @@ impl Turn {
     ) -> Pieces {
         crate::work::add(|work| work.turn_rows += 1);
         let prompts_at = out.len();
+        out.set_source(self.first_seq);
         for prompt in &self.prompts {
             let before = out.len();
             super::images::bubble_rows(prompt, width, layout, out);
@@ -85,7 +111,8 @@ impl Turn {
         // Whether a band drew since the last block: no blank row goes
         // next to a handoff band (`docs/tui.md`, "Turns", "Handoff").
         let mut after_band = false;
-        for entry in &self.entries {
+        for (index, entry) in self.entries.iter().enumerate() {
+            out.set_source(self.entry_seqs.get(index).copied().flatten());
             if let Entry::Band(band) = entry {
                 if !broken {
                     first = piece_drew;
@@ -125,6 +152,7 @@ impl Turn {
             }
         }
         if let Some((ending, ts)) = &self.ended {
+            out.set_source(self.end_seq);
             let drew = block(out, inner, pad, separates, |out| {
                 let head = match ending {
                     Ending::Done(done) => {
@@ -171,6 +199,7 @@ impl Turn {
         if led && !last && !after_band {
             out.gap(out.len());
         }
+        out.set_source(None);
         Pieces { first, last }
     }
 }

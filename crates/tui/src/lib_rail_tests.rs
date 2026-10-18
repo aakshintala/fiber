@@ -98,7 +98,7 @@ fn alt_one_switches_in_the_loop() {
     let (_, subscribe) = command(BufReader::new(theirs), "the subscribe for B");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], B);
-    assert_eq!(subscribe["args"]["level"], "full");
+    assert_eq!(subscribe["args"]["level"], "summary");
     assert_eq!(lp.app.session().map(|id| id.0.as_str()), Some(B));
 }
 

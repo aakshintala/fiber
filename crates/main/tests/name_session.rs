@@ -16,15 +16,15 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, Socket, answered, expired, function_call, group_alive, hello, is_status,
-    read_kinds, run_to_exit, stream, until,
+    Deadline, Running, Setup, Socket, answered, expired, function_call, group_alive, hello,
+    is_status, read_kinds, run_to_exit, stream, until,
 };
 
 /// A finished `function_call` for `name_session` with `arguments`.
@@ -509,18 +509,6 @@ fn a_person_name_pins_the_session_after_a_resume() {
         .next_back()
         .expect("a session_status line");
     assert_eq!(status["payload"]["name"], "Mine");
-}
-
-/// `fiber ask` with its stdout kept drained and its stderr kept for a failure
-/// (as in `tests/tools_tokens.rs`: the held provider parks the loop, so the
-/// test drives the session through its socket while it runs).
-struct Running {
-    child: Child,
-    watchdog: Watchdog,
-    group: u32,
-    stdout: mpsc::Receiver<String>,
-    stderr: Arc<Mutex<String>>,
-    deadline: Deadline,
 }
 
 #[track_caller]

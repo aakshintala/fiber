@@ -72,6 +72,7 @@ pub(super) struct Connection {
     credits: Arc<Credits>,
     /// The high-water mark of the stash's length on the answer path:
     /// what `answer` holds while it waits for a history answer.
+    #[cfg(test)]
     answer_stash_peak: usize,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
@@ -86,6 +87,7 @@ impl Connection {
             hub: None,
             stash: VecDeque::new(),
             credits: Credits::new(link::QUEUE),
+            #[cfg(test)]
             answer_stash_peak: 0,
             retry,
         }
@@ -225,6 +227,46 @@ impl Connection {
         Ok(lines)
     }
 
+    /// Reads the open's tail with `history`, oldest windows first, until
+    /// it fills or ends: one command per window, each answered before
+    /// the next is sent. A rejected or unreadable answer ends the tail as
+    /// failed with its message; a reopening abandons it without one. A
+    /// lost connection ends the read; the loop's `disconnected` already
+    /// ended the overlay.
+    pub(super) fn fetch_tail(
+        &mut self,
+        rx: &Receiver<Input>,
+        session: &SessionId,
+        app: &mut App,
+        tick: &TickThread,
+    ) -> Result<(), String> {
+        while let Some(args) = app.tail_next() {
+            let id = mint();
+            let command = session_command(&id, "history", session, Some(args)).to_string();
+            let written = self
+                .hub
+                .as_ref()
+                .is_some_and(|hub| link::write_line(hub, &command).is_ok());
+            if !written {
+                self.lost(app);
+                return Err(LOST.to_owned());
+            }
+            match self.answer(rx, &id, app, tick) {
+                Ok(Answer::Lines(lines)) => app.tail_lines(lines),
+                Ok(Answer::Reopened) => {
+                    app.tail_ended(None);
+                    return Ok(());
+                }
+                Err(message) if message == LOST => return Err(message),
+                Err(message) => {
+                    app.tail_ended(Some(&message));
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Waits for the answer to command `id`, holding every other input for
     /// after the frame. A lost connection ends the wait; a signal is held
     /// for after the frame and ends the wait as lost, so the loop quits
@@ -293,7 +335,10 @@ impl Connection {
     /// high-water mark. Only answer-path pushes count.
     fn push_stash(&mut self, input: Input) {
         self.stash.push_back(input);
-        self.answer_stash_peak = self.answer_stash_peak.max(self.stash.len());
+        #[cfg(test)]
+        {
+            self.answer_stash_peak = self.answer_stash_peak.max(self.stash.len());
+        }
     }
 
     /// The hub connection ended: the reader sends this once per stream,
