@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1139
 expression: "sized(&mut app, 80, 24)"
 ---
 
@@ -11,7 +10,7 @@ expression: "sized(&mut app, 80, 24)"
   Key map                                                                    ✕
 
   Every binding by area, with its other paths.
-  36 actions, 26 with other paths
+  37 actions, 26 with other paths
 
   All  Sessions  The input box  The conversation  Steering  Requests, models a
   Type to search shortcuts› █
