@@ -22,10 +22,11 @@ use support::run_to_exit;
 /// reading the file at run time (`docs/testing.md`).
 const DOC: &str = include_str!("../../../docs/extensions.md");
 
-/// The subsection's text and its fenced blocks in order, each as
-/// `(tag, body)`. A doc edit that adds, drops or reorders a fence changes
-/// this list, which the tests pin.
-fn documented_section() -> (String, Vec<(String, String)>) {
+/// The subsection's fenced blocks in order, each as `(tag, body)`: the
+/// tool as `lua`, then the allowed case as `json`. A doc edit that adds,
+/// drops or reorders a fence changes this list, which the tests pin. The
+/// section must name its case file.
+fn documented_blocks() -> Vec<(String, String)> {
     let heading = "### Testing a tool that executes";
     let start = DOC
         .find(heading)
@@ -54,13 +55,6 @@ fn documented_section() -> (String, Vec<(String, String)>) {
         }
         blocks.push((tag.trim().to_owned(), body));
     }
-    (section.to_owned(), blocks)
-}
-
-/// The subsection's blocks: the tool as `lua`, then the allowed case as
-/// `json`.
-fn documented_blocks() -> (String, Vec<(String, String)>) {
-    let (section, blocks) = documented_section();
     assert!(
         section.contains("tests/launch-allowed.json"),
         "the section must name its case file"
@@ -72,7 +66,7 @@ fn documented_blocks() -> (String, Vec<(String, String)>) {
             .collect::<Vec<_>>(),
         ["lua", "json"]
     );
-    (section, blocks)
+    blocks
 }
 
 /// An extension package holding `lua` as `init.lua` and each
@@ -107,7 +101,7 @@ fn temp_root() -> fakes::TempDir {
 
 #[test]
 fn the_documented_executes_case_passes_under_fiber_extension_test() {
-    let (_section, blocks) = documented_blocks();
+    let blocks = documented_blocks();
     let setup = support::Setup::new();
     let package = package(
         &setup,
@@ -132,7 +126,7 @@ fn the_documented_executes_case_passes_under_fiber_extension_test() {
 
 #[test]
 fn the_documented_allow_case_needs_its_reviewer_config() {
-    let (_section, blocks) = documented_blocks();
+    let blocks = documented_blocks();
     let mut allowed: Value = serde_json::from_str(&blocks[1].1).unwrap();
     allowed
         .as_object_mut()
