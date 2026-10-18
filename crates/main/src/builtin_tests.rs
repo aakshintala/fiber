@@ -612,20 +612,21 @@ const NOT_STRICT: &[&str] = &[
     "delegate_spawn", // "Background jobs"
     "jobs",           // "Background jobs"
     "name_session",   // "Naming the session"
-    "read",           // "File tools", "read"
     "session_search", // "Searching past sessions"
     "shell",          // "Shell", "Running a command"
     "web_search",     // "Web fetch and web search", "web_search"
 ];
 
-/// Whether `schema` fits the vendor's strict subset: one string `type`, every
+/// Whether `schema` fits the vendor's strict subset: scalar nullable unions
+/// only at required property positions, otherwise one string `type`, every
 /// object listing each property once in `required` and closing with
 /// `additionalProperties: false`, and no keyword outside the subset.
 fn strict(schema: &serde_json::Value) -> bool {
-    schema.get("type").and_then(serde_json::Value::as_str) == Some("object") && strict_node(schema)
+    schema.get("type").and_then(serde_json::Value::as_str) == Some("object")
+        && strict_node(schema, false)
 }
 
-fn strict_node(schema: &serde_json::Value) -> bool {
+fn strict_node(schema: &serde_json::Value, property: bool) -> bool {
     use serde_json::Value;
     let Some(map) = schema.as_object() else {
         return false;
@@ -651,13 +652,29 @@ fn strict_node(schema: &serde_json::Value) -> bool {
                 && names.len() == properties.len()
                 && names.iter().all(|name| properties.contains_key(*name))
                 && map.get("additionalProperties") == Some(&Value::Bool(false))
-                && properties.values().all(strict_node)
+                && properties.values().all(|p| strict_node(p, true))
         }
-        Some("array") => map.get("items").is_some_and(strict_node),
+        Some("array") => map
+            .get("items")
+            .is_some_and(|items| strict_node(items, false)),
         Some("string" | "number" | "integer" | "boolean" | "null") => {
             !map.contains_key("properties") && !map.contains_key("items")
         }
-        _ => false,
+        _ => {
+            let Some(types) = map.get("type").and_then(Value::as_array) else {
+                return false;
+            };
+            let names: Vec<_> = types.iter().filter_map(Value::as_str).collect();
+            property
+                && types.len() == 2
+                && names.contains(&"null")
+                && names
+                    .iter()
+                    .any(|name| matches!(*name, "integer" | "string" | "boolean"))
+                && !map.contains_key("enum")
+                && !map.contains_key("properties")
+                && !map.contains_key("items")
+        }
     }
 }
 
@@ -667,17 +684,43 @@ fn the_strict_walker_rejects_what_the_wire_rejects() {
     let fits = json!({"type": "object", "properties": {"name": {"type": "string"}},
         "required": ["name"], "additionalProperties": false});
     assert!(strict(&fits));
+    let property = |p| json!({"type": "object", "properties": {"name": p}, "required": ["name"], "additionalProperties": false});
+    for types in [
+        json!(["integer", "null"]),
+        json!(["null", "string"]),
+        json!(["boolean", "null"]),
+    ] {
+        let nullable = json!({"type": types});
+        assert!(strict(&property(nullable.clone())));
+        assert!(strict(&property(property(nullable.clone()))));
+        assert!(!strict(&nullable));
+        assert!(!strict(&property(
+            json!({"type": "array", "items": nullable})
+        )));
+    }
+    for p in [
+        json!({"type": []}),
+        json!({"type": ["null"]}),
+        json!({"type": ["null", "null"]}),
+        json!({"type": ["integer", "string"]}),
+        json!({"type": ["integer", "null", "string"]}),
+        json!({"type": ["object", "null"]}),
+        json!({"type": ["array", "null"]}),
+        json!({"type": ["number", "null"]}),
+        json!({"type": ["integer", "null"], "enum": [1, null]}),
+        json!({"type": ["integer", "null"], "properties": {}}),
+        json!({"type": ["integer", "null"], "items": {"type": "integer"}}),
+    ] {
+        assert!(!strict(&property(p.clone())), "{p}");
+    }
+    let mut optional = property(json!({"type": ["integer", "null"]}));
+    optional["required"] = json!([]);
+    assert!(!strict(&optional));
     for (label, schema) in [
         (
             "minLength",
             json!({"type": "object", "properties": {"name":
             {"type": "string", "minLength": 1}}, "required": ["name"],
-            "additionalProperties": false}),
-        ),
-        (
-            "type list",
-            json!({"type": "object", "properties": {"name":
-            {"type": ["string", "null"]}}, "required": ["name"],
             "additionalProperties": false}),
         ),
         (

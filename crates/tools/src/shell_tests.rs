@@ -44,6 +44,83 @@ fn run_details_call(shell: Shell, arguments: Map<String, Value>) -> contract::to
 }
 
 #[test]
+fn nullable_optional_arguments_parse_as_absent() {
+    let dir = fakes::TempDir::new("fiber-shell-nullable");
+    let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
+        "run_in_background": null, "tty": null, "monitor": null, "deadline_ms": null}));
+    let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+    assert_eq!(parsed.command, "ls");
+    assert_eq!(parsed.mode, Mode::Foreground);
+    assert_eq!(parsed.workdir, dir.path());
+    assert_eq!(parsed.timeout_ms, 600_000);
+    let tool = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    assert!(tool.effects(&arguments).is_ok());
+    let schema = tool.definition().input_schema;
+    assert_eq!(
+        schema["required"],
+        json!([
+            "command",
+            "workdir",
+            "timeout_ms",
+            "run_in_background",
+            "tty",
+            "monitor",
+            "deadline_ms"
+        ])
+    );
+    for (key, kind) in [
+        ("workdir", "string"),
+        ("timeout_ms", "integer"),
+        ("run_in_background", "boolean"),
+        ("tty", "boolean"),
+        ("monitor", "boolean"),
+        ("deadline_ms", "integer"),
+    ] {
+        assert_eq!(schema["properties"][key]["type"], json!([kind, "null"]));
+    }
+    for (overrides, mode, timeout) in [
+        (json!({"monitor": true}), Mode::Monitor, 300_000),
+        (
+            json!({"tty": true}),
+            Mode::Terminal {
+                run_in_background: false,
+            },
+            600_000,
+        ),
+        (
+            json!({"run_in_background": true}),
+            Mode::Background,
+            600_000,
+        ),
+    ] {
+        let mut args = arguments.clone();
+        args.extend(overrides.as_object().unwrap().clone());
+        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        assert_eq!(parsed.mode, mode);
+        assert_eq!(parsed.timeout_ms, timeout);
+    }
+    for (overrides, error) in [
+        (json!({"monitor": true, "tty": true}), super::MONITOR_ALONE),
+        (
+            json!({"monitor": true, "run_in_background": true}),
+            super::MONITOR_ALONE,
+        ),
+        (
+            json!({"monitor": true, "timeout_ms": 0}),
+            super::MONITOR_TIMEOUT,
+        ),
+        (json!({"deadline_ms": 0}), super::DEADLINE_WITHOUT_MONITOR),
+    ] {
+        let mut args = arguments.clone();
+        args.extend(overrides.as_object().unwrap().clone());
+        assert_eq!(
+            parse(&args, dir.path(), 600_000).err().as_deref(),
+            Some(error)
+        );
+    }
+}
+
+#[test]
 fn shell_attaches_only_strict_foreground_grep_match_records_and_cleans_up() {
     let dir = fakes::TempDir::new("fiber-shell-match-details");
     std::fs::write(dir.path().join("a.txt"), "needle\n").unwrap();

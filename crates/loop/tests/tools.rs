@@ -218,6 +218,77 @@ fn repaired_arguments_are_recorded_run_and_sent_back_as_written() {
 }
 
 #[test]
+fn required_nullable_arguments_are_absent_and_replayed_as_written() {
+    for written in [
+        json!({"city": "Paris", "days": null}),
+        json!({"city": "Paris"}),
+    ] {
+        let mut tool = TestTool::reads("get_weather", "Sunny.");
+        tool.schema = Some(json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}, "days": {"type": ["integer", "null"]}},
+            "required": ["city", "days"], "additionalProperties": false
+        }));
+        let tool = Arc::new(tool);
+        let (session, lines) = turn(vec![tool.clone()], &[("get_weather", written.clone())]);
+        assert_eq!(
+            kinds(&lines),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "tool_call_arguments_delta",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "tool_call_started",
+                "tool_call_completed",
+                "step_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed"
+            ]
+        );
+        let requested = lines
+            .iter()
+            .find(|line| line.kind == "tool_call_requested")
+            .unwrap();
+        assert_eq!(requested.payload["arguments"], written);
+        if written.get("days").is_some() {
+            assert_eq!(requested.payload["repaired"], json!({"city": "Paris"}));
+            assert_eq!(
+                requested.payload["repairs"],
+                json!([{"path": "/days", "fix": "null_dropped"}])
+            );
+        } else {
+            assert_eq!(requested.payload.get("repairs"), None);
+        }
+        assert_eq!(completed(&lines)[0].payload["status"], "completed");
+        assert_eq!(
+            tool.ran(),
+            [json!({"city": "Paris"}).as_object().unwrap().clone()]
+        );
+        let requests = session.requests();
+        let Some(Input::ToolCall { call, .. }) = requests[1]
+            .conversation
+            .iter()
+            .find(|input| matches!(input, Input::ToolCall { .. }))
+        else {
+            panic!("the call is sent back");
+        };
+        assert_eq!(call.arguments, written);
+    }
+}
+
+#[test]
 fn arguments_that_need_no_repair_record_none() {
     let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
     let (_, lines) = turn(vec![tool], &[("get_weather", paris())]);

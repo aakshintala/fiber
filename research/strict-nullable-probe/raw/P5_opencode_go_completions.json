@@ -1,0 +1,60 @@
+{
+ "url": "https://opencode.ai/zen/go/v1/chat/completions",
+ "request": {
+  "model": "glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Read a file.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "offset": {
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "note": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "all": {
+        "type": [
+         "boolean",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "path",
+       "offset",
+       "note",
+       "all"
+      ],
+      "additionalProperties": false
+     },
+     "strict": true
+    }
+   }
+  ],
+  "tool_choice": "required",
+  "max_tokens": 256
+ },
+ "status": 200,
+ "elapsed_s": 1.43,
+ "body": "{\"id\":\"chatcmpl-b8756822\",\"object\":\"chat.completion\",\"created\":1792344988,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"The user wants me to call the read tool with path 'a.txt' and pass null for every other argument. The parameters are:\\n- path: 'a.txt'\\n- offset: null\\n- note: null\\n- all: null\\n\\nAll of these are required parameters, so I need to pass all of them, with null for the ones other than path.\",\"tool_calls\":[{\"index\":0,\"id\":\"chatcmpl-tool-be50832661cc803d\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\": \\\"a.txt\\\", \\\"offset\\\": null, \\\"note\\\": null, \\\"all\\\": null}\"}}]}}],\"usage\":{\"prompt_tokens\":220,\"completion_tokens\":104,\"total_tokens\":324,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"accepted_prediction_tokens\":null,\"reasoning_tokens\":74,\"rejected_prediction_tokens\":null}}}"
+}

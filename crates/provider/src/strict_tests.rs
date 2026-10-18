@@ -54,7 +54,7 @@ fn a_nested_object_must_fit_too() {
 }
 
 #[test]
-fn a_keyword_outside_the_subset_or_a_type_list_does_not_fit() {
+fn a_keyword_outside_the_subset_does_not_fit() {
     let keyword = json!({
         "type": "object",
         "properties": {"s": {"type": "string", "minLength": 1}},
@@ -62,13 +62,42 @@ fn a_keyword_outside_the_subset_or_a_type_list_does_not_fit() {
         "additionalProperties": false
     });
     assert!(!fits(&keyword));
-    let type_list = json!({
-        "type": "object",
-        "properties": {"s": {"type": ["string", "null"]}},
-        "required": ["s"],
-        "additionalProperties": false
-    });
-    assert!(!fits(&type_list));
+}
+
+#[test]
+fn required_nullable_scalars_fit_only_at_property_positions() {
+    for types in [
+        json!(["integer", "null"]),
+        json!(["null", "string"]),
+        json!(["boolean", "null"]),
+    ] {
+        let property = json!({"type": types});
+        let schema = with_property(property.clone());
+        assert!(fits(&schema), "{schema}");
+        assert!(fits(&with_property(schema.clone())));
+        let mut optional = schema;
+        optional["required"] = json!([]);
+        assert!(!fits(&optional));
+        assert!(!fits(&property));
+        assert!(!fits(&with_property(
+            json!({"type": "array", "items": property})
+        )));
+    }
+    for property in [
+        json!({"type": []}),
+        json!({"type": ["integer", "string"]}),
+        json!({"type": ["null"]}),
+        json!({"type": ["null", "null"]}),
+        json!({"type": ["integer", "null", "string"]}),
+        json!({"type": ["object", "null"]}),
+        json!({"type": ["array", "null"]}),
+        json!({"type": ["number", "null"]}),
+        json!({"type": ["integer", "null"], "enum": [1, null]}),
+        json!({"type": ["integer", "null"], "properties": {}}),
+        json!({"type": ["integer", "null"], "items": {"type": "integer"}}),
+    ] {
+        assert!(!fits(&with_property(property.clone())), "{property}");
+    }
 }
 
 #[test]

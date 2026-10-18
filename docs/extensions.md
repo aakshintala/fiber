@@ -1305,7 +1305,7 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - `require` loads files from your extension's own directory only. To use
   someone else's Lua, vendor a copy into your directory or depend on the
   extension that holds it.
-- Give your extension a version tag for every release. Dependents name a
+- Give your extension a version tag for every release (see [Versions](#versions)). Dependents name a
   minimum version, and Fiber installs nothing newer than someone asked for.
 - JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`.
 - In Lua, do not reach for `io`, `os`, `fetch`, sockets or environment
@@ -1384,6 +1384,8 @@ later, and 1.9 is the newest, Fiber installs 1.4. The same inputs always give
 the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
+A git address a person installs by name gets the repository's newest version tag. A repository with no version tag cannot be installed from its git address: the install fails with `extension_not_found`. A local path install needs no tag.
+
 A version a person installed or updated by name counts as one more minimum,
 and it stays until they remove that extension. So `fiber extension update <name>` on a
 dependency keeps the newer version, and the same installed set always gives
@@ -1418,6 +1420,8 @@ for 300 seconds, fails with `fetch_failed`.
 | `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
 | `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |
+
+An install from a git address needs a version tag (see [Versions](#versions)).
 
 In a terminal, `install` and `update` show a summary and ask before going
 ahead. The summary is the one in
