@@ -45,6 +45,7 @@ struct Session {
     stderr: mpsc::Receiver<String>,
     client: Socket,
     setup: Setup,
+    id: String,
     stream: Vec<Value>,
     expected: Vec<&'static str>,
 }
@@ -106,6 +107,7 @@ impl Session {
             stderr,
             client,
             setup,
+            id,
             stream,
             expected: vec![
                 "command_accepted",
@@ -166,7 +168,10 @@ impl Session {
         );
         assert!(reloaded["payload"].get("failed").is_none());
     }
-    fn finish(mut self) -> Vec<Value> {
+    fn dir(&self) -> std::path::PathBuf {
+        session_dir(&self.setup, &self.id)
+    }
+    fn finish(mut self) -> (Vec<Value>, String) {
         self.client.send(r#"{"id":"close","command":"close"}"#);
         self.stream.extend(until_close(&self.client));
         self.expected.extend(["command_accepted", "fiber_exited"]);
@@ -188,7 +193,7 @@ impl Session {
             "{:?}",
             self.stream
         );
-        self.stream
+        (self.stream, stderr)
     }
 }
 
@@ -265,7 +270,7 @@ fn idle_reload_rebuilds_the_next_request_after_a_turn() {
     session.turn(true);
     session.reload();
     session.turn(false);
-    let stream = session.finish();
+    let (stream, _) = session.finish();
     let seen = bodies(&server);
     assert_eq!(seen.len(), 2);
     let built = stream
@@ -467,7 +472,7 @@ fn skill_description_is_resent_once_even_after_a_turn_start_check() {
     session.expected.push("skills_changed");
     session.reload();
     session.turn(false);
-    let stream = session.finish();
+    let (stream, _) = session.finish();
     let changes: Vec<_> = stream
         .iter()
         .filter(|line| line["kind"] == "skills_changed")
@@ -516,7 +521,7 @@ fn reviewer_model_changes_apply_to_the_next_reviewed_call() {
     );
     session.reload();
     reviewed_turn(&mut session, false);
-    let stream = session.finish();
+    let (stream, _) = session.finish();
     let decisions: Vec<_> = stream
         .iter()
         .filter(|line| line["kind"] == "permission_resolved")
@@ -540,7 +545,7 @@ fn the_retained_route_provider_can_write_state_when_signing_after_reload() {
     session.turn(false);
     let completed = session.expected.len() - 1;
     session.expected.insert(completed, "extension_state_set");
-    let stream = session.finish();
+    let (stream, _) = session.finish();
     let writes: Vec<_> = stream
         .iter()
         .filter(|line| line["kind"] == "extension_state_set")
@@ -647,4 +652,233 @@ fn startup_holds_extensions_loaded_behind_a_fifo_and_counts_clients_once() {
     let session = Session::start(setup);
     session.setup.deadline.recv(&written).unwrap();
     session.finish();
+}
+
+/// The credential file's text for the reload scenario. It is not a path
+/// fragment and not a word the denial sentence uses, so a hit in an output
+/// can only be the file's bytes.
+const RELOAD_MARKER: &str = "reload-quorum-xylophone-77";
+
+fn assert_no_reload_marker(label: &str, bytes: &[u8]) {
+    assert!(
+        !holds_marker(bytes, RELOAD_MARKER),
+        "{label} holds the credential file's text"
+    );
+}
+
+/// Every file under `dir`, symlink targets included. `events.jsonl` is one
+/// of them; `artifacts/` is entered even when a call wrote nothing there.
+/// Returns each file's display path with its bytes: the caller snapshots
+/// before `finish`, whose return drops the session's temporary root.
+fn snapshot_session_files(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    assert!(dir.join("events.jsonl").is_file());
+    assert!(dir.join("artifacts").is_dir());
+    let mut snapshots = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let meta = fs::symlink_metadata(&path).unwrap();
+        if meta.file_type().is_dir() {
+            for entry in fs::read_dir(&path).unwrap() {
+                pending.push(entry.unwrap().path());
+            }
+            continue;
+        }
+        snapshots.push((path.display().to_string(), fs::read(&path).unwrap()));
+    }
+    snapshots
+}
+
+#[test]
+fn reload_applies_a_changed_shell_read_only_list() {
+    let setup = Setup::new();
+    let secret = setup.home().join("credentials").join("secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, format!("{RELOAD_MARKER}\n")).unwrap();
+    let absolute = fs::canonicalize(&secret)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!absolute.contains(RELOAD_MARKER), "{absolute}");
+    let events = vec![function_call(
+        "shell_0",
+        "shell",
+        &json!({"command": format!("jq . {absolute}")}),
+    )];
+    let script = serde_json::to_string(&events).unwrap();
+    assert!(
+        !script.contains(RELOAD_MARKER),
+        "the scripted arguments contain the credential file's text"
+    );
+    let call = || stream(&events);
+    let server = ProviderServer::start([call(), hello(), call(), hello()]).unwrap();
+    setup.provider(&server);
+    let mut session = Session::start(setup);
+
+    // Turn 1: `jq` is unlisted, so the call goes to review. With no
+    // reviewer model the review escalates to the person, who denies it.
+    let turn = session.stream.len();
+    session.send_prompt();
+    session
+        .stream
+        .extend(until(&session.client, "permission requested", |line| {
+            line["kind"] == "permission_requested"
+        }));
+    let requested = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .cloned()
+        .unwrap();
+    let request = session
+        .stream
+        .last()
+        .cloned()
+        .filter(|line| line["kind"] == "permission_requested")
+        .unwrap();
+    assert_eq!(request["payload"]["step"], "review");
+    assert_eq!(request["payload"]["escalation"]["cause"], "reviewer_failed");
+    assert_eq!(
+        request["payload"]["escalation"]["error"]["code"],
+        "no_model"
+    );
+    assert_eq!(request["action_id"], requested["action_id"]);
+    let request_id = request["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    session.client.send(
+        &json!({"id":doors::mint("c_"),"command":"reply","args":{"request_id":request_id,"decision":"deny"}})
+            .to_string(),
+    );
+    session
+        .stream
+        .extend(until(&session.client, "denied turn completed", |line| {
+            line["kind"] == "turn_completed"
+        }));
+    let resolved = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "person");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["action_id"], requested["action_id"]);
+    let completed = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "denied");
+    assert_eq!(completed["payload"]["reason"], "person");
+    assert_eq!(completed["action_id"], requested["action_id"]);
+    assert!(
+        !session.stream[turn..]
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    session.expected.extend([
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "command_accepted",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "notice",
+        "permission_requested",
+        "command_accepted",
+        "permission_resolved",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+
+    // The reload lists `jq` as read-only with no flags: the same call on
+    // the credential path now declares `reads`, and the credential deny
+    // refuses it before review.
+    write_json(
+        &session.setup.home().join("config.json"),
+        &json!({"model":"fake/m","shell":{"read_only":{"jq":{"flags":[]}}}}),
+    );
+    session.reload();
+    let turn = session.stream.len();
+    session.send_prompt();
+    session.stream.extend(until(
+        &session.client,
+        "credential-denied turn completed",
+        |line| line["kind"] == "turn_completed",
+    ));
+    let requested = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .cloned()
+        .unwrap();
+    let resolved = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .cloned()
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "credential_deny");
+    assert_eq!(resolved["action_id"], requested["action_id"]);
+    let completed = session.stream[turn..]
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .cloned()
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "denied");
+    assert_eq!(completed["payload"]["reason"], "credentials");
+    assert_eq!(completed["action_id"], requested["action_id"]);
+    assert!(
+        !session.stream[turn..]
+            .iter()
+            .any(|line| line["kind"] == "permission_requested"),
+        "the listed call never reached review"
+    );
+    assert!(
+        !session.stream[turn..]
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    session.expected.extend([
+        "turn_started",
+        "command_accepted",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "permission_resolved",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+
+    let dir = session.dir();
+    let snapshots = snapshot_session_files(&dir);
+    let (stream, stderr) = session.finish();
+    let seen = bodies(&server);
+    assert_eq!(seen.len(), 4, "no reviewer request in either turn");
+    assert_no_reload_marker("stderr", stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_reload_marker(&format!("request {index}"), &request.body);
+    }
+    for (label, bytes) in &snapshots {
+        assert_no_reload_marker(label, bytes);
+    }
+    let _ = stream;
 }
