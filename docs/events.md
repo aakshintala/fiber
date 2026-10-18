@@ -158,7 +158,8 @@ below names a shape from this section by its name.
   milliseconds, and its key ends `_ms`.
 - Ids are strings. A token count is an integer.
 - A path to a file in the session directory is relative to that directory,
-  such as `artifacts/j_5e10.log`. Every other path is absolute.
+  such as `artifacts/j_5e10.log`. An offered item's `files` are relative to
+  the workspace, `/`-separated. Every other path is absolute.
 - A value listed as a closed set is breaking to extend ("Versioning"). An open
   set is additive, and a consumer treats an unknown value as the table says.
 
@@ -779,7 +780,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `files` (array of strings, sorted workspace-relative paths, possibly empty; absent on older offers), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
@@ -991,7 +992,8 @@ turn start (`docs/system-prompt.md`, "Added and removed skills").
 
 #### `skills_resent`
 
-Durable. Written after `handoff_completed` when the previous context had
+Durable. Written after `handoff_completed` and before the new
+`opening_message` when the previous context had
 loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
 
 | Key | Type | Required | Meaning |
@@ -1333,9 +1335,12 @@ Every driver command is answered with exactly one of these, echoing its id
 | `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) and `extension` (boolean, true on an extension's command, absent otherwise) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
+| `credentials` | `provider` (string), the provider a `credential` command would switch now; `credentials`, an array of its credential labels, sorted; `credential` (string, optional), the label it uses now, absent for a scripted session or a provider the session has not used |
+| `credential` | `provider` (string), the provider the switch applies to (`docs/invocation.md`) |
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
+| `offered_file` | `text` (string), the file's full UTF-8 text |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
@@ -1366,7 +1371,7 @@ Every driver command is answered with exactly one of these, echoing its id
 A session is reconstructed from the log and its
 [configuration](configuration.md), nothing else.
 
-Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
+Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds, the pending offer's `repository_code_offered` and `repository_code_resolved`, and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
 residency policies over one primitive: a range read by `seq`. A handoff
 shortening what the model sees must not shorten what a person can scroll back
 to.

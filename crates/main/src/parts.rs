@@ -64,6 +64,10 @@ pub(crate) struct Parts {
     /// Each configured `tools."<name>".max_result_bytes`, by the tool's
     /// registered name (`docs/tools.md`, "Bounded results").
     pub(crate) caps: r#loop::ResultCaps,
+    /// The person's `shell.read_only` entries, read from the session's
+    /// configuration and shared with the model shell (`docs/tools.md`,
+    /// "Other command-line tools").
+    pub(crate) shell_read_only: crate::settings::ShellReadOnly,
     /// Every configured `file` credential source, relative paths joined
     /// with the workspace the reader reads them from
     /// (`docs/permissions.md`, "Credentials").
@@ -267,6 +271,16 @@ pub(crate) fn parts_in(
     let lua = providers.lua(&model.provider.name);
     let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
         lua_providers::session_credential(lua, model.provider, &label, || {
+            if let Some(asked) = labels.asked {
+                let listed = config.credentials().labels(model.provider);
+                if !listed.iter().any(|label| label == asked) {
+                    return Err(crate::credential::no_label(
+                        &model.provider.name,
+                        asked,
+                        &listed,
+                    ));
+                }
+            }
             crate::credential::session_credential(&config, model.provider, Some(&label), &run)
                 .map(|(_, key)| key)
         })
@@ -453,6 +467,9 @@ pub(crate) fn parts_in(
         idle,
         warm,
         caps: settings::result_caps(&config),
+        shell_read_only: std::sync::Arc::new(std::sync::Mutex::new(settings::shell_read_only(
+            &config,
+        ))),
         credential_files,
         locks,
         extensions,

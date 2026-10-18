@@ -575,6 +575,52 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
 }
 
 #[test]
+fn the_offer_view_shows_an_items_file_after_enter() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    fs::create_dir_all(setup.workspace().join("tools")).unwrap();
+    fs::write(
+        setup.workspace().join("tools/db.sh"),
+        "# OFFEREDSOURCE1237\n",
+    )
+    .unwrap();
+    write_json(
+        &setup.workspace().join(".fiber/config.json"),
+        &json!({"mcp": {"servers": {"db": {"command": "/bin/echo", "args": ["tools/db.sh"]}}}}),
+    );
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.write(b"say hi\r");
+    run.wait_screen("the repository offer", |grid| {
+        grid.contents.contains("installed")
+    });
+    run.write(b"\r");
+    run.wait_screen("the offered file's source", |grid| {
+        grid.contents.contains("OFFEREDSOURCE1237")
+    });
+    run.write(b"\x1b[27u");
+    run.wait_screen("the offer list again", |grid| {
+        grid.contents.contains("installed")
+    });
+    run.write(b"\x1b[D");
+    run.write(b"\x1b[B");
+    run.write(b"\r");
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
 fn resize_redraws_the_grid_at_the_new_size() {
     let setup = support::Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -1998,9 +2044,9 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
     // click opens the whole text in the overlay (`docs/tui.md`,
     // "Notices").
     let grid = run.wait_screen("the refusal notice", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("credential_missing") && row.contains("No credential for"))
+        grid.rows.iter().any(|row| {
+            row.contains("credential_missing") && row.contains("has no credential label")
+        })
     });
     let row = u16::try_from(
         grid.rows
@@ -2026,9 +2072,8 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
         // The overlay wraps at the width, so each fragment fits on
         // one of its rows: the message's start and its credential
         // path, which no wrap splits.
-        grid.contents
-            .contains("No credential for `fake`: nothing is stored in")
-            && grid.contents.contains("credentials/fake/nope,")
+        grid.contents.contains("`nope`. The labels for `fake` are:")
+            && grid.contents.contains("default, home, work")
     });
     assert_eq!(
         server.requests().len(),
