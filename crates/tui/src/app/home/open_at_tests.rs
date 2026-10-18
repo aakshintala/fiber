@@ -737,6 +737,36 @@ fn home_during_the_open_sends_no_raise() {
 }
 
 #[test]
+fn an_open_sends_commands_only_after_the_subscribe_ack() {
+    // The `commands` line waits for the subscribe's acceptance: a
+    // refused open sends nothing else, so no second process starts
+    // behind the refusal.
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    assert!(
+        lines.iter().all(|line| line["command"] != "commands"),
+        "commands waits for the subscribe ack, got {lines:?}"
+    );
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    let send = commands(app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first)));
+    assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
+    assert_eq!(send[0]["command"], "commands");
+    assert_eq!(send[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(refused(first, "held by another process"))
+            .is_empty(),
+        "a refused subscribe sends no commands"
+    );
+}
+
+#[test]
 fn an_open_from_a_held_full_sends_summary_then_the_raise_later() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.open_session(
