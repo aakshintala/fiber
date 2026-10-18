@@ -458,7 +458,7 @@ fn resumed_session(
     let crate::switch::quota::QuotaReaders {
         door: quota,
         model: model_quota,
-        notice: _notice,
+        notice,
     } = switching.quota_readers();
     let delegates = crate::delegates::Delegates::new(
         fiber_path,
@@ -657,7 +657,10 @@ fn resumed_session(
                     folded,
                 )
                 .map(|looped| {
-                    let looped = crate::session_extensions::hooked(looped.jobs(jobs), &current);
+                    let looped = crate::session_extensions::hooked(
+                        looped.jobs(jobs).quota(notice),
+                        &current,
+                    );
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)

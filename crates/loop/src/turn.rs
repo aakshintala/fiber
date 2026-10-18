@@ -69,7 +69,21 @@ impl Loop {
         let start_contexts = self.session_start_once()?;
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        let (input, contexts, state) = self.turn_input(started.pieces);
+        let (mut input, contexts, state) = self.turn_input(started.pieces);
+        let quota = self.quota_due();
+        input.extend(
+            quota
+                .lines
+                .into_iter()
+                .map(|text| contract::events::InputItem::Message {
+                    content: vec![contract::shapes::ContentPart::Text { text }],
+                    sender: contract::shapes::Sender {
+                        origin: contract::shapes::Origin::Fiber,
+                        command_id: None,
+                    },
+                    changed_by: None,
+                }),
+        );
         let person = input
             .iter()
             .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
@@ -100,6 +114,11 @@ impl Loop {
                     &turn,
                     None,
                 )?;
+            }
+            for event in &quota.events {
+                self.append(event, &turn, None)?;
+                // Only a successfully written event changes the session's fold.
+                self.quota_notices.fired.fold(event);
             }
             Ok(())
         }) else {
