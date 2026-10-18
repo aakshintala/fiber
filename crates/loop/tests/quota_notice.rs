@@ -54,6 +54,11 @@ fn check_turn(lines: &[Envelope], quota: &[&str], fiber: Option<&str>) {
         .iter()
         .position(|line| line.kind == "turn_started")
         .unwrap();
+    assert!(matches!(
+        kinds(&lines[..at]).as_slice(),
+        [] | ["session_started", "preamble_built", "opening_message"]
+            | ["fiber_started", "preamble_built"]
+    ));
     let mut expected = vec!["turn_started"];
     expected.extend_from_slice(quota);
     expected.extend([
@@ -78,6 +83,21 @@ fn check_turn(lines: &[Envelope], quota: &[&str], fiber: Option<&str>) {
     for event in quota_events(lines) {
         assert_eq!(event.turn_id, lines[at].turn_id);
     }
+}
+
+#[test]
+fn a_capped_credit_notices_on_the_first_turn_and_not_the_next() {
+    let mut session = Session::new(script(2), None);
+    let cache = Arc::new(Mutex::new((vec![serde_json::from_value(json!({"provider":"openrouter","credential":"work","credit":{"remaining":1.0,"limit":10.0}})).unwrap()],80.0)));
+    wire(&mut session, &cache);
+    let lines = turn(&mut session);
+    check_turn(
+        &lines,
+        &["quota_noticed"],
+        Some("Fiber: openrouter credential work has used 90% of its credit quota."),
+    );
+    assert_eq!(quota_events(&lines)[0].payload, serde_json::from_value::<serde_json::Map<String,Value>>(json!({"provider":"openrouter","credential":"work","window":"credit","percent_used":90.0,"notice_at":80.0})).unwrap());
+    check_turn(&turn(&mut session), &[], None);
 }
 
 const LINE: &str = "Fiber: codex credential work has used 84% of its weekly quota, which resets at 2025-10-09T08:53:20Z.";

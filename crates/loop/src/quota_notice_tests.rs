@@ -1,6 +1,111 @@
 use super::{Due, Fired, text};
-use contract::events::{Event, QuotaInfo, QuotaNoticed, QuotaRearmed};
+use contract::events::{Event, QuotaCredit, QuotaInfo, QuotaNoticed, QuotaRearmed};
 use serde_json::{Value, json};
+
+fn credit(remaining: f64, limit: Option<f64>) -> QuotaInfo {
+    QuotaInfo {
+        provider: "openrouter".into(),
+        credential: "work".into(),
+        windows: None,
+        credit: Some(QuotaCredit { remaining, limit }),
+        unreachable: None,
+    }
+}
+
+fn credit_notice(percent_used: f64) -> Event {
+    Event::QuotaNoticed(QuotaNoticed {
+        provider: "openrouter".into(),
+        credential: "work".into(),
+        window: "credit".into(),
+        percent_used,
+        resets_at: None,
+        notice_at: 80.0,
+    })
+}
+
+fn credit_rearm(percent_used: f64) -> Event {
+    Event::QuotaRearmed(QuotaRearmed {
+        provider: "openrouter".into(),
+        credential: "work".into(),
+        window: "credit".into(),
+        percent_used,
+        notice_at: 80.0,
+    })
+}
+
+fn fired_credit() -> Fired {
+    let mut state = Fired::default();
+    state.fold(&credit_notice(90.0));
+    state
+}
+
+#[test]
+fn credit_percent_is_the_used_share_of_the_limit() {
+    for (remaining, limit, used) in [
+        (2.0, 10.0, Some(80.0)),
+        (1.0, 10.0, Some(90.0)),
+        (0.5, 4.0, Some(87.5)),
+        (3.0, 4.0, None),
+        (2.01, 10.0, None),
+        (1.99, 10.0, Some(80.1)),
+    ] {
+        expect(
+            Fired::default().judge(&[credit(remaining, Some(limit))], 80.0, 100),
+            used.map(credit_notice).into_iter().collect(),
+        );
+    }
+}
+
+#[test]
+fn credit_percent_clamps_to_0_and_100() {
+    expect(
+        Fired::default().judge(&[credit(-5.0, Some(10.0))], 80.0, 100),
+        vec![credit_notice(100.0)],
+    );
+    expect(
+        fired_credit().judge(&[credit(15.0, Some(10.0))], 80.0, 100),
+        vec![credit_rearm(0.0)],
+    );
+}
+
+#[test]
+fn a_fired_credit_read_hot_stays_silent() {
+    for now in [0, 100, u64::MAX] {
+        expect(
+            fired_credit().judge(&[credit(1.0, Some(10.0))], 80.0, now),
+            vec![],
+        );
+    }
+}
+
+#[test]
+fn a_fired_credit_rearms_only_on_a_reading_below_notice_at() {
+    let mut state = fired_credit();
+    expect(
+        state.judge(&[credit(3.0, Some(4.0))], 80.0, 100),
+        vec![credit_rearm(25.0)],
+    );
+    state.fold(&credit_rearm(25.0));
+    expect(state.judge(&[credit(3.0, Some(4.0))], 80.0, 100), vec![]);
+    expect(
+        state.judge(&[credit(1.0, Some(10.0))], 80.0, 100),
+        vec![credit_notice(90.0)],
+    );
+}
+
+#[test]
+fn a_credit_without_a_positive_limit_never_notices() {
+    for state in [Fired::default(), fired_credit()] {
+        for limit in [None, Some(0.0), Some(-10.0), Some(f64::NAN)] {
+            expect(state.judge(&[credit(0.0, limit)], 80.0, 100), vec![]);
+        }
+        expect(
+            state.judge(&[credit(f64::NAN, Some(10.0))], 80.0, 100),
+            vec![],
+        );
+        expect(state.judge(&[credit(1.0, Some(0.0))], 80.0, 100), vec![]);
+    }
+}
 
 fn row(windows: Value) -> QuotaInfo {
     serde_json::from_value(json!({"provider":"codex","credential":"work","windows":windows}))

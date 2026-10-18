@@ -267,6 +267,7 @@ fn a_hot_window_notices_rearms_and_notices_again_across_resumes() {
         assert_eq!(quota[0]["kind"], kind);
         assert_eq!(quota[0]["turn_id"], started["turn_id"]);
         let credential = quota[0]["payload"]["credential"].as_str().unwrap();
+        assert_eq!(credential, "work");
         assert_eq!(
             quota[0]["payload"],
             json!({"provider":"test","credential":credential,"window":"w","percent_used":used,"notice_at":80.0})
