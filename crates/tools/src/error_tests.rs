@@ -582,6 +582,58 @@ fn an_inspection_failure_keeps_its_message() {
     assert_eq!(error.to_string(), "`/a.txt` is a fifo.");
 }
 
+#[test]
+fn lines_below_one_name_their_key() {
+    for key in ["offset", "limit"] {
+        let error = ReadError::LineBelowOne { key };
+        assert_eq!(error.code(), ErrorCode::InvalidArguments);
+        assert_eq!(error.to_string(), format!("`{key}` must be 1 or greater."));
+    }
+    let error = ReadError::LineTooLarge { key: "offset" };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "`offset` is too large.");
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+}
+
+#[test]
+fn an_offset_past_the_end_names_the_total() {
+    let error = ReadError::OffsetPastEnd { total: 3 };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`offset` is past the end of the file, which has 3 lines."
+    );
+}
+
+#[test]
+fn pages_on_a_non_pdf_names_the_file() {
+    let error = ReadError::PagesOnNonPdf {
+        path: std::path::PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`pages` applies only to a PDF, and `/a.txt` is not one."
+    );
+}
+
+#[test]
+fn an_unresolvable_path_keeps_its_text() {
+    let error = FileError::PathInvalid {
+        message: "`..` escapes the workspace.".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "`..` escapes the workspace.");
+    let error = FileError::PathUnresolved {
+        message: "`/a.txt` is a symlink loop.".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "`/a.txt` is a symlink loop.");
+    let root = ToolError::from(ReadError::from(error));
+    assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct Args {
     #[allow(dead_code, reason = "the shape under test names a path")]

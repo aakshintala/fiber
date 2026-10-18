@@ -4,9 +4,39 @@
 /// Every way `read` fails.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReadError {
+    /// Reaching the file failed.
+    #[error(transparent)]
+    File(#[from] super::FileError),
     /// Reading the PDF failed.
     #[error(transparent)]
     Pdf(#[from] super::PdfError),
+    /// The call's arguments do not fit the schema.
+    #[error(transparent)]
+    Arguments(#[from] super::ArgumentsError),
+    /// `offset` or `limit` is below 1.
+    #[error("`{key}` must be 1 or greater.")]
+    LineBelowOne {
+        /// The argument at fault: `offset` or `limit`.
+        key: &'static str,
+    },
+    /// `offset` or `limit` does not fit `usize`.
+    #[error("`{key}` is too large.")]
+    LineTooLarge {
+        /// The argument at fault: `offset` or `limit`.
+        key: &'static str,
+    },
+    /// `offset` is past the file's last line.
+    #[error("`offset` is past the end of the file, which has {total} lines.")]
+    OffsetPastEnd {
+        /// How many lines the file holds.
+        total: usize,
+    },
+    /// `pages` names a file that is not a PDF.
+    #[error("`pages` applies only to a PDF, and `{}` is not one.", path.display())]
+    PagesOnNonPdf {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+    },
 }
 
 /// Every way `write` fails.
@@ -102,7 +132,13 @@ impl ReadError {
     /// wildcard arm.
     pub(crate) fn code(&self) -> contract::ErrorCode {
         match self {
+            Self::File(error) => error.code(),
             Self::Pdf(error) => error.code(),
+            Self::Arguments(error) => error.code(),
+            Self::LineBelowOne { .. }
+            | Self::LineTooLarge { .. }
+            | Self::OffsetPastEnd { .. }
+            | Self::PagesOnNonPdf { .. } => contract::ErrorCode::InvalidArguments,
         }
     }
 }

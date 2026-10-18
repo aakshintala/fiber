@@ -138,6 +138,22 @@ pub(crate) enum FileError {
         /// The path as the call named it.
         raw: String,
     },
+    /// The path does not resolve: `..` in the part that does not exist yet.
+    /// The text is made in `files.rs`; part 5 of #923 types it.
+    // debt: part 5 of #923 types `ResolveError`/`InspectError`
+    #[error("{message}")]
+    PathInvalid {
+        /// `ResolveError::Arguments`'s text.
+        message: String,
+    },
+    /// The path resolves nowhere honest. The text is made in `files.rs`;
+    /// part 5 of #923 types it.
+    // debt: part 5 of #923 types `ResolveError`/`InspectError`
+    #[error("{message}")]
+    PathUnresolved {
+        /// `ResolveError::Tool`'s text.
+        message: String,
+    },
     /// The file does not exist.
     #[error("`{}` does not exist.", path.display())]
     NotFound {
@@ -191,7 +207,10 @@ impl FileError {
             Self::ChangedBeforeRead { .. } | Self::ChangedBeforeWrite { .. } => {
                 ErrorCode::PathChanged
             }
-            Self::CouldNotWrite { .. } | Self::Inspect { .. } => ErrorCode::ToolError,
+            Self::CouldNotWrite { .. } | Self::PathUnresolved { .. } | Self::Inspect { .. } => {
+                ErrorCode::ToolError
+            }
+            Self::PathInvalid { .. } => ErrorCode::InvalidArguments,
             Self::NotFound { .. } => ErrorCode::NotFound,
             Self::Unsupported { .. } | Self::PdfOverCap { .. } => ErrorCode::UnsupportedFile,
         }
