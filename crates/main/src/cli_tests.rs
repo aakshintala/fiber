@@ -3194,13 +3194,13 @@ fn menu_synopses_take_the_text_before_the_description_gap() {
     assert!(!fields.contains(&"sessions [--all]"));
 }
 
-/// The `SessionArgs` a `to_argv` round-trip returns: `parse_from` of
+/// The `SessionArgs` a round-trip returns: `parse_from` of
 /// `fiber` plus the argv, which must be the session command with equal
 /// fields.
 #[track_caller]
 fn round_tripped(args: &SessionArgs) -> SessionArgs {
     let mut argv = vec![OsString::from("fiber")];
-    argv.extend(args.to_argv());
+    argv.extend(contract::session_argv::SessionArgv::from(args).to_argv());
     let Invocation::Run(Some(Commands::Session(got)), _) = parse_from(argv) else {
         panic!("to_argv does not parse back to a session: {args:?}");
     };
@@ -3247,7 +3247,7 @@ fn minimal_session() -> SessionArgs {
 fn session_argv_round_trips_a_minimal_session() {
     let args = minimal_session();
     assert_eq!(
-        args.to_argv(),
+        contract::session_argv::SessionArgv::from(&args).to_argv(),
         ["session", "--id=s_0123456789abcdef", "--workspace=/w",]
             .into_iter()
             .map(OsString::from)
@@ -3273,7 +3273,7 @@ fn session_argv_round_trips_a_new_launch_with_overrides() {
         depth: Some(2),
         login_shell: false,
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     // A plain override travels as two arguments; one starting with `-`
     // travels attached, so clap never reads it as a flag.
     let rendered: Vec<String> = argv
@@ -3309,7 +3309,7 @@ fn session_argv_round_trips_a_resume_with_a_credential() {
         depth: Some(1),
         ..minimal_session()
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     let rendered: Vec<String> = argv
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -3328,7 +3328,7 @@ fn session_argv_round_trips_a_rewind() {
         rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
         ..minimal_session()
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     let rendered: Vec<String> = argv
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -3348,7 +3348,7 @@ fn session_argv_round_trips_a_worktree_and_a_login_shell() {
         login_shell: true,
         ..minimal_session()
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     let rendered: Vec<String> = argv
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -3364,7 +3364,7 @@ fn session_argv_round_trips_a_workspace_named_like_a_flag() {
         workspace: PathBuf::from("-w"),
         ..minimal_session()
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     let rendered: Vec<String> = argv
         .iter()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -3386,7 +3386,7 @@ fn session_argv_round_trips_a_workspace_that_is_not_utf8() {
         workspace: PathBuf::from(OsString::from_vec(b"/w/\xff".to_vec())),
         ..minimal_session()
     };
-    let argv = args.to_argv();
+    let argv = contract::session_argv::SessionArgv::from(&args).to_argv();
     // The workspace travels byte for byte: a lossy render would fail
     // the round-trip below.
     assert_eq!(argv[2], OsString::from_vec(b"--workspace=/w/\xff".to_vec()),);

@@ -1,0 +1,11 @@
+#!/bin/sh
+# A stand-in for the session binary: prints one `fiber_exited` line whose
+# error message is the value after `--id=`, so a start through it is told
+# apart from any other binary by its session id.
+for arg in "$@"; do
+  case "$arg" in
+    --id=*) id=${arg#--id=} ;;
+  esac
+done
+printf '{"kind":"fiber_exited","ts":1,"schema_version":1,"payload":{"error":{"code":"io_failed","message":"%s"}}}\n' "$id"
+exit 0
