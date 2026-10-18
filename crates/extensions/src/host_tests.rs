@@ -481,3 +481,163 @@ fn an_unreadable_secret_is_io_failed() {
     assert!(message.contains("token"), "{message}");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
+
+/// The `env` the yielded `host.exec` spec carries: resume the coroutine
+/// that calls it and read the spec it yields.
+fn yielded_env(lua: &Lua, call: &str) -> Value {
+    let yielded: (LuaValue, LuaValue, LuaValue) = lua
+        .load(format!(
+            "local inner = coroutine.create(function() {call} end)\n\
+             local _, tag, kind, spec = coroutine.resume(inner)\n\
+             assert(kind == \"exec\"); return tag, kind, spec"
+        ))
+        .eval()
+        .unwrap();
+    assert!(matches!(yielded.0, LuaValue::Table(_)));
+    assert_eq!(
+        yielded.1,
+        LuaValue::String(lua.create_string("exec").unwrap())
+    );
+    to_json(&yielded.2).unwrap()
+}
+
+#[test]
+fn exec_env_is_forwarded_in_the_yielded_spec() {
+    let lua = lua();
+    let spec = yielded_env(
+        &lua,
+        "host.exec('sh', {'-c', 'x'}, {env = {FIBER_X = '1'}})",
+    );
+    assert_eq!(spec["program"], "sh");
+    assert_eq!(spec["env"], serde_json::json!({"FIBER_X": "1"}));
+}
+
+#[test]
+fn exec_env_nil_is_omitted_from_the_yielded_spec() {
+    let lua = lua();
+    let spec = yielded_env(&lua, "host.exec('sh', {})");
+    assert!(spec.get("env").is_none(), "{spec}");
+}
+
+#[test]
+fn exec_env_rejects_a_non_table_or_a_non_string_entry() {
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"), &[]);
+    for code in [
+        "return host.exec('sh', {}, {env = 1})",
+        "return host.exec('sh', {}, {env = 'x'})",
+        "return host.exec('sh', {}, {env = {A = 1}})",
+        "return host.exec('sh', {}, {env = {[1] = 'x'}})",
+    ] {
+        let message = pcall_string_of(&lua, code);
+        assert_eq!(
+            message, "host.exec: `env` must be a table of strings",
+            "{code}"
+        );
+    }
+}
+
+/// An `exec` spec table with `env` built from `pairs`.
+fn exec_spec(lua: &Lua, pairs: &[(&[u8], &[u8])]) -> Table {
+    let spec = lua.create_table().unwrap();
+    spec.set("program", "sh").unwrap();
+    spec.set("args", lua.create_table().unwrap()).unwrap();
+    let env = lua.create_table().unwrap();
+    for (name, value) in pairs {
+        env.set(
+            lua.create_string(*name).unwrap(),
+            lua.create_string(*value).unwrap(),
+        )
+        .unwrap();
+    }
+    spec.set("env", env).unwrap();
+    spec
+}
+
+#[track_caller]
+fn exec_request_of(spec: &Table) -> Result<exec::ExecRequest, String> {
+    let text = super::request_from(
+        "exec",
+        Some(&LuaValue::Table(spec.clone())),
+        None,
+        std::path::Path::new("/w"),
+        CAP,
+    )
+    .map_err(|error| {
+        let text = error.to_string();
+        text.strip_prefix("runtime error: ")
+            .unwrap_or(&text)
+            .to_owned()
+    })?;
+    match text {
+        Some(super::Request::Exec(read)) => Ok(read),
+        _ => panic!("an exec spec reads as an exec request"),
+    }
+}
+
+const CAP: usize = 1 << 20;
+
+#[test]
+fn exec_request_reads_env_into_the_map() {
+    let lua = Lua::new();
+    let spec = exec_spec(&lua, &[(b"B", b"2"), (b"A", b"1")]);
+    let read = exec_request_of(&spec).unwrap();
+    assert_eq!(
+        read.env.into_iter().collect::<Vec<_>>(),
+        [
+            ("A".to_owned(), "1".to_owned()),
+            ("B".to_owned(), "2".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn exec_request_without_env_is_empty() {
+    let lua = Lua::new();
+    let spec = lua.create_table().unwrap();
+    spec.set("program", "sh").unwrap();
+    spec.set("args", lua.create_table().unwrap()).unwrap();
+    let read = exec_request_of(&spec).unwrap();
+    assert!(read.env.is_empty());
+}
+
+/// An `env` holding one `name` to `value` entry never reads: its message
+/// is `expected`, which never echoes the value.
+#[track_caller]
+fn rejects_env(lua: &Lua, name: &[u8], value: &[u8], expected: &str) {
+    let spec = exec_spec(lua, &[(name, value)]);
+    let message = match exec_request_of(&spec) {
+        Ok(_) => panic!("a bad env never reads"),
+        Err(message) => message,
+    };
+    assert_eq!(message, expected);
+    assert!(!message.contains("s3cret"), "{message}");
+}
+
+#[test]
+fn exec_request_rejects_bad_names_and_nul_values_without_echoing_them() {
+    let lua = Lua::new();
+    let names = "host.exec: `env` names must not be empty or contain `=` or NUL";
+    rejects_env(&lua, b"", b"s3cret-value", names);
+    rejects_env(&lua, b"A=B", b"s3cret-value", names);
+    rejects_env(&lua, b"A\0B", b"s3cret-value", names);
+    rejects_env(
+        &lua,
+        b"A",
+        b"x\0y-s3cret",
+        "host.exec: `env` values must not contain NUL",
+    );
+}
+
+#[test]
+fn exec_request_rejects_a_non_table_env() {
+    let lua = Lua::new();
+    let spec = lua.create_table().unwrap();
+    spec.set("program", "sh").unwrap();
+    spec.set("args", lua.create_table().unwrap()).unwrap();
+    spec.set("env", 1).unwrap();
+    let message = match exec_request_of(&spec) {
+        Ok(_) => panic!("a non-table env never reads"),
+        Err(message) => message,
+    };
+    assert_eq!(message, "host.exec: `env` must be a table of strings");
+}

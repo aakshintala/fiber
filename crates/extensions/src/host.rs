@@ -117,7 +117,18 @@ function host.exec(program, args, opts)
   if cwd ~= nil and type(cwd) ~= "string" then
     error("host.exec: `cwd` must be a string", 2)
   end
-  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
+  local env = opts.env
+  if env ~= nil then
+    if type(env) ~= "table" then
+      error("host.exec: `env` must be a table of strings", 2)
+    end
+    for k, v in pairs(env) do
+      if type(k) ~= "string" or type(v) ~= "string" then
+        error("host.exec: `env` must be a table of strings", 2)
+      end
+    end
+  end
+  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd, env = env })
   if result == nil then error(failure(code, message), 0) end
   return result
 end
@@ -435,11 +446,39 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         Some(cwd) => workspace.join(Path::new(&cwd)),
         None => workspace.to_path_buf(),
     };
+    let table_of_strings =
+        || mlua::Error::RuntimeError("host.exec: `env` must be a table of strings".into());
+    let env: LuaValue = spec.get("env")?;
+    let mut map = BTreeMap::new();
+    if !matches!(env, LuaValue::Nil) {
+        let LuaValue::Table(table) = env else {
+            return Err(table_of_strings());
+        };
+        for pair in table.pairs::<LuaValue, LuaValue>() {
+            let (name, value) = pair.map_err(|_| table_of_strings())?;
+            let (LuaValue::String(name), LuaValue::String(value)) = (name, value) else {
+                return Err(table_of_strings());
+            };
+            let name = name.to_str().map_err(|_| table_of_strings())?.to_owned();
+            let value = value.to_str().map_err(|_| table_of_strings())?.to_owned();
+            if name.is_empty() || name.contains('=') || name.contains('\0') {
+                return Err(mlua::Error::RuntimeError(
+                    "host.exec: `env` names must not be empty or contain `=` or NUL".into(),
+                ));
+            }
+            if value.contains('\0') {
+                return Err(mlua::Error::RuntimeError(
+                    "host.exec: `env` values must not contain NUL".into(),
+                ));
+            }
+            map.insert(name, value);
+        }
+    }
     Ok(exec::ExecRequest {
         program,
         args,
         cwd,
-        env: BTreeMap::new(),
+        env: map,
         cap,
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the program as it does today.
