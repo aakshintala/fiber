@@ -1281,7 +1281,11 @@ impl App {
     pub(crate) fn load(&mut self, lines: Vec<Envelope>) {
         self.screen.pages_mut().load(&lines);
         // A held landing's top, found again at the width the load counted.
-        if let Some(row) = self.screen.pages_mut().anchored_row() {
+        // The pass stays live while a stale page is still owed, after it
+        // closed: the anchor lets go only once every stale page is counted
+        // or failed.
+        let live = self.pass_open() || self.screen.pages().stale_owed();
+        if live && let Some(row) = self.screen.pages_mut().anchored_row() {
             self.screen.jump(row);
         }
         self.settle();

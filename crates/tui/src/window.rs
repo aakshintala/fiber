@@ -1458,6 +1458,12 @@ impl Pages {
         self.anchor = None;
     }
 
+    /// Whether a dropped page still waits to be counted at the width:
+    /// the pass stays live while one is owed.
+    pub(crate) fn stale_owed(&self) -> bool {
+        self.stale.iter().any(|at| !self.failed.contains(at))
+    }
+
     /// The held anchor's row as the pages count now, as
     /// [`Pages::seq_row`] finds it; `None` with no anchor held. The
     /// anchor lets go once every stale page is counted again or failed,
