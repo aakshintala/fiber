@@ -344,6 +344,10 @@ impl StopTarget<'_> {
 /// that reaps the child itself instead of a waiter thread. A [`StopTarget::Pid`]
 /// run reaps the child on this thread and signals only its pid, never a
 /// group; a [`StopTarget::Group`] run leaves the reap to its waiter thread.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the run's inputs and its listing token are one call"
+)]
 fn supervise(
     req: &ExecRequest,
     shared: &Shared,
@@ -414,7 +418,9 @@ fn supervise(
                 if let Some(child) = pid_child.as_deref_mut() {
                     stop_pid(child, shared, Signal::TERM);
                 } else {
-                    support::group::signal(pgid, Signal::TERM).ok();
+                    match support::group::signal(pgid, Signal::TERM) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
             }
             kill_at = Some(add(now, support::group::GRACE));
@@ -431,7 +437,9 @@ fn supervise(
                 if let Some(child) = pid_child.as_deref_mut() {
                     stop_pid(child, shared, Signal::KILL);
                 } else {
-                    support::group::signal(pgid, Signal::KILL).ok();
+                    match support::group::signal(pgid, Signal::KILL) {
+                        Ok(()) | Err(_) => {}
+                    }
                 }
                 if drain_until.is_none() {
                     drain_until = Some(add(clock.now(), support::group::DRAIN));
@@ -446,10 +454,8 @@ fn supervise(
             // an escaped descendant holding the pipe past here is dropped.
             let ran = ran_of(shared, status, false);
             lock(&shared.inner).discard = true;
-            if seen_empty {
-                if let Some(registration) = listing.take() {
-                    support::group::live().unlist(registration);
-                }
+            if seen_empty && let Some(registration) = listing.take() {
+                support::group::live().unlist(registration);
             }
             return Ok(ran);
         } else if pid_mode && reaped {
@@ -460,10 +466,8 @@ fn supervise(
             if clock.now() >= until {
                 let ran = ran_of(shared, status, false);
                 lock(&shared.inner).discard = true;
-                if seen_empty {
-                    if let Some(registration) = listing.take() {
-                        support::group::live().unlist(registration);
-                    }
+                if seen_empty && let Some(registration) = listing.take() {
+                    support::group::live().unlist(registration);
                 }
                 return Ok(ran);
             }
@@ -483,10 +487,8 @@ fn supervise(
         if (eof && seen_empty) || clock.now() >= until {
             let ran = ran_of(shared, status, timed_out);
             lock(&shared.inner).discard = true;
-            if seen_empty {
-                if let Some(registration) = listing.take() {
-                    support::group::live().unlist(registration);
-                }
+            if seen_empty && let Some(registration) = listing.take() {
+                support::group::live().unlist(registration);
             }
             if capped {
                 return Err(Box::new(ExecError {
