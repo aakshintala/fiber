@@ -261,6 +261,8 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
 /// answer read; `before_wait` runs after each wait's deadline check, just
 /// before [`Clock::wait_until`]. The stream comes back blocking with no
 /// read timeout, as it arrived.
+// Exempted from mutation testing: the InvalidInput arm is macOS-only (Linux never refuses the restore) and mutants run on Linux, so no test can reach its guard mutants; the macOS job still runs an_answer_followed_by_a_close_is_read.
+#[cfg_attr(false, mutants::skip)]
 fn ask(
     stream: &UnixStream,
     deadline: Instant,
