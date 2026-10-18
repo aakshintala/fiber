@@ -15,6 +15,10 @@ use super::{
     Carry, HandoffSettings, context_tokens, estimate, note_request_text, prompt_tokens, trigger_at,
 };
 
+// Task 1 coverage: the skills sent again after a handoff (`docs/handoff.md`,
+// item 7) ride in `Carry.resend`, render from `Event::SkillsResent`, and
+// load through the one `admitted` predicate.
+
 fn settings(enabled: bool, tokens: u64, window_fraction: f64) -> HandoffSettings {
     HandoffSettings {
         enabled,
@@ -416,6 +420,8 @@ fn a_restart_on_a_completed_handoff_leaves_skills_empty() {
         note: vec![first.clone()],
     })));
     assert!(carry.skills.is_empty());
+    // The load moves into the resend the next opening sends again.
+    assert_eq!(carry.resend, [load("tdd", "/w/tdd/SKILL.md")]);
 }
 
 #[test]
@@ -458,4 +464,588 @@ fn only_a_session_start_context_honours_the_opening_slot() {
     let slot = carry.take_after_opening();
     assert_eq!(carry.place_context(slot, "before_message"), None);
     assert_eq!(carry.take_after_opening(), None);
+}
+
+fn load(name: &str, path: &str) -> contract::events::SkillLoad {
+    contract::events::SkillLoad {
+        name: name.into(),
+        path: path.into(),
+    }
+}
+
+fn resent(skills: &[(&str, &str, &str)]) -> contract::events::Event {
+    contract::events::Event::SkillsResent(contract::events::SkillsResent {
+        skills: skills
+            .iter()
+            .map(|(name, path, content)| contract::events::SkillSent {
+                name: (*name).into(),
+                path: (*path).into(),
+                content: (*content).into(),
+            })
+            .collect(),
+    })
+}
+
+fn opening() -> contract::events::Event {
+    contract::events::Event::OpeningMessage(contract::events::OpeningMessage {
+        environment: contract::events::Environment {
+            date: "2023-11-14".into(),
+            os: "test-os".into(),
+            arch: "test-arch".into(),
+            shell: "/bin/sh".into(),
+            workspace: "/w".into(),
+            git: None,
+            session_log: "/w/s_test/events.jsonl".into(),
+        },
+        instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
+        skills: Vec::new(),
+    })
+}
+
+fn session_start_context(text: &str) -> contract::events::Event {
+    contract::events::Event::ContextAdded(contract::events::ContextAdded {
+        text: text.into(),
+        extension: "fiber.test/inbox".into(),
+        hook: "session_start".into(),
+    })
+}
+
+fn render_into(
+    carry: &mut Carry,
+    conversation: &mut Vec<Input>,
+    event: &contract::events::Event,
+    action: Option<&ActionId>,
+) {
+    crate::conversation::render(
+        conversation,
+        event,
+        action,
+        "fake/model-1",
+        &mut std::collections::BTreeMap::new(),
+        carry,
+    );
+}
+
+#[test]
+fn a_restart_on_a_completed_handoff_moves_the_loads_into_resend() {
+    let (mut carry, [first, second, _]) = three_calls();
+    carry.call_completed(
+        &first,
+        &user("r1"),
+        None,
+        Some(&skilled("alpha", "/w/alpha/SKILL.md")),
+    );
+    carry.call_completed(
+        &second,
+        &user("r2"),
+        None,
+        Some(&skilled("beta", "/w/beta/SKILL.md")),
+    );
+    // A reload keeps its first-load position and takes the later path.
+    carry.call_completed(
+        &first,
+        &user("r3"),
+        None,
+        Some(&skilled("alpha", "/w/new-alpha/SKILL.md")),
+    );
+    carry.restart(&completed(None));
+    assert!(carry.skills.is_empty());
+    assert_eq!(
+        carry.resend,
+        [
+            load("alpha", "/w/new-alpha/SKILL.md"),
+            load("beta", "/w/beta/SKILL.md"),
+        ]
+    );
+    // A second restart replaces the resend, never appends to it.
+    carry.call_completed(
+        &first,
+        &user("r4"),
+        None,
+        Some(&skilled("gamma", "/w/gamma/SKILL.md")),
+    );
+    carry.restart(&completed(None));
+    assert_eq!(carry.resend, [load("gamma", "/w/gamma/SKILL.md")]);
+}
+
+#[test]
+fn the_opening_message_and_a_resend_clear_the_armed_resend() {
+    let mut carry = Carry {
+        resend: vec![load("alpha", "/w/alpha/SKILL.md")],
+        ..Carry::default()
+    };
+    let mut conversation = Vec::new();
+    render_into(&mut carry, &mut conversation, &opening(), None);
+    assert!(carry.resend.is_empty());
+    carry.resend = vec![load("alpha", "/w/alpha/SKILL.md")];
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha.")]),
+        None,
+    );
+    assert!(carry.resend.is_empty());
+}
+
+#[test]
+fn a_resend_appends_each_skill_after_the_note_in_event_order() {
+    let mut carry = Carry {
+        input: vec![user("ask")],
+        ..Carry::default()
+    };
+    let mut conversation = vec![user("ask"), user("the note")];
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &resent(&[
+            ("alpha", "/w/alpha/SKILL.md", "Alpha body."),
+            ("beta", "/w/beta/SKILL.md", "Beta body."),
+        ]),
+        None,
+    );
+    assert_eq!(
+        conversation,
+        [
+            user("ask"),
+            user("the note"),
+            user("/w/alpha/SKILL.md\n\nAlpha body."),
+            user("/w/beta/SKILL.md\n\nBeta body."),
+        ]
+    );
+    // The render records the loads but never touches the turn's input.
+    assert_eq!(carry.input, [user("ask")]);
+    assert_eq!(
+        carry.skills,
+        [
+            load("alpha", "/w/alpha/SKILL.md"),
+            load("beta", "/w/beta/SKILL.md"),
+        ]
+    );
+}
+
+#[test]
+fn a_full_handoff_renders_the_opening_then_the_context_then_the_skills() {
+    let (mut carry, [first, second]) = (
+        Carry::default(),
+        [ActionId("a_1".into()), ActionId("a_2".into())],
+    );
+    carry.input = vec![user("ask")];
+    carry.jobs = vec![("j_1".into(), "job one".into())];
+    carry.call_completed(
+        &first,
+        &user("r1"),
+        None,
+        Some(&skilled("alpha", "/w/alpha/SKILL.md")),
+    );
+    carry.call_completed(
+        &second,
+        &user("r2"),
+        None,
+        Some(&skilled("beta", "/w/beta/SKILL.md")),
+    );
+    let mut conversation = carry.restart(&completed(None));
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &resent(&[
+            ("alpha", "/w/alpha/SKILL.md", "Alpha body."),
+            ("beta", "/w/beta/SKILL.md", "Beta body."),
+        ]),
+        None,
+    );
+    render_into(&mut carry, &mut conversation, &opening(), None);
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &session_start_context("hook context"),
+        None,
+    );
+    assert_eq!(conversation.len(), 7);
+    assert!(matches!(&conversation[1], Input::User { text, .. } if text == "hook context"));
+    assert_eq!(conversation[5], user("/w/alpha/SKILL.md\n\nAlpha body."));
+    assert_eq!(conversation[6], user("/w/beta/SKILL.md\n\nBeta body."));
+    assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
+}
+
+#[test]
+fn an_empty_resend_appends_nothing() {
+    let mut carry = Carry::default();
+    let mut conversation = vec![user("ask")];
+    render_into(&mut carry, &mut conversation, &resent(&[]), None);
+    assert_eq!(conversation, [user("ask")]);
+    assert!(carry.skills.is_empty());
+}
+
+#[test]
+fn a_skill_sent_again_is_loaded_in_the_new_context() {
+    let mut carry = Carry::default();
+    let mut conversation = Vec::new();
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &resent(&[
+            ("alpha", "/w/alpha/SKILL.md", "Alpha body."),
+            ("beta", "/w/beta/SKILL.md", "Beta body."),
+        ]),
+        None,
+    );
+    // The next handoff arms the resend from the skills sent again.
+    carry.restart(&completed(None));
+    assert_eq!(
+        carry.resend,
+        [
+            load("alpha", "/w/alpha/SKILL.md"),
+            load("beta", "/w/beta/SKILL.md"),
+        ]
+    );
+    // A skill the next resend leaves out is not carried afterwards.
+    let mut conversation = Vec::new();
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha body.")]),
+        None,
+    );
+    carry.restart(&completed(None));
+    assert_eq!(carry.resend, [load("alpha", "/w/alpha/SKILL.md")]);
+}
+
+#[test]
+fn admitted_only_passes_a_fiber_run_completion() {
+    use contract::events::CallStatus;
+    let control = skilled("alpha", "/w/alpha/SKILL.md");
+    assert!(crate::conversation::admitted(CallStatus::Completed, false, Some(&control)).is_some());
+    assert!(crate::conversation::admitted(CallStatus::Failed, false, Some(&control)).is_none());
+    assert!(crate::conversation::admitted(CallStatus::Denied, false, Some(&control)).is_none());
+    assert!(crate::conversation::admitted(CallStatus::Cancelled, false, Some(&control)).is_none());
+    // A provider-run record never counts, even carrying a skill.
+    assert!(crate::conversation::admitted(CallStatus::Completed, true, Some(&control)).is_none());
+    assert!(crate::conversation::admitted(CallStatus::Completed, false, None).is_none());
+}
+
+#[test]
+fn a_provider_run_record_carrying_a_skill_renders_raw_and_loads_nothing() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::shapes::ContentPart;
+    let mut carry = Carry::default();
+    let mut conversation = Vec::new();
+    let done = contract::events::Event::ToolCallCompleted(ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![ContentPart::Text { text: "ok".into() }],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: Some(skilled("alpha", "/w/alpha/SKILL.md")),
+        changed_by: None,
+        provider_item: Some(json!({"type": "hosted_tool_call"})),
+        hosts_surfaced: Vec::new(),
+    });
+    render_into(
+        &mut carry,
+        &mut conversation,
+        &done,
+        Some(&ActionId("a_1".into())),
+    );
+    assert!(carry.skills.is_empty());
+    assert_eq!(conversation.len(), 1);
+    assert!(matches!(
+        &conversation[0],
+        Input::Assistant { text, provider_item: Some(_), .. } if text.is_empty()
+    ));
+}
+
+#[test]
+fn an_inner_calls_completion_loads_no_skill() {
+    use contract::events::{RanBy, ToolCallRequested};
+    let inner = ActionId("a_inner".into());
+    let mut carry = Carry::default();
+    let mut conversation = Vec::new();
+    let requested = contract::events::Event::ToolCallRequested(ToolCallRequested {
+        name: "inner".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: Some(RanBy {
+            extension: "ext".into(),
+            anchor: contract::events::Anchor::OuterCall(ActionId("a_0".into())),
+        }),
+        provider_item: None,
+    });
+    render_into(&mut carry, &mut conversation, &requested, Some(&inner));
+    assert!(carry.is_inner(&inner));
+    let done = contract::events::Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![contract::shapes::ContentPart::Text { text: "ok".into() }],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: Some(skilled("alpha", "/w/alpha/SKILL.md")),
+        changed_by: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+    });
+    render_into(&mut carry, &mut conversation, &done, Some(&inner));
+    assert!(carry.skills.is_empty());
+}
+
+#[test]
+fn loaded_keeps_first_load_order_and_the_latest_path() {
+    let mut carry = Carry::default();
+    carry.loaded(load("alpha", "/old/alpha/SKILL.md"));
+    carry.loaded(load("beta", "/w/beta/SKILL.md"));
+    carry.loaded(load("alpha", "/new/alpha/SKILL.md"));
+    assert_eq!(
+        carry.skills,
+        [
+            load("alpha", "/new/alpha/SKILL.md"),
+            load("beta", "/w/beta/SKILL.md"),
+        ]
+    );
+}
+use std::collections::BTreeMap as SkillMap;
+use std::path::{Path, PathBuf};
+
+use contract::skills::{SkillRead, Skills};
+
+/// A `Skills` seam over a fixed map, with real temp files for the
+/// canonical-target steps: `file` names the file the listing holds, and
+/// `body` answers without touching it.
+struct FakeSkills {
+    files: SkillMap<String, PathBuf>,
+    bodies: SkillMap<String, Result<String, SkillRead>>,
+    _home: fakes::TempDir,
+}
+
+impl FakeSkills {
+    fn new() -> Self {
+        Self {
+            files: SkillMap::new(),
+            bodies: SkillMap::new(),
+            _home: fakes::TempDir::new("loop-handoff-resent"),
+        }
+    }
+
+    fn dir(&self) -> PathBuf {
+        self._home.path().to_path_buf()
+    }
+
+    /// Writes `name`'s file with `text` and lists it, answering `body`.
+    fn list(&mut self, name: &str, text: &str, body: &str) {
+        let dir = self.dir().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("SKILL.md");
+        std::fs::write(&file, text).unwrap();
+        self.files.insert(name.into(), file);
+        self.bodies.insert(name.into(), Ok(body.into()));
+    }
+}
+
+impl Skills for FakeSkills {
+    fn file(&self, name: &str) -> Option<PathBuf> {
+        self.files.get(name).cloned()
+    }
+
+    fn body(&self, asked: &str, _file: &Path) -> Result<String, SkillRead> {
+        self.bodies
+            .get(asked)
+            .cloned()
+            .unwrap_or(Err(SkillRead::Invalid))
+    }
+}
+
+fn allow(_: &Path) -> Option<String> {
+    None
+}
+
+fn sent_of(sent: &[contract::events::SkillSent]) -> Vec<(&str, &str, &str)> {
+    sent.iter()
+        .map(|skill| {
+            (
+                skill.name.as_str(),
+                skill.path.as_str(),
+                skill.content.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn notices_of(notices: &[contract::events::Notice]) -> Vec<(contract::ErrorCode, &str)> {
+    notices
+        .iter()
+        .map(|notice| (notice.code.clone(), notice.message.as_str()))
+        .collect()
+}
+
+#[test]
+fn listed_skills_are_sent_in_load_order_with_the_listed_path() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.list("beta", "header\n", "Beta body.");
+    let alpha_path = skills.files["alpha"].to_string_lossy().into_owned();
+    let beta_path = skills.files["beta"].to_string_lossy().into_owned();
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &allow,
+        &[load("alpha", "/old/alpha"), load("beta", "/old/beta")],
+    );
+    assert_eq!(
+        sent_of(&sent),
+        [
+            ("alpha", alpha_path.as_str(), "Alpha body."),
+            ("beta", beta_path.as_str(), "Beta body."),
+        ]
+    );
+    assert!(left_out.is_empty());
+}
+
+#[test]
+fn a_skill_missing_from_the_listing_is_left_out_with_a_notice() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    let alpha_path = skills.files["alpha"].to_string_lossy().into_owned();
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &allow,
+        &[load("gone", "/old/gone"), load("alpha", "/old/alpha")],
+    );
+    assert_eq!(
+        sent_of(&sent),
+        [("alpha", alpha_path.as_str(), "Alpha body.")]
+    );
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill gone was not sent again after the handoff: it is not in the skills listing now, or it is switched off."
+        )],
+    );
+}
+
+#[test]
+fn a_skill_the_deny_steps_refuse_is_left_out_with_the_verdicts_reason() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.list("beta", "header\n", "Beta body.");
+    let beta_path = skills.files["beta"].to_string_lossy().into_owned();
+    let alpha_target = skills.files["alpha"].canonicalize().unwrap();
+    let refuse = |target: &Path| {
+        (target == alpha_target).then(|| "A standing rule refuses this call.".to_owned())
+    };
+    let (sent, left_out) = super::resent_skills(
+        &skills,
+        &refuse,
+        &[load("alpha", "/old/alpha"), load("beta", "/old/beta")],
+    );
+    assert_eq!(sent_of(&sent), [("beta", beta_path.as_str(), "Beta body.")]);
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill alpha was not sent again after the handoff: A standing rule refuses this call."
+        )],
+    );
+}
+
+#[test]
+fn an_unreadable_body_is_left_out_with_its_message() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills.bodies.insert(
+        "alpha".into(),
+        Err(SkillRead::Io(
+            "Could not read skill /w/alpha/SKILL.md: gone.".into(),
+        )),
+    );
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("alpha", "/old/alpha")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::IoFailed,
+            "Skill alpha was not sent again after the handoff: Could not read skill /w/alpha/SKILL.md: gone."
+        )],
+    );
+}
+
+#[test]
+fn an_invalid_body_is_left_out_with_the_header_clause() {
+    let mut skills = FakeSkills::new();
+    skills.list("alpha", "header\n", "Alpha body.");
+    skills
+        .bodies
+        .insert("alpha".into(), Err(SkillRead::Invalid));
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("alpha", "/old/alpha")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill alpha was not sent again after the handoff: its header no longer parses, names another skill, or turns off model invocation."
+        )],
+    );
+}
+
+#[test]
+fn a_file_that_does_not_resolve_is_left_out_as_unreadable() {
+    let skills = FakeSkills::new();
+    let missing = skills.dir().join("gone").join("SKILL.md");
+    let mut listing = FakeSkills::new();
+    listing.files.insert("gone".into(), missing.clone());
+    let (sent, left_out) = super::resent_skills(&listing, &allow, &[load("gone", "/old/gone")]);
+    assert!(sent.is_empty());
+    assert_eq!(left_out.len(), 1);
+    assert_eq!(left_out[0].code, contract::ErrorCode::IoFailed);
+    assert!(
+        left_out[0].message.starts_with(&format!(
+            "Skill gone was not sent again after the handoff: Could not read skill {}:",
+            missing.display()
+        )),
+        "{}",
+        left_out[0].message
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_target_outside_utf8_is_left_out_as_invalid() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let home = fakes::TempDir::new("loop-handoff-non-utf8");
+    let raw = home.path().join("bytes");
+    std::fs::create_dir_all(&raw).unwrap();
+    let mut bytes = raw.into_os_string().into_vec();
+    bytes.push(0xff);
+    let odd_dir = PathBuf::from(OsString::from_vec(bytes));
+    std::fs::create_dir_all(&odd_dir).unwrap();
+    let file = odd_dir.join("SKILL.md");
+    std::fs::write(&file, "body\n").unwrap();
+    let mut skills = FakeSkills::new();
+    skills.files.insert("odd".into(), file);
+    skills.bodies.insert("odd".into(), Ok("Odd body.".into()));
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[load("odd", "/old/odd")]);
+    assert!(sent.is_empty());
+    assert_eq!(
+        notices_of(&left_out),
+        [(
+            contract::ErrorCode::InvalidArguments,
+            "Skill odd was not sent again after the handoff: its path is not valid UTF-8."
+        )],
+    );
+}
+
+#[test]
+fn no_loads_send_nothing() {
+    let skills = FakeSkills::new();
+    let (sent, left_out) = super::resent_skills(&skills, &allow, &[]);
+    assert!(sent.is_empty());
+    assert!(left_out.is_empty());
 }

@@ -991,7 +991,8 @@ turn start (`docs/system-prompt.md`, "Added and removed skills").
 
 #### `skills_resent`
 
-Durable. Written after `handoff_completed` when the previous context had
+Durable. Written after `handoff_completed` and before the new
+`opening_message` when the previous context had
 loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
 
 | Key | Type | Required | Meaning |
