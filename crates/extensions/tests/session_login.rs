@@ -253,9 +253,11 @@ end}}}})
         let cfg = config.clone();
         let home = setup.home();
         let time = clock.clone();
-        let session = fakes::within("session.notices", fakes::MUST_SUCCEED_WITHIN, move || {
-            SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None)
-        });
+        let session = fakes::within(
+            "SessionExtensions::load",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || SessionExtensions::load(&home, &cfg, time, Arc::new(NoLock), None),
+        );
         assert!(session.notices().is_empty(), "{:?}", session.notices());
         let browser = Arc::new(Recording::default());
         let yes = Arc::new(AtomicBool::new(attended));

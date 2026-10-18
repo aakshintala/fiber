@@ -67,7 +67,7 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
             (providers, config)
         });
     // The session's own read.
-    let key = fakes::within("discovered.data", fakes::MUST_SUCCEED_WITHIN, move || {
+    let key = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
         let data = discovered.data("acme");
         config
             .credentials()

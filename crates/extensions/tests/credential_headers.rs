@@ -49,7 +49,7 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
 
 #[track_caller]
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
-    fakes::within("provider.name", fakes::MUST_SUCCEED_WITHIN, {
+    fakes::within("provider.signer", fakes::MUST_SUCCEED_WITHIN, {
         let provider = Arc::clone(provider);
         move || {
             provider

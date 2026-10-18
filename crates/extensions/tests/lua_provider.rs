@@ -1131,15 +1131,19 @@ fn declared_provider_files_list_owners_in_order_without_running_lua() {
     common::install(&setup.home(), &source, "0.1.0").unwrap();
     let configuration = common::config(&setup, &[]);
     let home = setup.home();
-    let session = fakes::within("session.notices", fakes::MUST_SUCCEED_WITHIN, move || {
-        extensions::SessionExtensions::load(
-            &home,
-            &configuration,
-            FakeClock::new(),
-            Arc::new(NoLock),
-            None,
-        )
-    });
+    let session = fakes::within(
+        "SessionExtensions::load",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            extensions::SessionExtensions::load(
+                &home,
+                &configuration,
+                FakeClock::new(),
+                Arc::new(NoLock),
+                None,
+            )
+        },
+    );
     assert!(session.notices().is_empty());
     let names: Vec<_> = session
         .lua_providers()

@@ -1325,7 +1325,7 @@ fn two_providers_over_one_stale_list_refresh_it_once() {
     let b = second.refresh(Some(DAY), ModelsArg::default());
     assert!(a.is_some(), "the first refresh starts");
     assert!(b.is_none(), "the second sees the first's lock");
-    fakes::within("a.unwrap", fakes::MUST_SUCCEED_WITHIN, move || {
+    fakes::within("refresh.join", fakes::MUST_SUCCEED_WITHIN, move || {
         a.unwrap().join().unwrap()
     })
     .unwrap();
