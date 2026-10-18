@@ -337,6 +337,7 @@ pub(crate) fn run_new(
         idle,
         warm,
         caps,
+        shell_read_only,
         home,
         project,
         workspace,
@@ -413,6 +414,7 @@ pub(crate) fn run_new(
         skills,
         extensions.tools(),
         timing.clone(),
+        shell_read_only.clone(),
     )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
@@ -467,6 +469,7 @@ pub(crate) fn run_new(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    session.repository_code(Arc::clone(&offer) as Arc<dyn contract::repository::RepositoryCode>);
     session.images(Arc::clone(&session_servers.images));
     session.hooks(Arc::clone(&extensions) as Arc<dyn contract::hook::Hooks>);
     session.extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
@@ -508,7 +511,10 @@ pub(crate) fn run_new(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
-    let switcher = switching.clone().closure(door);
+    let readers =
+        switching.credential_readers(switching.clone().closure(door), model.reference.clone());
+    session.credentials(readers.labels, readers.admitted);
+    let switcher = readers.prepare;
     let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
         sources,
         prompt_inputs.clone(),
@@ -521,6 +527,7 @@ pub(crate) fn run_new(
         answerable,
         log.clone(),
         diag.clone(),
+        shell_read_only,
     );
     let reloader = reload.preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());

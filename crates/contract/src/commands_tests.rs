@@ -89,12 +89,14 @@ fn samples() -> Vec<Value> {
             "decisions": ["approve", "skip", "never"]}}),
         json!({"id": "c", "command": "job_stop", "args": {"job_id": "j"}}),
         json!({"id": "c", "command": "job_input", "args": {"job_id": "j", "text": "t"}}),
+        json!({"id": "c", "command": "offered_file", "args": {"request_id": "r", "path": "tools/db.sh"}}),
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
         json!({"id": "c", "command": "quota"}),
+        json!({"id": "c", "command": "credentials"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "history", "args": {}}),
@@ -240,6 +242,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("commands", Command::Commands),
         ("skills", Command::Skills),
         ("quota", Command::Quota),
+        ("credentials", Command::Credentials),
         ("close", Command::Close(CloseArgs { now: false })),
     ] {
         let missing = format!(r#"{{"id":"c","command":"{name}"}}"#);
@@ -259,6 +262,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("commands", Command::Commands),
         ("skills", Command::Skills),
         ("quota", Command::Quota),
+        ("credentials", Command::Credentials),
     ] {
         let line = CommandLine {
             id: CommandId("c_1".into()),
@@ -348,12 +352,29 @@ fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
         "steer",
         "steer_drop",
         "artifact_page",
+        "offered_file",
         "model",
         "name",
         "shell",
     ] {
         let line = format!(r#"{{"id":"c","command":"{command}"}}"#);
         assert!(parse(&line).is_err(), "{command} without args");
+    }
+}
+
+#[test]
+fn offered_file_requires_exactly_its_arguments() {
+    for args in [
+        json!({"request_id": "r"}),
+        json!({"path": "p"}),
+        json!({"request_id": "r", "path": "p", "extra": true}),
+    ] {
+        assert!(
+            serde_json::from_value::<CommandLine>(
+                json!({"id": "c", "command": "offered_file", "args": args})
+            )
+            .is_err()
+        );
     }
 }
 

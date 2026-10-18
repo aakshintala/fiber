@@ -1909,6 +1909,9 @@ fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
                 error: None,
                 process: None,
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             }),
             action: None,
         };

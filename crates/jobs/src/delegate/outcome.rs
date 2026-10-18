@@ -51,6 +51,8 @@ pub(crate) fn outcome(
             questions: exited.questions.clone(),
             usage: exited.usage.clone(),
             worktree: None,
+
+            changed_by: None,
         },
         None => empty(job_id),
     };
@@ -61,6 +63,9 @@ pub(crate) fn outcome(
             error: None,
             process: Some(process),
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         Some(Termination::Timeout) => failed(
             job_id,
@@ -81,6 +86,9 @@ pub(crate) fn outcome(
                 error: Some(error),
                 process: Some(process),
                 output_tail: None,
+
+                notice: None,
+                changed_by: None,
             },
             None => without_error(job_id, exited, status, process),
         },
@@ -125,6 +133,9 @@ fn without_error(
             error: None,
             process: Some(process),
             output_tail: None,
+
+            notice: None,
+            changed_by: None,
         },
         _ => failed(
             job_id,
@@ -147,6 +158,9 @@ fn failed(job_id: &JobId, code: ErrorCode, message: &str, process: Process) -> J
         }),
         process: Some(process),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -171,6 +185,8 @@ pub(crate) fn empty(job_id: &JobId) -> DelegateFinished {
         questions: None,
         usage: Usage::default(),
         worktree: None,
+
+        changed_by: None,
     }
 }
 

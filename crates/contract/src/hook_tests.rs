@@ -5,7 +5,7 @@ use crate::hook::{Hooks, StateLine};
 
 use crate::SessionId;
 use crate::clock::Wake;
-use crate::hook::{BeforeModelCall, SessionStart, StartReason, TurnEnd, TurnStart};
+use crate::hook::{BeforeModelCall, JobDelivery, SessionStart, StartReason, TurnEnd, TurnStart};
 use crate::shapes::{Tokens, Usage};
 use crate::tool::Cancel;
 
@@ -203,4 +203,73 @@ fn turn_end_debug_names_the_type() {
     let shown = format!("{end:?}");
     assert!(shown.contains("TurnEnd"), "{shown}");
     assert!(shown.contains("Done."), "{shown}");
+}
+
+#[test]
+fn job_delivery_names_each_wire_word() {
+    let cases = [
+        (JobDelivery::Completion, "completion"),
+        (JobDelivery::Monitor, "monitor"),
+        (JobDelivery::Delegate, "delegate"),
+        (JobDelivery::OutputFile, "output_file"),
+    ];
+    for (delivery, word) in cases {
+        assert_eq!(delivery.as_str(), word);
+    }
+}
+
+#[test]
+fn a_not_regular_chain_without_hooks_is_no_pass_to_fail() {
+    let answer = crate::hook::not_regular_answer(&[]);
+    assert_eq!(
+        answer,
+        crate::hook::AfterToolAnswer {
+            outcome: crate::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_not_regular_chain_withholds_on_its_first_blocking_hook() {
+    let answer = crate::hook::not_regular_answer(&[
+        ("alpha".into(), false),
+        ("beta".into(), true),
+        ("gamma".into(), true),
+    ]);
+    assert_eq!(
+        answer.outcome,
+        crate::hook::AfterToolOutcome::Withheld {
+            extension: "beta".into(),
+        }
+    );
+    assert!(answer.notices.is_empty());
+}
+
+#[test]
+fn a_not_regular_chain_of_non_blocking_hooks_names_each_in_a_notice() {
+    let answer =
+        crate::hook::not_regular_answer(&[("alpha".into(), false), ("beta".into(), false)]);
+    assert_eq!(answer.outcome, crate::hook::AfterToolOutcome::Unchanged);
+    assert!(answer.changed_by.is_empty());
+    let extensions: Vec<_> = answer
+        .notices
+        .iter()
+        .map(|notice| {
+            notice
+                .extension
+                .clone()
+                .expect("each notice names its extension")
+        })
+        .collect();
+    assert_eq!(extensions, vec!["alpha".to_owned(), "beta".to_owned()]);
+    for notice in &answer.notices {
+        assert_eq!(notice.code, crate::ErrorCode::HookFailed);
+        assert!(
+            notice.message.contains("not a regular file"),
+            "unexpected notice: {}",
+            notice.message
+        );
+    }
 }

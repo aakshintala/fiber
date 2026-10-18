@@ -18,6 +18,7 @@ mod client;
 mod close;
 mod drive;
 mod error;
+mod offered;
 pub use error::Error;
 pub mod hub;
 mod isolation;

@@ -38,6 +38,9 @@ fn completed(id: &str, status: Outcome) -> JobCompleted {
             timed_out: false,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -430,6 +433,8 @@ fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
         job_id: id.clone(),
         lines: text.into(),
         suppressed: None,
+
+        changed_by: None,
     };
     let lines = opened.lines.unwrap();
     (lines.0)(line("one"));

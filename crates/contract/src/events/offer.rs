@@ -29,6 +29,10 @@ pub struct OfferedItem {
     pub required: bool,
     /// What an install shows.
     pub summary: String,
+    /// Its files inside the workspace, relative to it, `/`-separated, sorted;
+    /// empty when it pins none.
+    #[serde(default)]
+    pub files: Vec<String>,
     /// The version, for an extension.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,

@@ -158,7 +158,8 @@ below names a shape from this section by its name.
   milliseconds, and its key ends `_ms`.
 - Ids are strings. A token count is an integer.
 - A path to a file in the session directory is relative to that directory,
-  such as `artifacts/j_5e10.log`. Every other path is absolute.
+  such as `artifacts/j_5e10.log`. An offered item's `files` are relative to
+  the workspace, `/`-separated. Every other path is absolute.
 - A value listed as a closed set is breaking to extend ("Versioning"). An open
   set is additive, and a consumer treats an unknown value as the table says.
 
@@ -656,9 +657,11 @@ is listed in `docs/errors.md`. `changes` is the one tool-neutral account of a
 change: any tool may set it, so a client shows the counts without knowing
 which tool ran (`docs/tools.md`, "What a result carries").
 
-A line whose content a hook changed carries `changed_by`. It appears on
+A line whose content a hook changed carries `changed_by`, naming the extensions that took attribution for the change. A change no extension took attribution for carries no `changed_by` key. It appears on
 `tool_call_started` for rewritten arguments, on `permission_resolved` for a reviewed call's decision that has no request and whose arguments a `before_tool` hook rewrote, on `tool_call_completed` for a
-rewritten result, and on a `turn_started` message and `steering_applied` for
+rewritten result, on `job_line` for changed delivery lines, on `delegate_finished`
+for a changed final message, on `job_completed` for a changed completion notice,
+and on a `turn_started` message and `steering_applied` for
 a rewritten message. The line holds what the hook returned; the original is
 never logged (`docs/extensions.md`, "Hooks").
 
@@ -779,7 +782,7 @@ request (`docs/extensions.md`, "Code a repository ships").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `files` (array of strings, sorted workspace-relative paths, possibly empty; absent on older offers), `version` (string, for an extension), and `diff` (string, against the newest copy approved before that is still kept, when the content changed since an approval) |
 
 #### `repository_code_resolved`
 
@@ -1257,6 +1260,7 @@ Durable. What a monitor delivered to the model.
 | `job_id` | string | yes | the monitor's job |
 | `lines` | string | yes | the batch of lines delivered, cut as `docs/tools.md`, "Background jobs", says |
 | `suppressed` | integer | no | deliveries suppressed since the last one, when any were |
+| `changed_by` | `changed_by` | no | when a hook changed the delivered lines, and named itself |
 
 #### `delegate_finished`
 
@@ -1269,6 +1273,7 @@ Durable. Written just before `job_completed`.
 | `artifact` | string | no | the full final message's path, when cut |
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
 | `usage` | `usage` | yes | the run's totals |
+| `changed_by` | `changed_by` | no | when a hook changed the final message, and named itself |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
 
 #### `job_completed`
@@ -1281,7 +1286,9 @@ Durable.
 | `status` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | for a job that ran a process |
-| `output_tail` | string | no | for a failed job, the tail of its output, capped |
+| `output_tail` | string | no | for a failed job, the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
+| `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
+| `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
 
 #### `jobs_pending_notified`
 
@@ -1308,7 +1315,7 @@ the model saw.
 `error.code` values defined here are `nonzero_exit` and `timeout` (as on
 `tool_call_completed`), `signal` (a process killed by a signal Fiber did not
 send), `indeterminate`, `orphaned`, `flooded`, and `output_cap`. The output
-tail is the first time those bytes enter the log.
+tail is the first time those bytes enter the log, unless a hook changed the notice.
 
 Only the loop thread writes durable events, and it drains its inbox at step
 boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
@@ -1334,9 +1341,12 @@ Every driver command is answered with exactly one of these, echoing its id
 | `commands` | `commands`, an array with one object per `/name` the session runs: `name` (string), `description` (string), `argument_hint` (string, the skill's `argument-hint` or an MCP prompt's arguments, absent when it has none) and `tag` (string: `skill`, `template`, the extension's name, or the MCP server's name) and `extension` (boolean, true on an extension's command, absent otherwise) (`docs/invocation.md`, "What each command does") |
 | `skills` | `skills`, an array with one object per skill discovery found, switched-off and shadowed ones included: `name` (string), `description` (string), `path` (string, its `SKILL.md`), `source` (`repository`, `personal`, `extension` or `builtin`), `extension` (string, the extension's name, only when `source` is `extension`), `model_invocable` (boolean, false for a skill with `disable-model-invocation` and for one in an extension's `prompts/`), `disabled` (boolean, true when `skills.disabled` names it), `shadows` (array of strings, the `SKILL.md` paths of the skills it shadows) and `shadowed_by` (string, the winning skill's `SKILL.md` path, only on a shadowed skill) (`docs/invocation.md`, "What each command does") |
 | `quota` | `quota`, an array ordered by provider name, then credential label, and `notice_at` (number, the session's `quota.notice_at`). Each object has `provider` and `credential` (strings), and either `windows` (a non-empty array in vendor order: `name` and either `percent_used` (number) or `reset: true`, with optional `resets_at` (integer, milliseconds since the epoch) where the provider reports a reset time), `credit` (`remaining` (number) and optional `limit` (number)), or neither when unreachable. `unreachable: true` marks a failed fetch with its last value, or a failed credential read or provider start with no value. Labels that report no quota or have no cached value yet are absent. No age is shown (`docs/tools.md`, "Fetching"). |
+| `credentials` | `provider` (string), the provider a `credential` command would switch now; `credentials`, an array of its credential labels, sorted; `credential` (string, optional), the label it uses now, absent for a scripted session or a provider the session has not used |
+| `credential` | `provider` (string), the provider the switch applies to (`docs/invocation.md`) |
 | `subscribe` | at `full`, `last_seq` (integer), the `seq` of the last line the fold sends before the stream goes live; `result` is absent on an empty log or at `summary` |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `artifact_page` | `text` (string), the page, whole lines from `offset`; `next` (integer), the byte offset after the page, absent at the end of the file; and `size` (integer), the file's size in bytes |
+| `offered_file` | `text` (string), the file's full UTF-8 text |
 | `shell` | with `send` false, `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command`; with `send` true, `result` is absent |
 | `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
 | `pairing_code` | `code` (string), a new single-use pairing code, over the hub (`docs/invocation.md`, "Remote clients") |
@@ -1367,7 +1377,7 @@ Every driver command is answered with exactly one of these, echoing its id
 A session is reconstructed from the log and its
 [configuration](configuration.md), nothing else.
 
-Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
+Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds, the pending offer's `repository_code_offered` and `repository_code_resolved`, and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
 residency policies over one primitive: a range read by `seq`. A handoff
 shortening what the model sees must not shorten what a person can scroll back
 to.

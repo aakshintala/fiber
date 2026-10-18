@@ -63,7 +63,18 @@ pub(crate) fn builtin(
     // The unit tests' entry: no image-child timing. Production forwards
     // its timing through `builtin_timed`.
     builtin_timed(
-        fiber, home, workspace, artifacts, clock, jobs, locks, web_search, delegates, skills, None,
+        fiber,
+        home,
+        workspace,
+        artifacts,
+        clock,
+        jobs,
+        locks,
+        web_search,
+        delegates,
+        skills,
+        None,
+        Default::default(),
     )
 }
 
@@ -89,6 +100,7 @@ pub(crate) fn builtin_timed(
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
     timing: Option<Timing>,
+    shell_read_only: crate::settings::ShellReadOnly,
 ) -> Result<SessionTools, Failure> {
     let mut files = tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks));
     let mut images = tools::ImageChild::new(fiber.clone(), artifacts.to_path_buf());
@@ -105,11 +117,15 @@ pub(crate) fn builtin_timed(
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     // The model's shell and the driver shell spill their output past 1 MiB
-    // into the session's `artifacts/`; the driver has no hook.
+    // into the session's `artifacts/`; the driver has no hook. The model's
+    // shell classifies from the person's `shell.read_only` entries beside
+    // the built-in list; the driver runs the person's own command and is
+    // not classified for review, so it stays unlisted.
     let mut shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber.clone())
         .with_jobs(moves)
         .with_artifacts(artifacts.to_path_buf())
+        .with_read_only(shell_read_only)
         .non_interactive();
     // The model's shell moves commands into jobs, so it times a
     // background start as `jobs.start`. The driver shell never moves,

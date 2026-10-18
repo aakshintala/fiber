@@ -233,6 +233,7 @@ pub(crate) fn session_tools(
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
     timing: Option<contract::diag::Timing>,
+    shell_read_only: crate::settings::ShellReadOnly,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -255,6 +256,7 @@ pub(crate) fn session_tools(
         delegates,
         skills,
         timing.clone(),
+        shell_read_only,
     )?;
     // A repository server whose current content is approved starts with
     // the session exactly as a person's server does; any other waits for

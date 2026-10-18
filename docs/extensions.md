@@ -101,8 +101,7 @@ another's code by path. Code shared between extensions reaches an extension in
 one of two ways: the extension vendors a copy, or it depends on the extension
 that holds the code.
 
-A native binary is run as a process extension, or through `host.exec`
-("Host calls").
+The binary for this platform installs as `bin/<last segment of the manifest name>`: with `"name": "github.com/acme/fiber-acme"` that is `bin/fiber-acme` on every platform. A binary installed before this change gets that name at the next `fiber extension update`. A native binary is run as a process extension, or through `host.exec` ("Host calls") as `host.exec("bin/fiber-acme", args)`.
 
 ## Lua extensions
 
@@ -330,7 +329,12 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   for the call. Any callback may call it, bounded by that callback's
   timeout.
 - **`host.exec`** runs a program in its own process group, which is stopped on
-  cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). Inside a
+  cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). A `program`
+  containing `/` that is not absolute resolves against the extension's
+  directory and must stay inside it; a path that leaves the directory is an
+  error naming the path. A bare name resolves on `PATH`, and an absolute path
+  is used as written. The child's working directory is unchanged: the
+  workspace, by default. Inside a
   tool call, the tool's declared `executes` effect is what the permission
   decision judges. Outside one, in a hook, watcher, timer or command, it runs
   without asking: the person approved the extension, and a process extension
@@ -829,7 +833,7 @@ no artifact text returned it keeps what the tool or a hook wrote there, and a
 returned `content` over the cap is cut with a notice naming it.
 
 `after_tool` also runs on every job delivery: a job's completion notice, each
-batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
+batch of a monitor's lines, and a delegate's full, unbounded final message (`docs/tools.md`,
 "Background jobs"). It gets the tool name of the call that started the job, and
 `delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
 job ends, it runs once more on the job's whole output file, with `delivery`
@@ -975,8 +979,9 @@ What a `blocking` failure stops, at each point:
 ### Recording a change
 
 The log holds what a hook returned, never what it was given. Each line a hook
-changed names the extensions that changed it in `changed_by`, so a reader can
-see that a message or result was rewritten and by whom (`docs/events.md`).
+changed names the extensions that took attribution for the change in `changed_by`, so a reader can
+see that a message or result was rewritten and by whom (`docs/events.md`). A change no extension took
+attribution for carries no `changed_by` key.
 
 Handing a value to a hook and taking its answer back is cheap next to the
 hook's own work. A 16 KiB tool result crosses into Lua and back in under
@@ -1043,7 +1048,10 @@ entries instead of replacing the list:
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's
-environment. It runs once for each time its hook point or event comes round.
+environment. The command's program resolves as follows: a bare name on
+`PATH`, a path containing `/` against the workspace (the command's working
+directory), an absolute path as written. The package-relative rule is for
+`host.exec` and `process.program` only. It runs once for each time its hook point or event comes round.
 
 **What the command reads.** Standard input carries one JSON line: the hook
 request a process extension receives for that point ("Process extensions"),
@@ -1650,6 +1658,8 @@ everywhere.
 The summary shows what the manifest and the files tell. It does not list the
 new tools, hooks, watchers or commands an extension adds: a Lua extension
 registers those only when its script runs, and installing runs none of its
-code. The full source is one key away, so a person can read them.
+code. The full source is one key away, so a person can read them. An offer
+lists each item's files; a client reads one with `offered_file`
+(`docs/invocation.md`, "Driver commands").
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsextensionsmd).

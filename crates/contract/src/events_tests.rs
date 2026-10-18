@@ -641,8 +641,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "repository_code_offered",
             json!({"request_id": "r", "items": [
                 {"kind": "extension", "name": "n", "hash": "h", "required": true,
-                 "summary": "s", "version": "1.0.0", "diff": "d"},
-                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s"}]}),
+                 "summary": "s", "version": "1.0.0", "diff": "d", "files": ["tools/init.lua"]},
+                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s", "files": []}]}),
         ),
         (
             "repository_code_resolved",
@@ -795,19 +795,21 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "job_line",
-            json!({"job_id": "j", "lines": "a\nb", "suppressed": 3}),
+            json!({"job_id": "j", "lines": "a\nb", "suppressed": 3,
+            "changed_by": ["e"]}),
         ),
         (
             "delegate_finished",
             json!({"job_id": "j", "text": "t", "artifact": "artifacts/f",
-            "questions": questions,
+            "questions": questions, "changed_by": ["e"],
             "usage": {"tokens": tokens, "cost": null, "subscription_cost": 0.0},
             "worktree": {"path": "/t", "branch": "b", "dirty": true}}),
         ),
         (
             "job_completed",
             json!({"job_id": "j", "status": "cancelled", "error": error,
-            "process": process, "output_tail": "tail"}),
+            "process": process, "output_tail": "tail",
+            "notice": "n", "changed_by": ["e"]}),
         ),
         (
             "jobs_pending_notified",
@@ -1315,6 +1317,32 @@ fn a_required_key_that_may_be_null_must_be_present() {
 }
 
 #[test]
+fn an_empty_notice_is_written_and_absent_keys_stay_absent() {
+    let empty = read(
+        "job_completed",
+        json!({"job_id": "j",
+        "status": "failed", "notice": ""}),
+    )
+    .unwrap()
+    .unwrap();
+    let written = Value::Object(empty.payload().unwrap());
+    assert_eq!(written.get("notice"), Some(&json!("")));
+    assert!(!written.as_object().unwrap().contains_key("output_tail"));
+    assert!(!written.as_object().unwrap().contains_key("changed_by"));
+
+    let plain = read(
+        "job_completed",
+        json!({"job_id": "j",
+        "status": "failed", "output_tail": "tail"}),
+    )
+    .unwrap()
+    .unwrap();
+    let written = Value::Object(plain.payload().unwrap());
+    assert!(!written.as_object().unwrap().contains_key("notice"));
+    assert!(!written.as_object().unwrap().contains_key("changed_by"));
+}
+
+#[test]
 fn a_usage_without_input_bytes_does_not_read() {
     let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
     let without = json!({"generation_id": "g", "model": "p/m", "tokens": tokens, "cost": null});
@@ -1682,6 +1710,22 @@ fn an_empty_skills_result_reads_as_skills() {
 
 #[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"text": "t"}})),
+        CommandResult::OfferedFile { text: "t".into() }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"text": "t", "size": 1}})),
+        CommandResult::ArtifactPage { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "fake", "credentials": []}})),
+        CommandResult::Credentials(_)
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "other"}})),
+        CommandResult::CredentialSwitch { .. }
+    ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
         CommandResult::Quota { .. }
@@ -1707,6 +1751,69 @@ fn every_other_result_still_reads_as_its_own_variant() {
         result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
         CommandResult::Shell { .. }
     ));
+}
+
+fn credential_labels() -> CredentialLabels {
+    CredentialLabels {
+        provider: "fake".into(),
+        credentials: vec!["default".into(), "home".into(), "work".into()],
+        credential: Some("home".into()),
+    }
+}
+
+#[test]
+fn a_credentials_result_writes_provider_labels_and_label() {
+    let accepted = CommandAccepted {
+        command_id: CommandId("c".into()),
+        result: Some(CommandResult::Credentials(credential_labels())),
+    };
+    assert_eq!(
+        serde_json::to_value(&accepted).unwrap(),
+        json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})
+    );
+}
+
+#[test]
+fn a_scripted_credentials_result_leaves_out_the_label() {
+    let result = CommandResult::Credentials(CredentialLabels {
+        provider: "scripted".into(),
+        credentials: vec![],
+        credential: None,
+    });
+    let written = serde_json::to_value(&result).unwrap();
+    assert_eq!(written, json!({"provider":"scripted", "credentials":[]}));
+    assert!(written.get("credential").is_none());
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(written).unwrap(),
+        result
+    );
+}
+
+#[test]
+fn a_credentials_result_reads_as_credentials() {
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})),
+        CommandResult::Credentials(credential_labels())
+    );
+}
+
+#[test]
+fn a_credential_switch_result_writes_and_reads_only_its_provider() {
+    let result = CommandResult::CredentialSwitch {
+        provider: "other".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"provider":"other"})
+    );
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result":{"provider":"other"}})),
+        result
+    );
 }
 
 #[test]
@@ -1751,6 +1858,16 @@ fn an_mcp_tool_names_its_server_and_its_own_name() {
         }
     );
     assert_eq!(serde_json::to_value(&info).unwrap(), payload);
+}
+
+#[test]
+fn an_old_offered_item_without_files_reads_as_empty() {
+    let item: OfferedItem = serde_json::from_value(
+        json!({"kind": "hook", "name": "h", "hash": "h", "required": false, "summary": "s"}),
+    )
+    .unwrap();
+    assert!(item.files.is_empty());
+    assert_eq!(serde_json::to_value(item).unwrap()["files"], json!([]));
 }
 
 #[test]

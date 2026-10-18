@@ -258,6 +258,85 @@ fn close(client: &Client, id: &str) {
 }
 
 #[test]
+fn a_full_client_reads_a_listed_file_and_nothing_else() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let script = setup.workspace().join("tools/db.sh");
+    fs::create_dir_all(script.parent().unwrap()).unwrap();
+    let source = "# OFFEREDSOURCE1237\n";
+    fs::write(&script, source).unwrap();
+    let permissions = fs::metadata(&script).unwrap().permissions();
+    write_json(
+        &setup.workspace().join(".fiber/config.json"),
+        &json!({"mcp": {"servers": {"db": {"command": "/bin/echo", "args": ["tools/db.sh"]}}}}),
+    );
+    let id = doors::mint("s_");
+    let (session, stdout) = spawn_session(&setup, &id, &[]);
+    started(setup.deadline, stdout);
+    let client = attach(&setup, &id, "c_sub");
+    prompt(&client, "c_prompt");
+    let offered = recv_kind(setup.deadline, &client, "repository_code_offered");
+    let request = offered["payload"]["request_id"].as_str().unwrap();
+    assert_eq!(
+        offered["payload"]["items"][0]["files"],
+        json!(["tools/db.sh"])
+    );
+    let ask_file = |command: &str, path: &str| {
+        client.send(&json!({"id": command, "command": "offered_file", "args": {"request_id": request, "path": path}}).to_string()).unwrap();
+    };
+    ask_file("c_file", "tools/db.sh");
+    let accepted = answer(setup.deadline, &client, "c_file");
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert_eq!(accepted["payload"]["result"], json!({"text": source}));
+    for (command, path) in [("c_parent", "../secret"), ("c_absolute", "/etc/hosts")] {
+        ask_file(command, path);
+        let rejected = answer(setup.deadline, &client, command);
+        assert_eq!(rejected["kind"], "command_rejected");
+        assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+        assert!(rejected["payload"].get("result").is_none());
+    }
+    let outside = setup.root.path().join("secret");
+    let secret = "OUTSIDESECRET1237";
+    fs::write(&outside, secret).unwrap();
+    fs::remove_file(&script).unwrap();
+    std::os::unix::fs::symlink(&outside, &script).unwrap();
+    ask_file("c_link", "tools/db.sh");
+    let rejected = client
+        .recv_until(setup.deadline.left(), |line| {
+            assert!(
+                !line.to_string().contains(secret),
+                "protected bytes reached the client: {line}"
+            );
+            line["payload"]["command_id"] == "c_link"
+        })
+        .expect("the replaced link is refused within the deadline");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    fs::remove_file(&script).unwrap();
+    fs::write(&script, source).unwrap();
+    fs::set_permissions(&script, permissions).unwrap();
+    reply(&client, "c_reply", request, &["approve"]);
+    recv_kind(setup.deadline, &client, "repository_code_resolved");
+    assert_eq!(
+        answer(setup.deadline, &client, "c_reply")["kind"],
+        "command_accepted"
+    );
+    recv_kind(setup.deadline, &client, "turn_completed");
+    ask_file("c_stale", "tools/db.sh");
+    let stale = answer(setup.deadline, &client, "c_stale");
+    assert_eq!(stale["kind"], "command_rejected");
+    assert_eq!(stale["payload"]["code"], "stale_request");
+    close(&client, "c_close");
+    recv_kind(setup.deadline, &client, "fiber_exited");
+    drop(client);
+    assert!(session.wait().success());
+    assert_eq!(server.requests().len(), 1);
+    let events = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    assert!(!events.contains(secret));
+}
+
+#[test]
 fn a_full_client_answers_the_offer_and_the_turn_runs() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();

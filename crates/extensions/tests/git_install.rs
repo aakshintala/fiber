@@ -1918,7 +1918,7 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
         server.await_requests(1, Duration::from_secs(10)),
         "waited for the binary to be downloaded"
     );
-    let file = setup.home().join("extensions/acme/bin/tool-1.0");
+    let file = setup.home().join("extensions/acme/bin/acme");
     assert_eq!(fs::read(&file).unwrap(), b"#!/bin/sh\necho hi\n");
     assert_eq!(
         fs::metadata(&file).unwrap().permissions().mode() & 0o111,

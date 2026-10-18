@@ -378,7 +378,30 @@ fn cooked_words_drop_quotes_and_keep_the_text() {
 }
 
 fn classified(command: &str) -> Effects {
-    classify(command, Path::new("/work"))
+    classify(command, Path::new("/work"), &[])
+}
+
+fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
+    (
+        name.to_owned(),
+        flags.iter().map(|flag| (*flag).to_owned()).collect(),
+    )
+}
+
+fn classified_with(command: &str, entries: &[(String, Vec<String>)]) -> Effects {
+    classify(command, Path::new("/work"), entries)
+}
+
+fn classified_in(command: &str, workdir: &Path, entries: &[(String, Vec<String>)]) -> Effects {
+    classify(command, workdir, entries)
+}
+
+fn assert_configured_reads(command: &str, entries: &[(String, Vec<String>)], paths: &[&str]) {
+    let effects = classified_with(command, entries);
+    assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
+    assert!(effects.declared.reversible, "{command}");
+    let paths = paths.iter().map(|path| (*path).to_owned()).collect();
+    assert_eq!(effects.declared.paths, Some(paths), "{command}");
 }
 
 fn assert_reads(command: &str) {
@@ -923,4 +946,311 @@ fn an_operand_under_proc_is_not_read_only() {
     for command in ["cat proc/self/environ", "cat /procfs/x", "ls /work/proc"] {
         assert_reads(command);
     }
+}
+
+fn assert_configured_closed(command: &str, entries: &[(String, Vec<String>)]) {
+    let effects = classified_with(command, entries);
+    assert_eq!(
+        effects.declared.effects,
+        vec![Effect::Executes],
+        "{command}"
+    );
+    assert!(!effects.declared.reversible, "{command}");
+    assert!(effects.declared.paths.is_none(), "{command}");
+}
+
+#[test]
+fn a_configured_command_reads_with_only_its_flags() {
+    let entries = [configured("jq", &[])];
+    assert_configured_reads("jq . data.json", &entries, &["/work/.", "/work/data.json"]);
+    assert_configured_reads("jq", &entries, &["/work"]);
+    assert_configured_closed("jq -r . f", &entries);
+    // Without the entry the same call is not read-only.
+    assert_closed("jq . data.json");
+    assert_closed("jq");
+}
+
+#[test]
+fn a_configured_flag_list_admits_only_what_it_names() {
+    let entries = [configured("jq", &["-r"])];
+    assert_configured_reads("jq -r . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_closed("jq -c . f", &entries);
+    assert_configured_closed("jq -r -c . f", &entries);
+}
+
+#[test]
+fn a_configured_value_flag_takes_its_value_inline_or_next() {
+    let entries = [configured("jq", &["--indent="])];
+    // The value is never a declared path: only the operands are.
+    assert_configured_reads("jq --indent=2 . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_reads("jq --indent 2 . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_reads("jq --indent= . f", &entries, &["/work/.", "/work/f"]);
+    // A missing separate value is not read-only.
+    assert_configured_closed("jq . f --indent", &entries);
+    // A longer or shorter spelling is a different flag.
+    assert_configured_closed("jq --indentx=2 . f", &entries);
+    assert_configured_closed("jq --indent2 . f", &entries);
+    assert_configured_closed("jq --indentx 2 . f", &entries);
+    // A separate value may start with `-`, and may be the final word.
+    assert_configured_reads("jq --indent -x . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_reads("jq . f --indent 2", &entries, &["/work/.", "/work/f"]);
+}
+
+#[test]
+fn a_configured_short_value_flag_needs_its_equals_marker() {
+    let entries = [configured("jq", &["-p="])];
+    assert_configured_reads("jq -p=x . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_reads("jq -p x . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_reads("jq -p= . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_closed("jq -p", &entries);
+    assert_configured_closed("jq -p . f", &[configured("jq", &[])]);
+    // A long-only parser would read `-p` as a plain flag and keep the
+    // value as an operand; the configured grammar consumes it instead.
+    assert_configured_reads("jq -p 2", &entries, &["/work"]);
+}
+
+#[test]
+fn a_configured_plain_flag_takes_no_value() {
+    let entries = [configured("jq", &["--color"])];
+    assert_configured_reads("jq --color . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_closed("jq --color=always . f", &entries);
+    // The next word stays an operand: its path is declared.
+    assert_configured_reads(
+        "jq --color always . f",
+        &entries,
+        &["/work/always", "/work/.", "/work/f"],
+    );
+    // With the value-taking spelling the same word is its value instead.
+    assert_configured_reads(
+        "jq --color always . f",
+        &[configured("jq", &["--color="])],
+        &["/work/.", "/work/f"],
+    );
+}
+
+#[test]
+fn a_configured_short_cluster_is_literal() {
+    assert_configured_closed("jq -rc . f", &[configured("jq", &["-r", "-c"])]);
+    assert_configured_closed("jq -rc . f", &[configured("jq", &["-r"])]);
+    assert_configured_reads(
+        "jq -rc . f",
+        &[configured("jq", &["-rc"])],
+        &["/work/.", "/work/f"],
+    );
+}
+
+#[test]
+fn a_configured_double_dash_and_lone_dash_must_be_listed() {
+    // Absent, both execute.
+    assert_configured_closed("jq -- . f", &[configured("jq", &["-r"])]);
+    assert_configured_closed("jq - . f", &[configured("jq", &["-r"])]);
+    // Listed, both are flags that take no value.
+    assert_configured_reads(
+        "jq -- . f",
+        &[configured("jq", &["--"])],
+        &["/work/.", "/work/f"],
+    );
+    assert_configured_reads(
+        "jq - . f",
+        &[configured("jq", &["-"])],
+        &["/work/.", "/work/f"],
+    );
+    // `--` never ends flags for a configured command: the word after it
+    // is still a flag, and an unlisted one executes.
+    assert_configured_closed("jq -- -x", &[configured("jq", &["--"])]);
+    assert_configured_closed("jq -- -x . f", &[configured("jq", &["--"])]);
+    assert_configured_reads(
+        "jq -- -x . f",
+        &[configured("jq", &["--", "-x"])],
+        &["/work/.", "/work/f"],
+    );
+}
+
+#[test]
+fn an_empty_or_non_flag_spelling_admits_no_flag() {
+    for entries in [
+        vec![configured("jq", &[])],
+        vec![configured("jq", &[""])],
+        vec![configured("jq", &["json"])],
+    ] {
+        assert_configured_closed("jq --json . f", &entries);
+        assert_configured_closed("jq -j . f", &entries);
+    }
+}
+
+#[test]
+fn a_configured_plain_spelling_wins_over_its_equals_twin() {
+    // In either list order the exact word takes no value, so the next
+    // word stays an operand and its path is declared.
+    for entries in [
+        vec![configured("jq", &["--opt", "--opt="])],
+        vec![configured("jq", &["--opt=", "--opt"])],
+    ] {
+        assert_configured_reads("jq --opt /h/credentials/k", &entries, &["/h/credentials/k"]);
+    }
+    // With only the value-taking spelling the trailing word is its value,
+    // and a missing value executes.
+    assert_configured_closed("jq . f --opt", &[configured("jq", &["--opt="])]);
+    assert_configured_reads(
+        "jq . f --opt v",
+        &[configured("jq", &["--opt="])],
+        &["/work/.", "/work/f"],
+    );
+}
+
+#[test]
+fn a_configured_name_matches_exactly() {
+    let entries = [configured("jq", &[])];
+    assert_configured_closed("jqx . f", &entries);
+    assert_configured_closed("/usr/bin/jq . f", &entries);
+    assert_configured_closed("jq . f", &[]);
+    // A quoted multiword name matches only that exact word.
+    let spaced = [configured("my tool", &[])];
+    assert_configured_reads("'my tool' a b", &spaced, &["/work/a", "/work/b"]);
+    assert_configured_closed("my tool a b", &spaced);
+    assert_configured_closed("'my tool x' a", &spaced);
+    // A first word holding `=` is never a command name.
+    assert_configured_closed("jq=. f", &[configured("jq=", &[])]);
+    assert_configured_closed("FOO=bar jq . f", &entries);
+}
+
+#[test]
+fn a_configured_builtin_basename_is_never_consulted() {
+    for (command, name, flags) in [
+        ("grep -R x ws", "grep", &["-R"] as &[&str]),
+        ("/usr/bin/grep -R x ws", "/usr/bin/grep", &["-R"]),
+        ("/usr/bin/grep -r x ws", "/usr/bin/grep", &["-r"]),
+        ("grep -R", "grep", &["-R"]),
+        ("rg -L x", "rg", &["-L"]),
+        ("./rg -L x", "./rg", &["-L"]),
+        ("find -L x", "find", &["-L"]),
+        ("/usr/bin/find -L x", "/usr/bin/find", &["-L"]),
+        ("cat --foo", "cat", &["--foo"]),
+        ("/bin/cat --foo", "/bin/cat", &["--foo"]),
+        ("git push", "/usr/bin/git push", &[]),
+        ("git push", "git", &["push"]),
+        ("sed -i 1p f", "sed", &["-i"]),
+        ("/usr/bin/sed -n 1p f", "/usr/bin/sed", &["-n"]),
+    ] {
+        let entries = [configured(name, flags)];
+        assert_configured_closed(command, &entries);
+    }
+    // The built-in rule still answers those commands as it did.
+    assert_closed("/usr/bin/grep -r x ws");
+    assert_reads("grep -r x ws");
+    assert_reads("git branch --show-current");
+    assert_closed("git push");
+    // A path whose basename is not built in is consulted, for that exact
+    // word only.
+    let entries = [configured("/opt/tools/jq", &[])];
+    assert_configured_reads("/opt/tools/jq . f", &entries, &["/work/.", "/work/f"]);
+    assert_configured_closed("jq . f", &entries);
+    assert_configured_closed("/opt/tools/jqx . f", &entries);
+    // A name ending in `/` is not built in, and matches only itself.
+    let trailing = [configured("tools/", &[])];
+    assert_configured_reads("tools/ a", &trailing, &["/work/a"]);
+    assert_configured_closed("tools a", &trailing);
+}
+
+#[test]
+fn a_configured_empty_name_matches_only_an_empty_first_word() {
+    let entries = [configured("", &[])];
+    // A quoted empty first word takes the configured path.
+    assert_configured_reads("'' a b", &entries, &["/work/a", "/work/b"]);
+    // The same call with no empty entry executes.
+    assert_closed("'' a b");
+    // No non-empty word matches the empty entry.
+    assert_configured_closed("jq a b", &entries);
+    assert_configured_closed("x a", &entries);
+    // A part with no word never matches.
+    assert_configured_closed("ls && ''", &[]);
+}
+
+#[test]
+fn a_configured_operand_under_proc_is_not_read_only() {
+    let entries = [configured("jq", &[])];
+    for command in [
+        "jq . /proc/self/environ",
+        "jq . /proc/../proc/self/environ",
+        "jq . notes.txt /proc/self/environ",
+    ] {
+        assert_configured_closed(command, &entries);
+    }
+    // A workdir under `/proc` is not read-only either.
+    assert_eq!(
+        classified_in("jq . f", Path::new("/proc"), &entries)
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
+    assert_eq!(
+        classified_in("jq", Path::new("/proc"), &entries)
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
+    // A workdir that fails to resolve executes.
+    use std::os::unix::ffi::OsStrExt;
+    let bad = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
+    assert_eq!(
+        classified_in("jq . f", bad, &entries).declared.effects,
+        vec![Effect::Executes]
+    );
+    assert_eq!(
+        classified_in("jq", bad, &entries).declared.effects,
+        vec![Effect::Executes]
+    );
+}
+
+#[test]
+fn a_configured_part_beside_a_closed_part_is_not_read_only() {
+    let entries = [configured("jq", &["-r"])];
+    assert_configured_reads(
+        "jq -r . f && ls src",
+        &entries,
+        &["/work/.", "/work/f", "/work/src"],
+    );
+    for command in [
+        "jq -r . f && jq -c . g",
+        "jq -r . f || unknowns . g",
+        "jq -r . f; unknowns . g",
+        "jq -r . f | unknowns",
+        "ls src && jq -c . g",
+        "jq -r . f && grep -R x ws",
+    ] {
+        assert_configured_closed(command, &entries);
+    }
+}
+
+#[test]
+fn a_configured_call_keeps_redirects_and_refusals() {
+    let entries = [configured("jq", &[])];
+    // A stderr redirect is dropped before the check and kept in the subject.
+    assert_configured_reads("jq . f 2>/dev/null", &entries, &["/work/.", "/work/f"]);
+    // A write redirect, a substitution and an expansion never read.
+    for command in [
+        "jq . f > out",
+        "jq $(echo .) f",
+        "jq `echo .` f",
+        "jq $HOME f",
+        "jq . *.json",
+    ] {
+        assert_configured_closed(command, &entries);
+    }
+}
+
+#[test]
+fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
+    // A built-in basename under a spaced path is never consulted: the
+    // link-following flag stays refused.
+    let entries = [configured("/opt/my tools/grep", &["-R"])];
+    assert_configured_closed("'/opt/my tools/grep' -R pattern ws", &entries);
+    assert_configured_closed("'/opt/my tools/grep' -r pattern ws", &entries);
+    // A non-built-in basename under a spaced path is consulted, for that
+    // exact word only.
+    let spaced = [configured("/opt/my tools/jq", &[])];
+    assert_configured_reads("'/opt/my tools/jq' . f", &spaced, &["/work/.", "/work/f"]);
+    assert_configured_closed("/opt/my tools/jq . f", &spaced);
+    assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
+    assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
 }

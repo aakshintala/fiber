@@ -17,7 +17,7 @@ use std::time::Duration;
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::events::CallStatus;
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks, JobDelivery};
 use contract::shapes::Process;
 use contract::tool::SpillFile;
 use fakes::Deadline;
@@ -171,6 +171,9 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
             details: None,
             process: None,
             spilled: None,
+
+            not_regular: false,
+            delivery: None,
         })
     })
 }
@@ -621,12 +624,254 @@ fn the_hook_is_shown_the_call_and_its_output() {
             details: Some(&details),
             process: Some(&process),
             spilled: None,
+
+            not_regular: false,
+            delivery: None,
         })
     });
     assert_eq!(
         changed_content(&answer),
         Some("shell cancelled a.txt out 3 2 false")
     );
+}
+
+#[test]
+fn the_hook_is_shown_each_delivery_word_with_the_starting_tool() {
+    let home = Home::new();
+    home.install(
+        "seen",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.delivery) .. \"|\" .. tostring(call.tool) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    for (delivery, word) in [
+        (JobDelivery::Completion, "completion"),
+        (JobDelivery::Monitor, "monitor"),
+        (JobDelivery::Delegate, "delegate"),
+        (JobDelivery::OutputFile, "output_file"),
+    ] {
+        let answer = bounded({
+            let session = Arc::clone(&session);
+            move || {
+                let arguments = Map::new();
+                session.after_tool(&AfterToolCall {
+                    tool: "shell",
+                    arguments: &arguments,
+                    status: CallStatus::Completed,
+                    content: "out",
+                    details: None,
+                    process: None,
+                    spilled: None,
+                    not_regular: false,
+                    delivery: Some(delivery),
+                })
+            }
+        });
+        assert_eq!(
+            changed_content(&answer),
+            Some(format!("{word}|shell").as_str())
+        );
+    }
+    // An ordinary call has no delivery: the tool is shown as called.
+    let answer = after_tool(&session, "x");
+    assert_eq!(changed_content(&answer), Some("nil|read"));
+    // A delivery from no tool leaves the tool out, so the hook sees nil.
+    let answer = bounded({
+        let session = Arc::clone(&session);
+        move || {
+            let arguments = Map::new();
+            session.after_tool(&AfterToolCall {
+                tool: "",
+                arguments: &arguments,
+                status: CallStatus::Completed,
+                content: "out",
+                details: None,
+                process: None,
+                spilled: None,
+                not_regular: false,
+                delivery: Some(JobDelivery::Completion),
+            })
+        }
+    });
+    assert_eq!(changed_content(&answer), Some("completion|nil"));
+}
+
+#[test]
+fn the_hook_is_shown_a_spilled_output_file_as_path_and_size_without_content() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.content) .. \"|\" .. tostring(call.path) .. \
+             \"|\" .. tostring(call.size) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let file = SpillFile {
+        path: "/s/s_1/artifacts/s_x.txt".into(),
+        size: 1_048_591,
+    };
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "",
+            details: None,
+            process: None,
+            spilled: Some(&file),
+            not_regular: false,
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    assert_eq!(
+        changed_content(&answer),
+        Some("nil|/s/s_1/artifacts/s_x.txt|1048591")
+    );
+}
+
+/// An `output_file` pass that found no regular file, as the pass asks it:
+/// the pass failed before any hook ran, and no content is handed over.
+#[track_caller]
+fn not_regular(session: &Arc<SessionExtensions>) -> AfterToolAnswer {
+    let session = Arc::clone(session);
+    bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Failed,
+            content: "",
+            details: None,
+            process: None,
+            spilled: None,
+            delivery: Some(JobDelivery::OutputFile),
+            not_regular: true,
+        })
+    })
+}
+
+#[test]
+fn a_not_regular_probe_withholds_on_a_blocking_hook_without_running_it() {
+    let home = Home::new();
+    home.install(
+        "scan",
+        Some(&hook(
+            "blocking",
+            "return { content = call.content .. \"changed\" }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    // Withheld, not Changed: no hook ran on the probe.
+    assert_eq!(
+        answer.outcome,
+        AfterToolOutcome::Withheld {
+            extension: "fiber.test/scan".into(),
+        }
+    );
+    assert!(answer.notices.is_empty());
+}
+
+#[test]
+fn a_not_regular_probe_with_only_non_blocking_hooks_keeps_and_names_each() {
+    let home = Home::new();
+    home.install(
+        "fmt",
+        Some(&hook(
+            "non-blocking",
+            "return { content = call.content .. \"changed\" }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    // Unchanged, not Changed: no hook ran on the probe.
+    assert_eq!(answer.outcome, AfterToolOutcome::Unchanged);
+    assert_eq!(answer.notices.len(), 1);
+    assert_eq!(
+        answer.notices[0].extension.as_deref(),
+        Some("fiber.test/fmt")
+    );
+}
+
+#[test]
+fn a_not_regular_probe_without_hooks_is_no_pass_to_fail() {
+    let home = Home::new();
+    home.install("plain", None, &[]);
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    assert_eq!(answer.outcome, AfterToolOutcome::Unchanged);
+    assert!(answer.notices.is_empty());
+}
+
+#[test]
+fn the_hook_is_shown_a_small_output_file_as_content_without_path() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.content) .. \"|\" .. tostring(call.path) }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "small",
+            details: None,
+            process: None,
+            spilled: None,
+            not_regular: false,
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    assert_eq!(changed_content(&answer), Some("small|nil"));
+}
+
+#[test]
+fn a_hook_returning_artifact_on_an_output_file_changes_only_the_artifact() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook("blocking", "return { artifact = \"replaced\" }")),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "small",
+            details: None,
+            process: None,
+            spilled: None,
+            not_regular: false,
+            delivery: Some(JobDelivery::OutputFile),
+        })
+    });
+    let AfterToolOutcome::Changed {
+        content, artifact, ..
+    } = answer.outcome
+    else {
+        panic!("expected a change, got {:?}", answer.outcome);
+    };
+    assert_eq!(content, None);
+    assert_eq!(artifact.as_deref(), Some("replaced"));
 }
 
 #[test]
@@ -1756,6 +2001,9 @@ fn a_hook_given_a_spilled_call_sees_its_path_and_size() {
             details: None,
             process: None,
             spilled: Some(&file),
+
+            not_regular: false,
+            delivery: None,
         })
     });
     assert_eq!(

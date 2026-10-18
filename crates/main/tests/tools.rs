@@ -698,6 +698,236 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
 }
 
 #[test]
+fn a_configured_read_only_command_is_denied_for_a_credential_path() {
+    // `jq` is listed in the person's `shell.read_only` with no flags: the
+    // call declares its operands, the credential deny refuses it before it
+    // runs, and `jq` never needs to exist.
+    let setup = Setup::new_with_started_deadline();
+    let secret = setup.home().join("credentials").join("secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, format!("{MARKER}\n")).unwrap();
+    let absolute = fs::canonicalize(&secret)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!absolute.contains(MARKER), "{absolute}");
+    let events = vec![function_call(
+        "shell_0",
+        "shell",
+        &json!({"command": format!("jq . {absolute}")}),
+    )];
+    let script = serde_json::to_string(&events).unwrap();
+    assert!(
+        !script.contains(MARKER),
+        "the scripted arguments contain the credential file's text"
+    );
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider_with_defaults(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "shell": {"read_only": {"jq": {"flags": []}}}}),
+    );
+
+    let run = setup.run(&["ask", "show the secret"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), denied_kinds(1));
+    let requested: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    let resolved: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+        .collect();
+    let completed: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(&resolved[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(&completed[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(resolved[0]["payload"]["decided_by"], "credential_deny");
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert_no_marker("stderr", run.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
+#[test]
+fn a_resumed_session_reads_a_changed_shell_read_only_list() {
+    // The first run lists nothing, so `jq` is not read-only there; the
+    // resume loads the rewritten configuration and denies the same call.
+    let setup = Setup::within(Deadline::start());
+    let secret = setup.home().join("credentials").join("secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, format!("{MARKER}\n")).unwrap();
+    let absolute = fs::canonicalize(&secret)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!absolute.contains(MARKER), "{absolute}");
+    let events = vec![function_call(
+        "shell_0",
+        "shell",
+        &json!({"command": format!("jq . {absolute}")}),
+    )];
+    let server = ProviderServer::start([hello(), stream(&events), hello()]).unwrap();
+    setup.provider_with_defaults(&server);
+
+    let first = setup.run(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(
+        first.kinds(),
+        [
+            &[
+                "session_started",
+                "fiber_started",
+                "extensions_loaded",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ][..],
+            &[
+                "step_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "fiber_exited",
+            ][..],
+        ]
+        .concat()
+    );
+    let id = first.session_id().to_owned();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "shell": {"read_only": {"jq": {"flags": []}}}}),
+    );
+
+    let second = setup.run(&["ask", "--resume", &id, "show the secret"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    // A resume writes no `session_started` and no `opening_message`: the
+    // log already holds both.
+    let mut expected = denied_kinds(1);
+    expected.retain(|kind| *kind != "session_started" && *kind != "opening_message");
+    assert_eq!(second.kinds(), expected);
+    let started = second
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    assert_eq!(started["payload"]["resumed"], true);
+    let requested: Vec<_> = second
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    let resolved: Vec<_> = second
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+        .collect();
+    let completed: Vec<_> = second
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(&resolved[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(&completed[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(resolved[0]["payload"]["decided_by"], "credential_deny");
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    assert!(
+        !second
+            .lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    assert_no_marker("stdout", second.stdout.as_bytes());
+    assert_no_marker("stderr", second.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&second.session_dir(&setup));
+}
+
+#[test]
+fn a_configured_read_only_command_skips_review() {
+    // `printf` with no flags is listed: the call declares `reads` and runs
+    // with no `permission_resolved` and no reviewer request.
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "shell_0",
+            "shell",
+            &json!({"command": "printf 'configured-read'"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "shell": {"read_only": {"printf": {"flags": []}}}}),
+    );
+
+    let run = setup.run(&["ask", "print it"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A running shell streams `tool_call_delta`, absent from `read_kinds()`
+    // and of varying count: filter it exactly as the flood test does, and
+    // pin every other kind in order.
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .filter(|kind| *kind != "tool_call_delta")
+        .collect();
+    assert_eq!(kinds, read_kinds());
+    assert!(
+        run.kinds().contains(&"tool_call_delta"),
+        "a running shell streams deltas"
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        "configured-read\nExit code 0.\n"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+}
+
+#[test]
 fn a_configured_file_credential_source_is_denied_for_a_read() {
     // A `file` source outside Fiber home and outside the workspace, named
     // by the global configuration: the model reads it, and the credential

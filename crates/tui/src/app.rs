@@ -970,6 +970,12 @@ impl App {
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
+                    self.offer.file_refused(
+                        &id,
+                        &serde_json::from_value(Value::String(code.clone()))
+                            .unwrap_or_else(|_| contract::ErrorCode::Other(code.clone())),
+                        &message,
+                    );
                     self.config_views_refused(&id, &message);
                     self.session_views_refused(&id, &message);
                     if !self.history_rejected(&id, &code, &message) {
@@ -1143,6 +1149,7 @@ impl App {
                 if let Some(accepted) = read!(envelope, CommandAccepted) {
                     let sent = self.pending.remove(&accepted.command_id.0);
                     self.commands_answered(&accepted);
+                    changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
                         .and_then(|(_, draft)| shell::answered(&draft.expand(), accepted.result));
@@ -1161,6 +1168,8 @@ impl App {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
+                    self.offer
+                        .file_refused(&id.0, &rejected.code, &rejected.message);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }

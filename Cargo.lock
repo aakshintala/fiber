@@ -1563,6 +1563,7 @@ dependencies = [
  "fakes",
  "log 0.0.0",
  "proptest",
+ "rustix",
  "serde_json",
  "similar",
  "support",

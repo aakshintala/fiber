@@ -34,7 +34,10 @@ pub(super) fn labelled<'a>(kind: &str, payload: &'a Map<String, Value>) -> Vec<(
         "tool_call_completed" => text_parts(payload.get("content"), Label::ToolOutput, &mut out),
         "job_line" => push(&mut out, Label::ToolOutput, payload.get("lines")),
         "delegate_finished" => push(&mut out, Label::ToolOutput, payload.get("text")),
-        "job_completed" => push(&mut out, Label::ToolOutput, payload.get("output_tail")),
+        "job_completed" => {
+            push(&mut out, Label::ToolOutput, payload.get("output_tail"));
+            push(&mut out, Label::ToolOutput, payload.get("notice"));
+        }
         _ => {}
     }
     out

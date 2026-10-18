@@ -46,6 +46,9 @@ fn failure() -> JobCompleted {
         }),
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     }
 }
 
@@ -160,6 +163,9 @@ fn calling_end_records_that_result_and_drop_does_not_record_again() {
             timed_out: false,
         }),
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     });
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
@@ -247,6 +253,9 @@ fn the_completion_is_claimed_once() {
         error: None,
         process: None,
         output_tail: None,
+
+        notice: None,
+        changed_by: None,
     });
     let cancel = CancelToken::new();
     let first = registry.wait(&id, 0, &cancel).unwrap();
@@ -281,6 +290,9 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
                     error: None,
                     process: None,
                     output_tail: None,
+
+                    notice: None,
+                    changed_by: None,
                 });
             }));
         });
@@ -345,6 +357,8 @@ fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::Job
         job_id: JobId(id.into()),
         lines: lines.into(),
         suppressed,
+
+        changed_by: None,
     }
 }
 

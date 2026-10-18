@@ -115,6 +115,9 @@ pub enum Command {
     Skills,
     /// Answers with each provider credential label's cached quota.
     Quota,
+    /// Answers with the labels of the provider a `credential` command would
+    /// switch now, and the label that provider uses.
+    Credentials,
     /// Answers with durable log lines in a seq range.
     History(HistoryArgs),
     /// Answers with a page of an artifact's full output.
@@ -135,11 +138,23 @@ pub enum Command {
     Command(RunCommand),
     /// Accepts no more prompts, finishes what is running, and exits; with `now`, shuts down.
     Close(CloseArgs),
+    /// Reads one file listed by a pending repository offer.
+    OfferedFile(OfferedFile),
     /// A command this Fiber does not build: never sent by a client type,
     /// answered `unknown_command` with the line's own command name.
     #[serde(other)]
     #[serde(skip_serializing)]
     Unknown,
+}
+
+/// One file listed by a pending repository offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfferedFile {
+    /// The pending offer.
+    pub request_id: RequestId,
+    /// One of its items' `files`, exactly as listed.
+    pub path: String,
 }
 
 /// A content part a client sends. An image is sent as its bytes; Fiber writes

@@ -251,6 +251,9 @@ pub struct JobLine {
     /// Deliveries suppressed since the last one, when any were.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppressed: Option<u64>,
+    /// The extensions whose hooks changed the delivered lines, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// An isolated delegate's worktree when it finished.
@@ -278,6 +281,9 @@ pub struct DelegateFinished {
     pub questions: Option<Vec<Question>>,
     /// The run's totals.
     pub usage: Usage,
+    /// The extensions whose hooks changed the final message, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
     /// When isolated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<FinishedWorktree>,
@@ -296,9 +302,17 @@ pub struct JobCompleted {
     /// For a job that ran a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<Process>,
-    /// For a failed job, the tail of its output, capped.
+    /// For a failed job, the tail of its output, capped; absent when a hook
+    /// changed the completion notice (`notice` holds what the model was sent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,
+    /// The text the model was sent, when a hook changed or withheld the
+    /// completion notice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+    /// The extensions whose hooks changed the completion notice, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Vec<String>>,
 }
 
 /// `jobs_pending_notified`.
@@ -408,6 +422,30 @@ pub enum CommandResult {
         /// Percent used at which little is left.
         notice_at: f64,
     },
+    /// For `offered_file`: the file's text.
+    OfferedFile {
+        /// The file's full UTF-8 text.
+        text: String,
+    },
+    /// For `credentials`.
+    Credentials(CredentialLabels),
+    /// For `credential`: the provider the switch applies to.
+    CredentialSwitch {
+        /// The provider whose credential label switches.
+        provider: String,
+    },
+}
+
+/// The labels of the provider a credential command would switch now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CredentialLabels {
+    /// The provider's name.
+    pub provider: String,
+    /// Its credential labels, sorted.
+    pub credentials: Vec<String>,
+    /// The label the provider uses now; absent until used, or when scripted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// One provider credential label's cached quota, with no age.

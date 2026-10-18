@@ -2,7 +2,7 @@
 //! defaults (`docs/configuration.md`).
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use config::{Config, ModelData, ProjectKey, Sources};
@@ -238,3 +238,67 @@ pub(crate) fn skills_disabled_reader(
 #[cfg(test)]
 #[path = "skills_disabled_tests.rs"]
 mod skills_disabled_tests;
+
+/// The person's `shell.read_only` entries as the shell classifier takes
+/// them: one `(command, flags)` pair per command, shared with every
+/// [`tools::Shell`] clone so a reload can replace the contents without
+/// rebuilding the shell.
+pub(crate) type ShellReadOnly = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
+/// Each person-configured `shell.read_only."<command>".flags` entry, by
+/// command name (`docs/configuration.md`, "Keys"; `docs/tools.md",
+/// "Other command-line tools"). The key is person-only: a repository
+/// value is ignored with a notice before merging, so the checked merged
+/// configuration holds personal entries only. An entry without a complete
+/// string `flags` array gives no entry; an explicit empty array gives the
+/// command with no flags. Entries come out in name order: the merged
+/// object's map iterates its keys in order.
+pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
+    let mut entries = Vec::new();
+    let read_only = config
+        .merged(None)
+        .get("shell")
+        .and_then(|shell| shell.get("read_only"))
+        .cloned()
+        .unwrap_or_default();
+    let Value::Object(read_only) = read_only else {
+        return entries;
+    };
+    for (name, entry) in read_only {
+        let Value::Object(entry) = entry else {
+            continue;
+        };
+        let Some(Value::Array(flags)) = entry.get("flags") else {
+            continue;
+        };
+        let mut listed = Vec::new();
+        let mut complete = true;
+        for flag in flags {
+            let Value::String(flag) = flag else {
+                complete = false;
+                break;
+            };
+            listed.push(flag.clone());
+        }
+        if complete {
+            entries.push((name, listed));
+        }
+    }
+    entries
+}
+
+/// Replaces the shared `shell.read_only` list with the checked
+/// configuration's entries, so a reload applies the fresh list without
+/// rebuilding the shell (`docs/configuration.md`, "When Fiber reads
+/// configuration"). The next list is computed before the lock is taken;
+/// only the assignment runs under it. A poisoned lock is recovered.
+pub(crate) fn refresh_shell_read_only(handle: &ShellReadOnly, config: &Config) {
+    let next = shell_read_only(config);
+    *handle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+}
+
+#[cfg(test)]
+#[path = "shell_read_only_tests.rs"]
+mod shell_read_only_tests;
