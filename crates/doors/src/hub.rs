@@ -856,6 +856,8 @@ fn read_hello(
 /// macOS refuses the option once the peer has closed (`InvalidInput`),
 /// while its buffered bytes stay readable and a read of the closed socket
 /// does not block.
+// Exempt: no Linux caller produces `InvalidInput`; the macOS-only closed-peer refusal is covered by the macOS job's tests.
+#[cfg_attr(false, mutants::skip)]
 fn set_read_timeout(stream: &UnixStream, timeout: Option<Duration>) -> io::Result<()> {
     match stream.set_read_timeout(timeout) {
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),

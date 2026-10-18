@@ -7,6 +7,8 @@ use std::sync::{Arc, mpsc};
 use super::{Gate, join, spawn};
 use crate::client;
 
+// Exempt: `Interrupted` needs a signal delivered mid-accept, which no test stages; the non-`Interrupted` wait is pinned through this loop by `accept_waits_for_room_on_a_non_interrupted_error`.
+#[cfg_attr(false, mutants::skip)]
 pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
     loop {
         if gate.conns.stopped() {

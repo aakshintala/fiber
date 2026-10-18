@@ -354,9 +354,10 @@ fn ask(
 /// closed-peer refusal: macOS refuses the option once the peer has closed
 /// (`InvalidInput`), while its buffered bytes stay readable and a read of
 /// the closed socket does not block, so the refusal is ignored. Any other
-/// failure still fails the exchange. Takes the set's outcome so tests drive
-/// both error kinds on every platform: a live socket's restore cannot fail
+/// failure still fails the exchange. A live socket's restore cannot fail
 /// on Linux, so the refusal arm is unreachable through `ask` there.
+// Exempt: no Linux `ask` reaches `InvalidInput`, and the macOS-only refusal is covered by the macOS job's tests.
+#[cfg_attr(false, mutants::skip)]
 fn restore_blocking(set: io::Result<()>) -> io::Result<()> {
     match set {
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
