@@ -93,6 +93,8 @@ fn a_directory_is_invalid_arguments() {
     file_failure(&repo, "directory", ErrorCode::InvalidArguments);
 }
 
+// debt: macOS coverage of FIFO refusal, upgrade when rustix exposes mkfifo on macOS
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fifo_is_invalid_arguments_and_does_not_block() {
     use std::sync::mpsc;
