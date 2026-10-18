@@ -131,6 +131,7 @@ fn bump(inner: &mut Inner, shared: &Shared) {
 ///
 /// Example: `resolve_in_package("bin/acme", "/h/extensions/acme")` is
 /// `Ok("/h/extensions/acme/bin/acme")`.
+// debt: exec.rs over 800 lines after this change, upgrade when the next change to exec.rs lands: move resolve_in_package to its own module.
 pub(crate) fn resolve_in_package(program: &str, package: &Path) -> Result<String, String> {
     if !program.contains('/') || program.starts_with('/') {
         return Ok(program.to_owned());

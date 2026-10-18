@@ -40,6 +40,7 @@ fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<
     ))
 }
 
+// debt: duplicate test helpers with lua_tools.rs and git_install.rs (they differ: wait 10 s vs 5 s, failed().0 use), upgrade when a fourth test file needs them.
 /// The extension's tools, read on a thread under `WAIT`.
 #[track_caller]
 fn tools(ext: &Arc<LuaExtension>) -> Vec<LuaTool> {
