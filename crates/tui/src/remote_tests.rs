@@ -1375,3 +1375,47 @@ fn chip_read_detached_writes_nothing_and_reports_the_lost_link() {
         "a detached read writes nothing"
     );
 }
+
+#[test]
+fn the_fake_answers_notes_and_records_each_save() {
+    use crate::configure::{NotesSaved, NotesWrite, ReviewerNotes};
+    let fake = Fake::new(vec![]);
+    let w = Path::new("/w");
+    let read = fake.reviewer_notes(w).unwrap();
+    assert_eq!(read.global.text, "");
+    assert_eq!(read.global.version, "absent");
+    let write = Some(NotesWrite {
+        version: "absent".into(),
+        text: "global notes".into(),
+    });
+    assert_eq!(
+        fake.save_reviewer_notes(w, write.clone(), None).unwrap(),
+        NotesSaved::Written(vec![])
+    );
+    // A test sets the answers the views read.
+    *fake.notes.lock().unwrap() = Ok(ReviewerNotes {
+        global: crate::configure::NotesFile {
+            file: "/hub/config.json".into(),
+            text: "set notes".into(),
+            version: "v1".into(),
+        },
+        project: crate::configure::NotesFile {
+            file: "/hub/project".into(),
+            text: "".into(),
+            version: "absent".into(),
+        },
+    });
+    *fake.notes_saved.lock().unwrap() = Ok(NotesSaved::Stale);
+    assert_eq!(fake.reviewer_notes(w).unwrap().global.text, "set notes");
+    assert_eq!(
+        fake.save_reviewer_notes(w, None, write.clone()).unwrap(),
+        NotesSaved::Stale
+    );
+    assert_eq!(
+        fake.notes_saves(),
+        vec![
+            (w.to_path_buf(), write.clone(), None),
+            (w.to_path_buf(), None, write),
+        ]
+    );
+}

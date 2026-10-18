@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use support::*;
 
 /// Sends a `configure` command and reads its `command_accepted` answer.
-fn configure(client: &Socket, setup: &Setup, id: &str, args: Value) -> Value {
+fn configure(client: &Socket, id: &str, args: Value) -> Value {
     client.send(&json!({"id": id, "command": "configure", "args": args}).to_string());
     let answer = recv_answer(client, id, "the configure answer");
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
@@ -35,7 +35,6 @@ fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
 
     let notes = configure(
         &client,
-        &setup,
         "n_read_empty",
         json!({"operation":"reviewer_notes","workspace":workspace}),
     );
@@ -50,7 +49,6 @@ fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
 
     let saved = configure(
         &client,
-        &setup,
         "n_save_current",
         json!({"operation":"save_reviewer_notes","workspace":workspace,
             "global":{"version":"absent","text":"global notes"},
@@ -69,7 +67,6 @@ fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
 
     let notes = configure(
         &client,
-        &setup,
         "n_read_saved",
         json!({"operation":"reviewer_notes","workspace":workspace}),
     );
@@ -84,7 +81,6 @@ fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
     // byte as after the first save.
     let saved = configure(
         &client,
-        &setup,
         "n_save_stale",
         json!({"operation":"save_reviewer_notes","workspace":workspace,
             "global":{"version":"absent","text":"lost global"},
@@ -97,7 +93,6 @@ fn the_hub_reads_and_saves_reviewer_notes_with_version_conflicts_stale() {
     // The current versions still write.
     let saved = configure(
         &client,
-        &setup,
         "n_save_again",
         json!({"operation":"save_reviewer_notes","workspace":workspace,
             "global":{"version":global,"text":"newer global"}}),
