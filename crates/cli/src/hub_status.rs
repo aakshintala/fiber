@@ -343,17 +343,24 @@ fn ask(
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
             if let Some(reply) = answer(&line)? {
-                // macOS refuses the option once the peer has closed, while
-                // its buffered bytes stay readable and a read of the closed
-                // socket does not block, so the refusal is ignored.
-                match stream.set_nonblocking(false) {
-                    Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-                    other => other,
-                }
-                .map_err(lost)?;
+                restore_blocking(stream.set_nonblocking(false)).map_err(lost)?;
                 return Ok(reply);
             }
         }
+    }
+}
+
+/// Restores `stream` to blocking after the answer is read, ignoring the
+/// closed-peer refusal: macOS refuses the option once the peer has closed
+/// (`InvalidInput`), while its buffered bytes stay readable and a read of
+/// the closed socket does not block, so the refusal is ignored. Any other
+/// failure still fails the exchange. Takes the set's outcome so tests drive
+/// both error kinds on every platform: a live socket's restore cannot fail
+/// on Linux, so the refusal arm is unreachable through `ask` there.
+fn restore_blocking(set: io::Result<()>) -> io::Result<()> {
+    match set {
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
+        other => other,
     }
 }
 

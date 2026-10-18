@@ -453,6 +453,21 @@ fn an_answer_followed_by_a_close_is_read() {
 }
 
 #[test]
+fn restoring_blocking_ignores_only_the_closed_peer_refusal() {
+    fn refused(kind: std::io::ErrorKind) -> std::io::Result<()> {
+        Err(std::io::Error::new(kind, "injected for the test"))
+    }
+    // The macOS closed-peer refusal is ignored: the answer was read.
+    assert!(super::restore_blocking(refused(std::io::ErrorKind::InvalidInput)).is_ok());
+    // Any other failure still fails the exchange.
+    assert!(
+        super::restore_blocking(refused(std::io::ErrorKind::PermissionDenied)).is_err(),
+        "only the closed-peer refusal is ignored"
+    );
+    assert!(super::restore_blocking(Ok(())).is_ok());
+}
+
+#[test]
 fn a_close_before_the_answer_is_a_failure() {
     let (_dir, home) = home();
     let (_got, _hub) = fake_hub(&home, drop);

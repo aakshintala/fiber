@@ -88,6 +88,21 @@ fn a_hello_from_a_peer_that_already_closed_is_read() {
 }
 
 #[test]
+fn set_read_timeout_ignores_only_the_closed_peer_refusal() {
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    // A zero timeout is refused as `InvalidInput` on every platform, the
+    // same kind macOS reports when the peer has closed: the closed-peer
+    // refusal is ignored.
+    assert!(set_read_timeout(&stream, Some(Duration::ZERO)).is_ok());
+    // Any other failure still fails: setting the option on a non-socket is
+    // refused without `InvalidInput` on every platform.
+    let file = std::fs::File::open("/dev/null").unwrap();
+    let non_socket = UnixStream::from(OwnedFd::from(file));
+    let error = set_read_timeout(&non_socket, None).unwrap_err();
+    assert_ne!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
 fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     let (mut peer, reader) = UnixStream::pair().unwrap();
     let clock = fakes::clock::FakeClock::new();

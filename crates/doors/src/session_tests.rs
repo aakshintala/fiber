@@ -945,6 +945,37 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
     close_within(opened.session, opened.log);
 }
 
+#[test]
+fn accept_waits_for_room_on_a_non_interrupted_error() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    // A socket that never listened: every accept fails at once with
+    // `EINVAL`, a non-`Interrupted` error, on every platform, with no timing
+    // involved. (`Interrupted` has no deterministic source here: it needs a
+    // signal delivered mid-accept, which the suite never stages.)
+    let socket = rustix::net::socket(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::STREAM,
+        None,
+    )
+    .unwrap();
+    let listener = UnixListener::from(socket);
+    let worker = thread::Builder::new()
+        .name("accept-test-error".to_owned())
+        .spawn({
+            let gate = Arc::clone(&gate);
+            move || super::accept::accept_loop(listener, gate)
+        })
+        .unwrap();
+    // The loop waited instead of spinning: the hook fires only in
+    // `wait_for_room`. With the comparison flipped the loop never waits, so
+    // this fails at the deadline on the mutant.
+    wait_until_accept_waits();
+    close_within(opened.session, opened.log);
+    worker.join().unwrap();
+}
+
 fn status(name: &str) -> Event {
     Event::SessionStatus(SessionStatus {
         name: name.to_owned(),

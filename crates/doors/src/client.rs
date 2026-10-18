@@ -159,13 +159,9 @@ pub(crate) fn serve_connection(
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                // A carriage return and a line feed both end a command line.
-                while buf
-                    .last()
-                    .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-                {
-                    buf.pop();
-                }
+                // The kept line feed, and any carriage return a client sends
+                // with it, are JSON whitespace: `classify` reads the line
+                // with them still on, so there is nothing to strip.
                 on_line(&buf, &mut conn);
                 if conn.gone {
                     break;
