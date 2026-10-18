@@ -482,6 +482,166 @@ fn the_line_cap_allows_the_boundary_and_rejects_one_more_unterminated_byte() {
     }
 }
 
+// Signals only on the poll after the read seam has seen the whole prefix.
+struct PrefixClock {
+    clock: Arc<FakeClock>,
+    prefix_read: Arc<std::sync::atomic::AtomicBool>,
+    polled: Sender<()>,
+}
+
+impl Clock for PrefixClock {
+    fn now(&self) -> Instant {
+        self.clock.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.clock.wall()
+    }
+    fn sleep(&self, duration: Duration) {
+        self.clock.sleep(duration);
+    }
+    fn subscribe(&self, wake: std::sync::Weak<dyn Wake>) {
+        self.clock.subscribe(wake);
+    }
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.clock.wait_until(until, &mut |bound| {
+            if self
+                .prefix_read
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.polled.send(()).unwrap();
+            }
+            wait(bound);
+        });
+    }
+}
+
+#[test]
+fn a_literal_sized_split_summary_survives_below_one_mib() {
+    let home = Home::new();
+    let expected = status(&"x".repeat(8192));
+    let sent_status = expected.clone();
+    let (release, held) = mpsc::channel();
+    let peer = Peer::new(&home, ID, move |id, stream| {
+        writeln!(stream, "{}", ack(id)).unwrap();
+        let bytes = serde_json::to_vec(&summary(&sent_status)).unwrap();
+        stream.write_all(&bytes[..4096]).unwrap();
+        if held.recv().is_ok() {
+            stream.write_all(&bytes[4096..]).unwrap();
+            stream.write_all(b"\n").unwrap();
+        }
+    });
+    let prefix_read = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (polled, next_poll) = mpsc::channel();
+    let client = SessionSockets::new(
+        home.temp.path(),
+        Arc::new(PrefixClock {
+            clock: home.clock.clone(),
+            prefix_read: prefix_read.clone(),
+            polled,
+        }),
+    );
+    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let mut seen = Vec::new();
+        let answer =
+            client.list_until_with_read(cutoff, &CancelToken::new(), &mut |stream, chunk| {
+                let n = stream.read(chunk)?;
+                seen.extend_from_slice(&chunk[..n]);
+                if let Some(end) = seen.iter().position(|byte| *byte == b'\n') {
+                    if seen.len() - end - 1 >= 4096 {
+                        prefix_read.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                Ok(n)
+            });
+        done.send(answer).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    deadline.recv_or_fail(&next_poll, "prefix processed and next poll entered");
+    release.send(()).unwrap();
+    let entries = deadline
+        .recv_or_fail(&result, "complete split summary")
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, SessionId(ID.into()));
+    let actual = entries[0].status.as_ref().expect("complete status");
+    assert_eq!(actual.name.len(), 8192);
+    assert!(actual == &expected, "complete status content");
+    peer.ended(&deadline);
+}
+
+#[test]
+fn would_block_after_readiness_preserves_the_subscription() {
+    let home = Home::new();
+    let expected = status("ready after WouldBlock");
+    let peer = Peer::answer(&home, ID, expected.clone());
+    let client = home.client();
+    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let mut injected = false;
+        let answer =
+            client.list_until_with_read(cutoff, &CancelToken::new(), &mut |stream, chunk| {
+                if !injected {
+                    injected = true;
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                stream.read(chunk)
+            });
+        done.send((injected, answer)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let (injected, answer) = deadline.recv_or_fail(&result, "summary after WouldBlock");
+    assert!(injected);
+    assert_eq!(
+        answer,
+        Ok(vec![Running {
+            id: SessionId(ID.into()),
+            status: Some(expected),
+        }])
+    );
+    peer.ended(&deadline);
+}
+
+#[test]
+fn a_hard_read_error_closes_the_peer_without_advancing_time() {
+    let home = Home::new();
+    // The peer stays open, waiting for EOF, so neither EOF nor a clock
+    // advance can rescue a read error incorrectly treated as WouldBlock.
+    let peer = Peer::new(&home, ID, |id, stream| {
+        let mut bytes = serde_json::to_vec(&ack(id)).unwrap();
+        bytes.push(b'\n');
+        stream.write_all(&bytes).unwrap();
+    });
+    let client = home.client();
+    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let mut injected = false;
+        let answer =
+            client.list_until_with_read(cutoff, &CancelToken::new(), &mut |stream, chunk| {
+                if !injected {
+                    injected = true;
+                    return Err(io::ErrorKind::ConnectionReset.into());
+                }
+                stream.read(chunk)
+            });
+        done.send((injected, answer)).unwrap();
+    });
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    peer.ended(&deadline);
+    let (injected, answer) = deadline.recv_or_fail(&result, "hard read error closes listing");
+    assert!(injected);
+    assert_eq!(
+        answer,
+        Ok(vec![Running {
+            id: SessionId(ID.into()),
+            status: None
+        }])
+    );
+}
+
 #[test]
 fn discovery_at_the_cutoff_connects_to_nothing_and_cancel_takes_priority() {
     let home = Home::new();

@@ -19,7 +19,7 @@ use serde_json::Value;
 pub(crate) const LIST_DEADLINE: Duration = Duration::from_secs(2);
 pub(crate) const CLEANUP_MARGIN: Duration = Duration::from_millis(50);
 pub(crate) const MAX_LINE: usize = 1024 * 1024;
-pub(crate) const READ_CHUNK: usize = 64 * 1024;
+pub(crate) const READ_CHUNK: usize = 65_536;
 
 /// The account's session sockets, queried afresh on each call.
 pub struct SessionSockets {
@@ -37,6 +37,16 @@ impl SessionSockets {
     }
 
     fn list_until(&self, cutoff: Instant, cancel: &dyn Cancel) -> Result<Vec<Running>, ListError> {
+        self.list_until_with_read(cutoff, cancel, &mut |stream, chunk| stream.read(chunk))
+    }
+
+    // Keep readiness separate from reads: a ready socket may still WouldBlock.
+    fn list_until_with_read(
+        &self,
+        cutoff: Instant,
+        cancel: &dyn Cancel,
+        read: &mut impl FnMut(&mut UnixStream, &mut [u8]) -> io::Result<usize>,
+    ) -> Result<Vec<Running>, ListError> {
         if cancel.is_cancelled() {
             return Err(ListError::Cancelled);
         }
@@ -106,7 +116,7 @@ impl SessionSockets {
         }
         'listing: loop {
             let mut wake_bytes = [0; 256];
-            while wake_read.read(&mut wake_bytes).is_ok_and(|n| n != 0) {}
+            let _ = wake_read.read(&mut wake_bytes);
             if cancel.is_cancelled() {
                 return Err(ListError::Cancelled);
             }
@@ -167,7 +177,7 @@ impl SessionSockets {
                     continue;
                 };
                 let mut chunk = [0; READ_CHUNK];
-                match stream.read(&mut chunk) {
+                match read(stream, &mut chunk) {
                     Ok(0) => {
                         connection.stream = None;
                         continue;
