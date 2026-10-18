@@ -1,7 +1,7 @@
 //! Which sessions prune deletes (Ruling 6): the scope filter, the graph,
 //! cycles and selection, all over `log::started_sessions`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -106,25 +106,15 @@ pub(crate) fn select(
         };
     };
     let mut by_id: HashMap<String, (PathBuf, Option<String>)> = HashMap::new();
-    let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for started in all {
         by_id.entry(started.id.0.clone()).or_insert((
             started.dir.clone(),
             started.forked_from.as_ref().map(|id| id.0.clone()),
         ));
-        if let Some(from) = started.forked_from.as_ref() {
-            children
-                .entry(from.0.clone())
-                .or_default()
-                .insert(started.id.0.clone());
-        }
     }
-    let dependents_of = |id: &str| dependents(&children, id);
-    let cyclic: BTreeSet<String> = by_id
-        .keys()
-        .filter(|id| reaches(&children, id, id))
-        .cloned()
-        .collect();
+    let children = log::Children::of(all);
+    let dependents_of = |id: &str| children.dependents(id);
+    let cyclic: BTreeSet<String> = children.cyclic();
     let resolved = doors::resolve_project(workspace);
     let in_repo = resolved.in_repository;
     let project = resolved.path;
@@ -231,44 +221,6 @@ pub(crate) fn select(
             cycle_members,
         )
     }
-}
-
-/// The transitive dependents of `id`, never `id` itself: breadth-first,
-/// each once.
-fn dependents(children: &BTreeMap<String, BTreeSet<String>>, id: &str) -> Vec<String> {
-    let mut seen = BTreeSet::from([id.to_owned()]);
-    let mut queue = VecDeque::from([id.to_owned()]);
-    let mut found = Vec::new();
-    while let Some(parent) = queue.pop_front() {
-        if let Some(kids) = children.get(&parent) {
-            for child in kids {
-                if seen.insert(child.clone()) {
-                    found.push(child.clone());
-                    queue.push_back(child.clone());
-                }
-            }
-        }
-    }
-    found
-}
-
-/// Whether the walk from `from` reaches `target` again in one or more steps.
-fn reaches(children: &BTreeMap<String, BTreeSet<String>>, from: &str, target: &str) -> bool {
-    let mut seen = BTreeSet::from([from.to_owned()]);
-    let mut queue = VecDeque::from([from.to_owned()]);
-    while let Some(parent) = queue.pop_front() {
-        if let Some(kids) = children.get(&parent) {
-            for child in kids {
-                if child == target {
-                    return true;
-                }
-                if seen.insert(child.clone()) {
-                    queue.push_back(child.clone());
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Selection without `--cascade`: `s` is deleted when `D(s)` is a subset of
