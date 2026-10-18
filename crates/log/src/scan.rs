@@ -76,9 +76,9 @@ pub fn started_sessions(home: &Path) -> Vec<Started> {
 /// A session's first line as a `session_started`: the lenient view both
 /// walks share. [`SessionStarted::parse`] reads what the scans accept;
 /// [`first_line`] reads what history needs.
-pub struct SessionStarted {
+pub(crate) struct SessionStarted {
     /// `payload.workspace` when it is a string.
-    pub workspace: Option<String>,
+    pub(crate) workspace: Option<String>,
     /// `payload.forked_from`, raw: the two pointer policies read it
     /// differently.
     forked_from: Option<Value>,
@@ -109,7 +109,7 @@ impl SessionStarted {
 
     /// `forked_from.session_id` when it is a string: the lenient policy
     /// the scans walk by. A `seq` is not needed.
-    pub fn forked_from(&self) -> Option<SessionId> {
+    pub(crate) fn forked_from(&self) -> Option<SessionId> {
         self.forked_from
             .as_ref()?
             .get("session_id")?
@@ -142,7 +142,7 @@ pub(crate) struct MalformedFork;
 /// history walks by. A missing log is [`Error::NotFound`]; anything else
 /// that is not a `session_started` first line is [`Error::Pointer`].
 /// Reads only the first line, never the log past it.
-pub fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
+pub(crate) fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
     let path = dir.join(EVENTS);
     let file = crate::open_log(dir)?;
     let mut first = Vec::new();

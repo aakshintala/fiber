@@ -113,8 +113,16 @@ pub(crate) fn select(
         ));
     }
     let children = log::Children::of(all);
-    let dependents_of = |id: &str| children.dependents(id);
-    let cyclic: BTreeSet<String> = children.cyclic();
+    // `Children` speaks `SessionId`; this scope stays on strings, so the
+    // boundary converts in both directions.
+    let dependents_of = |id: &str| {
+        children
+            .dependents(&SessionId(id.to_owned()))
+            .into_iter()
+            .map(|id| id.0)
+            .collect::<Vec<_>>()
+    };
+    let cyclic: BTreeSet<String> = children.cyclic().into_iter().map(|id| id.0).collect();
     let resolved = doors::resolve_project(workspace);
     let in_repo = resolved.in_repository;
     let project = resolved.path;

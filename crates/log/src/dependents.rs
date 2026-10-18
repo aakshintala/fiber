@@ -12,19 +12,19 @@ use crate::scan::{Started, started_sessions};
 /// The fork graph over [`started_sessions`]: each started session's id to
 /// the ids that continue it, sorted. Prune reads this instead of walking
 /// the logs again.
-pub struct Children(BTreeMap<String, BTreeSet<String>>);
+pub struct Children(BTreeMap<SessionId, BTreeSet<SessionId>>);
 
 impl Children {
     /// The fork graph over `started`: each parent id to its child ids.
     /// Two sessions with one id add one edge each.
     pub fn of(started: &[Started]) -> Self {
-        let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut children: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
         for session in started {
             if let Some(from) = session.forked_from.as_ref() {
                 children
-                    .entry(from.0.clone())
+                    .entry(from.clone())
                     .or_default()
-                    .insert(session.id.0.clone());
+                    .insert(session.id.clone());
             }
         }
         Self(children)
@@ -33,9 +33,9 @@ impl Children {
     /// Every session that continues `id`, directly or through another in
     /// the result: breadth-first from `id`, each step's sessions sorted by
     /// id, each once, never `id` itself. A cycle ends the walk.
-    pub fn dependents(&self, id: &str) -> Vec<String> {
-        let mut seen = BTreeSet::from([id.to_owned()]);
-        let mut queue = VecDeque::from([id.to_owned()]);
+    pub fn dependents(&self, id: &SessionId) -> Vec<SessionId> {
+        let mut seen = BTreeSet::from([id.clone()]);
+        let mut queue = VecDeque::from([id.clone()]);
         let mut found = Vec::new();
         while let Some(parent) = queue.pop_front() {
             for child in self.0.get(&parent).into_iter().flatten() {
@@ -51,7 +51,7 @@ impl Children {
     /// The ids that reach themselves in one or more steps, over every id
     /// in the map: the sessions on a cycle. A descendant of a cycle is
     /// not one, and neither is a parent no started session names back.
-    pub fn cyclic(&self) -> BTreeSet<String> {
+    pub fn cyclic(&self) -> BTreeSet<SessionId> {
         self.0
             .keys()
             .filter(|id| reaches(&self.0, id, id))
@@ -61,9 +61,13 @@ impl Children {
 }
 
 /// Whether the walk from `from` reaches `target` again in one or more steps.
-fn reaches(children: &BTreeMap<String, BTreeSet<String>>, from: &str, target: &str) -> bool {
-    let mut seen = BTreeSet::from([from.to_owned()]);
-    let mut queue = VecDeque::from([from.to_owned()]);
+fn reaches(
+    children: &BTreeMap<SessionId, BTreeSet<SessionId>>,
+    from: &SessionId,
+    target: &SessionId,
+) -> bool {
+    let mut seen = BTreeSet::from([from.clone()]);
+    let mut queue = VecDeque::from([from.clone()]);
     while let Some(parent) = queue.pop_front() {
         for child in children.get(&parent).into_iter().flatten() {
             if child == target {
@@ -81,11 +85,7 @@ fn reaches(children: &BTreeMap<String, BTreeSet<String>>, from: &str, target: &s
 /// `session`, directly or through another in the result: [`Children`]
 /// over [`started_sessions`], mapped back to ids.
 pub fn dependents(home: &Path, session: &SessionId) -> Vec<SessionId> {
-    Children::of(&started_sessions(home))
-        .dependents(&session.0)
-        .into_iter()
-        .map(SessionId)
-        .collect()
+    Children::of(&started_sessions(home)).dependents(session)
 }
 
 #[cfg(test)]
