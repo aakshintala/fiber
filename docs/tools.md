@@ -1029,12 +1029,15 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   as `web_search_20250305` or `google_search` (`docs/model-routing.md`,
   "Hosted web search"). Reading and sending back the
   hosted search's blocks is protocol code in `anthropic-messages`,
-  `openai-responses` and `google-generative-ai`.
+  `openai-responses`, `openai-completions` and `google-generative-ai`.
 - Measured September 27, 2026: ChatGPT/codex, muse (only on its
   `/v1/responses` endpoint) and OpenCode (by passing Anthropic's and
   OpenAI's hosted tools through) host a search, and the OpenAI API, on
-  the models marked. OpenRouter documents an `openrouter:web_search`
-  server tool (on `openai-completions`) but it is unmeasured. Databricks
+  the models marked. Measured October 18, 2026 on `openai/gpt-5.2`:
+  `openrouter:web_search` on `openai-completions` hosts a search, read
+  from the new file
+  `research/web-tools/openrouter-web-search-probe-2026-10-18.json`.
+  Databricks
   does not: "Code interpreter and web search tools are not supported by
   Databricks." Which models accept the hosted search is
   [research/web-tools/hosted-search.md](../research/web-tools/hosted-search.md).

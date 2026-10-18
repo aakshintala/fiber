@@ -26,8 +26,8 @@ use contract::events::{
     CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
@@ -2090,4 +2090,57 @@ fn reply_without_annotations_has_no_hosted_call() {
     assert!(hosted_calls(&reply).is_empty());
     assert_eq!(reply.web_searches, None);
     assert_eq!(reply.text(), "hi");
+}
+
+/// How long the live search may take.
+const LIVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One live hosted search through OpenRouter, recorded as
+/// `recordings/openrouter-web-search.sse` with the `record` jig from the
+/// request Fiber builds for a model whose `web_search` is
+/// `openrouter:web_search`. It is `#[ignore]`d and panics without
+/// `FIBER_LIVE_OPENROUTER_KEY`; it never runs in CI. The call runs on a
+/// thread bounded by a channel deadline instead of hanging the test.
+#[test]
+#[ignore = "live/needs FIBER_LIVE_OPENROUTER_KEY; run with --run-ignored only"]
+fn live_openrouter_web_search_completes_a_turn() {
+    let Ok(key) = std::env::var("FIBER_LIVE_OPENROUTER_KEY") else {
+        panic!("the live openrouter test needs FIBER_LIVE_OPENROUTER_KEY set");
+    };
+    let endpoint = Endpoint {
+        provider: "openrouter".into(),
+        model: "openai/gpt-5.2".into(),
+        base_url: "https://openrouter.ai/api/v1".into(),
+        key: Some(contract::Secret::new(key)),
+        direct: true,
+        ..Endpoint::default()
+    };
+    let request = ModelRequest {
+        tools: vec![hosted_search_tool()],
+        conversation: vec![Input::User {
+            text: "Search the web: what is the latest stable version of the Rust \
+                     compiler? Answer in one sentence and cite the source."
+                .into(),
+            images: Vec::new(),
+        }],
+        ..request()
+    };
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut deltas = Vec::new();
+        let reply = Completions::new(endpoint)
+            .request(&request)
+            .run(&mut |d| deltas.push(d));
+        done.send(reply).unwrap();
+    });
+    let reply = fakes::Deadline::after(LIVE_DEADLINE)
+        .recv(&finished)
+        .expect("the live search never returned")
+        .expect("the live search failed");
+    assert_eq!(reply.finish, Finish::Completed);
+    let hosted = hosted_calls(&reply);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    assert!(!hosted.completed.hosts_surfaced.is_empty());
 }
