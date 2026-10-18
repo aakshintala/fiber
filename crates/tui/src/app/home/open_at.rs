@@ -13,11 +13,10 @@ use crate::home::{Level, opening};
 impl App {
     /// Opens `session` the way a row opens (`docs/tui.md`, "Home"):
     /// through the hub, so an exited session is resumed by it and a
-    /// refusal shows on home. With no level expected, one `full`
-    /// subscribe goes out; at `full` a `summary` first, since the hub
-    /// resumes an exited session at the level last held and a lone
-    /// `full` would be refused as already held. The last subscribe's
-    /// acknowledgement ends the gate.
+    /// refusal shows on home. The first stage, one `summary` unless the
+    /// connection already holds `summary`, goes out now; the `full`
+    /// raise follows the first frame. The raise's acknowledgement ends
+    /// the gate.
     pub(in crate::app) fn open_session(
         &mut self,
         session: SessionId,
@@ -27,7 +26,7 @@ impl App {
         self.go_home();
         self.attach(session.clone());
         let levels = opening(expected);
-        let mut ack = String::new();
+        let mut ack: Option<String> = None;
         let mut lines = Vec::new();
         // The label applies to the first subscribe only: it may be the
         // one that starts the process, and no later subscribe, reconnect
@@ -38,7 +37,7 @@ impl App {
             if let Some(home) = self.home.as_mut() {
                 home.subs.sent(id.clone(), session.clone(), *level);
             }
-            ack = id;
+            ack = Some(id);
             lines.push(line);
         }
         lines.push(self.ask_commands(&session));

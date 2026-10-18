@@ -693,6 +693,11 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        // The open's `full` raise goes out after the first frame draws,
+        // so no `full` line is written before it.
+        if let Some(line) = self.app.take_raise() {
+            self.hub.send(&[line], &mut self.app);
+        }
         // What the frame asked wakes the tick: nothing moving arms
         // nothing.
         self.tick.arm(self.app.take_wake());
