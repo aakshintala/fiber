@@ -164,7 +164,7 @@ fn completed_for(lines: &[Value], name: &str) -> Value {
     let requested = lines
         .iter()
         .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == name)
-        .unwrap_or_else(|| panic!("no {name} call in {:?}", kinds(lines)));
+        .unwrap_or_else(|| panic!("no {name} call in {:?}", owned_kinds(lines)));
     let action = requested["action_id"].as_str().unwrap();
     lines
         .iter()
@@ -178,13 +178,14 @@ fn one(lines: &[Value], kind: &str) -> Value {
     let mut found = lines.iter().filter(|line| line["kind"] == kind);
     let line = found
         .next()
-        .unwrap_or_else(|| panic!("no {kind} in {:?}", kinds(lines)));
+        .unwrap_or_else(|| panic!("no {kind} in {:?}", owned_kinds(lines)));
     assert!(found.next().is_none(), "two {kind} lines");
     line["payload"].clone()
 }
 
-/// The log's kinds, for a failure.
-fn kinds(lines: &[Value]) -> Vec<String> {
+/// The log's kinds as owned strings, for a failure: the log keeps
+/// `session_status`, which [`support::kinds`] filters out.
+fn owned_kinds(lines: &[Value]) -> Vec<String> {
     lines
         .iter()
         .map(|line| line["kind"].as_str().unwrap().to_owned())
@@ -571,7 +572,7 @@ fn assert_depth_refusal(lines: &[Value], resumed: bool, tool: &str) {
         expected.remove(4);
         expected.remove(0);
     }
-    assert_eq!(kinds(lines), expected);
+    assert_eq!(owned_kinds(lines), expected);
     let completed = completed_for(lines, tool);
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "depth_exceeded");
@@ -702,7 +703,7 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     assert_eq!(completed["payload"]["status"], "completed");
     let receipt = completed["payload"]["content"][0]["text"].as_str().unwrap();
     // One job, one delegate: the log holds each exactly once, in order.
-    let kinds = kinds(&ask.lines);
+    let kinds = owned_kinds(&ask.lines);
     let at = |kind: &str| kinds.iter().position(|got| got == kind).unwrap();
     assert!(at("job_started") < at("delegate_started"));
     assert!(at("delegate_started") < at("delegate_finished"));
@@ -1009,7 +1010,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
     // The shutdown stops the delegate as a stop does: its finish, then its
     // cancelled end, each once. The end is in the log, so the child's exit
     // line is already written when it is read.
-    let kinds = kinds(&out);
+    let kinds = owned_kinds(&out);
     assert_eq!(
         kinds
             .iter()
@@ -2003,7 +2004,7 @@ fn answered(lines: &[Value], id: &str) -> Value {
     lines
         .iter()
         .find(|line| is_answer(line, id))
-        .unwrap_or_else(|| panic!("no answer for {id} in {:?}", kinds(lines)))
+        .unwrap_or_else(|| panic!("no answer for {id} in {:?}", owned_kinds(lines)))
         .clone()
 }
 
@@ -2080,7 +2081,7 @@ fn open_delegate(
     let folded_started = folded
         .iter()
         .find(|line| line["kind"] == "session_started")
-        .unwrap_or_else(|| panic!("no session_started in {:?}", kinds(&folded)));
+        .unwrap_or_else(|| panic!("no session_started in {:?}", owned_kinds(&folded)));
     assert_eq!(
         folded_started["payload"]["parent"],
         json!({"session_id": parent, "delegate_id": job}),
@@ -2316,7 +2317,7 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     });
     lines.append(&mut batch);
     let parent_lines = for_session(&lines, &parent);
-    let parent_kinds = kinds(&parent_lines);
+    let parent_kinds = owned_kinds(&parent_lines);
     let at = |kind: &str| {
         parent_kinds
             .iter()
@@ -2421,7 +2422,7 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
             .iter()
             .any(|line| line["kind"] == "session_status" && is_session(line, &parent)),
         "the feed held the parent: {:?}",
-        kinds(&feed_lines)
+        owned_kinds(&feed_lines)
     );
 }
 
@@ -2506,7 +2507,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
     });
     parent_lines.append(&mut batch);
     let folded = for_session(&parent_lines, &parent);
-    let folded_kinds = kinds(&folded);
+    let folded_kinds = owned_kinds(&folded);
     let at = |kind: &str| {
         folded_kinds
             .iter()
@@ -2541,7 +2542,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
             .iter()
             .any(|line| line["kind"] == "session_status" && is_session(line, &parent)),
         "the feed held the parent: {:?}",
-        kinds(&feed_lines)
+        owned_kinds(&feed_lines)
     );
     for line in &feed_lines {
         assert!(
@@ -2806,7 +2807,7 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     let started = one(&lines, "delegate_started");
     let job = started["job_id"].as_str().unwrap().to_owned();
     let child_id = started["delegate_session_id"].as_str().unwrap().to_owned();
-    let kinds = kinds(&lines);
+    let kinds = owned_kinds(&lines);
     assert_eq!(
         kinds
             .iter()
@@ -3139,7 +3140,7 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
     assert_eq!(resolved["payload"]["decided_by"], "reviewer");
     for kind in ["job_started", "job_completed"] {
         let found: Vec<&Value> = lines.iter().filter(|line| line["kind"] == kind).collect();
-        assert_eq!(found.len(), 1, "{kind} wrote {:?}", kinds(&lines));
+        assert_eq!(found.len(), 1, "{kind} wrote {:?}", owned_kinds(&lines));
         assert_eq!(found[0]["payload"]["job_id"], job.as_str());
     }
     let finished = one(&lines, "delegate_finished");
@@ -3333,7 +3334,7 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
             line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_message"
         })
         .collect();
-    assert_eq!(requested.len(), 2, "{:?}", kinds(&lines));
+    assert_eq!(requested.len(), 2, "{:?}", owned_kinds(&lines));
     fn action_of(line: &Value) -> &str {
         line["action_id"].as_str().unwrap()
     }
@@ -3371,7 +3372,7 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
         "job_completed",
     ] {
         let found = of_kind(kind);
-        assert_eq!(found.len(), 2, "{kind} wrote {:?}", kinds(&lines));
+        assert_eq!(found.len(), 2, "{kind} wrote {:?}", owned_kinds(&lines));
         for line in &found {
             assert_eq!(line["payload"]["job_id"], job.as_str());
         }
@@ -3576,7 +3577,7 @@ fn delegate_message_to_a_job_this_session_never_started_fails_as_jobs_does() {
             .iter()
             .all(|line| line["kind"] != "job_started" && line["kind"] != "delegate_started"),
         "a refused message started nothing: {:?}",
-        kinds(&lines)
+        owned_kinds(&lines)
     );
     assert!(child.requests().is_empty());
     assert_eq!(durable_kinds(&lines), UNKNOWN_PARENT_DURABLE);
