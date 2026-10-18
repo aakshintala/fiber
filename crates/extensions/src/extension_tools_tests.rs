@@ -37,6 +37,7 @@ fn a_full_table_maps_field_for_field() {
         "details": {"count": 3, "nested": {"list": [1, 2]}},
         "error": {"code": "nonzero_exit", "message": "m"},
         "control": {"handoff": "n"},
+        "hosts_surfaced": ["https://x.test/a"],
     }))
     .unwrap();
     assert_eq!(
@@ -51,9 +52,51 @@ fn a_full_table_maps_field_for_field() {
                 skill: None,
                 name: None,
             }),
+            hosts_surfaced: vec!["https://x.test/a".to_owned()],
             ..Output::default()
         }
     );
+}
+
+#[test]
+fn hosts_surfaced_empty_is_an_empty_list_with_no_error() {
+    let output = output_from(json!({"content": "x", "hosts_surfaced": []})).unwrap();
+    assert_eq!(output.hosts_surfaced, Vec::<String>::new());
+    assert_eq!(output.content, vec![text("x")]);
+    assert_eq!(output.error, None);
+}
+
+#[test]
+fn hosts_surfaced_absent_is_an_empty_list() {
+    assert_eq!(
+        output_from(json!({"content": "x"})).unwrap().hosts_surfaced,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        output_from(json!({"type": "text", "text": "x"}))
+            .unwrap()
+            .hosts_surfaced,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        output_from(json!("x")).unwrap().hosts_surfaced,
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn each_bad_hosts_surfaced_fails_the_whole_result() {
+    let why = "a `hosts_surfaced` that is not a list of http or https URLs";
+    let cases = [
+        json!({"content": "x", "hosts_surfaced": "https://x.test/a"}),
+        json!({"content": "x", "hosts_surfaced": [1]}),
+        json!({"content": "x", "hosts_surfaced": ["x.test/a"]}),
+        json!({"content": "x", "hosts_surfaced": ["https://a.test", "nope"]}),
+        json!({"content": "x", "hosts_surfaced": ["ftp://a.test"]}),
+    ];
+    for value in cases {
+        assert_eq!(output_from(value.clone()), Err(why.to_owned()), "{value}");
+    }
 }
 
 #[test]
@@ -92,7 +135,7 @@ fn each_return_that_does_not_read_says_why() {
         (json!(["a"]), "a list with no `content`"),
         (
             json!({"content": "x", "colour": "red"}),
-            "`colour`, which is not `content`, `details`, `error` or `control`",
+            "`colour`, which is not `content`, `details`, `error`, `control` or `hosts_surfaced`",
         ),
         (json!({"details": 1}), "no `content`"),
         (

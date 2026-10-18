@@ -28,15 +28,24 @@ use super::{LuaExtension, Next, Phase, Shared, Target};
 /// their names").
 const NAME_MAX: usize = 128;
 
+/// A tool's static effects: what its `effects` table declares, read once
+/// at registration. Absent hosts leave them unknown; an empty list says
+/// the call contacts no host the model chose.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StaticEffects {
+    pub(crate) declared: DeclaredEffects,
+    pub(crate) hosts: Option<Vec<String>>,
+}
+
 /// One tool the entry script registered.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DeclaredTool {
     pub(crate) name: String,
     pub(crate) description: String,
     pub(crate) input_schema: Value,
-    /// The declared effects, or `None` when a function of the call's
-    /// arguments returns them.
-    pub(crate) effects: Option<DeclaredEffects>,
+    /// The static effects, or `None` when a function of the call's
+    /// arguments returns them beside the hosts.
+    pub(crate) effects: Option<StaticEffects>,
     pub(crate) timeout: Duration,
     /// How many bytes of the start and of the end of a long result the
     /// model is sent (`docs/tools.md`, "Bounded results").
@@ -155,8 +164,8 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
         (None, Some(f))
     } else if effects.is_table() {
         let value = host::to_json(&effects).map_err(|e| format!("`effects`: {e}"))?;
-        let declared = effects_from(&value).map_err(|why| format!("`effects`: {why}"))?;
-        (Some(declared), None)
+        let (declared, hosts) = effects_from(&value).map_err(|why| format!("`effects`: {why}"))?;
+        (Some(StaticEffects { declared, hosts }), None)
     } else {
         return Err("`effects` must be a table or a function".to_owned());
     };
@@ -265,18 +274,92 @@ fn schema(value: &LuaValue) -> Result<Value, String> {
 
 /// A call's effects as `docs/permissions.md`, "Effects", declares them:
 /// `effects`, a list of `reads`, `writes`, `executes` and `network`, kept in
-/// the order each first appears; `reversible`; and `paths`, absent or a
-/// list of strings. Any other key, a wrong type or an unknown effect is
+/// the order each first appears; `reversible`; `paths`, absent or a
+/// list of strings; and `hosts`, absent or a list of `http` or `https` URLs
+/// naming the hosts the call contacts (`docs/tools.md`, "What a tool
+/// declares"). An absent list leaves the hosts unknown; an empty list says
+/// the call contacts no host the model chose. Any other key, a wrong type,
+/// an unknown effect or a host that is not an `http` or `https` URL is
 /// refused.
-pub(crate) fn effects_from(value: &Value) -> Result<DeclaredEffects, String> {
+// debt: is_http_url mirrors crates/loop/src/known_hosts.rs host_of, ceiling: two parsers, upgrade trigger: a shared normaliser in contract. Every URL it accepts host_of parses to Some; the table test below pins both sides so drift shows.
+fn is_http_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return false;
+    }
+    let Some(authority) = rest.split(['/', '?', '#']).next() else {
+        return false;
+    };
+    let Some(authority) = authority.rsplit('@').next() else {
+        return false;
+    };
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, tail)) = bracketed.split_once(']') else {
+            return false;
+        };
+        if tail.is_empty() {
+            (host, "")
+        } else {
+            let Some(port) = tail.strip_prefix(':') else {
+                return false;
+            };
+            (host, port)
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((host, port)) => (host, port),
+            None => (authority, ""),
+        }
+    };
+    if host.is_empty() || !host.is_ascii() || host.contains(['%', '[', ']', ' ', '\t', '\n', '\r'])
+    {
+        return false;
+    }
+    if !port.is_empty() {
+        if !port.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        if port.parse::<u16>().is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// A JSON list of `http` or `https` URLs as `is_http_url` reads them, kept
+/// as written. Anything else is `None`: not a list, or one entry that is
+/// not a string or not an `http` or `https` URL.
+pub(crate) fn urls_from(value: &Value) -> Option<Vec<String>> {
+    let Value::Array(items) = value else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .filter(|url| is_http_url(url))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+pub(crate) fn effects_from(
+    value: &Value,
+) -> Result<(DeclaredEffects, Option<Vec<String>>), String> {
     let Value::Object(map) = value else {
-        return Err("it must be a table of `effects`, `paths` and `reversible`".to_owned());
+        return Err(
+            "it must be a table of `effects`, `paths`, `reversible` and `hosts`".to_owned(),
+        );
     };
     if let Some(key) = map
         .keys()
-        .find(|key| !matches!(key.as_str(), "effects" | "paths" | "reversible"))
+        .find(|key| !matches!(key.as_str(), "effects" | "paths" | "reversible" | "hosts"))
     {
-        return Err(format!("`{key}` is not `effects`, `paths` or `reversible`"));
+        return Err(format!(
+            "`{key}` is not `effects`, `paths`, `reversible` or `hosts`"
+        ));
     }
     let list = match map.get("effects") {
         None => return Err("missing `effects`".to_owned()),
@@ -316,11 +399,21 @@ pub(crate) fn effects_from(value: &Value) -> Result<DeclaredEffects, String> {
         ),
         Some(_) => return Err("`paths` must be a list of strings".to_owned()),
     };
-    Ok(DeclaredEffects {
-        effects,
-        reversible,
-        paths,
-    })
+    let hosts = match map.get("hosts") {
+        None => None,
+        Some(value) => Some(
+            urls_from(value)
+                .ok_or_else(|| "`hosts` must be a list of http or https URLs".to_owned())?,
+        ),
+    };
+    Ok((
+        DeclaredEffects {
+            effects,
+            reversible,
+            paths,
+        },
+        hosts,
+    ))
 }
 
 impl LuaExtension {

@@ -110,10 +110,13 @@ fn a_tool_registers_its_description_schema_effects_and_timeout() {
                 "required": ["path"],
                 "properties": { "path": { "type": "string" } }
             }),
-            effects: Some(DeclaredEffects {
-                effects: vec![Effect::Reads, Effect::Network],
-                reversible: true,
-                paths: Some(vec!["note.txt".to_owned()]),
+            effects: Some(StaticEffects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads, Effect::Network],
+                    reversible: true,
+                    paths: Some(vec!["note.txt".to_owned()]),
+                },
+                hosts: None,
             }),
             timeout: Duration::from_millis(2000),
             keep: Bound::DEFAULT,
@@ -179,7 +182,7 @@ fn each_bad_spec_leaves_one_problem_and_the_rest_stand() {
         (
             "effects",
             "{ effects = {}, reversible = true, risky = true }",
-            "`effects`: `risky` is not `effects`, `paths` or `reversible`",
+            "`effects`: `risky` is not `effects`, `paths`, `reversible` or `hosts`",
         ),
         ("timeout", "", "missing `timeout`"),
         ("timeout", "0", timeout),
@@ -406,11 +409,14 @@ fn fiber_tool_after_the_entry_script_raises_and_registers_nothing() {
 fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
     assert_eq!(
         effects_from(&json!({"effects": [], "reversible": false})),
-        Ok(DeclaredEffects {
-            effects: Vec::new(),
-            reversible: false,
-            paths: None,
-        })
+        Ok((
+            DeclaredEffects {
+                effects: Vec::new(),
+                reversible: false,
+                paths: None,
+            },
+            None,
+        ))
     );
     assert_eq!(
         effects_from(&json!({
@@ -418,16 +424,19 @@ fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
             "reversible": true,
             "paths": []
         })),
-        Ok(DeclaredEffects {
-            effects: vec![Effect::Writes, Effect::Executes],
-            reversible: true,
-            paths: Some(Vec::new()),
-        })
+        Ok((
+            DeclaredEffects {
+                effects: vec![Effect::Writes, Effect::Executes],
+                reversible: true,
+                paths: Some(Vec::new()),
+            },
+            None,
+        ))
     );
     let refused = [
         (
             json!(["reads"]),
-            "it must be a table of `effects`, `paths` and `reversible`",
+            "it must be a table of `effects`, `paths`, `reversible` and `hosts`",
         ),
         (json!({"reversible": true}), "missing `effects`"),
         (
@@ -453,7 +462,7 @@ fn effects_from_reads_each_shape_and_refuses_each_bad_one() {
         ),
         (
             json!({"effects": [], "reversible": true, "subject": "a"}),
-            "`subject` is not `effects`, `paths` or `reversible`",
+            "`subject` is not `effects`, `paths`, `reversible` or `hosts`",
         ),
     ];
     for (value, why) in refused {
@@ -715,4 +724,171 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
         Some(json!("ran"))
     );
     assert!(marker.exists(), "the next call's run started");
+}
+
+#[test]
+fn is_http_url_agrees_with_the_loops_host_rule() {
+    // Each accept is one `host_of` in `crates/loop/src/known_hosts.rs`
+    // parses to `Some`; each refusal to `None`.
+    let accepts = [
+        "https://example.com",
+        "HTTP://Example.COM:8080/a?b#c",
+        "http://[::1]:80/",
+        "https://user@host.test/",
+        "https://host.test:65535",
+        "http://a.test:0",
+        "http://a.test:",
+        "https://a.test/?next=@b",
+    ];
+    for url in accepts {
+        assert!(is_http_url(url), "{url} reads as an http(s) URL");
+    }
+    let refusals = [
+        "",
+        "example.com",
+        "ftp://a.test",
+        "https://",
+        "http://:80",
+        "http://a.test:65536",
+        "http://a.test:80x",
+        "http://a b",
+        "http://a%b",
+        "https:/a.test",
+        "https://exämple.test/",
+        "http://[::1:80/",
+        "http://[::1]80/",
+        "http://a.test: 80",
+    ];
+    for url in refusals {
+        assert!(!is_http_url(url), "{url} is not an http(s) URL");
+    }
+}
+
+#[test]
+fn urls_from_reads_only_a_list_of_http_or_https_urls() {
+    assert_eq!(urls_from(&json!([])), Some(Vec::new()));
+    assert_eq!(
+        urls_from(&json!(["https://a.test", "http://b.test/x"])),
+        Some(vec![
+            "https://a.test".to_owned(),
+            "http://b.test/x".to_owned()
+        ])
+    );
+    for value in [
+        json!("x"),
+        json!(null),
+        json!({"url": "https://a.test"}),
+        json!([1]),
+        json!([true]),
+        json!([["https://a.test"]]),
+        json!(["https://a.test", "nope"]),
+        json!(["https://a.test", 1]),
+    ] {
+        assert_eq!(urls_from(&value), None, "{value}");
+    }
+}
+
+#[test]
+fn effects_from_reads_hosts_beside_the_effects() {
+    let network = || DeclaredEffects {
+        effects: vec![Effect::Network],
+        reversible: true,
+        paths: None,
+    };
+    assert_eq!(
+        effects_from(&json!({"effects": ["network"], "reversible": true})),
+        Ok((network(), None))
+    );
+    assert_eq!(
+        effects_from(&json!({"effects": ["network"], "reversible": true, "hosts": []})),
+        Ok((network(), Some(Vec::new())))
+    );
+    assert_eq!(
+        effects_from(
+            &json!({"effects": ["network"], "reversible": true, "hosts": ["https://a.test/x"]})
+        ),
+        Ok((network(), Some(vec!["https://a.test/x".to_owned()])))
+    );
+    for value in [
+        json!({"effects": [], "reversible": true, "hosts": "https://a.test"}),
+        json!({"effects": [], "reversible": true, "hosts": ["a.test"]}),
+        json!({"effects": [], "reversible": true, "hosts": [1]}),
+        json!({"effects": [], "reversible": true, "hosts": ["https://a.test", "nope"]}),
+        json!({"effects": [], "reversible": true, "hosts": [false]}),
+    ] {
+        assert_eq!(
+            effects_from(&value),
+            Err("`hosts` must be a list of http or https URLs".to_owned()),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn a_static_hosts_list_registers_beside_the_effects() {
+    let (_dir, ext) = extension(
+        "fiber.tool(\"x\", { description = \"d\", input_schema = { type = \"object\" },\n\
+           effects = { effects = { \"network\" }, hosts = { \"https://a.test/x\" }, reversible = true },\n\
+           timeout = 100, run = function() return \"\" end })\n",
+    );
+    assert_eq!(
+        tools(&ext)
+            .get("x")
+            .unwrap()
+            .effects
+            .as_ref()
+            .unwrap()
+            .hosts,
+        Some(vec!["https://a.test/x".to_owned()])
+    );
+    assert!(problems(&ext).is_empty());
+}
+
+#[test]
+fn an_empty_hosts_table_registers_no_host_rather_than_unknown() {
+    let (_dir, ext) = extension(
+        "fiber.tool(\"x\", { description = \"d\", input_schema = { type = \"object\" },\n\
+           effects = { effects = { \"network\" }, hosts = {}, reversible = true },\n\
+           timeout = 100, run = function() return \"\" end })\n",
+    );
+    assert_eq!(
+        tools(&ext)
+            .get("x")
+            .unwrap()
+            .effects
+            .as_ref()
+            .unwrap()
+            .hosts,
+        Some(Vec::new())
+    );
+    assert!(problems(&ext).is_empty());
+}
+
+#[test]
+fn an_effects_function_registers_no_static_hosts() {
+    let (_dir, ext) = extension(&format!(
+        "fiber.tool(\"x\", {})\n",
+        spec_with("effects", "function() return {} end")
+    ));
+    assert_eq!(tools(&ext).get("x").unwrap().effects, None);
+}
+
+#[test]
+fn a_bad_hosts_list_refuses_the_registration() {
+    for hosts in ["\"https://a.test\"", "{ \"a.test\" }", "{ 1 }"] {
+        let (_dir, ext) = extension(&format!(
+            "fiber.tool(\"bad\", {{ description = \"d\", input_schema = {{ type = \"object\" }},\n\
+               effects = {{ effects = {{ \"network\" }}, hosts = {hosts}, reversible = true }},\n\
+               timeout = 100, run = function() return \"\" end }})\n\
+             fiber.tool(\"good\", {})\n",
+            spec_with("", ""),
+        ));
+        assert_eq!(
+            problems(&ext),
+            ["`bad` tool not registered: `effects`: `hosts` must be a list of http or https URLs"],
+            "{hosts}"
+        );
+        let names: Vec<String> = tools(&ext).into_keys().collect();
+        assert_eq!(names, ["good"], "{hosts}");
+    }
 }
