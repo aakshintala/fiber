@@ -267,6 +267,16 @@ pub(crate) fn parts_in(
     let lua = providers.lua(&model.provider.name);
     let lua_providers::Access { key, signer, .. } = scripted::access(model.provider, || {
         lua_providers::session_credential(lua, model.provider, &label, || {
+            if let Some(asked) = labels.asked {
+                let listed = config.credentials().labels(model.provider);
+                if !listed.iter().any(|label| label == asked) {
+                    return Err(crate::credential::no_label(
+                        &model.provider.name,
+                        asked,
+                        &listed,
+                    ));
+                }
+            }
             crate::credential::session_credential(&config, model.provider, Some(&label), &run)
                 .map(|(_, key)| key)
         })
