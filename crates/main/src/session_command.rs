@@ -299,17 +299,21 @@ pub(crate) fn run_new(
                 seed,
             )?
         }
-        None => parts_with(
-            overrides,
-            None,
-            None,
-            None,
-            Arc::clone(&clock),
-            host,
-            Arc::clone(&reads),
-            process,
-            extensions::StateSeed::new(),
-        )?,
+        None => {
+            let overrides_for_fix = overrides.clone();
+            parts_with(
+                overrides,
+                None,
+                None,
+                None,
+                Arc::clone(&clock),
+                host,
+                Arc::clone(&reads),
+                process,
+                extensions::StateSeed::new(),
+            )
+            .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
+        }
     };
     crash::attach(&id);
     let dir = parts.sessions.join(&id.0);

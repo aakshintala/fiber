@@ -860,6 +860,7 @@ Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  doctor                                    Says whether a session can start, and how to fix it when it cannot
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -4191,4 +4192,72 @@ fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
     // as a reviewer, and no reviewer request ran. The second request is
     // the session continuing after the denial.
     assert_eq!(requested_models(&server), ["sess", "sess"]);
+}
+
+/// One `fiber ask` run without the provider key in its environment: the
+/// startup wire diagnoses the same failure doctor names.
+fn ask_without_key(setup: &Setup, args: &[&str]) -> Run {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    command
+        .args(args)
+        .current_dir(setup.root.path().join("w"))
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .env_remove("FIBER_TEST_FAKE_KEY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    Run::from(support::run_to_exit(
+        setup.deadline,
+        "`fiber ask` with no key to exit",
+        command,
+    ))
+}
+
+#[test]
+fn a_missing_key_at_startup_carries_the_doctor_line_first() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let run = ask_without_key(&setup, &["ask", "hi"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    assert_eq!(
+        error["message"],
+        "no key for fake: run `fiber login fake`\n\
+         No credential for `fake`: nothing is stored in credentials/fake/default, \
+         and the environment variable FIBER_TEST_FAKE_KEY is not set. \
+         Run `fiber login fake`."
+    );
+}
+
+#[test]
+fn a_per_run_credential_label_is_the_diagnosed_one() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let run = ask_without_key(
+        &setup,
+        &["ask", "-c", "providers.fake.credential=work", "hi"],
+    );
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    let message = error["message"].as_str().unwrap();
+    let mut lines = message.lines();
+    assert_eq!(
+        lines.next(),
+        Some("no key for fake under work: run `fiber login fake --as work`"),
+        "{message}"
+    );
+    assert!(
+        lines.next().unwrap().contains("credentials/fake/work"),
+        "{message}"
+    );
 }

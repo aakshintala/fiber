@@ -40,3 +40,13 @@ pub fn images_cache_dir(home: &Path) -> PathBuf {
 pub fn crashes_dir(home: &Path) -> PathBuf {
     home.join("crashes")
 }
+
+/// `<home>/logs`: where diagnostic logs are written. Never creates it.
+pub fn logs_dir(home: &Path) -> PathBuf {
+    home.join("logs")
+}
+
+/// `<home>/docs`: where the user guide is installed. Never creates it.
+pub fn docs_dir(home: &Path) -> PathBuf {
+    home.join("docs")
+}

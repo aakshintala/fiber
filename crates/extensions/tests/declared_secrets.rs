@@ -180,3 +180,92 @@ fn an_extension_with_a_provider_and_secrets_lists_both() {
     assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
     assert_eq!(providers.secrets().collect::<Vec<_>>(), ["acme.api_key"]);
 }
+
+#[test]
+fn declared_secrets_lists_each_owners_rows_by_extension_then_name() {
+    let setup = Setup::new();
+    placed(&setup, "b", 1, &["shared", "b.key"]);
+    placed(&setup, "a", 1, &["x.key", "shared"]);
+    let (providers, _) = Providers::load(&setup.home()).unwrap();
+    assert_eq!(
+        providers.declared_secrets().collect::<Vec<_>>(),
+        [
+            ("a", "shared"),
+            ("a", "x.key"),
+            ("b", "b.key"),
+            ("b", "shared"),
+        ]
+    );
+    // The flattened list still sorts the shared name once.
+    assert_eq!(
+        providers.secrets().collect::<Vec<_>>(),
+        ["b.key", "shared", "x.key"]
+    );
+}
+
+#[test]
+fn damaged_packages_declare_nothing() {
+    let setup = Setup::new();
+    let dir = placed(&setup, "d", 1, &["d.key"]);
+    write(&dir.join(".fiber.json"), "not json");
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(!notices.is_empty());
+    assert_eq!(
+        providers.declared_secrets().collect::<Vec<_>>(),
+        Vec::<(&str, &str)>::new()
+    );
+    assert_eq!(providers.secrets().collect::<Vec<_>>(), Vec::<&str>::new());
+}
+
+#[test]
+fn a_provider_admission_failure_keeps_the_extensions_secrets() {
+    let setup = Setup::new();
+    let dir = placed(&setup, "acme", 1, &["acme.api_key"]);
+    // The file names a provider the manifest does not declare, so none
+    // of the extension's providers loads.
+    write(
+        &dir.join("providers/other.json"),
+        &provider("other", &["m"]).to_string(),
+    );
+    let manifest_file = dir.join("extension.json");
+    let mut installed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_file).unwrap()).unwrap();
+    installed["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    std::fs::write(&manifest_file, installed.to_string()).unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(!notices.is_empty());
+    assert_eq!(providers.names().collect::<Vec<_>>(), Vec::<&str>::new());
+    assert_eq!(
+        providers.declared_secrets().collect::<Vec<_>>(),
+        [("acme", "acme.api_key")]
+    );
+    assert_eq!(providers.secrets().collect::<Vec<_>>(), ["acme.api_key"]);
+}
+
+#[test]
+fn declared_secrets_follow_scoped_enabling() {
+    let setup = Setup::new();
+    placed(&setup, "acme", 1, &["acme.api_key"]);
+    write(
+        &setup.home().join("config.json"),
+        r#"{"extensions":{"acme":{"enabled":false}}}"#,
+    );
+    let configuration = common::config(&setup, &[]);
+    let (providers, _) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+    assert_eq!(
+        providers.declared_secrets().collect::<Vec<_>>(),
+        Vec::<(&str, &str)>::new()
+    );
+    assert_eq!(providers.secrets().collect::<Vec<_>>(), Vec::<&str>::new());
+    write(
+        &setup.home().join("projects/p/config.json"),
+        r#"{"extensions":{"acme":{"enabled":true}}}"#,
+    );
+    let configuration = common::config(&setup, &[]);
+    let (providers, _) = Providers::load_enabled(&setup.home(), &configuration).unwrap();
+    assert_eq!(
+        providers.declared_secrets().collect::<Vec<_>>(),
+        [("acme", "acme.api_key")]
+    );
+    assert_eq!(providers.secrets().collect::<Vec<_>>(), ["acme.api_key"]);
+}
