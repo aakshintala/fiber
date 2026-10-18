@@ -1398,6 +1398,27 @@ fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
+/// Commands for the gated-hold test: `arm_gated` sets a timer whose
+/// callback suspends on a `host.exec` run. The child signals on the
+/// `ready` FIFO, then waits on the `gate` FIFO between its signal and its
+/// `read _ < block`, so the test's release lands before the child's
+/// `block` open whatever the scheduling.
+fn gated_timer_init(
+    ready: &std::path::Path,
+    gate: &std::path::Path,
+    block: &std::path::Path,
+) -> String {
+    format!(
+        r#"fiber.command("arm_gated", {{ timeout = 5000, run = function()
+  host.after(100, function() host.exec("sh", {{ "-c", "echo $$ > {ready}; read _ < {gate}; read _ < {block}; exit 0" }}) return "fired" end, {{ timeout = 5000 }})
+  return "armed" end }})
+"#,
+        ready = shell_quote(ready),
+        gate = shell_quote(gate),
+        block = shell_quote(block),
+    )
+}
+
 /// The settle hook's log: each pause as its target's name and stage.
 type PauseLog = Arc<std::sync::Mutex<Vec<(String, Pause)>>>;
 
@@ -1436,7 +1457,31 @@ fn serve_timer_init(
     ready: &std::path::Path,
     block: &std::path::Path,
 ) -> (Arc<Hub>, u64) {
-    let init = timer_init(ready, block);
+    serve_init(clock, dir, name, &timer_init(ready, block))
+}
+
+/// A hub in registration, with [`gated_timer_init`] served on a thread;
+/// the call `name` is queued and its id returned.
+fn serve_gated_timer_init(
+    clock: &Arc<fakes::clock::FakeClock>,
+    dir: &std::path::Path,
+    name: &str,
+    ready: &std::path::Path,
+    gate: &std::path::Path,
+    block: &std::path::Path,
+) -> (Arc<Hub>, u64) {
+    serve_init(clock, dir, name, &gated_timer_init(ready, gate, block))
+}
+
+/// A hub in registration, with `init` served on a thread; the call `name`
+/// is queued and its id returned.
+fn serve_init(
+    clock: &Arc<fakes::clock::FakeClock>,
+    dir: &std::path::Path,
+    name: &str,
+    init: &str,
+) -> (Arc<Hub>, u64) {
+    let init = init.to_owned();
     std::fs::write(dir.join("init.lua"), init).unwrap();
     let hub = Hub::new(clock.clone());
     hub.lock().phase = Phase::Registering { abandon_at: None };
@@ -1598,35 +1643,28 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     );
 }
 
-/// Kills `group` when the test ends, so a failure before the child's
-/// exit leaves no orphan behind.
-struct KillGroupOnDrop(Option<u32>);
-
-impl Drop for KillGroupOnDrop {
-    fn drop(&mut self) {
-        if let Some(group) = self.0.take() {
-            match fakes::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-        }
-    }
-}
-
-/// A release before the child opens `block` still wakes it: the child
-/// signals on the `ready` FIFO, then waits on a second FIFO (`gate`)
-/// between its signal and its `read _ < block`, so the test's release
-/// lands before the child's `block` open whatever the scheduling. Without
+/// A release before the child opens `block` still completes the timer: the
+/// timer callback's child signals on the `ready` FIFO, then waits on a
+/// second FIFO (`gate`) between its signal and its `read _ < block`, so the
+/// test's release lands before the child's `block` open whatever the
+/// scheduling, and the settle hook records exactly one `TimerDone`. Without
 /// the held end staying open, the child's `block` open blocks with no
-/// writer and the exit wait below expires.
+/// writer and the completion wait below expires.
 #[test]
 fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     use std::io::Write as _;
-    use std::os::unix::process::CommandExt as _;
 
     let dir = fakes::TempDir::new("fiber-schedule-hold-release");
-    let block = dir.path().join("block.fifo");
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let (log, done) = log_pauses();
+    let _guard = SettleGuard;
+    // The ready reader is open before the child runs, so its signal line
+    // is never lost and its open never blocks; the held write end keeps
+    // the child's `read` parked until the release below.
+    let ready = fakes::children::Ready::new(dir.path());
     let gate = dir.path().join("gate.fifo");
-    for fifo in [&block, &gate] {
+    let block = dir.path().join("block.fifo");
+    for fifo in [&gate, &block] {
         assert!(
             std::process::Command::new("mkfifo")
                 .arg(fifo)
@@ -1637,60 +1675,59 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
             fifo.display()
         );
     }
-    // The ready reader is open before the child runs, so its signal line
-    // is never lost and its open never blocks.
-    let ready = fakes::children::Ready::new(dir.path());
     let mut hold = HoldExec::hold(&block);
-    let script = format!(
-        "echo $$ > {ready}; read _ < {gate}; read _ < {block}; exit 0",
-        ready = shell_quote(ready.path()),
-        gate = shell_quote(&gate),
-        block = shell_quote(&block),
+    let (hub, armed) =
+        serve_gated_timer_init(&clock, dir.path(), "arm_gated", ready.path(), &gate, &block);
+    wait_returned(&hub, armed);
+    let due = clock.origin() + Duration::from_millis(100);
+    assert!(
+        clock.await_parked(due, WAIT_FOR_TIMER),
+        "the timer waits for its due time"
     );
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&script)
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let group = child.id();
-    let _kill_on_drop = KillGroupOnDrop(Some(group));
-    // The exit wait below reaps the child, so the group check after it
-    // sees no zombie.
-    let (exit_tx, exit_rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || match exit_tx.send(child.wait()) {
-        Ok(()) | Err(_) => {}
-    });
+    clock.advance(Duration::from_secs(5));
     // The child reached its script, so it is at or on its way to the gate:
     // the gate read comes before the block open, whatever the scheduling.
-    let _started = ready.wait(WAIT_FOR_TIMER);
+    let started = ready.wait(WAIT_FOR_TIMER);
+    {
+        let shared = hub.lock();
+        assert!(
+            hub.wait_for(shared, fakes::MUST_SUCCEED_WITHIN, |shared| {
+                shared.calls.values().any(|progress| {
+                    matches!(
+                        progress,
+                        super::super::hub::Progress::Started {
+                            run: Run::Parked,
+                            ..
+                        }
+                    )
+                })
+            }),
+            "the timer callback suspends on its exec"
+        );
+    }
+    assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
+    // The release lands before the gate opens, and the child's block open
+    // comes after its gate read, so the release lands before the open.
     hold.release();
-    // Opening read-write never blocks; the held end keeps the child's gate
-    // open from blocking, and the buffered line lets its gate read finish
-    // so it reaches the block open after the release.
+    // Opening read-write never blocks, and the buffered line lets the
+    // child's gate read finish so it reaches the block open after the
+    // release.
     let mut gate_hold = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(&gate)
         .unwrap();
     gate_hold.write_all(b"\n").unwrap();
-    let deadline = Deadline::after(WAIT_FOR_TIMER);
-    match deadline.recv(&exit_rx) {
-        Ok(Ok(status)) => assert!(status.success(), "the released child exited cleanly"),
-        Ok(Err(err)) => panic!("waiting for the released child failed: {err}"),
-        Err(_) => {
-            match fakes::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            match deadline.cleanup_phase().recv(&exit_rx) {
-                Ok(_) | Err(_) => {}
-            }
-            panic!("waited until the deadline for the child to read the released line and exit");
-        }
-    }
+    Deadline::after(WAIT_FOR_TIMER)
+        .recv(&done)
+        .expect("the timer callback completed");
+    assert_eq!(
+        timer_done(&log),
+        vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
+    );
     assert!(
-        fakes::group_empties(group, WAIT_FOR_TIMER),
-        "the released child left its group behind"
+        fakes::group_empties(started[0], WAIT_FOR_TIMER),
+        "the released exec left its group behind"
     );
 }
 
