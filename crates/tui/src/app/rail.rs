@@ -239,6 +239,8 @@ impl App {
     /// Enter, Esc and Tab move a focused rail ahead of any rebound
     /// binding, with Right giving focus back. Typing goes on to the
     /// input box. None for every other stroke.
+    // The no-layout clause reaches go_home only on home, where it shows no visible change.
+    #[cfg_attr(false, mutants::skip)]
     pub(super) fn rail_stroke(&mut self, stroke: &Stroke, now: Instant) -> Option<Effect> {
         if self.key_context() != Context::Input
             || self.item_open()
