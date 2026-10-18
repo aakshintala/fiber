@@ -1040,13 +1040,11 @@ fn drawn(app: &App) -> (Buffer, Vec<Target>) {
 }
 
 /// The drawn text rect of the focused card `focus`.
-fn focused_rect(targets: &[Target], focus: u64) -> Rect {
+fn focused_rect(targets: &[Target], focus: Spot) -> Rect {
     targets
         .iter()
         .find_map(|target| {
-            if let TargetId::Rail(Spot::Card(key)) = target.id
-                && key == focus
-            {
+            if target.id == TargetId::Rail(focus) {
                 Some(target.rect)
             } else {
                 None
@@ -1079,8 +1077,8 @@ fn a_focused_card_lifts_with_the_hover_tint() {
     let other = targets
         .iter()
         .find_map(|target| {
-            if let TargetId::Rail(Spot::Card(key)) = target.id
-                && key != focus
+            if let TargetId::Rail(Spot::Card(_)) = target.id
+                && target.id != TargetId::Rail(focus)
             {
                 Some(target.rect)
             } else {
@@ -1096,7 +1094,7 @@ fn a_focused_card_lifts_with_the_hover_tint() {
 fn shift_tab_from_a_focused_rail_lifts_no_card() {
     let mut app = two(15.0, json!({}));
     let (plain, plain_targets) = drawn(&app);
-    let card = key(&app, A);
+    let card = Spot::Card(key(&app, A));
     let before = focused_rect(&plain_targets, card);
     let cell = (before.x.saturating_add(2), before.y);
     press_left(&mut app);
@@ -1168,8 +1166,8 @@ fn no_color_an_unfocused_card_keeps_its_dim_box() {
     let rect = targets
         .iter()
         .find_map(|target| {
-            if let TargetId::Rail(Spot::Card(key)) = target.id
-                && key != focus
+            if let TargetId::Rail(Spot::Card(_)) = target.id
+                && target.id != TargetId::Rail(focus)
             {
                 Some(target.rect)
             } else {
@@ -1200,6 +1198,55 @@ fn no_color_an_unfocused_card_keeps_its_dim_box() {
     }
 }
 
+/// Presses `code` through the bindings.
+fn press(app: &mut App, code: Code) {
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_press(
+        Stroke {
+            code,
+            mods: Mods::NONE,
+        },
+        now,
+    );
+}
+
+#[test]
+fn no_color_a_focused_plus_and_cross_go_bold() {
+    use ratatui::style::Modifier;
+    let mut app = two(15.0, json!({}));
+    app.on_line(left(B, "crashed"));
+    press_left(&mut app);
+    press(&mut app, Code::Up);
+    assert_eq!(app.rail_state().focused(), Some(Spot::Start(key(&app, A))));
+    let (buf, targets) = no_color_drawn(&app);
+    let plus = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Start(key(&app, A))))
+        .map(|target| target.rect)
+        .expect("the plus target");
+    assert!(
+        buf[(plus.x, plus.y)].modifier.contains(Modifier::BOLD),
+        "the focused plus goes bold"
+    );
+    press(&mut app, Code::Down);
+    press(&mut app, Code::Down);
+    press(&mut app, Code::Down);
+    assert_eq!(
+        app.rail_state().focused(),
+        Some(Spot::Dismiss(key(&app, B)))
+    );
+    let (buf, targets) = no_color_drawn(&app);
+    let cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Dismiss(key(&app, B))))
+        .map(|target| target.rect)
+        .expect("the cross target");
+    assert!(
+        buf[(cross.x, cross.y)].modifier.contains(Modifier::BOLD),
+        "the focused cross goes bold"
+    );
+}
+
 #[test]
 fn no_color_no_cell_carries_reversed() {
     use ratatui::style::Modifier;
@@ -1226,7 +1273,7 @@ fn no_color_the_dim_branch_and_usage_text_stays_dim() {
     let (plain, _) = no_color_drawn(&app);
     press_left(&mut app);
     let focus = app.rail_state().focused().expect("focus");
-    assert_eq!(focus, key(&app, A));
+    assert_eq!(focus, Spot::Card(key(&app, A)));
     let (buf, targets) = no_color_drawn(&app);
     let rect = focused_rect(&targets, focus);
     let right = rect.x.saturating_add(rect.width).saturating_sub(1);

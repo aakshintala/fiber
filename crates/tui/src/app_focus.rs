@@ -206,8 +206,8 @@ impl App {
     /// Tab from `from`: the next area's first stop, or the conversation's
     /// newest item back in the conversation. The rail takes no `App`
     /// focus: Tab onto it focuses the on-screen session's card, else the
-    /// rail's first card, and a cardless rail walks on as if from the
-    /// rail (`docs/tui.md`, "The rail").
+    /// rail's first card, starting the rail's Tab walk, and a cardless
+    /// rail walks on as if from the rail (`docs/tui.md`, "The rail").
     pub(super) fn tab_to(&mut self, from: Area) {
         let Some(area) = crate::focus::next_area(&self.stops, &self.regions, from) else {
             return;
@@ -237,7 +237,7 @@ impl App {
                 });
                 match key {
                     Some(key) => {
-                        self.set_rail_focus(key);
+                        self.set_rail_focus(RailSpot::Card(key));
                         self.focus = None;
                     }
                     None => self.tab_to(Area::Rail),

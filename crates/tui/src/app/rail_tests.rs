@@ -1456,7 +1456,7 @@ fn slash_rail_on_home_does_nothing() {
 }
 
 /// The rail's focused card key, if any.
-fn rail_focus(app: &App) -> Option<u64> {
+fn rail_focus(app: &App) -> Option<Spot> {
     app.rail_state().focus
 }
 
@@ -1514,7 +1514,7 @@ fn turn(session: &str, kind: &str, payload: Value) -> Line {
 fn left_in_an_empty_box_focuses_the_on_screen_card() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
 }
 
@@ -1522,28 +1522,38 @@ fn left_in_an_empty_box_focuses_the_on_screen_card() {
 fn down_moves_in_drawn_order_across_two_project_groups() {
     let mut app = two_projects();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    // Down moves over the next group's "+" to its first card.
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    // Up stops at every stop, the "+" above included.
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
 }
 
 #[test]
-fn down_on_the_last_card_and_up_on_the_first_stay_put() {
+fn up_from_the_first_card_reaches_plus_and_down_on_the_last_holds() {
     let mut app = two_projects();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
 }
 
 #[test]
@@ -1551,7 +1561,7 @@ fn enter_on_another_card_switches_to_it() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     let effect = stroke_press(&mut app, plain(Code::Enter));
     assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
     assert_eq!(rail_focus(&app), None);
@@ -1562,7 +1572,7 @@ fn enter_on_another_card_switches_to_it() {
 fn enter_on_the_on_screen_card_sends_nothing() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
     assert_eq!(rail_focus(&app), None);
     assert_eq!(on_screen(&app), Some(A));
@@ -1606,7 +1616,7 @@ fn alt_digit_clears_focus_first() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert_eq!(
         stroke_press(&mut app, Stroke::parse("alt+1").unwrap()),
         Effect::None
@@ -1619,7 +1629,7 @@ fn alt_digit_clears_focus_first() {
 fn alt_a_clears_focus_with_no_waiting_request() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(
         stroke_press(&mut app, Stroke::parse("alt+a").unwrap()),
         Effect::None
@@ -1632,7 +1642,7 @@ fn alt_a_clears_focus_with_no_waiting_request() {
 fn alt_r_hiding_the_rail_clears_focus() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(
         stroke_press(&mut app, Stroke::parse("alt+r").unwrap()),
         Effect::None
@@ -1645,7 +1655,7 @@ fn alt_r_hiding_the_rail_clears_focus() {
 fn slash_rail_hiding_clears_focus() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     type_text(&mut app, "/rail");
     press(&mut app, Key::Enter);
     assert_eq!(rail_focus(&app), None);
@@ -1657,7 +1667,7 @@ fn an_exit_of_the_focused_card_clears_it() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     app.on_line(left(B, "exited"));
     assert_eq!(rail_focus(&app), None);
     assert_eq!(on_screen(&app), Some(A));
@@ -1669,7 +1679,7 @@ fn dismissing_the_focused_card_clears_it() {
     app.on_line(left(B, "crashed"));
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     let out = sent(app.on_click(TargetId::Rail(Spot::Dismiss(key(&app, B)))));
     let id = out
         .iter()
@@ -1678,16 +1688,295 @@ fn dismissing_the_focused_card_clears_it() {
         .as_str()
         .expect("dismiss has an id")
         .to_owned();
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     app.on_line(hub_answer("command_accepted", &id, ""));
     assert_eq!(rail_focus(&app), None);
+}
+
+/// `A` on screen but crashed, with `B` live: Tab walks the card, then
+/// "+", then "×".
+fn crashed_on_screen() -> App {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "crashed"));
+    app
+}
+
+#[test]
+fn tab_walks_the_card_then_plus_then_cross() {
+    use crate::app::rail::RAIL_HINT;
+    let mut app = crashed_on_screen();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert!(
+        frame_rows(&app, 200, 40).contains(&RAIL_HINT.to_owned()),
+        "the hint follows the focused stop"
+    );
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    // Past the last stop Tab walks on from the rail.
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn shift_tab_walks_the_walk_back() {
+    let mut app = crashed_on_screen();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, A))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    // From the walk's first stop Shift+Tab leaves the rail.
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+}
+
+#[test]
+fn shift_tab_past_a_held_end_moves_on() {
+    let mut app = two_projects();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    // Down holds on the last stop, marking it twice: one Shift+Tab
+    // still walks past the hold.
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+}
+
+#[test]
+fn entering_the_rail_starts_the_walk_over() {
+    let mut app = crashed_on_screen();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    app.set_rail_focus(Spot::Card(key(&app, B)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(
+        rail_focus(&app),
+        Some(Spot::Start(key(&app, A))),
+        "the walk starts over, not past the old one"
+    );
+}
+
+#[test]
+fn enter_on_plus_goes_home_like_a_click() {
+    fn hubbed() -> App {
+        let mut app = opened(&[A, B], A);
+        app.on_line(live(
+            B,
+            json!({"workspace": "/Users/you/work/hub", "project": "-hub"}),
+        ));
+        app
+    }
+    let mut clicked = hubbed();
+    let click_out = sent(clicked.on_click(TargetId::Rail(Spot::Start(key(&clicked, B)))));
+    let mut app = hubbed();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, B))));
+    let out = sent(press(&mut app, Key::Enter));
+    // The click and the key send the same commands.
+    assert_eq!(out.len(), click_out.len());
+    for (left, right) in out.iter().zip(click_out.iter()) {
+        assert_eq!(left["command"], right["command"]);
+        assert_eq!(left["args"], right["args"]);
+    }
+    assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
+    assert_eq!(on_screen(&app), None);
+    let chip = app
+        .home_screen()
+        .and_then(|screen| screen.chips.first().map(|chip| chip.text.clone()));
+    assert_eq!(chip.as_deref(), Some("[hub]"));
+    assert_eq!(app.focused(), None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn enter_on_cross_sends_dismiss_like_a_click_and_keeps_focus() {
+    let mut app = crashed();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, B))));
+    let out = sent(press(&mut app, Key::Enter));
+    let mut clicked = crashed();
+    let click_out = sent(clicked.on_click(TargetId::Rail(Spot::Dismiss(key(&clicked, B)))));
+    assert_eq!(out.len(), click_out.len());
+    for (left, right) in out.iter().zip(click_out.iter()) {
+        assert_eq!(left["command"], right["command"]);
+        assert_eq!(left["args"], right["args"]);
+    }
+    assert_eq!(
+        out,
+        vec![json!({"id": out[0]["id"], "command": "dismiss", "args": {"session": B}})]
+    );
+    // As with the click, the focus stays until the hub answers.
+    assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, B))));
+    let id = out[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(hub_answer("command_accepted", &id, ""));
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn losing_a_plus_card_clears_its_plus_focus() {
+    let mut app = two_projects();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, C))));
+    app.on_line(left(C, "exited"));
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn a_rebound_navigate_leaves_shift_tab_walking_back() {
+    let mut app = opened_in_conversation();
+    app.on_line(left(A, "crashed"));
+    app.set_keys(keyed_setup(&[("navigate", json!("f5"))]));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    // Without focus Shift+Tab is no navigate any more: the box keeps
+    // it, instead of a rebound walk-back leaving the rail.
+    assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+    stroke_press(&mut app, shift_tab());
+    assert_eq!(app.focused(), None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+/// Ten sessions, `A` on screen in the launch project and the rest in
+/// another one: focusing the other group's "+" above a deep scroll
+/// shows its header row.
+fn tall_two_groups() -> App {
+    let sessions = ten();
+    let refs: Vec<&str> = sessions.iter().map(String::as_str).collect();
+    let mut app = opened(&refs, refs[0]);
+    for session in refs.iter().skip(1) {
+        app.on_line(live(
+            session,
+            json!({"workspace": "/other", "project": "-other"}),
+        ));
+    }
+    app
+}
+
+#[test]
+fn focusing_plus_above_a_deep_scroll_shows_its_header() {
+    let mut app = tall_two_groups();
+    let sessions = ten();
+    let last = sessions.last().expect("ten sessions").clone();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    for _ in 0..9 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    }
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &last))));
+    for _ in 0..8 {
+        assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    }
+    let first_other = sessions.get(1).expect("a second session").clone();
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, &first_other))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, &first_other))));
+    // The settle scrolled the header into view: the next frame draws it.
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let shown = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        shown
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Start(key(&app, &first_other)))),
+        "the settle reveals the focused plus"
+    );
+}
+
+#[test]
+fn a_focused_plus_lifts_its_cell() {
+    use crate::theme::hover_bg;
+    let mut app = opened(&[A, B], A);
+    let control = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    let targets = framed(&mut app);
+    let plus = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Start(key(&app, A))))
+        .map(|target| target.rect)
+        .expect("the plus target");
+    let at = usize::from(plus.y) * 200 + usize::from(plus.x);
+    let bgs = frame_bgs(&app, 200, 40);
+    let flats = frame_bgs(&control, 200, 40);
+    assert_eq!(bgs[at], hover_bg(flats[at]), "the plus lifts");
+    // The card's own tint stays flat: only the stop lifts.
+    let card = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A))))
+        .map(|target| target.rect)
+        .expect("the card target");
+    let tint = usize::from(card.y) * 200 + usize::from(card.x) + 2;
+    assert_eq!(bgs[tint], flats[tint], "the card stays flat");
+}
+
+#[test]
+fn a_focused_cross_lifts_its_cell() {
+    use crate::theme::hover_bg;
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "crashed"));
+    let mut control = opened(&[A, B], A);
+    control.on_line(left(B, "crashed"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Dismiss(key(&app, B))));
+    let targets = framed(&mut app);
+    let cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Dismiss(key(&app, B))))
+        .map(|target| target.rect)
+        .expect("the cross target");
+    let at = usize::from(cross.y) * 200 + usize::from(cross.x);
+    let bgs = frame_bgs(&app, 200, 40);
+    let flats = frame_bgs(&control, 200, 40);
+    assert_eq!(bgs[at], hover_bg(flats[at]), "the cross lifts");
+    let card = targets
+        .iter()
+        .find(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A))))
+        .map(|target| target.rect)
+        .expect("the card target");
+    let tint = usize::from(card.y) * 200 + usize::from(card.x) + 2;
+    assert_eq!(bgs[tint], flats[tint], "the card stays flat");
 }
 
 #[test]
 fn a_resize_that_sheds_the_rail_clears_it() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     app.set_size(60, 24);
     app.on_line(live(B, json!({})));
     assert!(rail_rect(&app).is_none());
@@ -1698,7 +1987,7 @@ fn a_resize_that_sheds_the_rail_clears_it() {
 fn leaving_clears_the_rail() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     app.leave();
     app.on_line(live(B, json!({})));
     assert!(app.on_home());
@@ -1710,7 +1999,7 @@ fn a_second_left_widens_home_on_the_on_screen_row_after_moving() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     let widened = stroke_press(&mut app, plain(Code::Left));
     assert!(matches!(widened, Effect::Send(_)), "{widened:?}");
     assert!(app.on_home());
@@ -1733,7 +2022,7 @@ fn a_second_left_widens_home_on_a_row_keyed_past_one() {
     let mut app = opened(&[A, B, C], C);
     assert!(row_key(&app, C) > 1, "C's row key: {}", row_key(&app, C));
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, C))));
     let widened = stroke_press(&mut app, plain(Code::Left));
     assert!(matches!(widened, Effect::Send(_)), "{widened:?}");
     assert!(app.on_home());
@@ -1755,11 +2044,11 @@ fn a_second_left_widens_home_on_a_row_keyed_past_one() {
 fn a_focused_text_left_moves_the_cursor() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     type_text(&mut app, "ab");
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(app.input().cursor(app.draft_width()).1, 3);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert!(!app.on_home());
 }
 
@@ -1836,12 +2125,12 @@ fn an_exited_on_screen_session_behind_more_widens_home_on_its_row() {
 fn esc_closes_the_completion_panel_before_giving_focus_back() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     type_text(&mut app, "/");
     assert!(app.completions().is_some());
     assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
     assert!(app.completions().is_none());
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
     assert_eq!(rail_focus(&app), None);
 }
@@ -1850,11 +2139,11 @@ fn esc_closes_the_completion_panel_before_giving_focus_back() {
 fn esc_goes_to_an_open_approval_panel_first() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     app.on_line(permission(A, "r_esc"));
     assert!(app.panel().is_some());
     assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert!(app.panel().is_none());
 }
 
@@ -1862,7 +2151,7 @@ fn esc_goes_to_an_open_approval_panel_first() {
 fn esc_goes_to_an_open_search_bar_first() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(
         stroke_press(&mut app, Stroke::parse("ctrl+f").unwrap()),
         Effect::None
@@ -1870,7 +2159,7 @@ fn esc_goes_to_an_open_search_bar_first() {
     assert!(app.find_open());
     assert_eq!(stroke_press(&mut app, plain(Code::Esc)), Effect::None);
     assert!(!app.find_open());
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
 }
 
 #[test]
@@ -1882,11 +2171,13 @@ fn unset_arrows_still_move_a_focused_rail_with_rebound_recall() {
             .collect(),
     });
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
 }
 
 /// Eight live sessions with `A` on screen, its card scrolled out of view
@@ -1914,11 +2205,11 @@ fn a_focus_rail_key_rebound_to_up_moves_a_focused_rail() {
     ]));
     // Entry still reaches the rail from the input box, not the recall.
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert!(!app.on_home());
     // A focused rail takes Up as a rail move, not a widen home.
     assert_eq!(stroke_press(&mut app, plain(Code::Up)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert!(!app.on_home());
 }
 
@@ -1940,7 +2231,7 @@ fn tab_lands_on_the_on_screen_card_scrolled_out_of_view() {
     app.focus = Some(panel);
     app.drawn(&targets);
     assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
     // The Tab's settle reveals the card: the next frame draws it.
     let area = ratatui::layout::Rect::new(0, 0, 200, 40);
@@ -1958,7 +2249,7 @@ fn tab_lands_on_the_on_screen_card_scrolled_out_of_view() {
 fn left_entry_reveals_a_scrolled_off_on_screen_card_in_the_same_frame() {
     let mut app = eight_scrolled_past_on_screen();
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     // No further key or hub line: the entry's settle already revealed it.
     let area = ratatui::layout::Rect::new(0, 0, 200, 40);
     let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -2004,7 +2295,7 @@ fn a_rebound_focus_rail_key_focuses_an_empty_box() {
     app.set_keys(keyed_setup(&[("focus_rail", json!("alt+l"))]));
     let alt_l = Stroke::parse("alt+l").unwrap();
     assert_eq!(stroke_press(&mut app, alt_l), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
 }
 
@@ -2078,9 +2369,9 @@ fn a_dropped_link_keeps_a_focused_card() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     app.disconnected();
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert!(app.panel().is_none());
 }
 
@@ -2088,10 +2379,10 @@ fn a_dropped_link_keeps_a_focused_card() {
 fn enter_on_a_focused_card_with_the_link_down_sends_nothing() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     app.disconnected();
     assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
 }
 
 #[test]
@@ -2100,7 +2391,7 @@ fn down_still_moves_a_focused_rail_with_the_link_down() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     app.disconnected();
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
 }
 
 #[test]
@@ -2108,7 +2399,7 @@ fn a_reconnect_dropping_the_focused_card_clears_it() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     let id = reconnected_sessions(&mut app);
     sessions_result(&mut app, &id, &[A]);
     assert_eq!(rail_focus(&app), None);
@@ -2119,10 +2410,10 @@ fn a_reconnect_dropping_the_focused_card_clears_it() {
 fn a_reconnect_listing_the_focused_card_keeps_it() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     let id = reconnected_sessions(&mut app);
     sessions_result(&mut app, &id, &[A, B]);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
 }
 
 /// `A` and `B` live with `A` on screen, after one finished turn, so the
@@ -2179,9 +2470,20 @@ fn tab_walks_the_conversation_the_panel_and_the_rail() {
     assert_eq!(app.focused(), Some(TargetId::Notice(5)));
     assert_single_focus(&app);
     stroke_press(&mut app, plain(Code::Tab));
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
     assert_single_focus(&app);
+    // Tab walks the rail's stops in drawn order from the on-screen
+    // card: the "+" above it, then the next card.
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), Some(Spot::Start(key(&app, A))));
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+    stroke_press(&mut app, plain(Code::Tab));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    assert_eq!(app.focused(), None);
+    assert_single_focus(&app);
+    // Past the last stop Tab walks on from the rail.
     stroke_press(&mut app, plain(Code::Tab));
     assert!(matches!(app.focused(), Some(TargetId::Turn(_))));
     assert_eq!(rail_focus(&app), None);
@@ -2193,13 +2495,13 @@ fn typing_on_a_focused_rail_types_into_the_box() {
     let mut app = opened_in_conversation();
     framed(&mut app);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     let x = Stroke {
         code: Code::Char('x'),
         mods: Mods::NONE,
     };
     assert_eq!(stroke_press(&mut app, x), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_single_focus(&app);
     assert_eq!(app.input().cursor(app.draft_width()).1, 3);
 }
@@ -2209,7 +2511,7 @@ fn shift_tab_from_the_rail_returns_to_the_conversation() {
     let mut app = opened_in_conversation();
     framed(&mut app);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     stroke_press(&mut app, shift_tab());
     assert!(matches!(app.focused(), Some(TargetId::Turn(_))));
     assert_eq!(rail_focus(&app), None);
@@ -2221,7 +2523,7 @@ fn shift_tab_with_no_stop_clears_the_rail_leaving_no_focus() {
     let mut app = opened(&[A, B], A);
     framed(&mut app);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     stroke_press(&mut app, shift_tab());
     assert_eq!(app.focused(), None);
     assert_eq!(rail_focus(&app), None);
@@ -2241,7 +2543,7 @@ fn tab_with_the_on_screen_session_exited_lands_on_the_first_card() {
     app.focus = Some(panel_stop);
     app.drawn(&targets);
     stroke_press(&mut app, plain(Code::Tab));
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert_eq!(app.focused(), None);
     assert_single_focus(&app);
 }
@@ -2275,7 +2577,7 @@ fn focusing_a_card_past_the_rail_height_scrolls_it_into_view() {
     for _ in 0..7 {
         assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
     }
-    assert_eq!(rail_focus(&app), Some(key(&app, "s_e4")));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, "s_e4"))));
     app.on_line(live(A, json!({})));
     assert!(app.rail_state().scroll() > 0);
 }
@@ -2290,7 +2592,7 @@ fn clicking_a_conversation_target_clears_a_focused_rail() {
         .expect("a conversation stop")
         .id;
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, A)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.on_click(turn), Effect::None);
     assert_eq!(rail_focus(&app), None);
     assert_eq!(app.focused(), None);
@@ -2439,12 +2741,12 @@ fn with_the_notice_overlay_open_up_leaves_a_focused_card_alone() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     app.on_line(notice(A, "The fiber is quiet."));
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     let _ = stroke_press(&mut app, plain(Code::Up));
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert!(app.notice_overlay().is_some());
 }
 
@@ -2467,7 +2769,7 @@ fn a_plain_up_with_an_item_open_leaves_a_focused_card_alone() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     app.on_line(turn(
         A,
         "job_started",
@@ -2476,6 +2778,6 @@ fn a_plain_up_with_an_item_open_leaves_a_focused_card_alone() {
     let _ = app.open_item(&contract::JobId("j_1".to_owned()));
     assert!(app.item_open());
     let _ = stroke_press(&mut app, plain(Code::Up));
-    assert_eq!(rail_focus(&app), Some(key(&app, B)));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert!(app.item_open());
 }
