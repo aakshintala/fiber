@@ -2870,7 +2870,10 @@ fn x_on_a_subscribed_row_sends_close_now_only() {
     let summary = first[0]["id"]
         .as_str()
         .unwrap_or_else(|| panic!("summary id"));
-    accept_summary(&mut app, "s_aaaaaaaaaaaaaaaa", summary);
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", summary))
+            .is_empty()
+    );
     let lines = stop(&mut app);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "close");
