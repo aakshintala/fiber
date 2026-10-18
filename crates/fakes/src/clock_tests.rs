@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
@@ -3747,4 +3748,472 @@ fn advance_when_parked_threads_rejects_an_advance_past_the_named_park() {
     Deadline::after(Duration::from_secs(5))
         .recv(&exit_b)
         .expect("the second thread exits");
+}
+
+/// Runs `advance_when_parked_then` on a worker thread, catching its
+/// intentional panic: the worker sends `Ok(mark)` on success and
+/// `Err(message)` on failure, so the test receives the outcome through its
+/// deadline instead of joining a thread that a bug would hang.
+fn run_advance_when_parked_then(
+    clock: &Arc<FakeClock>,
+    expected: Option<std::time::Instant>,
+    thread: Option<std::thread::ThreadId>,
+    advance: Duration,
+    deadline: Deadline,
+    hook: impl FnOnce() + Send + 'static,
+) -> mpsc::Receiver<Result<super::Mark, String>> {
+    let (tx, rx) = mpsc::channel();
+    let clock = Arc::clone(clock);
+    thread::spawn(move || {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            clock.advance_when_parked_then(expected, thread, advance, &deadline, hook)
+        }));
+        let outcome = outcome.map_err(|payload| {
+            if let Some(message) = payload.downcast_ref::<String>() {
+                message.clone()
+            } else if let Some(message) = payload.downcast_ref::<&str>() {
+                (*message).to_string()
+            } else {
+                "a panic without a message".to_string()
+            }
+        });
+        match tx.send(outcome) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// A subscriber that reports the fake clock's `now()` at each wake.
+struct WokeAt {
+    tx: mpsc::Sender<std::time::Instant>,
+    clock: Mutex<Option<Arc<FakeClock>>>,
+}
+
+impl Wake for WokeAt {
+    fn wake(&self) {
+        if let Some(clock) = self.clock.lock().unwrap().as_ref() {
+            match self.tx.send(clock.now()) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn advance_when_parked_then_runs_the_hook_between_the_park_and_the_move() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let step = Duration::from_millis(5);
+    let (wake_tx, wake_rx) = mpsc::channel();
+    let wake: Arc<dyn Wake> = Arc::new(WokeAt {
+        tx: wake_tx,
+        clock: Mutex::new(Some(Arc::clone(&clock))),
+    });
+    clock.subscribe(Arc::downgrade(&wake));
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        step,
+        Deadline::after(Duration::from_secs(30)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&waiting)
+        .expect("the helper waits for the park");
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "the hook does not run before the park is observed"
+    );
+    // The pause holds the state lock, so the release goes first.
+    release_waiter.send(()).expect("released the wait");
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to advance")
+        .expect("the parked thread advances");
+    assert_eq!(hooks.load(Ordering::SeqCst), 1, "the hook runs once");
+    // The hook cannot read the clock, and the wake runs after the move
+    // whichever order the hook took, so this event order alone cannot prove
+    // the hook ran before the move: only the hook-panic test proves that.
+    assert_eq!(
+        Deadline::after(Duration::from_secs(5))
+            .recv(&wake_rx)
+            .expect("waited for the wake"),
+        clock.origin() + step,
+        "the wake sees the moved time"
+    );
+    assert_eq!(
+        clock.now(),
+        clock.origin() + step,
+        "time moves by exactly the advance"
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_a_wrong_instant() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = until + Duration::from_secs(1);
+    let (parked, release, exit, _) = park_once(&clock, Some(wrong));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("a wrong park mismatches");
+    assert!(
+        message.contains("different instant"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "a failed park never runs the hook"
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_a_finite_park_where_none_was_named() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        None,
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("a finite park where none was named mismatches");
+    assert!(
+        message.contains("where None was named"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "a failed park never runs the hook"
+    );
+    assert_eq!(clock.now(), now, "a mismatch moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_an_expired_deadline() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let now = clock.now();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_millis(200)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to expire")
+        .expect_err("an expired wait never runs the hook");
+    assert!(
+        message.contains("the deadline passed"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "an expired wait never runs the hook"
+    );
+    assert_eq!(clock.now(), now, "an expired wait moves no time");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_a_rejected_advance() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_secs(31),
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("an overshoot never runs the hook");
+    assert!(
+        message.contains("would pass the named instant"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "a rejected advance never runs the hook"
+    );
+    assert_eq!(clock.now(), now, "a rejected advance moves no time");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_a_named_park_at_now() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(now),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("a named park at now never runs the hook");
+    assert!(
+        message.contains("already passed"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "a rejected wait never runs the hook"
+    );
+    assert_eq!(clock.now(), now, "a rejected wait moves no time");
+}
+
+#[test]
+fn advance_when_parked_then_never_runs_the_hook_for_another_drivers_move() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (waiting, release_waiter) = clock.pause_next_advance_wait();
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        Duration::from_millis(5),
+        Deadline::after(Duration::from_secs(30)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&waiting)
+        .expect("the helper waits for the park");
+    // The pause holds the state lock, so the release goes first.
+    release_waiter.send(()).expect("released the wait");
+    let before = clock.now();
+    clock.advance_marked(Duration::from_millis(1));
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("another driver's move never runs the hook");
+    assert!(
+        message.contains("time moved during the wait by another driver"),
+        "the failure names its kind: {message}"
+    );
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        0,
+        "another driver's move never runs the hook"
+    );
+    assert_eq!(
+        clock.now(),
+        before + Duration::from_millis(1),
+        "only the other driver moves time"
+    );
+}
+
+#[test]
+fn advance_when_parked_then_hook_panic_leaves_time_unmoved() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let step = Duration::from_millis(5);
+    let (wake_tx, wake_rx) = mpsc::channel();
+    let wake: Arc<dyn Wake> = Arc::new(ChanWake(wake_tx));
+    clock.subscribe(Arc::downgrade(&wake));
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    let now = clock.now();
+    let wall = clock.wall();
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        None,
+        step,
+        Deadline::after(Duration::from_secs(5)),
+        || panic!("hook failed"),
+    );
+    let message = Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to fail")
+        .expect_err("a panicking hook fails the wait");
+    assert!(
+        message.contains("hook failed"),
+        "the helper panics with the hook's payload: {message}"
+    );
+    assert_eq!(clock.now(), now, "a panicking hook moves no time");
+    assert_eq!(clock.wall(), wall, "a panicking hook moves no time");
+    assert!(wake_rx.try_recv().is_err(), "a panicking hook wakes nobody");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_parks() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let elsewhere = clock.origin() + Duration::from_secs(31);
+    let step = Duration::from_millis(5);
+    let (parked_other, release_other, exit_other, _) = park_once(&clock, Some(elsewhere));
+    let (parked_named, release_named, exit_named, named_id) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_other)
+        .expect("waited for the other thread to park");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_named)
+        .expect("waited for the named thread to park");
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        Some(until),
+        Some(named_id),
+        step,
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to advance")
+        .expect("the named thread advances among several parks");
+    assert_eq!(hooks.load(Ordering::SeqCst), 1, "the hook runs once");
+    assert_eq!(
+        clock.now(),
+        clock.origin() + step,
+        "time moves by exactly the advance"
+    );
+    release_other.send(()).unwrap();
+    release_named.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_other)
+        .expect("the other thread exits");
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit_named)
+        .expect("the named thread exits");
+
+    let clock = FakeClock::new();
+    let (parked, release, exit, _) = park_once(&clock, None);
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the unbounded park");
+    let hooks = Arc::new(AtomicUsize::new(0));
+    let hooks_t = Arc::clone(&hooks);
+    let outcome = run_advance_when_parked_then(
+        &clock,
+        None,
+        None,
+        step,
+        Deadline::after(Duration::from_secs(5)),
+        move || {
+            hooks_t.fetch_add(1, Ordering::SeqCst);
+        },
+    );
+    Deadline::after(Duration::from_secs(5))
+        .recv(&outcome)
+        .expect("waited for advance_when_parked_then to advance")
+        .expect("an unbounded park advances");
+    assert_eq!(
+        hooks.load(Ordering::SeqCst),
+        1,
+        "an unbounded park runs the hook once"
+    );
+    assert_eq!(
+        clock.now(),
+        clock.origin() + step,
+        "time moves by exactly the advance"
+    );
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the parked thread exits");
 }

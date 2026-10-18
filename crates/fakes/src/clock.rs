@@ -265,6 +265,31 @@ impl FakeClock {
         )
     }
 
+    /// Runs `hook` after the park is observed and before time moves, under
+    /// the clock's lock. (Temporary docs; polished with the behaviour in a
+    /// later task.)
+    #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+    pub fn advance_when_parked_then(
+        &self,
+        expected: Option<Instant>,
+        thread: Option<ThreadId>,
+        advance: Duration,
+        deadline: &crate::deadline::Deadline,
+        hook: impl FnOnce(),
+    ) -> Mark {
+        let select = match thread {
+            Some(id) => Select::Thread(id),
+            None => Select::Count(1),
+        };
+        let mut hook = Some(hook);
+        self.advance_when_parked_core(expected, select, advance, deadline, &mut || {
+            if let Some(hook) = hook.take() {
+                hook();
+            }
+        })
+    }
+
     /// The loop behind every `advance_when_parked` wait: `select` says which
     /// parks are watched, and `hook` runs under the lock after the park
     /// matched and the move validated, immediately before the move.
