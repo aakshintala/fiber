@@ -43,6 +43,8 @@ An extension is one directory. Its manifest, `extension.json`, states
 - its version
 - the lowest Fiber version it runs on
 - the extension API version it was written for ("The extension API version")
+- the session-half version range the TUI extension works with
+  (`tui.session_versions`)
 - the other extensions it depends on, each with a minimum version
 - the native binaries it ships, if any, with one download URL and one sha256
   per platform
@@ -89,7 +91,7 @@ nothing in the manifest and an install finds them by looking:
 | `skills/` | one directory per skill, each with a `SKILL.md` |
 | `prompts/` | one directory per prompt template, in the same format; every skill here is one only a person runs, as if its header set `disable-model-invocation: true` |
 | `themes/` | one file per theme; a switched-off extension's themes are not listed or loaded |
-| `tui/` | the TUI extension's Lua scripts |
+| `tui/` | the TUI extension's Lua scripts, entered at `tui/init.lua` |
 
 What a skill and a prompt template are, and where Fiber finds them besides
 packages, is `docs/system-prompt.md`, "Skills". A theme sets the terminal's
@@ -1147,6 +1149,13 @@ session only as a client does. It reads the event stream, including its
 session half's extension state and what that half sends with `host.emit`, and
 sends driver commands, including its own extension's commands. A crash in a
 TUI extension cannot stop the session (`docs/invocation.md`, "Processes").
+
+A TUI extension registers each slot it fills with `fiber.slot(name, {
+timeout, render, animate })`, the same shape as `fiber.command` above:
+`timeout` in milliseconds is required, `render` draws the slot, and `animate`
+is present only on a slot that animates (`docs/tui.md`, "Animation"). A
+missing `timeout` fails at registration, as a missing callback `timeout` does
+("How an extension runs").
 
 A TUI extension has the host calls that need no session: `host.http`,
 `host.exec`, `host.fs`, `host.config`, `host.data_dir`, `host.after`,
