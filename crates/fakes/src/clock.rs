@@ -226,6 +226,45 @@ impl FakeClock {
         self.advance_when_parked_core(expected, select, advance, deadline, &mut || {})
     }
 
+    /// Waits for exactly `count` threads to hold a fresh park at `expected`,
+    /// then advances by `advance`, returning each thread's latest park as in
+    /// [`FakeClock::advance_marked`]. A count of zero fails before waiting;
+    /// more parked threads than `count` fail at once; fewer wait to the
+    /// deadline. Parks made before the last move are stale and count for
+    /// nothing, and nested parks on one thread count once. All failures
+    /// panic at the caller's line and move no time. (Docs polished with the
+    /// hook method in a later task.)
+    #[track_caller]
+    #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+    pub fn advance_when_parked_threads(
+        &self,
+        expected: Option<Instant>,
+        count: usize,
+        advance: Duration,
+        deadline: &crate::deadline::Deadline,
+    ) -> Mark {
+        if count == 0 {
+            let state = lock(&self.state);
+            let report = report(
+                &state,
+                expected,
+                Select::Count(count),
+                advance,
+                "the thread count must be at least 1",
+                None,
+            );
+            drop(state);
+            panic!("{report}");
+        }
+        self.advance_when_parked_core(
+            expected,
+            Select::Count(count),
+            advance,
+            deadline,
+            &mut || {},
+        )
+    }
+
     /// The loop behind every `advance_when_parked` wait: `select` says which
     /// parks are watched, and `hook` runs under the lock after the park
     /// matched and the move validated, immediately before the move.
@@ -289,14 +328,16 @@ impl FakeClock {
                 panic!("{report}");
             }
             if several_threads_parked(&state, select) {
-                let report = report(
-                    &state,
-                    expected,
-                    select,
-                    advance,
-                    "several threads hold a park and no thread was named: name the thread",
-                    None,
-                );
+                let kind = match select {
+                    Select::Count(n) if n != 1 => {
+                        format!("more than {n} threads hold a park at the named instant")
+                    }
+                    Select::Thread(_) | Select::Count(_) => {
+                        "several threads hold a park and no thread was named: name the thread"
+                            .to_string()
+                    }
+                };
+                let report = report(&state, expected, select, advance, &kind, None);
                 leave_wait(&mut state);
                 drop(state);
                 panic!("{report}");
@@ -329,14 +370,15 @@ impl FakeClock {
             }
             let wait_for = deadline.left();
             if wait_for.is_zero() {
-                let report = report(
-                    &state,
-                    expected,
-                    select,
-                    advance,
-                    "the deadline passed before the named park arrived",
-                    None,
-                );
+                let kind = match select {
+                    Select::Count(n) if n != 1 => format!(
+                        "the deadline passed before {n} threads parked at the named instant"
+                    ),
+                    Select::Thread(_) | Select::Count(_) => {
+                        "the deadline passed before the named park arrived".to_string()
+                    }
+                };
+                let report = report(&state, expected, select, advance, &kind, None);
                 leave_wait(&mut state);
                 drop(state);
                 panic!("{report}");
@@ -807,37 +849,50 @@ fn watched_mismatch(
         })
 }
 
-/// A selected fresh park matches; unnamed parks must belong to exactly one
-/// distinct thread, even when that thread holds nested parks.
+/// A selected fresh park matches; a counted wait matches exactly `n`
+/// distinct fresh threads at the expected instant, even when one of those
+/// threads holds nested parks. An unnamed wait is a count of one.
 fn matched(state: &State, expected: Option<Instant>, select: Select) -> bool {
     let mut held = state.parked.iter().filter(|parked| fresh(state, parked));
     match select {
         Select::Thread(selected) => {
             held.any(|parked| parked.thread == selected && parked.until == expected)
         }
-        Select::Count(_) => match held.next() {
-            Some(first) => {
-                if held.clone().any(|parked| parked.thread != first.thread) {
-                    return false;
+        Select::Count(n) => {
+            let mut seen: Vec<ThreadId> = Vec::new();
+            for parked in state
+                .parked
+                .iter()
+                .filter(|parked| fresh(state, parked) && parked.until == expected)
+            {
+                if !seen.contains(&parked.thread) {
+                    seen.push(parked.thread);
                 }
-                std::iter::once(first)
-                    .chain(held)
-                    .any(|parked| parked.until == expected)
             }
-            None => false,
-        },
+            seen.len() == n
+        }
     }
 }
 
-/// Whether fresh parks belong to two or more distinct threads. Nested parks
-/// on one thread count as one; diagnostics still list every held park.
+/// Whether fresh parks belong to more distinct threads than the wait allows:
+/// more than one for a named or unnamed wait, more than `n` for a counted
+/// one. Nested parks on one thread count as one; diagnostics still list
+/// every held park.
 fn several_threads_parked(state: &State, select: Select) -> bool {
-    if !matches!(select, Select::Count(_)) {
-        return false;
+    let n = match select {
+        Select::Thread(_) => return false,
+        Select::Count(n) => n,
+    };
+    let mut seen: Vec<ThreadId> = Vec::new();
+    for parked in state.parked.iter().filter(|parked| fresh(state, parked)) {
+        if !seen.contains(&parked.thread) {
+            seen.push(parked.thread);
+            if seen.len() > n {
+                return true;
+            }
+        }
     }
-    let mut held = state.parked.iter().filter(|parked| fresh(state, parked));
-    held.next()
-        .is_some_and(|first| held.any(|parked| parked.thread != first.thread))
+    false
 }
 
 /// Closes an [`FakeClock::advance_when_parked`] wait: the observation log
