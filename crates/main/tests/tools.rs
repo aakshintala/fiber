@@ -910,7 +910,7 @@ fn a_configured_read_only_command_skips_review() {
         .collect();
     assert_eq!(kinds, read_kinds());
     assert!(
-        run.kinds().iter().any(|kind| *kind == "tool_call_delta"),
+        run.kinds().contains(&"tool_call_delta"),
         "a running shell streams deltas"
     );
     let completed = run
