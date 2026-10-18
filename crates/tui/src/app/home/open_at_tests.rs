@@ -610,6 +610,36 @@ fn the_raise_ack_ends_the_gate_and_the_first_stage_ack_does_not() {
     assert_eq!(app.session(), Some(&id("s_aaaaaaaaaaaaaaaa")));
 }
 
+/// The raise ack names its own session and ack: a wrong ack with the
+/// right session, or the right ack with another session, acks
+/// nothing, so only the raise's own answer folds the pass.
+#[test]
+fn the_raise_ack_needs_its_own_session_and_ack() {
+    let mut app = home_at(OpenAt::Home);
+    let lines = commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), None, None, false));
+    let first = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("first id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", first))
+            .is_empty()
+    );
+    let raise = raise_line(&mut app);
+    let last = raise["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("last id"))
+        .to_owned();
+    assert!(app.raise_ack(&id("s_aaaaaaaaaaaaaaaa"), &last));
+    assert!(
+        !app.raise_ack(&id("s_aaaaaaaaaaaaaaaa"), "another-ack"),
+        "the ack must match"
+    );
+    assert!(
+        !app.raise_ack(&id("s_bbbbbbbbbbbbbbbb"), &last),
+        "the session must match"
+    );
+}
+
 /// Home showing one exited row, ready for a row open.
 fn home_with_row() -> App {
     let mut app = home_at(OpenAt::Home);
