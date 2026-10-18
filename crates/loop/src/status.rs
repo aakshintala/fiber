@@ -429,6 +429,7 @@ impl Fold {
             | Event::ReasoningCompleted(_)
             | Event::ToolCallDelta(_)
             | Event::QuotaNoticed(_)
+            | Event::QuotaRearmed(_)
             | Event::Notice(_)
             | Event::OpeningMessage(_)
             | Event::InstructionFile(_)

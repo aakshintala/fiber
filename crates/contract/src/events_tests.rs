@@ -689,6 +689,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             "resets_at": 17, "notice_at": 80.0}),
         ),
         (
+            "quota_rearmed",
+            json!({"provider": "p", "credential": "work", "window": "5h", "percent_used": 79.5, "notice_at": 80.0}),
+        ),
+        (
             "retry_scheduled",
             json!({"code": "rate_limited", "attempt": 2, "delay_ms": 500, "last_attempt": 4}),
         ),
@@ -893,7 +897,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}, {"name": "daily", "reset": true}]}], "notice_at": 80.0}}),
+            json!({"command_id": "c", "result": {"quota": [{"provider": "codex", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0, "resets_at": 1760000000000_u64}, {"name": "daily", "reset": true}]}], "notice_at": 80.0}}),
         ),
         (
             "command_accepted",
