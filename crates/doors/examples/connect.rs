@@ -15,7 +15,7 @@
 #[path = "../tests/support/connect_args.rs"]
 mod connect_args;
 use connect_args::{Args, parse};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode, Stdio};
@@ -103,12 +103,13 @@ fn relay(
     // The socket closing must not wait on stdin, which may still be blocked.
     drop(incoming);
     let mut reader = BufReader::new(stream);
-    let mut line = String::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => stdout.write_all(line.as_bytes())?,
+        match support::framing::read_line(&mut reader, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(line)) => {
+                stdout.write_all(&line)?;
+                stdout.write_all(b"\n")?;
+            }
         }
     }
     stdout.flush()
@@ -116,13 +117,14 @@ fn relay(
 
 fn copy_stdin(stdin: impl Read, writer: &mut UnixStream) {
     let mut stdin = BufReader::new(stdin);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match stdin.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                if writer.write_all(&buf).is_err() || writer.flush().is_err() {
+        match support::framing::read_line(&mut stdin, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(buf)) => {
+                if writer.write_all(&buf).is_err()
+                    || writer.write_all(b"\n").is_err()
+                    || writer.flush().is_err()
+                {
                     break;
                 }
             }

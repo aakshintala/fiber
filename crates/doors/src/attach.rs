@@ -6,7 +6,7 @@
 //! `close` and never opens the log: the holder keeps the only writer, and a
 //! disconnect only ends the client.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
@@ -160,16 +160,13 @@ pub(crate) fn send(
 /// not end the attach. `None` is a closed connection.
 pub(crate) fn next_line(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u8>, Value)> {
     loop {
-        let mut raw = Vec::new();
-        match reader.read_until(b'\n', &mut raw) {
-            Ok(0) | Err(_) => return None,
-            Ok(_) => {}
-        }
-        if raw.ends_with(b"\n") {
-            raw.pop();
-        }
-        if let Ok(line) = serde_json::from_slice::<Value>(&raw) {
-            return Some((raw, line));
+        match support::framing::read_line(reader, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => return None,
+            Ok(Some(raw)) => {
+                if let Ok(line) = serde_json::from_slice::<Value>(&raw) {
+                    return Some((raw, line));
+                }
+            }
         }
     }
 }
