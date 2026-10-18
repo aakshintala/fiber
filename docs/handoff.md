@@ -116,10 +116,13 @@ In order:
    description, as the rewind note does (`docs/events.md`, "Rewind").
 7. The skills loaded in the previous context, each sent again as its current
    text, in the order they were first loaded, once each
-   (`docs/tools.md`, "Skills"). An agent working under a skill keeps it across
-   a handoff without having to notice it was lost. A loaded skill whose file
-   is gone at the handoff is not sent again, and the new opening message's
-   listing leaves it out.
+   (`docs/tools.md`, "Skills"). A skill sent again counts as loaded in the
+   new context, so a later handoff sends it again too. An agent working under
+   a skill keeps it across a handoff without having to notice it was lost. A
+   loaded skill whose file is gone at the handoff is not sent again, and the
+   new opening message's listing leaves it out. A loaded skill that cannot be
+   read at the handoff, for any other reason the `skill` tool would refuse it,
+   is left out the same way, with a `notice` naming it and the reason.
 
 When a tool set `control.handoff`, the other calls in that step and their
 results follow the note verbatim, because the model had not seen them. They go
