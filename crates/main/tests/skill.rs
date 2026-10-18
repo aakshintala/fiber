@@ -18,7 +18,9 @@ use std::os::unix::fs::symlink;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Setup, function_call, hello, holds_marker, kinds, run_to_exit, stream, tool_names};
+use support::{
+    Setup, function_call, hello, holds_marker, kinds, run_to_exit, stream, text_reply, tool_names,
+};
 
 /// A finished `function_call` for `skill` with `arguments`.
 fn skill_call(call_id: &str, arguments: &Value) -> Value {
@@ -414,6 +416,127 @@ fn a_skill_linked_into_credentials_is_denied() {
         .join(key)
         .join("sessions")
         .join(running);
+    assert!(session.join("events.jsonl").is_file());
+    let mut pending = vec![session.join("artifacts")];
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(&path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                assert!(
+                    !holds_marker(&fs::read(&path).unwrap(), MARKER),
+                    "{} holds the marker",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
+    const MARKER: &str = "the secret skill body that must never be read";
+    let setup = Setup::new();
+    install_skill(
+        &setup,
+        "sec",
+        "---\nname: sec\ndescription: A secret skill.\n---\nThe secret skill body.\n",
+    );
+    // Run 1 loads the regular skill.
+    let (first, _) = ask(
+        &setup,
+        "load the secret skill",
+        vec![
+            stream(&[skill_call("call_skill", &json!({"name": "sec"}))]),
+            hello(),
+        ],
+    );
+    let id = first[0]["session_id"].as_str().unwrap().to_owned();
+
+    // The skill becomes a link into the credentials directory.
+    let target = setup.home().join("credentials/sec");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(
+        target.join("SKILL.md"),
+        format!("---\nname: sec\ndescription: A secret skill.\n---\n{MARKER}\n"),
+    )
+    .unwrap();
+    let link = setup.root.path().join(".agents/skills/sec");
+    fs::remove_dir_all(&link).unwrap();
+    symlink(fs::canonicalize(&target).unwrap(), &link).unwrap();
+
+    // The resumed turn hands off after its first reply is measured, and
+    // the resend refuses the link.
+    fs::write(setup.root.path().join("note.txt"), "a note\n").unwrap();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        text_reply("The note."),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        json!({"model": "fake/m", "handoff": {"tokens": 10, "nudge": false}}).to_string(),
+    )
+    .unwrap();
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber ask --resume",
+        setup.fiber(&["ask", "--resume", &id, "again"]),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+        .collect();
+
+    let done = line(&lines, "handoff_completed");
+    assert_eq!(done["payload"]["outcome"], "completed");
+    // The resend runs no tool: nothing is read, started or sent again.
+    assert!(
+        lines.iter().all(|line| line["kind"] != "skills_resent"),
+        "no resend of a refused skill"
+    );
+    // The turn's one call is the read; the resend starts no call.
+    let requested: Vec<_> = lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    assert_eq!(requested.len(), 1, "{requested:?}");
+    assert_eq!(requested[0]["payload"]["name"], "read");
+    let notices: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("Skill sec was not sent again after the handoff")
+        })
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    // The marker is in no request body, no stdout line and no artifact.
+    for request in server.requests() {
+        let body = serde_json::to_string(&request.body).unwrap();
+        assert!(!body.contains(MARKER), "{body}");
+    }
+    assert!(!stdout.contains(MARKER), "{stdout}");
+    let workspace = fs::canonicalize(setup.root.path()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    let session = setup
+        .home()
+        .join("projects")
+        .join(key)
+        .join("sessions")
+        .join(&id);
     assert!(session.join("events.jsonl").is_file());
     let mut pending = vec![session.join("artifacts")];
     while let Some(path) = pending.pop() {
