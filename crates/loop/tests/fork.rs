@@ -618,6 +618,7 @@ fn prepared() -> ReloadPrepared {
         extensions: vec![LoadedExtension {
             name: "fresh".into(),
             version: "2".into(),
+            replaces: Vec::new(),
         }],
         notices: Vec::new(),
         servers: vec!["kept".into()],
