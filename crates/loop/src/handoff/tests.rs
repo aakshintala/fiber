@@ -936,8 +936,9 @@ fn a_skill_the_deny_steps_refuse_is_left_out_with_the_verdicts_reason() {
     skills.list("alpha", "header\n", "Alpha body.");
     skills.list("beta", "header\n", "Beta body.");
     let beta_path = skills.files["beta"].to_string_lossy().into_owned();
+    let alpha_target = skills.files["alpha"].canonicalize().unwrap();
     let refuse = |target: &Path| {
-        (target == skills.files["alpha"]).then(|| "A standing rule refuses this call.".to_owned())
+        (target == alpha_target).then(|| "A standing rule refuses this call.".to_owned())
     };
     let (sent, left_out) = super::resent_skills(
         &skills,
@@ -1014,6 +1015,7 @@ fn a_file_that_does_not_resolve_is_left_out_as_unreadable() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_target_outside_utf8_is_left_out_as_invalid() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
