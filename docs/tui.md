@@ -1644,7 +1644,7 @@ later release still applies.
 | `/name <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
-| `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"). |
+| `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/close` | Stops the session on screen ("Quit"). |
 | `/quit` | Quits ("Quit"). |
 | `/?`, `/help` | Opens the key map. |
