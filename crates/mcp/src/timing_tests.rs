@@ -593,13 +593,12 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
         fake.await_requests(1, test_deadline.left()),
         "the initialize arrives"
     );
-    assert!(
-        setup
-            .fake
-            .await_thread_parked(worker, Some(until), test_deadline.left()),
-        "the handshake waits on the fake clock"
+    let mark = setup.fake.advance_when_parked(
+        Some(until),
+        Some(worker),
+        Duration::from_millis(5),
+        &Deadline::after(test_deadline.left()),
     );
-    let mark = setup.fake.advance_marked(Duration::from_millis(5));
     fake.release_one();
     // The held `notifications/initialized`, then the held `tools/list`.
     assert!(
@@ -639,7 +638,12 @@ fn a_held_tool_list_measures_the_advance_and_prompts_add_nothing() {
     assert_one_completion(&capture, Duration::from_millis(5));
     // More time passes only after the prompts wait signal; releasing then
     // finishes the handshake without a second line.
-    setup.fake.advance(Duration::from_millis(7));
+    setup.fake.advance_when_parked(
+        Some(until),
+        Some(worker),
+        Duration::from_millis(7),
+        &Deadline::after(test_deadline.left()),
+    );
     fake.release();
     let open = Deadline::after(WITHIN)
         .recv(&result)
@@ -668,13 +672,12 @@ fn a_failed_prompt_list_after_a_held_tool_list_writes_no_second_line() {
         fake.await_requests(1, test_deadline.left()),
         "the initialize arrives"
     );
-    assert!(
-        setup
-            .fake
-            .await_thread_parked(worker, Some(until), test_deadline.left()),
-        "the handshake waits on the fake clock"
+    let mark = setup.fake.advance_when_parked(
+        Some(until),
+        Some(worker),
+        Duration::from_millis(5),
+        &Deadline::after(test_deadline.left()),
     );
-    let mark = setup.fake.advance_marked(Duration::from_millis(5));
     fake.release_one();
     assert!(
         fake.await_requests(2, test_deadline.left()),
@@ -846,11 +849,12 @@ fn a_missed_startup_deadline_still_completes_once() {
             ))
             .unwrap_or(());
         });
-        assert!(
-            setup.fake.await_parked(until, WITHIN),
-            "the launch waits on the startup deadline"
+        setup.fake.advance_when_parked(
+            Some(until),
+            None,
+            spec.startup_timeout,
+            &Deadline::after(WITHIN),
         );
-        setup.fake.advance(spec.startup_timeout);
         let words = Deadline::after(WITHIN)
             .recv(&result)
             .unwrap_or_else(|_| panic!("the timed-out launch ends within {WITHIN:?}"));
