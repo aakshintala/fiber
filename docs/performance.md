@@ -41,7 +41,7 @@ Two rows hold work to the size of what it covers. Memory kept after 10 busy
 turns, each followed by its handoff, stays within 1 MiB of the memory kept after one, so state that grows
 with every tool call the session has ever made fails it. The `paging` jig's
 scale-16 session is about 75 MiB, the size of the owner's longest sessions;
-its re-count and search may take at most 20 times their scale-1 time in the same run, so the ratio, not the machine, decides. The page count is 16 times; the rest allows for cache capacity, which grows the time per page at 75 MiB while the work per page stays flat (#2187).
+its re-count and search may take at most 24 times their scale-1 time in the same run, so the ratio, not the machine, decides. The page count is 16 times; the rest allows for cache capacity, which grows the time per page at 75 MiB while the work per page stays flat (#2187), and for runner noise: readings run about 20 to 20.6 times (#2640).
 
 The `paging` rows measure the `tui` crate's `paging` jig (`docs/testing.md`,
 "Jigs"), a process that runs the terminal's paging over a generated session
@@ -82,8 +82,8 @@ a 20-thousand-token one fit the same ceiling.
 | `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured | 9 ms | 9 ms | 13 ms | 11 % | 5 % |
 | `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured | 67 ms | 77 ms | 99 ms | 16 % | 8 % |
 | `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured | 7 ms | 4 ms | 6 ms | 56 % | 32 % |
-| `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |
-| `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |
+| `paging` jig at scale 16, slowest re-count at a new width | 24 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |
+| `paging` jig at scale 16, a search of the whole session with no match | 24 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked | 7 ms | 6 ms | 9 ms | 21 % | 12 % |
 | Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked | 5 ms | 4 ms | 7 ms | 40 % | 23 % |
 
@@ -263,7 +263,7 @@ on `main` fails on it, which makes the fix a backstop ticket.
 A timing row gates per runner speed class when its runner's CPU model is
 eligible, and stays advisory otherwise. The two scale-16
 `paging` growth-ratio rows are the exception: like an exact or memory
-budget, a paired ratio over 20 times its same run's scale-1 sample
+budget, a paired ratio over 24 times its same run's scale-1 sample
 fails the pull request on Linux x86_64, however the base compares.
 GitHub's Linux x86_64 runners fall into three speed classes, whose
 frames_64 medians across 26 stored results (October 11 to 13, 2026; 19 from
