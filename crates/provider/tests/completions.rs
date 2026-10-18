@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+    CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
@@ -1937,4 +1937,157 @@ fn hosted_search_tool_is_sent_in_its_own_shape() {
         .0
         .unwrap();
     assert_eq!(sent_body(&server, 0)["tools"], Value::Array(want));
+}
+
+fn web_search_recording() -> Vec<u8> {
+    include_bytes!("recordings/openrouter-web-search.sse").to_vec()
+}
+
+fn annotation(url: &str) -> Value {
+    json!({"type": "url_citation",
+        "url_citation": {"url": url, "title": url,
+            "start_index": 0, "end_index": 1}})
+}
+
+fn annotated_chunk(annotations: Value) -> Value {
+    chunk(json!({"content": "a", "annotations": annotations}), None)
+}
+
+fn usage_with_searches(searches: Option<u64>) -> Value {
+    let mut details = json!({});
+    if let Some(n) = searches {
+        details["server_tool_use_details"] = json!({"web_search_requests": n});
+    }
+    json!({"id": "gen-1", "choices": [], "usage": details})
+}
+
+#[track_caller]
+fn hosted_calls(reply: &Reply) -> Vec<&contract::provider::HostedCall> {
+    reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Text(_)
+            | ReplyAction::Reasoning(_)
+            | ReplyAction::ToolCall(_)
+            | ReplyAction::HostedResult { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn hosted_search_reads_annotations_as_one_call() {
+    let bytes = web_search_recording();
+    let (reply, _) = decoded(&bytes);
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    assert_eq!(reply.web_searches, Some(2));
+    let hosted = hosted_calls(&reply);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(hosted.call.arguments, json!({}));
+    let annotations = json!([{"type": "url_citation",
+        "url_citation": {"url": "https://rust-lang.org/",
+            "title": "Rust Programming Language",
+            "start_index": 95, "end_index": 136}}]);
+    assert_eq!(
+        hosted.completed.provider_item.as_ref().unwrap(),
+        &annotations
+    );
+    assert_eq!(hosted.completed.status, CallStatus::Completed);
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://rust-lang.org/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.hosts_surfaced,
+        vec!["https://rust-lang.org/"]
+    );
+    assert_eq!(
+        reply.text(),
+        "The latest stable version of the Rust compiler is **Rust 1.99.1** \
+         (as shown on rust-lang.org). ([rust-lang.org](https://rust-lang.org/))"
+    );
+    // The hosted call comes before the text.
+    let hosted_at = reply
+        .actions
+        .iter()
+        .position(|a| matches!(a, ReplyAction::Hosted(_)))
+        .unwrap();
+    let text_at = reply
+        .actions
+        .iter()
+        .position(|a| matches!(a, ReplyAction::Text(_)))
+        .unwrap();
+    assert!(hosted_at < text_at);
+
+    // Annotations split across chunks append in order, and a repeated URL
+    // is kept once, in the order it first arrived.
+    let chunks = vec![
+        annotated_chunk(json!([annotation("https://a.example/")])),
+        annotated_chunk(json!([
+            annotation("https://a.example/"),
+            annotation("https://b.example/")
+        ])),
+        chunk(json!({"content": ""}), Some("stop")),
+        usage_with_searches(None),
+    ];
+    let (split, _) = decoded(&stream(&chunks));
+    let split = split.unwrap();
+    let hosted = hosted_calls(&split);
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", split.actions);
+    };
+    assert_eq!(
+        hosted.completed.provider_item.as_ref().unwrap(),
+        &json!([
+            annotation("https://a.example/"),
+            annotation("https://a.example/"),
+            annotation("https://b.example/")
+        ])
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://a.example/\nhttps://b.example/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.hosts_surfaced,
+        vec!["https://a.example/", "https://b.example/"]
+    );
+}
+
+#[test]
+fn search_count_comes_from_server_tool_use_details() {
+    for (searches, want) in [
+        (Some(2), Some(2)),
+        (Some(1), Some(1)),
+        (Some(0), None),
+        (None, None),
+    ] {
+        let chunks = vec![
+            chunk(json!({"content": "hi"}), Some("stop")),
+            usage_with_searches(searches),
+        ];
+        let (reply, _) = decoded(&stream(&chunks));
+        assert_eq!(reply.unwrap().web_searches, want, "{searches:?}");
+    }
+}
+
+#[test]
+fn reply_without_annotations_has_no_hosted_call() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(json!({"content": "hi"}), Some("stop")),
+        usage(10, 4, 3),
+    ]));
+    let reply = reply.unwrap();
+    assert!(hosted_calls(&reply).is_empty());
+    assert_eq!(reply.web_searches, None);
+    assert_eq!(reply.text(), "hi");
 }
