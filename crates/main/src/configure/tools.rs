@@ -102,46 +102,27 @@ impl Seam {
     ) -> Result<(), ConfigureError> {
         let config = self.load(workspace)?;
         let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let owner = match group {
+            ToolGroup::Mcp(server) => config::ToolOwner::Mcp(server),
+            ToolGroup::Extension(name) => config::ToolOwner::Extension(name),
+        };
         let layer = match scope {
-            SwitchScope::Project => config::Layer::Project,
-            SwitchScope::Everywhere => config::Layer::Global,
+            SwitchScope::Project => config::SwitchLayer::Project,
+            SwitchScope::Everywhere => config::SwitchLayer::Global,
         };
-        let prefix = prefix(group);
-        let enabled = format!("{prefix}.enabled");
-        let disabled = format!("{prefix}.disabled");
-        let below = |key: &str| match scope {
-            SwitchScope::Everywhere => None,
-            SwitchScope::Project => config
-                .in_layer(key, config::Layer::Repository)
-                .or_else(|| config.in_layer(key, config::Layer::Global))
-                .map(|value| crate::mcp_servers::strings(&value)),
-        };
-        let below_disabled = below(&disabled);
-        let below_enabled = below(&enabled);
-        let edits: Vec<config::ListEdit<'_>> = if on {
-            vec![
-                config::ListEdit {
-                    key: &disabled,
-                    name: tool,
-                    change: config::ListChange::Remove,
-                    inherited: below_disabled.as_deref(),
-                },
-                config::ListEdit {
-                    key: &enabled,
-                    name: tool,
-                    change: config::ListChange::AddIfListed,
-                    inherited: below_enabled.as_deref(),
-                },
-            ]
-        } else {
-            vec![config::ListEdit {
-                key: &disabled,
-                name: tool,
-                change: config::ListChange::Add,
-                inherited: below_disabled.as_deref(),
-            }]
-        };
-        config::edit_list(&self.home, workspace, &project, layer, &edits).map_err(from_config)?;
+        config::switch_tool(
+            &config,
+            config::ToolSwitch {
+                home: &self.home,
+                workspace,
+                project: &project,
+                owner,
+                tool,
+                layer,
+                on,
+            },
+        )
+        .map_err(from_config)?;
         Ok(())
     }
 }

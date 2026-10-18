@@ -58,27 +58,11 @@ impl Seam {
     ) -> Result<(), ConfigureError> {
         let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
         let layer = match scope {
-            SwitchScope::Project => config::Layer::Project,
-            SwitchScope::Everywhere => config::Layer::Global,
+            SwitchScope::Project => config::SwitchLayer::Project,
+            SwitchScope::Everywhere => config::SwitchLayer::Global,
         };
-        let change = if on {
-            config::ListChange::Remove
-        } else {
-            config::ListChange::Add
-        };
-        config::edit_list(
-            &self.home,
-            workspace,
-            &project,
-            layer,
-            &[config::ListEdit {
-                key: "skills.disabled",
-                name,
-                change,
-                inherited: None,
-            }],
-        )
-        .map_err(from_config)?;
+        config::switch_skill(&self.home, workspace, &project, layer, name, on)
+            .map_err(from_config)?;
         Ok(())
     }
 
