@@ -826,11 +826,11 @@ fn sigterm_on_a_session_pending_on_a_form_exits_143_suspended_and_a_reply_throug
     let hubbed = Hubbed::open(&base_and_name());
     let (requested, _) = hubbed.requested();
     let request = request_of(&requested);
-    // The session's command line carries `--workspace <path>`; the
-    // short-lived `git -C <path>` children it spawns carry the bare
-    // path, so matching the flag names the session alone. The hub
-    // itself carries neither.
-    let session_match = format!("--workspace {}", hubbed.workspace);
+    // The session's command line carries `--workspace=<path>` (one
+    // argument); the short-lived `git -C <path>` children it spawns
+    // carry the bare path, so matching the flag names the session
+    // alone. The hub itself carries neither.
+    let session_match = format!("--workspace={}", hubbed.workspace);
     let pids = fakes::matching(&session_match).unwrap();
     assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
     assert!(kill_pid(hubbed.setup.deadline, pids[0], "TERM").unwrap());
