@@ -1517,8 +1517,12 @@ impl HoldExec {
         Self { file }
     }
 
-    /// Wakes the child's `read` with a line and closes the end.
-    fn release(mut self) {
+    /// Wakes the child's `read` with a line and keeps the end open: the
+    /// buffered line survives until the child reads it, even when the
+    /// release runs before the child's open. The end closes when the value
+    /// drops, so a failure before the release still lets the child read
+    /// end-of-file and exit instead of hanging the run.
+    fn release(&mut self) {
         use std::io::Write as _;
         match writeln!(&mut self.file) {
             Ok(()) | Err(_) => {}
@@ -1550,7 +1554,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         "mkfifo {}",
         block.display()
     );
-    let hold = HoldExec::hold(&block);
+    let mut hold = HoldExec::hold(&block);
     let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
@@ -1594,15 +1598,16 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     );
 }
 
-/// A child the test kills and reaps when the test ends, so a failure
-/// before the child's exit leaves no orphan behind.
-struct ReapOnDrop(Option<std::process::Child>);
+/// Kills `group` when the test ends, so a failure before the child's
+/// exit leaves no orphan behind.
+struct KillGroupOnDrop(Option<u32>);
 
-impl Drop for ReapOnDrop {
+impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(group) = self.0.take() {
+            match fakes::kill_group(group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
         }
     }
 }
@@ -1612,7 +1617,7 @@ impl Drop for ReapOnDrop {
 /// between its signal and its `read _ < block`, so the test's release
 /// lands before the child's `block` open whatever the scheduling. Without
 /// the held end staying open, the child's `block` open blocks with no
-/// writer and the second `ready` wait below expires.
+/// writer and the exit wait below expires.
 #[test]
 fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     use std::io::Write as _;
@@ -1632,23 +1637,30 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
             fifo.display()
         );
     }
-    // The ready reader is open before the child runs, so its signal lines
-    // are never lost and its opens never block.
+    // The ready reader is open before the child runs, so its signal line
+    // is never lost and its open never blocks.
     let ready = fakes::children::Ready::new(dir.path());
-    let hold = HoldExec::hold(&block);
+    let mut hold = HoldExec::hold(&block);
     let script = format!(
-        "echo $$ > {ready}; read _ < {gate}; read _ < {block}; echo $$ > {ready}; exit 0",
+        "echo $$ > {ready}; read _ < {gate}; read _ < {block}; exit 0",
         ready = shell_quote(ready.path()),
         gate = shell_quote(&gate),
         block = shell_quote(&block),
     );
-    let child = std::process::Command::new("sh")
+    let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(&script)
         .process_group(0)
         .spawn()
         .unwrap();
-    let mut child = ReapOnDrop(Some(child));
+    let group = child.id();
+    let _kill_on_drop = KillGroupOnDrop(Some(group));
+    // The exit wait below reaps the child, so the group check after it
+    // sees no zombie.
+    let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || match exit_tx.send(child.wait()) {
+        Ok(()) | Err(_) => {}
+    });
     // The child reached its script, so it is at or on its way to the gate:
     // the gate read comes before the block open, whatever the scheduling.
     let _started = ready.wait(WAIT_FOR_TIMER);
@@ -1662,13 +1674,24 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         .open(&gate)
         .unwrap();
     gate_hold.write_all(b"\n").unwrap();
-    let _exited = ready.wait(WAIT_FOR_TIMER);
+    let deadline = Deadline::after(WAIT_FOR_TIMER);
+    match deadline.recv(&exit_rx) {
+        Ok(Ok(status)) => assert!(status.success(), "the released child exited cleanly"),
+        Ok(Err(err)) => panic!("waiting for the released child failed: {err}"),
+        Err(_) => {
+            match fakes::kill_group(group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            match deadline.cleanup_phase().recv(&exit_rx) {
+                Ok(_) | Err(_) => {}
+            }
+            panic!("waited until the deadline for the child to read the released line and exit");
+        }
+    }
     assert!(
-        fakes::group_empties(child.0.as_ref().unwrap().id(), WAIT_FOR_TIMER),
+        fakes::group_empties(group, WAIT_FOR_TIMER),
         "the released child left its group behind"
     );
-    let status = child.0.take().unwrap().wait().unwrap();
-    assert!(status.success(), "the released child exited cleanly");
 }
 
 /// A non-timer call that finishes records no `TimerDone`. Without the
