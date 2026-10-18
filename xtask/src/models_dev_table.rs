@@ -379,8 +379,8 @@ const OPENCODE_GO: Package = Package {
     protocol_overrides: &[],
     every_model: r#"{"subscription":true}"#,
     by_protocol: &[
-        // provisional: x-api-key-only auth is unprobed on OpenCode;
-        // research/opencode-probe/probe.py sent Authorization and x-api-key together.
+        // x-api-key alone authenticates Go's /v1/messages
+        // (research/opencode-xapikey-probe).
         ("anthropic-messages", OPENCODE_SESSION),
         ("openai-completions", OPENCODE_COMPLETIONS),
         ("openai-responses", OPENCODE_SESSION),

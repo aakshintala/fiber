@@ -442,3 +442,26 @@ fn signal_name_numbers_the_unknown() {
     assert_eq!(signal_name(0), "SIG0");
     assert_eq!(signal_name(999), "SIG999");
 }
+
+#[test]
+fn from_spawn_keeps_the_io_error() {
+    let converted = std::io::Error::from(Error::Spawn(std::io::Error::from(
+        std::io::ErrorKind::NotFound,
+    )));
+    assert_eq!(converted.kind(), std::io::ErrorKind::NotFound);
+}
+
+#[test]
+fn from_refused_reads_the_list_message() {
+    let converted = std::io::Error::from(Error::Refused(5));
+    assert_eq!(converted.to_string(), "refusing to list process group 5");
+}
+
+#[test]
+fn from_signal_keeps_the_source() {
+    let converted = std::io::Error::from(Error::Signal {
+        id: 9,
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    });
+    assert_eq!(converted.kind(), std::io::ErrorKind::PermissionDenied);
+}
