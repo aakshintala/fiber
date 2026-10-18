@@ -5,7 +5,7 @@
 use super::{App, Effect, Kind, Link, mint};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::offer::{OfferKey, Row, Spot};
+use crate::offer::{FileAction, OfferKey, Row, Spot};
 
 impl App {
     /// A key for the open offer, after the key map and the approval panel:
@@ -26,7 +26,7 @@ impl App {
         match self.offer.on_key(key, self.column_width(), height)? {
             OfferKey::Handled => Some(Effect::None),
             OfferKey::Send => Some(self.send_offer()),
-            OfferKey::Source => Some(self.ask_offered_file(None)),
+            OfferKey::Source => Some(self.ask_offered_file(FileAction::Open)),
         }
     }
 
@@ -38,8 +38,8 @@ impl App {
         }
         if self.offer.source_open() {
             return Some(match edit {
-                Edit::Left => self.ask_offered_file(Some(false)),
-                Edit::Right => self.ask_offered_file(Some(true)),
+                Edit::Left => self.ask_offered_file(FileAction::Prev),
+                Edit::Right => self.ask_offered_file(FileAction::Next),
                 Edit::ShiftEnter
                 | Edit::CtrlJ
                 | Edit::WordLeft
@@ -62,7 +62,7 @@ impl App {
         }
     }
 
-    fn ask_offered_file(&mut self, step: Option<bool>) -> Effect {
+    fn ask_offered_file(&mut self, action: FileAction) -> Effect {
         if self.link != Link::Up {
             return Effect::None;
         }
@@ -70,14 +70,11 @@ impl App {
             return Effect::None;
         };
         let id = mint();
-        let line = match step {
-            Some(right) => self.offer.step_file(right, &id, &session),
-            None => self.offer.ask_file(&id, &session),
-        };
+        let line = self.offer.step_file(action, &id, &session);
         if let Some(line) = line {
             return Effect::Send(vec![line]);
         }
-        if step.is_none() {
+        if action == FileAction::Open {
             self.notices
                 .push("invalid_arguments", "This item lists no files.".to_owned());
         }

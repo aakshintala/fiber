@@ -59,6 +59,14 @@ pub(crate) enum OfferKey {
     Source,
 }
 
+/// A source request from the offer's keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileAction {
+    Open,
+    Prev,
+    Next,
+}
+
 /// One drawn row before wrapping, with its click targets as column
 /// ranges. A row that carries targets is clipped at the view's width and
 /// never wraps, so a target never covers cells it does not draw.
@@ -399,12 +407,18 @@ impl Offer {
         Some(line)
     }
 
+    /// Opens the cursor item's first file or steps the open source view.
     pub(crate) fn step_file(
         &mut self,
-        right: bool,
+        action: FileAction,
         id: &str,
         session: &SessionId,
     ) -> Option<String> {
+        let right = match action {
+            FileAction::Open => return self.ask_file(id, session),
+            FileAction::Prev => false,
+            FileAction::Next => true,
+        };
         let held = self.held.as_mut()?;
         let source = held.source.as_mut()?;
         let item = held.items.get(source.item)?;
