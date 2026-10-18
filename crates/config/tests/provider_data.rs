@@ -496,6 +496,7 @@ fn reads_web_search_reads_one_type_per_protocol() {
     let kinds = [
         "web_search_20250305",
         "web_search",
+        "openrouter:web_search",
         "google_search",
         "web_search_preview",
         "",
@@ -506,6 +507,7 @@ fn reads_web_search_reads_one_type_per_protocol() {
                 (protocol, kind),
                 (Protocol::AnthropicMessages, "web_search_20250305")
                     | (Protocol::OpenaiResponses, "web_search")
+                    | (Protocol::OpenaiCompletions, "openrouter:web_search")
                     | (Protocol::GoogleGenerativeAi, "google_search")
             );
             assert_eq!(

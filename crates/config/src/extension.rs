@@ -236,14 +236,16 @@ pub enum Protocol {
 impl Protocol {
     /// Whether the protocol reads back this hosted-search tool type:
     /// `anthropic-messages` reads `web_search_20250305`,
-    /// `openai-responses` reads `web_search` and `google-generative-ai`
-    /// reads `google_search`; every other pair is unread.
+    /// `openai-responses` reads `web_search`, `openai-completions` reads
+    /// `openrouter:web_search`, and `google-generative-ai` reads
+    /// `google_search`; every other pair is unread.
     pub fn reads_web_search(self, kind: &str) -> bool {
         match self {
             Self::AnthropicMessages => kind == "web_search_20250305",
             Self::OpenaiResponses => kind == "web_search",
             Self::GoogleGenerativeAi => kind == "google_search",
-            Self::OpenaiCompletions | Self::BedrockConverse | Self::Scripted => false,
+            Self::OpenaiCompletions => kind == "openrouter:web_search",
+            Self::BedrockConverse | Self::Scripted => false,
         }
     }
 

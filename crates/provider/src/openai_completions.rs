@@ -14,8 +14,8 @@ use contract::events::{
     ToolCallRequested,
 };
 use contract::provider::{
-    CallUsage, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
-    ToolDefinition,
+    CallUsage, Delta, Finish, HostedCall, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use serde_json::{Map, Value, json};
@@ -263,6 +263,9 @@ struct Decoder {
     details: Vec<Value>,
     /// Tool calls by their wire `index`.
     calls: BTreeMap<u64, StreamedCall>,
+    /// A hosted search's result entries, as `delta.annotations` carried
+    /// them, appended in arrival order across chunks.
+    annotations: Vec<Value>,
     finish: Option<String>,
     usage: Value,
     /// The request's cache lifetime, which a reported cache write is counted
@@ -331,6 +334,11 @@ impl Decoder {
             .flatten()
         {
             self.call(call, sink);
+        }
+        // A hosted search's results arrive as `delta.annotations` entries;
+        // each chunk's entries append in order, never replace.
+        if let Some(entries) = delta.get("annotations").and_then(Value::as_array) {
+            self.annotations.extend(entries.iter().cloned());
         }
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             self.finish = Some(reason.to_owned());
@@ -488,6 +496,11 @@ impl Decoder {
                 provider_item,
             }));
         }
+        // A reply carrying search results holds one hosted call before its
+        // text: the search the provider ran for it.
+        if let Some(hosted) = hosted_search(&self.annotations) {
+            actions.push(ReplyAction::Hosted(hosted));
+        }
         if !self.text.is_empty() {
             actions.push(ReplyAction::Text(TextCompleted {
                 text: self.text,
@@ -512,11 +525,55 @@ impl Decoder {
             finish,
             generation_id: named(self.id),
             tokens: tokens(&self.usage, lifetime),
-            web_searches: None,
+            web_searches: web_searches(&self.usage),
             cost: cost(&self.usage),
             input_size: InputSize::default(),
         })
     }
+}
+
+/// One hosted search from the reply's annotation entries, or `None` when no
+/// `url_citation` URL arrived. The call names
+/// `web_search` with empty arguments, since the stream never shows the
+/// query; the completion carries the cited URLs, one per line, in the order
+/// each first arrived, duplicates dropped, with the raw entries as the
+/// `provider_item`. Only string URLs count.
+fn hosted_search(annotations: &[Value]) -> Option<HostedCall> {
+    let mut urls: Vec<&str> = Vec::new();
+    for entry in annotations {
+        if entry.get("type").and_then(Value::as_str) != Some("url_citation") {
+            continue;
+        }
+        if let Some(url) = entry.pointer("/url_citation/url").and_then(Value::as_str)
+            && !url.is_empty()
+            && !urls.contains(&url)
+        {
+            urls.push(url);
+        }
+    }
+    let item = Value::Array(annotations.to_vec());
+    if urls.is_empty() {
+        return None;
+    }
+    Some(HostedCall {
+        call: ToolCallRequested {
+            name: "web_search".to_owned(),
+            arguments: json!({}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: Some(item.clone()),
+        },
+        completed: crate::hosted::completed(item, &urls),
+    })
+}
+
+/// Hosted searches the usage reports; `None` when it reports none.
+fn web_searches(usage: &Value) -> Option<u64> {
+    usage
+        .pointer("/server_tool_use_details/web_search_requests")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
 }
 
 /// `usage` as `tokens`. OpenAI and OpenRouter count cache reads
