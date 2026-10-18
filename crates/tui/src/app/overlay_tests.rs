@@ -839,6 +839,96 @@ fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
     );
 }
 
+/// A wheel-up after a held landing releases the anchor: the wheel
+/// scrolls past `route_key`, straight through `Screen::scroll_rows`,
+/// so a later load must not jump the top back.
+#[test]
+fn a_wheel_up_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `scroll_conversation` runs for a wheel-up over the
+    // conversation: three rows up, past the key router.
+    app.attached_screen_mut().scroll_rows(true, 3, 5);
+    let top = app.attached_screen().top();
+    assert!(top.is_some(), "the wheel scrolled up from the landing");
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        top,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+/// Clicking "new below" after a held landing releases the anchor: the
+/// click follows past `route_key`, straight through `Screen::follow`,
+/// so a later load must not jump the top back.
+#[test]
+fn a_follow_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `on_click` runs for "new below": follow, past the key router.
+    app.attached_screen_mut().follow();
+    assert_eq!(app.attached_screen().top(), None, "the click follows");
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        None,
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
+/// A search jump after a held landing releases the anchor: the reveal
+/// jumps past `route_key`, straight through `Screen::jump`, so a later
+/// load must not jump the top back.
+#[test]
+fn a_search_jump_after_a_held_landing_does_not_jump_back_on_load() {
+    let (mut app, log) = held_landing_with_dropped_pages();
+    // What `reveal_current` runs for a match on a resident page: jump,
+    // past the key router and past `App::jump`.
+    app.attached_screen_mut().jump(0);
+    assert_eq!(app.attached_screen().top(), Some(0));
+    let before = landing_top_text(&app);
+    let range = app
+        .needs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("a dropped page"));
+    let page: Vec<_> = log
+        .into_iter()
+        .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
+        .collect();
+    assert!(!page.is_empty());
+    app.load(page);
+    let after = landing_top_text(&app);
+    assert_eq!(
+        app.attached_screen().top(),
+        Some(0),
+        "before: {before:?}; after: {after:?}"
+    );
+}
+
 #[test]
 fn an_empty_log_opens_no_pass() {
     let mut app = home_at(crate::OpenAt::Home);

@@ -782,7 +782,7 @@ impl App {
             pages.hold_anchor(seq, offset);
             match pages.anchored_row() {
                 Some(row) => {
-                    self.screen.jump(row);
+                    self.screen.jump_kept(row);
                     self.settle();
                 }
                 None => self.attached_screen_mut().follow(),
@@ -1286,7 +1286,7 @@ impl App {
         // or failed.
         let live = self.pass_open() || self.screen.pages().stale_owed();
         if live && let Some(row) = self.screen.pages_mut().anchored_row() {
-            self.screen.jump(row);
+            self.screen.jump_kept(row);
         }
         self.settle();
     }
