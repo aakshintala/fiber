@@ -128,7 +128,9 @@ fn read_frame(read: &mut BufReader<TcpStream>) -> Option<Frame> {
     }
 }
 
-fn git(setup: &Setup, workspace: &Path, args: &[&str]) {
+/// Runs `git` with `args` in `workspace` for fixture setup: no identity
+/// flags, and the failure reports stderr.
+fn git_setup(setup: &Setup, workspace: &Path, args: &[&str]) {
     let mut command = Command::new("git");
     command
         .args(args)
@@ -190,8 +192,8 @@ fn the_hub_searches_its_own_machine_over_the_port() {
     fs::write(workspace.join("src/hub-alpha.rs"), "hub only").unwrap();
     fs::write(workspace.join("client-untracked.rs"), "untracked").unwrap();
     fs::write(user_home.path().join("hub-home-file"), "hub home").unwrap();
-    git(&setup, workspace, &["init", "-q"]);
-    git(&setup, workspace, &["add", "src/hub-alpha.rs"]);
+    git_setup(&setup, workspace, &["init", "-q"]);
+    git_setup(&setup, workspace, &["add", "src/hub-alpha.rs"]);
     let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = free.local_addr().unwrap().port();
     drop(free);
@@ -280,9 +282,9 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
     fs::create_dir_all(workspace.join("src")).unwrap();
     fs::write(workspace.join("src/alpha.rs"), "hub only").unwrap();
     fs::write(workspace.join("beta.txt"), "hub only").unwrap();
-    git(&setup, workspace, &["init", "-q"]);
-    git(&setup, workspace, &["add", "."]);
-    git(
+    git_setup(&setup, workspace, &["init", "-q"]);
+    git_setup(&setup, workspace, &["add", "."]);
+    git_setup(
         &setup,
         workspace,
         &[

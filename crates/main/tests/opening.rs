@@ -20,9 +20,9 @@ use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{KillGroup, Run, Setup, is_status, spawn_watched};
+use support::{KillGroup, Run, Setup, hello_single_delta, is_status, spawn_watched};
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
@@ -161,7 +161,7 @@ impl Setup {
     /// `fiber ask`.
     #[track_caller]
     fn ask(&self, config: &Value) -> (Run, ProviderServer) {
-        let server = ProviderServer::start([hello()]).unwrap();
+        let server = ProviderServer::start([hello_single_delta()]).unwrap();
         self.provider_with_extra(&server, config);
         let run = self.run(&["ask", "hi"]);
         assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -190,32 +190,7 @@ impl From<Output> for Run {
     }
 }
 
-/// An `openai-responses` stream answering `Hello.`.
-fn hello() -> Response {
-    let mut body = String::new();
-    for event in [
-        json!({"type": "response.output_text.delta", "delta": "Hello."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ] {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// The event kinds of a turn answered by [`hello`]: one text fragment.
+/// The event kinds of a turn answered by [`hello_single_delta`]: one text fragment.
 const HELLO_KINDS: [&str; 14] = [
     "session_started",
     "fiber_started",
@@ -326,7 +301,7 @@ fn an_over_budget_section_ends_with_the_prune_line() {
 fn the_model_addendum_and_the_extension_prompt_reach_the_system_prompt() {
     let setup = Setup::new();
     setup.prompt_fixture("guide", "Read before shell.\n");
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = ProviderServer::start([hello_single_delta()]).unwrap();
     setup.provider_with_extra(&server, &json!({}));
     // The installed model names an addendum file holding its own text.
     write(

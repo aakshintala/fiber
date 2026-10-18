@@ -15,7 +15,7 @@ use std::sync::{Mutex, mpsc};
 use std::thread;
 
 use crate::support::{Deadline, KillGroup, Setup, group_alive};
-use fakes::{Response, Watchdog};
+use fakes::Watchdog;
 use serde_json::{Value, json};
 
 impl Setup {
@@ -36,7 +36,7 @@ impl Setup {
         for (key, value) in manifest.as_object().unwrap() {
             base[key] = value.clone();
         }
-        write_json(&source.join("extension.json"), &base);
+        crate::support::write_json(&source.join("extension.json"), &base);
         fs::write(source.join("init.lua"), init).unwrap();
         extensions::plan(
             &self.home(),
@@ -111,11 +111,6 @@ impl Setup {
             deadline: self.deadline,
         }
     }
-}
-
-pub(crate) fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
 }
 
 /// How the session stdout reader ended: an explicit EOF on a clean read
@@ -329,7 +324,7 @@ pub(crate) fn send(client: &Socket, line: &str) {
     client.send(line);
 }
 
-pub(crate) fn until(
+pub(crate) fn until_session(
     client: &Socket,
     what: &str,
     mut done: impl FnMut(&Value) -> bool,
@@ -350,7 +345,7 @@ pub(crate) fn until(
     }
 }
 
-pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
+pub(crate) fn until_session_close(client: &Socket) -> Vec<Value> {
     let mut lines = Vec::new();
     while let Some(line) = client.next("the session to close the socket", &lines) {
         lines.push(line);
@@ -358,43 +353,10 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what these tests pin.
-pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-pub(crate) fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body.into_bytes())
-}
-
-pub(crate) fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
+/// Re-exports `support`'s provider wire builders and event-kinds reader
+/// under the names the harness users call.
+#[allow(
+    unused_imports,
+    reason = "each test binary uses its own subset of the harness names"
+)]
+pub(crate) use crate::support::{hello, kinds, stream};

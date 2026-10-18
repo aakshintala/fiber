@@ -23,7 +23,9 @@ use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Run, Setup, function_call, hello_single_delta as hello, outputs_sent, stream};
+use support::{
+    Run, Setup, function_call, hello_single_delta as hello, outputs_sent, stream, write_json,
+};
 
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
@@ -338,11 +340,6 @@ fn install_hosted_model(setup: &Setup, server: &ProviderServer) {
         &setup.home().join("config.json"),
         &json!({"model": "fake/r"}),
     );
-}
-
-fn write_json(file: &std::path::Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
 }
 
 #[test]
