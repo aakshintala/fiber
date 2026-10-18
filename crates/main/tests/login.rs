@@ -34,7 +34,7 @@ use fakes::{ProviderServer, Response, Watchdog};
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Setup, group_alive, spawn_watched};
+use support::{Deadline, KillGroup, Output, Setup, group_alive, spawn_watched};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -108,7 +108,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` and `input` on a closed pipe for stdin.
     #[track_caller]
-    fn run_with_input(&self, args: &[&str], input: &str) -> Run {
+    fn run_with_input(&self, args: &[&str], input: &str) -> Output {
         let mut command = self.command(args);
         command
             .stdin(Stdio::piped())
@@ -121,7 +121,7 @@ impl Setup {
     /// `input`, and stdout/stderr on pipes: stdin is a terminal while
     /// standard error is not, so there is nobody to ask.
     #[track_caller]
-    fn run_with_terminal_stdin(&self, args: &[&str], input: &str) -> Run {
+    fn run_with_terminal_stdin(&self, args: &[&str], input: &str) -> Output {
         let terminal = Terminal::open();
         let mut command = self.command(args);
         command
@@ -163,17 +163,13 @@ impl Setup {
         assert!(terminal.echoes(), "echo was not restored");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 
     /// Runs `command` with piped outputs and `input` fed on a thread,
     /// waiting for the exit under the deadline with nothing left behind.
     #[track_caller]
-    fn run_piped(&self, command: &mut Command, args: &[&str], input: &str) -> Run {
+    fn run_piped(&self, command: &mut Command, args: &[&str], input: &str) -> Output {
         let (mut child, watchdog) = spawn_watched(command);
         let group = child.id();
         let guard = KillGroup(group);
@@ -195,11 +191,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 
     /// Starts `fiber` with stdin and stderr on a new pseudo-terminal.
@@ -266,12 +258,6 @@ impl Setup {
         walk(&self.home(), needle, &mut found);
         found
     }
-}
-
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
 }
 
 /// Writes `input` to the child's stdin on a thread and closes it, so a
@@ -867,7 +853,7 @@ struct DeviceHold {
 /// Runs `fiber login codex --device`, reading stderr until `needle`
 /// shows, then waiting for the exit under the deadline.
 #[track_caller]
-fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceHold>) -> Run {
+fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceHold>) -> Output {
     let mut command = setup.command(args);
     command
         .stdin(Stdio::piped())
@@ -1036,7 +1022,7 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
     );
     std::mem::forget(guard);
     watchdog.stand_down(setup.deadline.cleanup());
-    Run {
+    Output {
         code: output.status.code(),
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8_lossy(&stderr).into_owned(),

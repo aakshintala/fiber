@@ -237,10 +237,13 @@ impl Fiber {
             raw: raw
                 .into_iter()
                 .zip(&seen)
-                .filter(|(_, line)| !is_status(line))
+                .filter(|(_, line)| !is_status_line(line))
                 .map(|(text, _)| text)
                 .collect(),
-            lines: seen.into_iter().filter(|line| !is_status(line)).collect(),
+            lines: seen
+                .into_iter()
+                .filter(|line| !is_status_line(line))
+                .collect(),
             stderr: match deadline.recv(&stderr) {
                 Ok(text) => text,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -265,7 +268,7 @@ fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
 
 /// A `session_status` line, written by an observer thread: where it falls
 /// is not what these tests pin.
-fn is_status(line: &Value) -> bool {
+fn is_status_line(line: &Value) -> bool {
     line["kind"] == "session_status"
 }
 

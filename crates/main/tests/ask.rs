@@ -18,18 +18,18 @@ use std::fs;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
+use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, Setup, git, group_alive, hello_inline_completed as hello, is_status,
+    Deadline, HELLO_KINDS, KillGroup, Setup, git, group_alive, hello_inline_completed as hello,
+    is_status, spawn_watched,
 };
 
 #[path = "../../provider/tests/support/probes.rs"]
@@ -94,13 +94,13 @@ impl Setup {
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
     #[track_caller]
-    fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
+    fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> TextRun {
         self.run(home, args, Stdio::piped(), stdin, &[])
     }
 
     /// Runs `fiber` with `args` and the extra environment `env`.
     #[track_caller]
-    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> TextRun {
         let home = self.home();
         self.run(home.to_str().unwrap(), args, Stdio::piped(), None, env)
     }
@@ -114,20 +114,20 @@ impl Setup {
 
     /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
     #[track_caller]
-    fn fiber_on_terminal(&self, args: &[&str]) -> Run {
+    fn fiber_on_terminal(&self, args: &[&str]) -> TextRun {
         self.fiber_typing(args, "")
     }
 
     /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
     /// `typed` was already typed.
     #[track_caller]
-    fn fiber_typing(&self, args: &[&str], typed: &str) -> Run {
+    fn fiber_typing(&self, args: &[&str], typed: &str) -> TextRun {
         self.fiber_typing_env(args, typed, &[])
     }
 
     /// [`Self::fiber_typing`] with extra environment variables.
     #[track_caller]
-    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Run {
+    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> TextRun {
         let terminal = Terminal::open();
         let mut main = fs::File::from(terminal.main.try_clone().unwrap());
         let typed = typed.to_owned();
@@ -151,7 +151,7 @@ impl Setup {
         stdin: Stdio,
         text: Option<&str>,
         env: &[(&str, &str)],
-    ) -> Run {
+    ) -> TextRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -198,11 +198,11 @@ impl Setup {
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        TextRun::from(output)
     }
 
     #[track_caller]
-    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Run {
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> TextRun {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
 
@@ -210,7 +210,7 @@ impl Setup {
     /// still holds stays open until this returns, so an unread pipe is open
     /// when `fiber` exits.
     #[track_caller]
-    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
+    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> TextRun {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
     }
 }
@@ -258,44 +258,24 @@ impl Terminal {
     }
 }
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. The watchdog's stdin is a pipe only this process holds: a newline
-/// means the child is reaped, and EOF means this process died, so the
-/// watchdog kills the group. The watchdog is started immediately after the
-/// child; a kill in the gap between the two spawns can still orphan it.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    // A failed watchdog spawn still kills the child on unwind.
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
+/// One finished run that keeps stdout's text and raw lines: the help and
+/// `list` tests pin the text, the others read parsed lines. Shared behaviour
+/// (`kinds`, `session_id`) comes from the inner run.
+struct TextRun {
+    run: support::Run,
+    stdout: String,
+    raw: Vec<String>,
 }
 
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
+impl std::ops::Deref for TextRun {
+    type Target = support::Run;
 
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        // A panic between spawn and reap still kills the group. Failure
-        // here is ignored: the process may already be gone.
-        support::kill_group_detached(self.0, "KILL");
+    fn deref(&self) -> &Self::Target {
+        &self.run
     }
 }
 
-/// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    raw: Vec<String>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
-impl From<Output> for Run {
+impl From<Output> for TextRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let raw: Vec<String> = stdout
@@ -309,29 +289,20 @@ impl From<Output> for Run {
             .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             stdout,
             raw,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|l| l["kind"].as_str().unwrap())
-            .collect()
-    }
-
+impl TextRun {
     fn last(&self) -> &Value {
         self.lines.last().expect("stdout has a line")
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
     }
 
     /// The session's directory, from its id.
@@ -406,7 +377,7 @@ fn completions_hello(id: &str, cost: Value) -> Response {
 }
 
 /// The text of the first message in the session's `turn_started`.
-fn turn_input(run: &Run) -> &str {
+fn turn_input(run: &TextRun) -> &str {
     let started = run
         .lines
         .iter()
@@ -487,7 +458,7 @@ fn install_docs_skills(home: &Path) {
     }
 }
 
-fn opening_skills(run: &Run) -> Vec<(String, String, String)> {
+fn opening_skills(run: &TextRun) -> Vec<(String, String, String)> {
     let opening = run
         .lines
         .iter()
@@ -600,7 +571,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
 }
 
 /// The one line stdout holds when the process failed before any session.
-fn assert_pre_session(run: &Run, exit: i32, code: &str) {
+fn assert_pre_session(run: &TextRun, exit: i32, code: &str) {
     assert_eq!(run.code, Some(exit));
     assert_eq!(run.kinds(), ["fiber_exited"]);
     let line = run.last();
@@ -909,7 +880,7 @@ Examples:
   fiber help ask
 "#;
 
-fn printed(run: &Run) -> String {
+fn printed(run: &TextRun) -> String {
     if run.raw.is_empty() {
         String::new()
     } else {
@@ -917,7 +888,7 @@ fn printed(run: &Run) -> String {
     }
 }
 
-fn assert_help(run: &Run, about: &str) {
+fn assert_help(run: &TextRun, about: &str) {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stderr, "");
     let text = printed(run);
@@ -1627,7 +1598,7 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
 }
 
 /// Asserts a completed turn that answered the weather question.
-fn assert_weather(run: &Run) {
+fn assert_weather(run: &TextRun) {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let step = [
         "step_started",
@@ -2426,7 +2397,7 @@ fn openrouter_claude_request(
     setup: &Setup,
     home_config: Value,
     repo_config: Option<Value>,
-) -> (Run, Value) {
+) -> (TextRun, Value) {
     install(
         setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2463,7 +2434,7 @@ fn openrouter_claude_request(
 
 /// A 5-minute run records `"5m"` in `preamble_built` and marks the system
 /// and last-message blocks with a `ttl`-less marker.
-fn assert_five_minute_markers(run: &Run, body: &Value) {
+fn assert_five_minute_markers(run: &TextRun, body: &Value) {
     assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
@@ -4096,7 +4067,7 @@ fn requested_models(server: &ProviderServer) -> Vec<String> {
 }
 
 /// The reviewed call's `permission_resolved` line.
-fn resolved(run: &Run) -> &Value {
+fn resolved(run: &TextRun) -> &Value {
     run.lines
         .iter()
         .find(|line| line["kind"] == "permission_resolved")
@@ -4198,7 +4169,7 @@ fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
 
 /// One `fiber ask` run without the provider key in its environment: the
 /// startup wire diagnoses the same failure doctor names.
-fn ask_without_key(setup: &Setup, args: &[&str]) -> Run {
+fn ask_without_key(setup: &Setup, args: &[&str]) -> TextRun {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
         .args(args)
@@ -4212,7 +4183,7 @@ fn ask_without_key(setup: &Setup, args: &[&str]) -> Run {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    Run::from(support::run_to_exit(
+    TextRun::from(support::run_to_exit(
         setup.deadline,
         "`fiber ask` with no key to exit",
         command,

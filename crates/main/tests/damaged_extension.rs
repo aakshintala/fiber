@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::{Value, json};
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 /// The damaged extension's full name and directory.
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
@@ -125,7 +125,7 @@ impl Setup {
     /// Runs `fiber extension` with `args` and no terminal, so it does not
     /// ask.
     #[track_caller]
-    fn extension(&self, args: &[&str]) -> Run {
+    fn extension(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(["extension"])
@@ -153,11 +153,7 @@ impl Setup {
             ),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 
     /// Runs `fiber ask` from the workspace: its exit code, its stdout
@@ -205,7 +201,7 @@ impl Setup {
     /// Runs `fiber` with `args` and `input` on stdin, no terminal, with
     /// the same watchdog and deadline as `extension`.
     #[track_caller]
-    fn run_with_input(&self, args: &[&str], input: &str) -> Run {
+    fn run_with_input(&self, args: &[&str], input: &str) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -240,22 +236,12 @@ impl Setup {
             ),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 }
 
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
 /// How many of stderr's lines are the skip line.
-fn skips(run: &Run) -> usize {
+fn skips(run: &Output) -> usize {
     run.stderr.lines().filter(|line| *line == SKIP).count()
 }
 

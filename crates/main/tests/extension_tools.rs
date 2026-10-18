@@ -18,56 +18,19 @@ mod support;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Output;
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Setup, function_call, hello_single_delta as hello, on_disk, outputs_sent, stream};
+use support::{
+    Setup, StdoutRun, function_call, hello_single_delta as hello, on_disk, outputs_sent, stream,
+};
 
 /// One finished `fiber ask`: its exit code, its stdout lines parsed (less
 /// `session_status`, which an observer thread writes), its raw stdout and
 /// its stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stdout: String,
-    stderr: String,
-}
-
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|line| !line.contains(r#""kind":"session_status""#))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            code: output.status.code(),
-            lines,
-            stdout,
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
-    }
-}
-
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn all(&self, kind: &str) -> Vec<&Value> {
-        self.lines
-            .iter()
-            .filter(|line| line["kind"] == kind)
-            .collect()
-    }
-
+impl StdoutRun {
     fn payload(&self, kind: &str) -> &Value {
         &self
             .lines
@@ -129,7 +92,7 @@ impl Run {
 /// started is left in the group. A watchdog kills the group if this
 /// process dies first.
 #[track_caller]
-fn ask(setup: &Setup, prompt: &str) -> Run {
+fn ask(setup: &Setup, prompt: &str) -> StdoutRun {
     let mut command = setup.fiber(&["ask", prompt]);
     command.current_dir(setup.workspace());
     let child = command.spawn().unwrap();
@@ -146,7 +109,7 @@ fn ask(setup: &Setup, prompt: &str) -> Run {
         "`fiber` left a process in its group behind"
     );
     watchdog.stand_down(setup.deadline.cleanup());
-    let run = Run::from(output);
+    let run = StdoutRun::from(output);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     run
 }
@@ -170,7 +133,7 @@ fn sent_names(server: &ProviderServer, index: usize) -> Vec<String> {
 /// The complete event kinds of a run whose model makes one step of calls,
 /// then answers: `loading` follows `extensions_loaded`, `decided` follows
 /// the first step's `assistant_message_completed`, and `ran` follows that.
-fn kinds(
+fn expected_kinds(
     loading: &[&'static str],
     requested: usize,
     decided: &[&'static str],
@@ -255,7 +218,7 @@ fn an_extension_tool_is_declared_in_full_runs_and_its_result_passes_the_hooks() 
            run = function(call) return { content = call.content .. \"|t\" } end })\n",
     );
     let run = ask(&setup, "count the notes");
-    assert_eq!(run.kinds(), kinds(&[], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
     assert_eq!(run.loaded(), ["fake", "fiber.test/notes", "fiber.test/tag"]);
     let names = sent_names(&server, 0);
     let mut sorted = names.clone();
@@ -312,7 +275,7 @@ fn each_call_is_judged_on_the_effects_its_arguments_declare() {
     let run = ask(&setup, "peek at both");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             2,
             &["permission_resolved"],
@@ -340,7 +303,7 @@ fn each_call_is_judged_on_the_effects_its_arguments_declare() {
 }
 
 /// The `action_id` of the run's one `permission_resolved`.
-fn resolved_action(run: &Run) -> Value {
+fn resolved_action(run: &StdoutRun) -> Value {
     run.all("permission_resolved")[0]["action_id"].clone()
 }
 
@@ -361,7 +324,7 @@ fn an_executes_call_with_no_reviewer_is_denied_and_never_runs() {
     let run = ask(&setup, "launch it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &["notice", "permission_resolved"],
@@ -395,7 +358,7 @@ fn a_declared_replacement_of_read_is_the_read_tool() {
         json!({"replaces": ["read"]}),
     );
     let run = ask(&setup, "read the note");
-    assert_eq!(run.kinds(), kinds(&[], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
     assert_eq!(
         run.payload("preamble_built")["replaced"],
         json!([{"name": "read", "from": "builtin", "to": "fiber.test/myread"}])
@@ -425,7 +388,7 @@ fn an_undeclared_replacement_of_read_unloads_its_extension() {
         ),
     );
     let run = ask(&setup, "read the note");
-    assert_eq!(run.kinds(), kinds(&["notice"], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&["notice"], 1, &[], RAN));
     assert_eq!(
         run.notices(),
         [(
@@ -460,7 +423,7 @@ fn a_tool_without_a_timeout_is_not_declared_and_its_neighbour_is() {
         ),
     );
     let run = ask(&setup, "use the tool");
-    assert_eq!(run.kinds(), kinds(&["notice"], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&["notice"], 1, &[], RAN));
     assert_eq!(
         run.notices(),
         [(
@@ -488,7 +451,7 @@ fn two_extensions_registering_one_tool_name_both_lose_it() {
         &format!("{}{}", saying("dup", "b"), saying("only_b", "b")),
     );
     let run = ask(&setup, "use the tools");
-    assert_eq!(run.kinds(), kinds(&["notice"], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&["notice"], 1, &[], RAN));
     assert_eq!(
         run.notices(),
         [(
@@ -518,7 +481,7 @@ fn a_tool_spinning_past_its_timeout_fails_timeout_and_the_session_goes_on() {
         ),
     );
     let run = ask(&setup, "spin");
-    assert_eq!(run.kinds(), kinds(&[], 1, &[], RAN));
+    assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "failed");
     assert_eq!(completed["error"]["code"], "timeout");
@@ -566,7 +529,7 @@ fn a_null_reaches_the_tool_as_absent_only_for_an_optional_property() {
     // keeps its null, which its type allows, and sees `"present"`.
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             2,
             &[],
@@ -622,7 +585,7 @@ fn an_extension_tool_calling_host_tool_sees_the_inner_outcome() {
     let run = ask(&setup, "fetch it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],
@@ -709,7 +672,7 @@ fn a_sanitize_hook_redacts_an_inner_call_before_the_script_sees_it() {
     let run = ask(&setup, "fetch it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],
@@ -764,7 +727,7 @@ fn an_inner_call_to_a_credential_path_is_denied() {
     let run = ask(&setup, "leak it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],
@@ -833,7 +796,7 @@ fn a_standing_deny_refuses_an_inner_call() {
     let run = ask(&setup, "fetch it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],
@@ -885,7 +848,7 @@ fn a_standing_ask_still_runs_an_inner_call() {
     let run = ask(&setup, "fetch it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],
@@ -936,7 +899,7 @@ fn cancelling_the_outer_call_cancels_its_inner_calls() {
     let run = ask(&setup, "spin it");
     assert_eq!(
         run.kinds(),
-        kinds(
+        expected_kinds(
             &[],
             1,
             &[],

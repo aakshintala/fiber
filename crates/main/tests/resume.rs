@@ -94,7 +94,7 @@ impl Setup {
     /// test's [`Deadline`]. A watchdog beside it kills that group if this process
     /// dies first.
     #[track_caller]
-    fn run_in_workspace(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> RawRun {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -128,7 +128,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        RawRun::from(output)
     }
 }
 
@@ -137,16 +137,23 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
+/// One finished run that keeps stdout's raw lines: the resume tests compare
+/// them against the session log. Shared behaviour (`kinds`, `session_id`)
+/// comes from the inner run.
+struct RawRun {
+    run: support::Run,
     raw: Vec<String>,
-    lines: Vec<Value>,
-    stderr: String,
 }
 
-impl From<Output> for Run {
+impl std::ops::Deref for RawRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<Output> for RawRun {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let raw: Vec<String> = stdout
@@ -159,28 +166,19 @@ impl From<Output> for Run {
             .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
             .collect();
         Self {
-            code: output.status.code(),
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
             raw,
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
 }
 
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|l| l["kind"].as_str().unwrap())
-            .collect()
-    }
-
+impl RawRun {
     fn last(&self) -> &Value {
         self.lines.last().expect("stdout has a line")
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
     }
 
     /// Stdout's durable lines for its session, one per line with the newline.
@@ -197,7 +195,7 @@ impl Run {
 }
 
 /// The one line stdout holds when the process failed before any session.
-fn assert_pre_session(run: &Run, exit: i32, code: &str) {
+fn assert_pre_session(run: &RawRun, exit: i32, code: &str) {
     assert_eq!(run.code, Some(exit), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), ["fiber_exited"]);
     let line = run.last();
@@ -722,7 +720,7 @@ fn ask_kinds(resumed: bool) -> Vec<&'static str> {
     kinds
 }
 
-fn preamble_label(run: &Run) -> Value {
+fn preamble_label(run: &RawRun) -> Value {
     let built = run.lines.iter().find(|l| l["kind"] == "preamble_built");
     built.unwrap()["payload"]["credential"].clone()
 }
