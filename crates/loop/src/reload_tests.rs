@@ -104,6 +104,14 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
 }
 struct EmptyRepository;
 impl contract::repository::RepositoryCode for EmptyRepository {
+    fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+        Err(contract::shapes::Failure {
+            code: contract::ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
     fn unapproved(&self) -> Result<Vec<contract::repository::Unapproved>, Failure> {
         Ok(Vec::new())
     }

@@ -3076,6 +3076,7 @@ fn close_keeps_a_session_whose_log_holds_an_offer_and_no_turn() {
     let offered = Event::RepositoryCodeOffered(RepositoryCodeOffered {
         request_id: contract::RequestId("r_1".into()),
         items: vec![OfferedItem {
+            files: vec![],
             kind: OfferedKind::McpServer,
             name: "db".into(),
             hash: "0".repeat(64),

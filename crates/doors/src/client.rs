@@ -385,6 +385,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Reload(ack));
         }
+        Command::OfferedFile(args) => crate::offered::answer(conn, id, &args),
         Command::Unknown => unknown(conn, id, name),
         Command::ArtifactPage(args) => crate::artifact::run(conn, id, args),
     }
