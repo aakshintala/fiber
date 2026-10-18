@@ -2,7 +2,6 @@
 //! `fiber` process installs it first, and it writes one crash report before
 //! the process aborts.
 
-use std::ffi::OsString;
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -15,22 +14,22 @@ use std::time::UNIX_EPOCH;
 /// exists yet, when the file is named by the process id instead.
 static SESSION: OnceLock<String> = OnceLock::new();
 
-/// Installs the panic hook. `fiber_home` and `home` are the values of
-/// `FIBER_HOME` and `HOME`, resolved with `config::fiber_home` only when a
-/// panic happens, so installing creates nothing. `clock` dates the file.
-pub(crate) fn install(
-    fiber_home: Option<OsString>,
-    home: Option<OsString>,
+/// Installs the panic hook. `home` resolves Fiber home only when a panic
+/// happens, so installing creates nothing; `restore` puts the terminal
+/// back before the report is built and written; `clock` dates the file.
+pub fn install(
+    home: Box<dyn Fn() -> Result<PathBuf, String> + Send + Sync>,
+    restore: fn(),
     clock: Arc<dyn contract::clock::Clock>,
 ) {
     std::panic::set_hook(Box::new(move |info: &PanicHookInfo<'_>| {
-        hook(info, &fiber_home, &home, &clock);
+        hook(info, &home, restore, &clock);
     }));
 }
 
 /// Names later crash files by this session id. The first call wins; later
 /// calls do nothing.
-pub(crate) fn attach(id: &contract::SessionId) {
+pub fn attach(id: &contract::SessionId) {
     match SESSION.set(id.0.clone()) {
         Ok(()) | Err(_) => {}
     }
@@ -44,11 +43,11 @@ pub(crate) fn attach(id: &contract::SessionId) {
 /// "What a panic leaves").
 fn hook(
     info: &PanicHookInfo<'_>,
-    fiber_home: &Option<OsString>,
-    home: &Option<OsString>,
+    home: &dyn Fn() -> Result<PathBuf, String>,
+    restore: fn(),
     clock: &Arc<dyn contract::clock::Clock>,
 ) {
-    tui::restore();
+    restore();
     let thread = std::thread::current();
     let name = thread.name().unwrap_or("<unnamed>");
     let location = info.location().map_or_else(
@@ -63,7 +62,7 @@ fn hook(
         .map(|past| past.as_millis())
         .unwrap_or(0);
     let file = file_name(SESSION.get().map(String::as_str), std::process::id(), ms);
-    let stderr = match write_report(fiber_home.clone(), home.clone(), &file, &reported) {
+    let stderr = match write_report(home(), &file, &reported) {
         Ok(path) => format!(
             "{reported}fiber: crash report written to {}\n",
             path.display()
@@ -95,17 +94,15 @@ fn file_name(session: Option<&str>, pid: u32, ms: u128) -> String {
     }
 }
 
-/// Writes `reported` to `crashes/<file>` under Fiber home, creating a
-/// missing home and `crashes/` mode 0700 and the file itself mode 0600. The
-/// file's path, or why no file was written.
+/// Writes `reported` to `crashes/<file>` under the resolved home, creating
+/// a missing home and `crashes/` mode 0700 and the file itself mode 0600.
+/// The file's path, or why no file was written.
 fn write_report(
-    fiber_home: Option<OsString>,
-    home: Option<OsString>,
+    home: Result<PathBuf, String>,
     file: &str,
     reported: &str,
 ) -> Result<PathBuf, String> {
-    let home = config::fiber_home(fiber_home, home).map_err(|e| e.to_string())?;
-    let crashes = config::crashes_dir(&home);
+    let crashes = home?.join("crashes");
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)

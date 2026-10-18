@@ -8,7 +8,7 @@ use std::path::Path;
 use contract::events::{Event, Parent, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
-use contract::{ActionId, Seq};
+use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::Value;
 
 use crate::prompt::{fill, message};
@@ -131,6 +131,39 @@ pub fn fork_task(parent: &contract::SessionId, depth: u32, prompt: &str) -> Stri
             ("prompt", prompt),
         ],
     )
+}
+
+/// The point `new` continues from, from the old log's last line: `seq`
+/// counts in the old session's log, or in `from_session_id`'s when an
+/// ancestor point names one. Anything else is [`Error::NotRewound`].
+pub fn rewound_from(
+    last: Option<Envelope>,
+    new: &SessionId,
+    old: &SessionId,
+) -> Result<(Point, Option<String>), Error> {
+    let not_rewound = || Error::NotRewound {
+        old: old.clone(),
+        new: new.clone(),
+    };
+    let Some(last) = last else {
+        return Err(not_rewound());
+    };
+    if last.kind != "rewound" {
+        return Err(not_rewound());
+    }
+    let rewound: contract::events::Rewound =
+        serde_json::from_value(serde_json::Value::Object(last.payload))
+            .map_err(|_| not_rewound())?;
+    if rewound.new_session_id != *new {
+        return Err(not_rewound());
+    }
+    Ok((
+        Point {
+            session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
+            seq: rewound.seq,
+        },
+        rewound.summary,
+    ))
 }
 
 /// The latest `session_named` in the log in `dir`, read from the end

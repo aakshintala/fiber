@@ -107,7 +107,7 @@ pub(crate) fn ask_resume(
     }
     // A resume that attaches to a live session names the crash file by the
     // session it attaches to, as the TUI does.
-    crate::crash::attach(&id);
+    log::crash::attach(&id);
     // `Log::open` takes the lock first; the log is folded under it.
     // A held lock means a live session: attach to it instead of opening a
     // second writer (`docs/invocation.md`, "Processes"). Its failure
@@ -193,7 +193,7 @@ pub(crate) fn session_resume(
         }
     };
     let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    crate::crash::attach(&id);
+    log::crash::attach(&id);
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),

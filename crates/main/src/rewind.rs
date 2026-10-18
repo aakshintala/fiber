@@ -11,8 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::shapes::{Failure, Point};
-use contract::{Envelope, ErrorCode, SessionId};
+use contract::{ErrorCode, SessionId};
 
 use crate::{ask_failed, failed};
 
@@ -52,9 +51,9 @@ pub(crate) fn session_rewound(
             format!("No session `{}`.", old.0),
         ));
     }
-    let (point, summary) = match point_of(log::last_line(&old_dir), &new, &old) {
+    let (point, summary) = match r#loop::rewound_from(log::last_line(&old_dir), &new, &old) {
         Ok(point) => point,
-        Err(failure) => return ask_failed(failure),
+        Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = sessions.join(&point.session_id.0);
     let forked = match r#loop::forked(&dir, point.seq) {
@@ -105,46 +104,3 @@ pub(crate) fn session_rewound(
         Err(failure) => super::session_command::report(signals, failure),
     }
 }
-
-/// The point `new` continues from, from the old log's last line: `seq`
-/// counts in the old session's log, or in `from_session_id`'s when an
-/// ancestor point names one. Anything else is `invalid_arguments`.
-fn point_of(
-    last: Option<Envelope>,
-    new: &SessionId,
-    old: &SessionId,
-) -> Result<(Point, Option<String>), Failure> {
-    let Some(last) = last else {
-        return Err(invalid(old, new));
-    };
-    if last.kind != "rewound" {
-        return Err(invalid(old, new));
-    }
-    let rewound: contract::events::Rewound =
-        serde_json::from_value(serde_json::Value::Object(last.payload))
-            .map_err(|_| invalid(old, new))?;
-    if rewound.new_session_id != *new {
-        return Err(invalid(old, new));
-    }
-    Ok((
-        Point {
-            session_id: rewound.from_session_id.unwrap_or_else(|| old.clone()),
-            seq: rewound.seq,
-        },
-        rewound.summary,
-    ))
-}
-
-fn invalid(old: &SessionId, new: &SessionId) -> Failure {
-    failed(
-        ErrorCode::InvalidArguments,
-        format!(
-            "Session `{}` was not rewound for session `{}`.",
-            old.0, new.0
-        ),
-    )
-}
-
-#[cfg(test)]
-#[path = "rewind_tests.rs"]
-mod tests;
