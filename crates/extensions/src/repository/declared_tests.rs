@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::{RepoItem, declared_items, mcp_server_item};
 use crate::Error;
 use crate::git::GIT_DEADLINE;
-use crate::host::exec::{GRACE, GROUP_POLL};
+use support::group::{GRACE, GROUP_POLL};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
