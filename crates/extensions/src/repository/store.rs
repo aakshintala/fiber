@@ -165,17 +165,16 @@ impl Store {
     /// reads without building a store.
     fn approvals_in(home: &Path, project: &ProjectKey, kind: OfferedKind) -> PathBuf {
         match kind {
-            OfferedKind::Extension | OfferedKind::Hook => home
-                .join("projects")
-                .join(project.as_str())
-                .join("approvals"),
-            OfferedKind::McpServer => home.join("approvals"),
+            OfferedKind::Extension | OfferedKind::Hook => {
+                config::project_approvals_dir(home, project)
+            }
+            OfferedKind::McpServer => config::machine_approvals_dir(home),
         }
     }
 
     /// Where the copy of a content is kept.
     pub fn copy_dir(&self, hash: &str) -> PathBuf {
-        self.home.join("pinned").join(hash)
+        config::pinned_dir(&self.home).join(hash)
     }
 
     /// The decision recorded for this content, if any.

@@ -297,8 +297,8 @@ impl Providers {
     /// Reads the session's providers from the merged personal and
     /// repository entries: an approved repository copy replaces the
     /// personal install of the same name, with one notice naming both,
-    /// whether or not it is enabled. Damaged personal installs keep
-    /// today's notice.
+    /// whether or not it is enabled. A damaged personal install keeps
+    /// its `extension_failed` notice.
     pub fn load_repository(
         home: &Path,
         config: &config::Config,

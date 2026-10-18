@@ -116,8 +116,8 @@ pub(crate) fn unwritten(
 }
 
 /// How the session's repository approvals fetch dependencies: the github
-/// `Origin`, this binary's version, on `clock`. No repository set is
-/// loaded here; that is Part 2.
+/// `Origin`, this binary's version, on `clock`. The repository set load
+/// takes it.
 pub(crate) fn fetch(clock: &Arc<dyn contract::clock::Clock>) -> extensions::Fetch {
     extensions::Fetch::new(
         extensions::Origin::github(),
