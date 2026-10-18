@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use contract::{ErrorCode, SessionId};
 
 pub use artifact::{Refusal, check_artifact_path, open_artifact};
-pub use dependents::dependents;
+pub use dependents::{Children, dependents};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use name::session_name;
