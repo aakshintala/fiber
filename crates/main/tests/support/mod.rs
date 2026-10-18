@@ -543,6 +543,16 @@ impl HubProc {
     }
 }
 
+/// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
+pub(crate) struct Running {
+    pub(crate) child: Child,
+    pub(crate) watchdog: Watchdog,
+    pub(crate) group: u32,
+    pub(crate) stdout: mpsc::Receiver<String>,
+    pub(crate) stderr: Arc<Mutex<String>>,
+    pub(crate) deadline: Deadline,
+}
+
 /// A client on the hub's socket or a session's. Every read and write takes
 /// what remains of the test's [`Deadline`]: expiry panics naming what was
 /// awaited, while the far end closing the socket ends [`until_close`] and
