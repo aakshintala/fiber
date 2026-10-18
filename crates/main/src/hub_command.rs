@@ -272,6 +272,10 @@ fn apply(command: &mut Command, environment: &hub::Environment) {
 /// The session command a `start` spawns: one `-c` per override, in
 /// order. An override travels through `to_argv`, which keeps a value
 /// starting with `-` attached to its flag.
+// debt: the hub builds three full SessionArgs literals (resume, start
+// and session) with the same login-shell note on each; replace them
+// with one base value plus struct update when a fourth hub SessionArgs
+// appears.
 fn start_command(
     exe: &Path,
     id: &SessionId,

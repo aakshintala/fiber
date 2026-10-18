@@ -837,7 +837,8 @@ fn terminal(
 /// Starts `fiber hub serve` detached, as every client of the hub does when
 /// none is running (`docs/invocation.md`, "The hub"). The child is handed
 /// to its reaper thread at once: the hub keeps running while the thread
-/// owns its wait, and a thread that never starts leaves it unreaped.
+/// owns its wait. A reaper thread that never starts leaves the child
+/// running unreaped, and its failure is recorded in the diagnostic log.
 fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
     let exe = exe.map_err(io::Error::other)?;
     let child = std::process::Command::new(exe)
@@ -848,9 +849,13 @@ fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
         .stderr(std::process::Stdio::null())
         .process_group(0)
         .spawn()?;
-    match reap::on_thread(child) {
-        Ok(_) | Err(_) => Ok(()),
+    if let Err(error) = reap::on_thread(child) {
+        startup_log::record(
+            &failed(ErrorCode::IoFailed, format!("hub reap: {error}")),
+            Arc::new(clock::System),
+        );
     }
+    Ok(())
 }
 
 /// Connects to the hub under `home`, starting it with `fiber` when none runs.
