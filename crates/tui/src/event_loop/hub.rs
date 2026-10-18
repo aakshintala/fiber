@@ -72,6 +72,7 @@ pub(super) struct Connection {
     credits: Arc<Credits>,
     /// The high-water mark of the stash's length on the answer path:
     /// what `answer` holds while it waits for a history answer.
+    #[cfg(test)]
     answer_stash_peak: usize,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
     /// dropped connection"); none in tests with no hub thread.
@@ -86,6 +87,7 @@ impl Connection {
             hub: None,
             stash: VecDeque::new(),
             credits: Credits::new(link::QUEUE),
+            #[cfg(test)]
             answer_stash_peak: 0,
             retry,
         }
@@ -333,7 +335,10 @@ impl Connection {
     /// high-water mark. Only answer-path pushes count.
     fn push_stash(&mut self, input: Input) {
         self.stash.push_back(input);
-        self.answer_stash_peak = self.answer_stash_peak.max(self.stash.len());
+        #[cfg(test)]
+        {
+            self.answer_stash_peak = self.answer_stash_peak.max(self.stash.len());
+        }
     }
 
     /// The hub connection ended: the reader sends this once per stream,
