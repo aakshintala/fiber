@@ -565,7 +565,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/main/src/case/call.rs", "fn provider_extension|root:home|scope:let extension_for = | package : & extensions : : Installed |::let dir = home . join ( extensions ) . join ( config : : dir_name ( & package . name ) )", "join:extensions", "#1720"),
     source_allowance!("crates/main/src/case/call.rs", "fn provider_extension|root:home|scope:installed . iter ( ) . find_map ( | package |::let dir = home . join ( extensions ) . join ( config : : dir_name ( & package . name ) )", "join:extensions", "#1720"),
     source_allowance!("crates/main/src/configure.rs", "fn set|root:self.home", "join:projects", "#1720"),
-    source_allowance!("crates/main/src/crash.rs", "fn write_report|root:home", "join:crashes", "#1720"),
+    source_allowance!("crates/log/src/crash.rs", "fn write_report|root:home", "join:crashes", "#1720"),
     source_allowance!("crates/main/src/launch.rs", "fn launch|root:home", "join:cache", "#1720"),
     source_allowance!("crates/main/src/main.rs", "fn ask_permissions|root:home", "join:credentials", "#1720"),
     source_allowance!("crates/main/src/mcp_servers.rs", "fn session_tools|root:home", "join:cache", "#1720"),
