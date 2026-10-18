@@ -170,8 +170,13 @@ fn plain(name: &str, run: &str) -> String {
 #[track_caller]
 fn assert_large_eq(actual: &str, expected: &str) {
     if actual.len() != expected.len() {
+        let offset = actual
+            .bytes()
+            .zip(expected.bytes())
+            .position(|(left, right)| left != right)
+            .unwrap_or_else(|| actual.len().min(expected.len()));
         panic!(
-            "large strings differ in length: actual {} bytes, expected {} bytes",
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
             actual.len(),
             expected.len()
         );
@@ -182,10 +187,23 @@ fn assert_large_eq(actual: &str, expected: &str) {
         .position(|(left, right)| left != right)
     {
         panic!(
-            "large strings of {} bytes differ first at offset {offset}",
-            actual.len()
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
+            actual.len(),
+            expected.len()
         );
     }
+}
+
+#[test]
+#[should_panic(expected = "actual 3 bytes, expected 5 bytes, first differing offset 1")]
+fn assert_large_eq_reports_first_offset_when_lengths_differ() {
+    assert_large_eq("axc", "aycde");
+}
+
+#[test]
+#[should_panic(expected = "actual 2 bytes, expected 5 bytes, first differing offset 2")]
+fn assert_large_eq_reports_shorter_length_when_one_is_a_prefix() {
+    assert_large_eq("ab", "abcde");
 }
 
 /// The single text part of a `tool_call_completed`'s `content`: the JSON
