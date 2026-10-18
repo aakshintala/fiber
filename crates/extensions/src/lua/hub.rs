@@ -13,7 +13,7 @@
 //! Dropping the extension stops it. Stopped is final.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use contract::RequestId;
@@ -67,6 +67,32 @@ pub(super) enum Window {
 #[cfg(test)]
 type WindowHook = Arc<dyn Fn(&Hub, Window) + Send + Sync>;
 
+/// Every live extension hub, weakly held: a shutdown stops each one, so a
+/// callback in flight answers `Stopped` and its admitted `host.exec` runs
+/// stop as on a cancel. Pruned on every stop; entries whose hub is gone
+/// drop out.
+static HUBS: Mutex<Vec<Weak<Hub>>> = Mutex::new(Vec::new());
+
+/// Stops every live extension hub with `Stopped`, as a shutdown stops a
+/// tool call's group (`docs/invocation.md`, "Shutdown"): each callback in
+/// flight answers `Stopped`, each admitted `host.exec` run stops with
+/// SIGTERM, SIGKILL 800 ms later for a group still alive, and every waiter
+/// wakes. The session's shutdown calls this beside stopping jobs; hubs
+/// created after it are the next session's, once this process is gone.
+/// Takes the registry lock, then each hub's lock in turn, and nothing
+/// while holding either: no waiter takes the registry lock under a hub
+/// lock, so the order never inverts.
+pub fn stop_every_callback() {
+    let live: Vec<Arc<Hub>> = {
+        let mut hubs = HUBS.lock().unwrap_or_else(PoisonError::into_inner);
+        hubs.retain(|hub| hub.upgrade().is_some());
+        hubs.iter().filter_map(Weak::upgrade).collect()
+    };
+    for hub in live {
+        hub.stop_for_shutdown();
+    }
+}
+
 impl Hub {
     /// The hub every waiter and the extension's thread share, subscribed to
     /// `clock` so a move of that clock wakes them.
@@ -83,6 +109,9 @@ impl Hub {
         let cloned = Arc::clone(&hub);
         let wake: Arc<dyn Wake> = cloned;
         clock.subscribe(Arc::downgrade(&wake));
+        HUBS.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&hub));
         hub
     }
 
@@ -241,6 +270,36 @@ impl Hub {
                 job.held = false;
             }
         }
+        self.notify();
+    }
+
+    /// Stops this hub for a shutdown, keeping its router: every callback in
+    /// flight answers `Stopped`, every admitted `host.exec` run stops
+    /// without the Lua thread, and every waiter wakes. Later deliveries
+    /// still route, so a run that ends as it stops is still recorded.
+    fn stop_for_shutdown(&self) {
+        let unsent = {
+            let mut shared = self.lock();
+            let unsent = if !matches!(shared.phase, Phase::Stopped(_)) {
+                shared.stop(StopReason::Stopped)
+            } else {
+                Vec::new()
+            };
+            // Every call still on the hub is cancelled with it, so `judge`
+            // waits for an admitted `host.exec` run's end before answering
+            // `Stopped`, as for a cancelled tool call. The hook path never
+            // sees the turn's cancel itself, so the stop marks its calls.
+            let started: Vec<u64> = shared
+                .calls
+                .iter()
+                .filter_map(|(id, progress)| {
+                    matches!(progress, Progress::Started { .. }).then_some(*id)
+                })
+                .collect();
+            shared.cancelled.extend(started);
+            unsent
+        };
+        drop(unsent);
         self.notify();
     }
 
@@ -559,6 +618,16 @@ impl Shared {
     ) -> (Next, Vec<Delivery>) {
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(reason) = &self.phase {
+            // A stopped call the shutdown cancelled, whose admitted
+            // `host.exec` run is still going, waits for the run's end, as a
+            // cancelled tool call does (`judge_tool`): the shutdown already
+            // stopped the run with SIGTERM, and the caller must not return
+            // — the process must not exit — before the run answers. The
+            // run's end notifies, and the next judge answers `Stopped`. An
+            // uncancelled call still fails at once.
+            if self.exec_pending(id) && self.cancelled.contains(&id) {
+                return (Next::Sleep(None), Vec::new());
+            }
             let e = reason.error(name);
             self.forget(id);
             return (Next::Return(Err(e)), Vec::new());

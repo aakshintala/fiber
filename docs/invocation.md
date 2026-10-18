@@ -763,6 +763,9 @@ and a repeat does nothing. A SIGTERM or SIGINT after it is a second signal.
   ("Stopping a command"). Groups are signalled together, never one after
   another. Six groups that ignore SIGTERM took 0.81 s in parallel and 4.85 s
   in sequence (macOS arm64, `research/shutdown/probe5_nested_kill_cost.py`).
+- Every extension callback in flight ends, and every `host.exec` process
+  group it started gets SIGTERM with the rest: a group still alive 800 ms
+  later gets SIGKILL, as a tool call's does.
 - A Fiber delegate is a session process, and SIGTERM starts its own shutdown.
   Its parent waits for it to exit, up to the bound, rather than sending
   SIGKILL at 800 ms, so the delegate stops its own commands and writes its

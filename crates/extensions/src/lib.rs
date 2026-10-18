@@ -6,7 +6,9 @@
 //! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
 //! "Lua extensions"), and a provider's Lua: `models()`, `credential()` and
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
-//! and "Credentials").
+//! and "Credentials"). A shutdown stops every running extension callback
+//! through [`stop_every_callback`], so an in-flight hook and its `host.exec`
+//! group end as a tool call's does (`docs/invocation.md`, "Shutdown").
 
 mod attend;
 #[cfg(test)]
@@ -95,6 +97,7 @@ pub use installed::{
     Damaged, Installed, Listing, Removal, is_enabled, list, package_names, removal,
 };
 pub use login::login_provider;
+pub use lua::hub::stop_every_callback;
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{
     CredentialPair, LoggedIn, LoginMethod, LuaProvider, ModelsArg, Quota, QuotaEntry,
