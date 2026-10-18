@@ -3281,12 +3281,27 @@ fn hub_hello() -> Line {
 /// A remote app whose hub answers `script` on its own thread: each
 /// `(command, args)` read off the wire must match, and is answered with
 /// the result, or rejected with the code and message. The end of the
-/// script arrives on the returned channel once the app has asked
-/// everything. The watcher's hub end proves quiet waits: reads on it
-/// time out while the app writes nothing.
-fn scripted_remote(
-    script: Vec<(String, Value, Result<Value, Rejection>)>,
-) -> (App, mpsc::Receiver<()>, UnixStream) {
+/// script arrives on `done` once the app has asked everything. The
+/// watcher's hub end proves quiet waits: reads on it time out while
+/// the app writes nothing. The player waits for `start` before its
+/// first read, so it never parks on the shared socket while a quiet
+/// wait holds a read timeout: the timeout could otherwise fire on the
+/// parked player instead.
+struct Hub {
+    done: mpsc::Receiver<()>,
+    watcher: UnixStream,
+    start: mpsc::Sender<()>,
+}
+
+impl Hub {
+    /// Releases the player thread: after the quiet waits before the
+    /// first fold, and before that fold.
+    fn start(&self) {
+        self.start.send(()).unwrap_or(());
+    }
+}
+
+fn scripted_remote(script: Vec<(String, Value, Result<Value, Rejection>)>) -> (App, Hub) {
     scripted_remote_named(script, None, None)
 }
 
@@ -3295,7 +3310,7 @@ fn scripted_remote_named(
     script: Vec<(String, Value, Result<Value, Rejection>)>,
     model: Option<&str>,
     thinking: Option<&str>,
-) -> (App, mpsc::Receiver<()>, UnixStream) {
+) -> (App, Hub) {
     let router = Router::new();
     let (client, hub) = UnixStream::pair().unwrap();
     let watcher = hub.try_clone().unwrap();
@@ -3306,7 +3321,9 @@ fn scripted_remote_named(
         Arc::clone(&router),
     ));
     let (served, done) = mpsc::channel();
+    let (start, release) = mpsc::channel();
     thread::spawn(move || {
+        release.recv().unwrap_or(());
         let mut reader = BufReader::new(hub);
         for (command, args, answer) in script {
             let mut text = String::new();
@@ -3340,7 +3357,14 @@ fn scripted_remote_named(
     let mut app = remote_home_named(model, thinking);
     app.set_remote(Arc::clone(&remote));
     app.set_models(Some(remote.catalogue_reader()));
-    (app, done, watcher)
+    (
+        app,
+        Hub {
+            done,
+            watcher,
+            start,
+        },
+    )
 }
 
 /// Folds `line` on a thread of its own: the chip and start reads block
@@ -3497,15 +3521,16 @@ fn open_mode(app: &App) -> Option<crate::model_picker::Mode> {
 
 #[test]
 fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
-    let (mut app, done, watcher) = scripted_remote(vec![global_file(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings()]);
     // Before the link the start pick owes but writes nothing.
     app.start_model_pick();
     assert!(app.model_picker.open.is_none());
-    quiet(&watcher);
+    quiet(&hub.watcher);
     // The first hello reads the chips: the hub named a model, so the
     // owed pick drops and no `models` line goes out.
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     let chips = home_chips(&app);
     assert!(chips.contains(&"[hub/m]".to_owned()), "{chips:?}");
     assert!(chips.contains(&"[thinking: high]".to_owned()), "{chips:?}");
@@ -3513,35 +3538,36 @@ fn the_chip_read_runs_before_the_start_pick_and_not_twice() {
     // A second hello reads nothing further.
     let (app, _) = fold(app, hub_hello());
     assert!(!app.chip_read_owed());
-    quiet(&watcher);
-    quiet(&watcher);
+    quiet(&hub.watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn the_start_pick_drops_when_the_chip_names_a_model() {
-    let (mut app, done, watcher) =
-        scripted_remote(vec![global_file(), chip_settings(), chip_settings()]);
+    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings(), chip_settings()]);
     app.owe_start_pick();
+    hub.start();
     let (mut app, _) = fold(app, hub_hello());
     assert!(app.model_picker.open.is_none());
     // Closing nothing and reconnecting opens nothing either: the pick
     // was taken, while the chips read again over the cached global.
     app.disconnected();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(app.model_picker.open.is_none());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn the_start_pick_opens_once_when_the_chip_names_no_model() {
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
     ]);
     app.owe_start_pick();
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
     assert_eq!(selected(&app).as_deref(), Some("hub/m"));
@@ -3558,9 +3584,9 @@ fn the_start_pick_opens_once_when_the_chip_names_no_model() {
     assert!(app.model_picker.open.is_none());
     app.disconnected();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(app.model_picker.open.is_none());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
@@ -3570,7 +3596,7 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
         crate::model_picker::Mode::Scope,
         crate::model_picker::Mode::Choose,
     ] {
-        let (mut app, done, watcher) =
+        let (mut app, hub) =
             scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
         // The seeded catalogue holds the chip's model, so a thinking
         // open lands on its row instead of falling back to Choose.
@@ -3578,11 +3604,12 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
         app.open_model_picker(mode);
         assert_eq!(open_mode(&app), Some(mode));
         let selected_before = selected(&app);
-        quiet(&watcher);
+        quiet(&hub.watcher);
         // The hello's answer, with no model, neither closes the open
         // picker nor opens a second one.
+        hub.start();
         let (app, _) = fold(app, hub_hello());
-        Deadline::start().recv_or_fail(&done, "wire script");
+        Deadline::start().recv_or_fail(&hub.done, "wire script");
         assert_eq!(open_mode(&app), Some(mode));
         // The open is unchanged: its mode, selection and touched set.
         assert_eq!(selected(&app), selected_before);
@@ -3598,45 +3625,45 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
                 .map(|open| open.toggled.clone()),
             Some(touched)
         );
-        drop(watcher);
+        drop(hub);
         drop(app);
     }
 }
 
 #[test]
 fn explicit_opens_by_key_and_click_run_at_once_while_owed() {
-    let (mut app, done, watcher) =
-        scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
     app.on_models(Ok(three()));
     assert_eq!(press_key(&mut app, Key::CtrlL), Effect::None);
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
-    quiet(&watcher);
+    quiet(&hub.watcher);
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn an_explicit_open_drops_the_owed_start_pick() {
-    let (mut app, done, watcher) =
-        scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
+    let (mut app, hub) = scripted_remote(vec![global_file(), chip_settings_scoped("[\"hub/m\"]")]);
     app.owe_start_pick();
     app.open_model_picker(crate::model_picker::Mode::Choose);
     // The hello answers with no model, but the pick is gone: the open
     // picker keeps its mode, and two Esc closes leave no picker.
+    hub.start();
     let (mut app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
     assert_eq!(press_key(&mut app, Key::Esc), Effect::None);
     assert_eq!(press_key(&mut app, Key::Esc), Effect::None);
     assert!(app.model_picker.open.is_none());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         // The reconnect reads again over the cached global file.
@@ -3644,6 +3671,7 @@ fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
         models_with(&["hub/m"]),
     ]);
     app.owe_start_pick();
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     // Exactly one notice, with the hub's code and text: the chip keeps
     // its text, and the failed pick stays owed.
@@ -3662,65 +3690,69 @@ fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
     // A reconnect reads again, and with no model the owed pick opens.
     app.disconnected();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn choosing_a_workspace_rereads_the_chips_at_once() {
-    let (app, done, watcher) = scripted_remote(vec![
+    let (app, hub) = scripted_remote(vec![
         global_file(),
         chip_settings(),
         chip_settings_at("/hub/p"),
     ]);
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
     // With the link up the choice reads at once at the new workspace.
     let app = choosing(app, "/hub/p");
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn choosing_a_workspace_while_down_reads_at_the_next_hello() {
-    let (mut app, done, watcher) = scripted_remote(vec![chip_settings_at("/hub/p")]);
+    let (mut app, hub) = scripted_remote(vec![chip_settings_at("/hub/p")]);
     // With the link down the choice writes nothing and only owes;
     // the chosen workspace reads directly, with no `global_file`.
     app.choose_workspace("/hub/p".to_owned());
     assert!(app.chip_read_owed());
-    quiet(&watcher);
+    quiet(&hub.watcher);
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
     assert!(!app.chip_read_owed());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn flagged_keys_survive_the_chip_read() {
     // The layer names `model=flag/m`: the answer never replaces it,
     // while thinking, unnamed, is replaced.
-    let (mut app, done, watcher) =
+    let (mut app, hub) =
         scripted_remote_named(vec![global_file(), chip_settings()], Some("flag/m"), None);
     app.set_launch_overrides(vec!["model=flag/m".to_owned()]);
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     let chips = home_chips(&app);
     assert!(chips.contains(&"[flag/m]".to_owned()), "{chips:?}");
     assert!(chips.contains(&"[thinking: high]".to_owned()), "{chips:?}");
-    quiet(&watcher);
+    quiet(&hub.watcher);
     // With `thinking=low` named, thinking is kept too.
-    let (mut app, done, watcher) =
+    let (mut app, hub) =
         scripted_remote_named(vec![global_file(), chip_settings()], None, Some("low"));
     app.set_launch_overrides(vec!["thinking=low".to_owned()]);
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     let chips = home_chips(&app);
     assert!(chips.contains(&"[hub/m]".to_owned()), "{chips:?}");
     assert!(!chips.iter().any(|chip| chip.contains("high")), "{chips:?}");
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
@@ -3738,11 +3770,12 @@ fn a_local_start_pick_opens_at_once() {
 
 #[test]
 fn the_start_pick_opens_over_the_workspace_picker() {
-    let (app, done, watcher) = scripted_remote(vec![
+    let (app, hub) = scripted_remote(vec![
         global_file(),
         chip_settings_scoped("[\"hub/m\",\"hub/n\"]"),
         models_with(&["hub/m", "hub/n"]),
     ]);
+    hub.start();
     let (mut app, _) = fold(app, hub_hello());
     // The workspace picker opens first: Down focuses the chip row,
     // Enter opens it.
@@ -3759,7 +3792,7 @@ fn the_start_pick_opens_over_the_workspace_picker() {
     // The owed pick opens over it once the next hello runs it.
     app.owe_start_pick();
     let (mut app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
     assert_eq!(selected(&app).as_deref(), Some("hub/m"));
     // Down moves the model picker's row, not the workspace picker's.
@@ -3778,35 +3811,37 @@ fn the_start_pick_opens_over_the_workspace_picker() {
         app.home_screen()
             .is_some_and(|screen| screen.picker.is_some())
     );
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_failed_read_then_a_reconnect_opens_the_pick_once() {
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
         models_with(&["hub/m"]),
     ]);
     app.owe_start_pick();
+    hub.start();
     let (mut app, _) = fold(app, hub_hello());
     assert!(app.model_picker.open.is_none());
     app.disconnected();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_failed_read_then_an_explicit_open_stays_single() {
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         global_file(),
         chip_rejection("invalid_arguments", "bad settings"),
         chip_settings_scoped("[\"hub/m\"]"),
     ]);
     app.owe_start_pick();
+    hub.start();
     let (mut app, _) = fold(app, hub_hello());
     assert!(app.model_picker.open.is_none());
     // Ctrl+L opens the picker; the re-read answers with no model, but
@@ -3815,15 +3850,15 @@ fn a_failed_read_then_an_explicit_open_stays_single() {
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
     app.disconnected();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn the_chip_answer_keeps_each_toggle() {
     // The chosen workspace reads directly, with no `global_file`.
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
@@ -3852,19 +3887,20 @@ fn the_chip_answer_keeps_each_toggle() {
     // The hello's answer lists rows 1 and 2, with an uninstalled
     // `gone/x`: row 1 adopts the answer, row 2 keeps the person's
     // mark, row 3 stays unmarked.
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert_eq!(marks(&app), Some(vec![true, false, false]));
     let (app, effect) = saving(app);
     assert_eq!(effect, Effect::None);
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(!app.model_picker_open());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     // The chosen workspace reads directly, with no `global_file`.
-    let (mut app, done, watcher) = scripted_remote(vec![(
+    let (mut app, hub) = scripted_remote(vec![(
         "configure".to_owned(),
         json!({"operation": "settings", "workspace": "/hub"}),
         Ok(json!({"rows": [
@@ -3884,17 +3920,18 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, true, false]));
+    hub.start();
     let (app, _) = fold(app, hub_hello());
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(marks(&app), Some(vec![true, true, false]));
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_failed_chip_read_keeps_the_placeholders_marks() {
     // The chosen workspace reads directly, with no `global_file`;
     // the save writes the marked list, here empty.
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         chip_rejection("invalid_arguments", "bad settings"),
         (
             "configure".to_owned(),
@@ -3913,6 +3950,7 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
     assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
     // The rejection notices once and leaves the marks as they were.
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     let lines = app.notices.lines();
     assert_eq!(lines.len(), 1);
@@ -3920,14 +3958,17 @@ fn a_failed_chip_read_keeps_the_placeholders_marks() {
     // Ctrl+S saves only what is marked: nothing.
     let (app, effect) = saving(app);
     assert_eq!(effect, Effect::None);
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(!app.model_picker_open());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
-    let (mut app, _done, watcher) = scripted_remote(Vec::new());
+    let (mut app, hub) = scripted_remote(Vec::new());
+    // No fold reads: starting releases the player, whose empty script
+    // ends at once.
+    hub.start();
     app.on_models(Ok(three()));
     app.model_picker.scoped = vec!["acme/m2".to_owned()];
     app.choose_workspace("/hub".to_owned());
@@ -3947,13 +3988,13 @@ fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
             .map(|open| open.toggled.clone()),
         Some(vec![true, false, false])
     );
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }
 
 #[test]
 fn a_mark_cell_click_joins_the_toggled_set() {
     // The chosen workspace reads directly, with no `global_file`.
-    let (mut app, done, watcher) = scripted_remote(vec![
+    let (mut app, hub) = scripted_remote(vec![
         (
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
@@ -3974,11 +4015,12 @@ fn a_mark_cell_click_joins_the_toggled_set() {
     // rows 0 the filter, 1 the buttons, 2 the heading, 3 row 1.
     assert_eq!(app.model_picker.click_cell(4, 0), None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
+    hub.start();
     let (app, _) = fold(app, hub_hello());
     assert_eq!(marks(&app), Some(vec![true, false, false]));
     let (app, effect) = saving(app);
     assert_eq!(effect, Effect::None);
-    Deadline::start().recv_or_fail(&done, "wire script");
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert!(!app.model_picker_open());
-    quiet(&watcher);
+    quiet(&hub.watcher);
 }

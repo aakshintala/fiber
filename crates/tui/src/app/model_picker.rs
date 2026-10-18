@@ -82,10 +82,16 @@ impl App {
             // dropped, never opened.
             return Vec::new();
         }
-        // The open reads for itself: take its read and ask it now, so
-        // the loop owes the thread nothing more. With no reader the
-        // open still shows.
+        // The open reads for itself: on the loop thread take its read
+        // and ask it now, so the loop owes the thread nothing more.
+        // At startup the loop does not exist yet, so a local open only
+        // opens: the cached read the loop asks after the first frame
+        // fills it, and the first frame draws at once. With no reader
+        // the open still shows.
         self.open_model_picker(Mode::Choose);
+        if !remote {
+            return Vec::new();
+        }
         let Some(read) = self.models_reader() else {
             return Vec::new();
         };
