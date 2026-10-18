@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use contract::{Envelope, Seq};
 
 use crate::offsets::{After, Offsets, Page};
-use crate::{EVENTS, Error, io_at};
+use crate::{EVENTS, Error, io_at, open_log};
 
 /// Every durable line in the session directory `dir`, in order, up to the
 /// last complete line. A torn tail, a line cut short by a crash, is skipped;
@@ -26,13 +26,7 @@ pub fn read(dir: &Path) -> Result<Vec<Envelope>, Error> {
 /// log is [`Error::NotFound`] here; after the first error the lines end.
 pub fn lines(dir: &Path) -> Result<Lines, Error> {
     let path = dir.join(EVENTS);
-    let file = File::open(&path).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            Error::NotFound(dir.to_owned())
-        } else {
-            io_at(&path)(e)
-        }
-    })?;
+    let file = open_log(dir)?;
     Ok(Lines {
         reader: BufReader::new(file),
         path,
