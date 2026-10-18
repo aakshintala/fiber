@@ -30,6 +30,7 @@ Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  doctor                                    Says whether a session can start, and how to fix it when it cannot
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -178,6 +179,8 @@ pub(crate) enum Commands {
     Login(LoginArgs),
     /// Delete a provider's stored key
     Logout(LogoutArgs),
+    /// Say whether a session can start, and how to fix it when it cannot
+    Doctor,
     /// Print a completion script for bash, zsh or fish
     Completion {
         /// The shell to complete in.
@@ -810,6 +813,12 @@ fn parse_job_id(text: &str) -> Result<String, String> {
 /// newline clap prints.
 pub(crate) fn version_line() -> String {
     command().render_version()
+}
+
+/// The version text without the `fiber ` prefix or trailing newline, for
+/// reports that print the command name themselves.
+pub(crate) fn bare_version() -> String {
+    version_text(env!("CARGO_PKG_VERSION"), option_env!("FIBER_COMMIT"))
 }
 
 /// The text after `fiber `: the package version, and the commit when one

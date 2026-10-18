@@ -1157,3 +1157,32 @@ fn ask_resume_of_a_kept_worktree_runs_in_it() {
     assert!(branch_exists(setup.deadline, &setup.workspace(), &branch));
     assert_eq!(server.requests().len(), 2);
 }
+
+#[test]
+fn a_missing_key_in_a_worktree_carries_the_doctor_line_first() {
+    let setup = Setup::new();
+    init_repo(setup.deadline, &setup.workspace());
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let mut ask = ask_command(
+        &setup,
+        &setup.workspace(),
+        &[],
+        &["ask", "--worktree", "hi"],
+    );
+    ask.env_remove("FIBER_TEST_FAKE_KEY");
+    let out = run_to_exit(
+        setup.deadline,
+        "`fiber ask --worktree` with no key to exit",
+        ask,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let events = lines(&out);
+    let last = events.last().expect("a fiber_exited line");
+    assert_eq!(last["payload"]["error"]["code"], "credential_missing");
+    let message = last["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("no key for fake: run `fiber login fake`\n"),
+        "{message}"
+    );
+}

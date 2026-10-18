@@ -377,6 +377,10 @@ fn parses_argv_into_its_invocation() {
             ),
         ),
         (
+            &["fiber", "doctor"],
+            Invocation::Run(Some(Commands::Doctor), TopLevel::default()),
+        ),
+        (
             &["fiber", "logout", "acme", "--as", "work"],
             Invocation::Run(
                 Some(Commands::Logout(LogoutArgs {
@@ -1245,6 +1249,20 @@ fn extension_test_rejects_extra_arguments() {
 }
 
 #[test]
+fn doctor_takes_no_arguments() {
+    let error = sentence(&["fiber", "doctor", "extra"]);
+    assert!(error.starts_with("Unexpected argument 'extra'"), "{error}");
+    assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
+    assert_eq!(error.lines().count(), 1, "{error}");
+    assert!(
+        MENU.contains(
+            "doctor                                    Says whether a session can start, and how to fix it when it cannot"
+        ),
+        "{MENU}"
+    );
+}
+
+#[test]
 fn approve_rejects_anything_else() {
     assert!(
         sentence(&["fiber", "approve", "extra"]).starts_with("Unexpected argument 'extra'"),
@@ -1894,6 +1912,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "config",
             "login",
             "logout",
+            "doctor",
             "completion",
             "version",
             "help",
@@ -1962,6 +1981,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "config",
             "login",
             "logout",
+            "doctor",
             "completion",
             "version",
             "help",
@@ -3061,7 +3081,7 @@ fn is_built_follows_the_parser() {
     assert!(is_built(&["hub", "add"]));
     assert!(is_built(&[]));
     assert!(!is_built(&["update"]));
-    assert!(!is_built(&["doctor"]));
+    assert!(is_built(&["doctor"]));
     assert!(!is_built(&["mcp", "serve"]));
     assert!(is_built(&["hub", "remove"]));
 }
@@ -3099,5 +3119,5 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["doctor", "mcp serve", "update"]);
+    assert_eq!(unbuilt, ["mcp serve", "update"]);
 }

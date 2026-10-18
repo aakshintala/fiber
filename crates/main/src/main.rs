@@ -269,6 +269,9 @@ fn run() -> i32 {
             };
             ::cli::run_logout(args.provider.as_deref(), target)
         }
+        cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
+            ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
+        }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args }), _) => tools::grep_main(args),

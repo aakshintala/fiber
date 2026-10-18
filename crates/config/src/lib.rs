@@ -9,6 +9,7 @@
 mod cache;
 mod credential;
 mod credential_file;
+mod credential_origin;
 mod editable;
 mod error;
 mod extension;
@@ -23,6 +24,7 @@ mod prompt_files;
 mod rules;
 mod secret;
 mod settings;
+mod startup_check;
 mod themes;
 mod write;
 
@@ -46,6 +48,7 @@ pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
 pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
+pub use credential_origin::{Origin, Presence};
 pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
@@ -58,8 +61,9 @@ pub use home::{
     fiber_home_path_from_env,
 };
 pub use layout::{
-    crashes_dir, extension_data_dir, extensions_dir, global_config_file, images_cache_dir,
-    mcp_cache_dir, project_config_file, project_data_dir, repository_config_file,
+    crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
+    images_cache_dir, logs_dir, mcp_cache_dir, project_config_file, project_data_dir,
+    repository_config_file,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
@@ -71,6 +75,10 @@ pub use secret::{
     valid_env_key,
 };
 pub use settings::{SettingInfo, SettingValue};
+pub use startup_check::{
+    McpRefusal, McpRefusalKind, McpServer, McpServers, McpTransport, ScriptRead, mcp_server_key,
+    mcp_servers, quoted_segment, read_script,
+};
 pub use themes::{theme_names, theme_text};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,

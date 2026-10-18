@@ -57,3 +57,13 @@ pub fn project_config_file(home: &Path, project: &ProjectKey) -> PathBuf {
 pub fn repository_config_file(workspace: &Path) -> PathBuf {
     workspace.join(".fiber").join("config.json")
 }
+
+/// `<home>/logs`: where diagnostic logs are written. Never creates it.
+pub fn logs_dir(home: &Path) -> PathBuf {
+    home.join("logs")
+}
+
+/// `<home>/docs`: where the user guide is installed. Never creates it.
+pub fn docs_dir(home: &Path) -> PathBuf {
+    home.join("docs")
+}

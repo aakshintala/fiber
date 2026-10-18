@@ -72,6 +72,7 @@ mod resolve;
 mod search;
 #[cfg(test)]
 mod stall;
+mod startable;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -110,6 +111,7 @@ pub use repository::{
     ServerApproval, SessionOffer, SpawnGuard, Store, declared_items, hash, kind_name,
     mcp_server_item, pending, repository_servers,
 };
+pub use startable::{context_window, protocol_refusal, takes, thinking_refusal};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").
@@ -360,6 +362,13 @@ pub enum Error {
         /// The model id.
         model: String,
     },
+    /// A model that declares no `context_window`, or a zero one: it
+    /// cannot start.
+    #[error("The model `{reference}` declares no `context_window`.")]
+    NoContextWindow {
+        /// The model, as typed.
+        reference: String,
+    },
     /// The session's model, or one named, is left out for its per-account host.
     #[error("{message}")]
     Unconfigured {
@@ -552,9 +561,10 @@ impl Error {
             | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
-            Self::UnknownModel { .. } | Self::ModelMissing { .. } | Self::NoModel => {
-                ErrorCode::NoModel
-            }
+            Self::UnknownModel { .. }
+            | Self::ModelMissing { .. }
+            | Self::NoModel
+            | Self::NoContextWindow { .. } => ErrorCode::NoModel,
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,

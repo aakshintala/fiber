@@ -150,7 +150,11 @@ fn connect_listed_with(
                 io::ErrorKind::UnexpectedEof,
                 "the hub closed before hub_hello",
             ),
-            super::Poll::Failed(source) => source,
+            // Listed always connects, so absence and post-accept
+            // failures surface as their own error.
+            super::Poll::Failed(source)
+            | super::Poll::Accepted(source)
+            | super::Poll::Absent(source) => source,
         };
         Error::Hello {
             hub: name.into(),
