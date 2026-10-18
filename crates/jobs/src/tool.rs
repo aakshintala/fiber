@@ -94,6 +94,10 @@ enum Action {
     Stop,
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn action(arguments: &Map<String, Value>) -> Result<Action, JobsError> {
     match arguments.get("action").and_then(Value::as_str) {
         Some("list") => Ok(Action::List),
@@ -220,6 +224,10 @@ fn unknown_if_named(registry: &Registry, arguments: &Map<String, Value>) -> Opti
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn job_id(arguments: &Map<String, Value>) -> Result<String, JobsError> {
     match arguments.get("job_id") {
         Some(Value::String(id)) => Ok(id.clone()),
@@ -228,6 +236,10 @@ fn job_id(arguments: &Map<String, Value>) -> Result<String, JobsError> {
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn timeout_ms(arguments: &Map<String, Value>) -> Result<u64, JobsError> {
     match arguments.get("timeout_ms") {
         None => Err(JobsError::TimeoutMissing),
@@ -247,6 +259,10 @@ const WRITE_WAIT_DEFAULT_MS: u64 = 250;
 const WRITE_WAIT_EMPTY_MS: u64 = 5_000;
 
 /// How long `write` waits for output. Empty `input` raises it to the floor.
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn write_wait(arguments: &Map<String, Value>, empty: bool) -> Result<u64, JobsError> {
     let asked = match arguments.get("timeout_ms") {
         None => WRITE_WAIT_DEFAULT_MS,

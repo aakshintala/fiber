@@ -11,9 +11,9 @@ use contract::events::Outcome;
 use contract::events::{DelegateFinished, DelegateStarted, JobCompleted};
 use contract::inbox::Claim;
 use contract::jobs::{JobRecord, Stop, Taken};
-use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Output, Settle};
-use contract::{ActionId, ErrorCode, JobId, SessionId};
+use contract::shapes::Failure;
+use contract::tool::{Cancel, Settle};
+use contract::{ActionId, JobId, SessionId};
 
 use super::park::Parked;
 use super::{Registry, final_text, lock};
@@ -530,21 +530,6 @@ pub(super) fn is_running(inner: &super::Inner, id: &str, run: u64) -> bool {
     inner.jobs.iter().any(|job| {
         job.started.job_id.0 == id && job.run == run && matches!(job.phase, super::Phase::Running)
     })
-}
-
-/// A tool call's failure: the model reads `content`, the caller matches
-/// on the error's message.
-pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text { text: content }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
-    }
 }
 
 #[cfg(test)]

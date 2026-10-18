@@ -80,6 +80,10 @@ pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<JobsError> {
 /// string. `model` is checked in `run`, not here, so a missing or
 /// wrongly typed one reaches the tool's own check, which lists the valid
 /// roles and references (`docs/delegates.md`, "Choosing a model").
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 fn check_effects_arguments(
     arguments: &Map<String, Value>,
 ) -> Result<(String, String, Option<Duration>), JobsError> {
@@ -99,6 +103,10 @@ fn check_effects_arguments(
 
 /// Reads each of the two names from the call's arguments: each is
 /// required, and each is a string.
+#[allow(
+    clippy::result_large_err,
+    reason = "every jobs boundary returns the crate's error enum by value"
+)]
 pub(crate) fn check_pair(
     arguments: &Map<String, Value>,
     first: &str,
@@ -230,6 +238,10 @@ impl DelegateSpawn {
     /// Starts an extension-owned delegate with the model tool's admission
     /// and limits. Binds its id before spawning; the caller must unbind on
     /// a later failure. `bind` must not start or resume another delegate.
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
     pub fn start_extension(
         &self,
         extension: &str,
@@ -240,6 +252,10 @@ impl DelegateSpawn {
             .map(|start| start.job_id)
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "every jobs boundary returns the crate's error enum by value"
+    )]
     fn start(
         &self,
         arguments: &Map<String, Value>,
@@ -257,7 +273,7 @@ impl DelegateSpawn {
                         "description" | "prompt" | "model" | "timeout_ms"
                     )
                 })
-                .map(|key| key.clone())
+                .cloned()
                 .collect();
             if !unknown.is_empty() {
                 return Err(JobsError::ArgumentsNotAllowed { keys: unknown });
@@ -301,103 +317,109 @@ impl DelegateSpawn {
                 return Err(JobsError::CredentialUnavailable { message });
             }
         };
-        let admitted = self.registry.admit(|| {
-            if extension.is_some() && !self.registry.has_inbox() {
-                return Err(JobsError::NoInbox);
-            }
-            let job_id = mint_job_id();
-            if let Some((_, bind)) = extension.as_mut() {
-                bind(&job_id);
-            }
-            let session_id = run::mint_session_id();
-            let output_path = self
-                .sessions
-                .join(&session_id.0)
-                .join("events.jsonl")
-                .to_string_lossy()
-                .into_owned();
-            let launched = Launched {
-                depth: self.depth.saturating_add(1),
-                session_id: session_id.clone(),
-                job_id: job_id.clone(),
-                parent: self.parent.clone(),
-                model: resolved.clone(),
-                prompt,
-                workspace: self.workspace.clone(),
-                resume: false,
-                credential,
-            };
-            // The stamp covers building the runner, spawning and listing the
-            // child, and recording the job. No clock is read without an
-            // installed timing.
-            let start = self
-                .registry
-                .timing()
-                .map(|timing| (timing, self.clock.now()));
-            let (runner, stop) = Runner::new(
-                job_id.clone(),
-                session_id.clone(),
-                PathBuf::from(&output_path),
-                Arc::clone(&self.clock),
-                self.bound,
-                self.cap,
-                Arc::clone(&self.watch),
-                None,
-                timeout,
-            );
-            let (child, listing) = runner
-                .spawn(&self.launch, &launched)
-                .map_err(|source| JobsError::SpawnFailed { source })?;
-            let delegate = DelegateStarted {
-                job_id: job_id.clone(),
-                delegate_session_id: session_id.clone(),
-                harness: "fiber".to_owned(),
-                // The resolved reference, with any role resolved: a full
-                // reference argument records the same text as before
-                // (`docs/events.md`, "`delegate_started`").
-                model: format!("fiber:{resolved}"),
-                workspace: self.workspace.to_string_lossy().into_owned(),
-                worktree: None,
-                forked_from: None,
-            };
-            let (started, finish) = if let Some((extension, _)) = extension {
-                let started = JobStarted {
+        let admitted = self.registry.admit(
+            #[allow(
+                clippy::result_large_err,
+                reason = "every jobs boundary returns the crate's error enum by value"
+            )]
+            || {
+                if extension.is_some() && !self.registry.has_inbox() {
+                    return Err(JobsError::NoInbox);
+                }
+                let job_id = mint_job_id();
+                if let Some((_, bind)) = extension.as_mut() {
+                    bind(&job_id);
+                }
+                let session_id = run::mint_session_id();
+                let output_path = self
+                    .sessions
+                    .join(&session_id.0)
+                    .join("events.jsonl")
+                    .to_string_lossy()
+                    .into_owned();
+                let launched = Launched {
+                    depth: self.depth.saturating_add(1),
+                    session_id: session_id.clone(),
                     job_id: job_id.clone(),
-                    tool: None,
-                    extension: Some(extension.to_owned()),
-                    description: description.clone(),
-                    output_path: output_path.clone(),
+                    parent: self.parent.clone(),
+                    model: resolved.clone(),
+                    prompt,
+                    workspace: self.workspace.clone(),
+                    resume: false,
+                    credential,
                 };
-                let finish = self.registry.open_extension_started(
+                // The stamp covers building the runner, spawning and listing the
+                // child, and recording the job. No clock is read without an
+                // installed timing.
+                let start = self
+                    .registry
+                    .timing()
+                    .map(|timing| (timing, self.clock.now()));
+                let (runner, stop) = Runner::new(
                     job_id.clone(),
-                    extension.to_owned(),
-                    description,
-                    output_path.clone(),
-                    stop,
-                    delegate.clone(),
+                    session_id.clone(),
+                    PathBuf::from(&output_path),
+                    Arc::clone(&self.clock),
+                    self.bound,
+                    self.cap,
+                    Arc::clone(&self.watch),
+                    None,
+                    timeout,
                 );
-                (started, finish)
-            } else {
-                self.registry.open_started(
-                    job_id.clone(),
-                    "delegate_spawn".to_owned(),
-                    description,
-                    output_path.clone(),
-                    stop,
-                    delegate.clone(),
-                )
-            };
-            std::thread::spawn(move || runner.drive(child, Some(listing), finish));
-            Ok((
-                Started {
-                    job_id,
-                    output_path,
-                    started,
-                    delegate,
-                },
-                start,
-            ))
-        });
+                let (child, listing) = runner
+                    .spawn(&self.launch, &launched)
+                    .map_err(|source| JobsError::SpawnFailed { source })?;
+                let delegate = DelegateStarted {
+                    job_id: job_id.clone(),
+                    delegate_session_id: session_id.clone(),
+                    harness: "fiber".to_owned(),
+                    // The resolved reference, with any role resolved: a full
+                    // reference argument records the same text as before
+                    // (`docs/events.md`, "`delegate_started`").
+                    model: format!("fiber:{resolved}"),
+                    workspace: self.workspace.to_string_lossy().into_owned(),
+                    worktree: None,
+                    forked_from: None,
+                };
+                let (started, finish) = if let Some((extension, _)) = extension {
+                    let started = JobStarted {
+                        job_id: job_id.clone(),
+                        tool: None,
+                        extension: Some(extension.to_owned()),
+                        description: description.clone(),
+                        output_path: output_path.clone(),
+                    };
+                    let finish = self.registry.open_extension_started(
+                        job_id.clone(),
+                        extension.to_owned(),
+                        description,
+                        output_path.clone(),
+                        stop,
+                        delegate.clone(),
+                    );
+                    (started, finish)
+                } else {
+                    self.registry.open_started(
+                        job_id.clone(),
+                        "delegate_spawn".to_owned(),
+                        description,
+                        output_path.clone(),
+                        stop,
+                        delegate.clone(),
+                    )
+                };
+                std::thread::spawn(move || runner.drive(child, Some(listing), finish));
+                Ok((
+                    Started {
+                        job_id,
+                        output_path,
+                        started,
+                        delegate,
+                    },
+                    start,
+                ))
+            },
+        );
         match admitted {
             Ok((output, start)) => {
                 // Timing emission holds no start gate: its sink may enter the registry.
