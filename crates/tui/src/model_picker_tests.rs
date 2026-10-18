@@ -1899,3 +1899,45 @@ fn the_startup_read_counts_as_owed_until_it_answers() {
     assert_eq!(picker.owed, 0);
     assert_eq!(picker.refreshing, None);
 }
+
+#[test]
+fn takes_merged_into_the_queued_slot_answer_once() {
+    // Two Ctrl+R presses while a `Stale` read runs merge into the one
+    // queued slot and answer once: the third take counts nothing more,
+    // so two answers clear the mark instead of leaking one owed read.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the queued read died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_failed_queued_start_answers_its_single_owed_read() {
+    // The queued start's spawn failure sends one error for the whole
+    // queue (`catalogue::Reader::ask_with`): it answers the one counted
+    // queued read, clearing the mark instead of leaking it.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    // The running read answers, then the queued start fails to spawn.
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err(
+        "terminal: could not start the model-list reader: no thread".to_owned(),
+    ));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
