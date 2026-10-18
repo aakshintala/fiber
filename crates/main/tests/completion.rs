@@ -102,7 +102,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "help",
             "hub",
         ],
-        &["--model", "-c", "-h", "--help", "-v", "--version"],
+        &["--model", "-c", "--hub", "-h", "--help", "-v", "--version"],
     ),
     (
         "ask",
@@ -118,7 +118,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         ],
     ),
     ("models", &[], &["--json", "-h", "--help"]),
-    ("resume", &[], &["--credential", "-h", "--help"]),
+    ("resume", &[], &["--credential", "--hub", "-h", "--help"]),
     ("continue", &[], &["-h", "--help"]),
     ("approve", &[], &["--yes", "-h", "--help"]),
     ("login", &[], &["--as", "--device", "-h", "--help"]),

@@ -7,6 +7,7 @@
 use std::io::{self, BufReader, Write};
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::events::{SessionState, WaitingKind};
 use contract::shapes::Failure;
 use contract::shapes::Usage;
@@ -164,6 +165,69 @@ fn run(
         write_line(out, line)?;
     }
     Ok(())
+}
+
+/// `fiber resume <selector> --hub <name>`: the session the selector names
+/// on that hub, over the hub's `sessions` answer across every project.
+/// A full id wins over a longer id it prefixes, else a unique prefix;
+/// an empty selector matches nothing. The command carries no `project`
+/// argument, as the list outside a repository does, and never reads the
+/// current directory.
+pub fn resolve_listed(
+    selector: &str,
+    hub: &str,
+    connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
+) -> Result<SessionId, Failure> {
+    if selector.is_empty() {
+        return Err(not_found(selector, hub));
+    }
+    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
+    let result = request(
+        &mut BufReader::new(stream),
+        LIST_ID,
+        "sessions",
+        serde_json::Map::new(),
+    )?;
+    let answer: Answer = serde_json::from_value(result).map_err(|e| {
+        failed(
+            ErrorCode::IoFailed,
+            format!("the hub's answer to `sessions`: {e}"),
+        )
+    })?;
+    let ids = answer
+        .live
+        .into_iter()
+        .map(|row| row.session_id)
+        .chain(answer.exited.into_iter().map(|row| row.session_id));
+    let ids: Vec<String> = ids.collect();
+    if ids.iter().any(|id| id == selector) {
+        return Ok(SessionId(selector.to_owned()));
+    }
+    let mut matches: Vec<String> = ids
+        .into_iter()
+        .filter(|id| id.starts_with(selector))
+        .collect();
+    matches.sort();
+    match matches.len() {
+        1 => Ok(SessionId(matches.remove(0))),
+        0 => Err(not_found(selector, hub)),
+        _ => {
+            let error = log::Error::Ambiguous {
+                selector: selector.to_owned(),
+                matches,
+            };
+            Err(failed(error.code(), error))
+        }
+    }
+}
+
+/// No session on `hub` answers `selector`: the local sessions path does
+/// not exist here, so the sentence names the hub instead.
+fn not_found(selector: &str, hub: &str) -> Failure {
+    failed(
+        ErrorCode::SessionNotFound,
+        format!("no session matches \"{selector}\" on hub `{hub}`"),
+    )
 }
 
 /// Live rows in the hub's order, then exited rows in the hub's order.
