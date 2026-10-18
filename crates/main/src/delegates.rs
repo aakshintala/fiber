@@ -502,8 +502,6 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 }
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
-    // debt: this SessionArgs literal repeats the hub's three; share one
-    // base constructor with hub_command when either side gains a field.
     // A role naming a credential label runs the child under it: the
     // label travels as a run override, so the child's `preamble_built`
     // records it. The value is a JSON string, so a label that parses
@@ -525,7 +523,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
     // environment").
-    let args = crate::cli::SessionArgs {
+    let args = contract::session_argv::SessionArgv {
         id: launched.session_id.0.clone(),
         workspace: launched.workspace.clone(),
         model: (!launched.resume).then(|| launched.model.clone()),
