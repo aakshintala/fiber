@@ -30,6 +30,7 @@ mod open;
 mod parts;
 mod prompt_files;
 mod read_signals;
+mod reap;
 mod reload;
 mod resume;
 mod rewind;
@@ -834,18 +835,22 @@ fn terminal(
 }
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when
-/// none is running (`docs/invocation.md`, "The hub").
+/// none is running (`docs/invocation.md`, "The hub"). The child is handed
+/// to its reaper thread at once: the hub keeps running while the thread
+/// owns its wait, and a thread that never starts leaves it unreaped.
 fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
     let exe = exe.map_err(io::Error::other)?;
-    std::process::Command::new(exe)
+    let child = std::process::Command::new(exe)
         .arg("hub")
         .arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0)
-        .spawn()
-        .map(|_| ())
+        .spawn()?;
+    match reap::on_thread(child) {
+        Ok(_) | Err(_) => Ok(()),
+    }
 }
 
 /// Connects to the hub under `home`, starting it with `fiber` when none runs.
