@@ -136,11 +136,7 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
     setup.result("slow", r#"{"content":[{"type":"text","text":"slow"}]}"#);
     setup.result("fast", r#"{"content":[{"type":"text","text":"fast"}]}"#);
     for name in ["held-slow", "release-slow"] {
-        let status = std::process::Command::new("mkfifo")
-            .arg(setup.dir.path().join(name))
-            .status()
-            .expect("mkfifo runs");
-        assert!(status.success(), "mkfifo creates {name}");
+        fakes::fifo(setup.dir.path().join(name));
     }
     let opened = setup.start_expect(Duration::from_secs(5));
     let server = std::sync::Arc::new(opened.server);
@@ -1339,11 +1335,7 @@ fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
     let dir = setup.dir.path().display().to_string();
     let script = "if [ -e \"$2/started\" ]; then exit 1; fi\ntouch \"$2/started\"\ni=0; while [ $i -lt 3 ] && IFS= read -r line; do printf '%s\\n' \"$line\"; i=$((i+1)); done | \"$1\" \"$2\"\nread -r _ < \"$2/hold\"\n";
     let hold = setup.dir.path().join("hold");
-    let status = std::process::Command::new("mkfifo")
-        .arg(&hold)
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success(), "mkfifo creates hold");
+    fakes::fifo(&hold);
     let mut spec = setup.spec("fx");
     spec.stdio_mut().command = "/bin/bash".to_owned();
     spec.stdio_mut().args = vec![

@@ -1,6 +1,7 @@
 //! The opt-in live reviewer run (`docs/permissions.md`, "The reviewer"):
-//! twenty calls through the real reviewer, billed per token. It returns
-//! early without its variables, so the gate never spends anything.
+//! twenty calls through the real reviewer, billed per token. The test is
+//! `#[ignore]`d, so the gate never spends anything: run it with
+//! `--run-ignored only` and both variables below set.
 
 #![allow(
     clippy::unwrap_used,
@@ -134,28 +135,24 @@ impl Tool for Shell {
 /// Twenty reviewed calls through the reviewer's real provider. It asserts
 /// only that every call got a `permission_resolved`, and prints the share
 /// decided at stage 2 with the reviewer's tokens.
+#[allow(
+    clippy::print_stderr,
+    reason = "the live test's turn-failure and billed-token diagnostics are its only output; it is #[ignore]d"
+)]
 #[test]
+#[ignore = "live: needs FIBER_LIVE_REVIEWER_KEY_FILE and FIBER_LIVE_REVIEWER_MODEL, billed per token; run with --ignored"]
 fn live_reviewer() {
     let (key_file, typed) = match (std::env::var(KEY_FILE), std::env::var(MODEL)) {
         (Ok(key_file), Ok(typed)) => (key_file, typed),
-        _ => {
-            eprintln!("live reviewer test skipped: {KEY_FILE} or {MODEL} is unset");
-            return;
-        }
+        _ => panic!("live reviewer test needs {KEY_FILE} and {MODEL} set"),
     };
     let key = match std::fs::read_to_string(&key_file) {
         Ok(key) => key.trim().to_owned(),
-        Err(e) => {
-            eprintln!("live reviewer test skipped: {key_file}: {e}");
-            return;
-        }
+        Err(e) => panic!("live reviewer test cannot read {key_file}: {e}"),
     };
     let (provider_name, model_id) = match typed.split_once('/') {
         Some(pair) => pair,
-        None => {
-            eprintln!("live reviewer test skipped: {MODEL} is not provider/model");
-            return;
-        }
+        None => panic!("live reviewer test needs {MODEL} as provider/model"),
     };
     let mut found = None;
     // Every first-party `providers/<name>.json`, compiled in: listing
@@ -180,17 +177,11 @@ fn live_reviewer() {
     }
     let data = match found {
         Some(data) => data,
-        None => {
-            eprintln!("live reviewer test skipped: no provider {provider_name}");
-            return;
-        }
+        None => panic!("live reviewer test needs a compiled provider named {provider_name}"),
     };
     let model_data = match data.models.iter().find(|m| m.id == model_id) {
         Some(model_data) => model_data,
-        None => {
-            eprintln!("live reviewer test skipped: no model {typed}");
-            return;
-        }
+        None => panic!("live reviewer test needs model {typed} in its provider"),
     };
     let reviewer = extensions::Model {
         provider: &data,

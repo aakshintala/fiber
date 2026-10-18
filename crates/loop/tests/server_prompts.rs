@@ -231,9 +231,7 @@ fn a_steer_naming_a_prompt_is_not_fetched() {
 /// so `Session::lines` would wait for a `turn_completed` that never comes.
 #[track_caller]
 fn run_until_close(session: &mut Session) -> Vec<contract::Envelope> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    let finished = support::spawn_run(session);
     Deadline::after(support::DEADLINE)
         .recv(&finished)
         .expect("close ended the loop")

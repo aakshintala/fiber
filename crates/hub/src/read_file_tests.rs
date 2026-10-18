@@ -487,11 +487,7 @@ fn a_directory_fifo_or_socket_is_invalid_arguments() {
     let _held = std::os::unix::net::UnixListener::bind("s.sock").unwrap();
     std::env::set_current_dir(&cwd).unwrap();
     let fifo = artifacts.join("f.png");
-    let made = std::process::Command::new("mkfifo")
-        .arg(&fifo)
-        .output()
-        .unwrap();
-    assert!(made.status.success(), "{made:?}");
+    fakes::fifo(&fifo);
     for path in [
         "artifacts/sub",
         "artifacts/dir.png",

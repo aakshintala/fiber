@@ -174,7 +174,7 @@ pub(crate) fn next_line(reader: &mut BufReader<UnixStream>) -> Option<(Vec<u8>, 
     }
 }
 
-fn kind(line: &Value) -> &str {
+pub(crate) fn kind(line: &Value) -> &str {
     line.get("kind").and_then(Value::as_str).unwrap_or("")
 }
 

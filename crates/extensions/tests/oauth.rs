@@ -288,8 +288,7 @@ end } })
 /// loader has opened it for read).
 fn go_spin(dir: &Path) -> mpsc::Receiver<()> {
     let path = dir.join("go_spin.lua");
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    fakes::fifo(&path);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let held = fs::OpenOptions::new().write(true).open(&path).unwrap();

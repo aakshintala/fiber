@@ -14,6 +14,7 @@ mod connect_proxy;
 mod crash_ports;
 pub mod deadline;
 pub mod emit;
+mod fifo;
 mod finished;
 mod gated_http;
 mod handoff;
@@ -32,7 +33,9 @@ mod rules;
 mod scripted_provider;
 mod skills;
 mod temp_dir;
+mod tool_io;
 pub mod ustar;
+mod wait_output;
 mod watchdog;
 mod within;
 
@@ -44,6 +47,7 @@ pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
 pub use emit::{EventLog, Recorder};
+pub use fifo::fifo;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
 pub use locks::{FakeLock, NoLock};
@@ -68,6 +72,8 @@ pub use scripted_provider::{
     Scripted, ScriptedProvider, call_usage, reply, unnamed_usage, wire_tools,
 };
 pub use temp_dir::TempDir;
+pub use tool_io::{text_of, tool_args};
+pub use wait_output::wait_output;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, within};
 

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Wake;
-use contract::shapes::{ContentPart, Effect};
+use contract::shapes::Effect;
 use contract::tool::{Cancel, EffectsError, Output, Tool};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -133,13 +133,6 @@ impl Call {
     }
 }
 
-fn text(output: &Output) -> String {
-    match output.content.first() {
-        Some(ContentPart::Text { text }) => text.clone(),
-        _ => String::new(),
-    }
-}
-
 fn code(output: &Output) -> Option<ErrorCode> {
     output.error.as_ref().map(|error| error.code.clone())
 }
@@ -155,7 +148,7 @@ fn the_result_begins_with_the_final_url_status_and_content_type() {
     let output = Rig::new().fetch(&url);
     assert_eq!(code(&output), None);
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("{url} 200 text/plain; charset=utf-8\n\nhello")
     );
 }
@@ -166,7 +159,7 @@ fn the_content_type_is_shown_as_the_server_sent_it() {
     let url = format!("{}/", server.url());
     let output = Rig::new().fetch(&url);
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("{url} 200 TEXT/Plain ;Charset=X\n\nx")
     );
 }
@@ -178,7 +171,7 @@ fn html_comes_back_as_markdown() {
     let rig = Rig::new();
     let url = format!("{}/", server.url());
     let output = rig.fetch(&url);
-    let text = text(&output);
+    let text = fakes::text_of(&output);
     let first = text.lines().next().unwrap();
     let prefix = format!("{url} 200 text/html; charset=utf-8; raw page at ");
     let path = first.strip_prefix(&prefix).unwrap();
@@ -198,7 +191,7 @@ fn an_html_page_is_saved_raw_byte_for_byte() {
     let url = format!("{}/", server.url());
     let output = rig.fetch(&url);
     assert_eq!(code(&output), None);
-    let text = text(&output);
+    let text = fakes::text_of(&output);
     let first = text.lines().next().unwrap();
     assert!(
         first.starts_with(&format!("{url} 200 text/html; raw page at ")),
@@ -217,7 +210,7 @@ fn a_shift_jis_page_named_by_the_header_converts_with_its_text_intact() {
     let server = serve([ok("text/html; charset=shift_jis", body.clone())]);
     let rig = Rig::new();
     let output = rig.fetch(&server.url());
-    let text = text(&output);
+    let text = fakes::text_of(&output);
     assert!(text.contains("\u{3042}"), "{text}");
     let path = text
         .lines()
@@ -237,7 +230,7 @@ fn a_latin1_page_named_only_by_its_meta_converts_with_its_text_intact() {
     let server = serve([ok("text/html", body.clone())]);
     let rig = Rig::new();
     let output = rig.fetch(&server.url());
-    let text = text(&output);
+    let text = fakes::text_of(&output);
     assert!(text.contains("\u{e9}"), "{text}");
     let path = text
         .lines()
@@ -254,7 +247,11 @@ fn an_html_page_with_no_charset_reads_as_utf8_with_replacement() {
     let body: Vec<u8> = b"<p>a\xffb</p>".to_vec();
     let server = serve([ok("text/html", body)]);
     let output = Rig::new().fetch(&server.url());
-    assert!(text(&output).contains("a\u{fffd}b"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("a\u{fffd}b"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -265,9 +262,9 @@ fn an_html_download_that_cannot_be_saved_is_a_tool_error() {
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(
-        text(&output).contains("could not save"),
+        fakes::text_of(&output).contains("could not save"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -324,7 +321,7 @@ fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
     let rig = Rig::new().with(fills_up_after_two_pieces);
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     let prefix = format!(
         "could not save the download to {}/w_",
         rig.artifacts().display()
@@ -338,7 +335,11 @@ fn an_html_download_whose_write_fails_is_a_tool_error_and_leaves_no_file() {
 fn xhtml_comes_back_as_markdown() {
     let server = serve([ok("application/xhtml+xml", "<p>x</p>")]);
     let output = Rig::new().fetch(&server.url());
-    assert!(text(&output).ends_with("\n\nx\n"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).ends_with("\n\nx\n"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -357,7 +358,7 @@ fn text_json_and_xml_come_back_as_they_are() {
         let url = format!("{}/", server.url());
         let output = Rig::new().fetch(&url);
         assert_eq!(
-            text(&output),
+            fakes::text_of(&output),
             format!("{url} 200 {content_type}\n\n{body}"),
             "{content_type}"
         );
@@ -369,15 +370,15 @@ fn text_is_decoded_as_utf8_with_invalid_bytes_replaced() {
     let server = serve([ok("text/plain", b"a\xffb".to_vec())]);
     let output = Rig::new().fetch(&server.url());
     assert!(
-        text(&output).ends_with("\n\na\u{fffd}b"),
+        fakes::text_of(&output).ends_with("\n\na\u{fffd}b"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
 /// The path a "Saved to" line names.
 fn saved_path(output: &Output) -> String {
-    let text = text(output);
+    let text = fakes::text_of(output);
     let line = text
         .lines()
         .find(|line| line.starts_with("Saved to "))
@@ -403,7 +404,12 @@ fn a_pdf_and_each_image_type_are_saved_as_downloaded() {
         let rig = Rig::new();
         let url = format!("{}/f", server.url());
         let output = rig.fetch(&url);
-        assert_eq!(code(&output), None, "{content_type}: {}", text(&output));
+        assert_eq!(
+            code(&output),
+            None,
+            "{content_type}: {}",
+            fakes::text_of(&output)
+        );
         let path = saved_path(&output);
         let file = std::path::Path::new(&path);
         assert_eq!(file.parent().unwrap(), rig.artifacts(), "{content_type}");
@@ -414,7 +420,7 @@ fn a_pdf_and_each_image_type_are_saved_as_downloaded() {
         assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
         assert_eq!(fs::read(file).unwrap(), bytes, "{content_type}");
         assert_eq!(
-            text(&output),
+            fakes::text_of(&output),
             format!(
                 "{url} 200 {content_type}\n\nSaved to {path} ({} bytes). Read it with `read`.\n",
                 bytes.len()
@@ -442,9 +448,9 @@ fn a_download_that_cannot_be_saved_is_a_tool_error() {
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(
-        text(&output).contains("could not save"),
+        fakes::text_of(&output).contains("could not save"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -453,7 +459,7 @@ fn another_content_type_fails_unsupported_with_its_type_and_size() {
     let server = serve([ok("application/octet-stream", vec![0u8; 1234])]);
     let output = Rig::new().fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     assert!(message.contains("`application/octet-stream`"), "{message}");
     assert!(message.contains("1234 bytes"), "{message}");
 }
@@ -463,7 +469,7 @@ fn a_missing_content_type_fails_unsupported_with_its_size() {
     let server = serve([response(200, None, "abc")]);
     let output = Rig::new().fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     assert!(message.contains("no content type"), "{message}");
     assert!(message.contains("3 bytes"), "{message}");
 }
@@ -476,7 +482,7 @@ fn a_page_past_the_loops_cut_comes_back_whole() {
     let server = serve([ok("text/html", html)]);
     let output = Rig::new().fetch(&server.url());
     let expected = "0123456789 0123456789 0123456789\n\n".repeat(20 * 1024 / paragraph.len() + 1);
-    let body = text(&output);
+    let body = fakes::text_of(&output);
     let body = body.split_once("\n\n").unwrap().1;
     assert_eq!(body, format!("{}\n", expected.trim_end()));
     assert!(body.len() > 16 * 1024);
@@ -491,7 +497,7 @@ fn a_download_of_exactly_ten_mib_succeeds() {
     let server = serve([ok("text/plain", vec![b'a'; TEN_MIB])]);
     let output = Rig::new().fetch(&server.url());
     assert_eq!(code(&output), None);
-    assert!(text(&output).len() > TEN_MIB);
+    assert!(fakes::text_of(&output).len() > TEN_MIB);
 }
 
 #[test]
@@ -499,7 +505,11 @@ fn a_download_one_byte_past_ten_mib_fails_too_large() {
     let server = serve([ok("text/plain", vec![b'a'; TEN_MIB + 1])]);
     let output = Rig::new().fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::TooLarge));
-    assert!(text(&output).contains("10485760"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("10485760"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -518,7 +528,7 @@ fn a_status_outside_2xx_fails_http_error_with_the_start_of_the_body() {
     let output = Rig::new().fetch(&url);
     assert_eq!(code(&output), Some(ErrorCode::HttpError));
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("HTTP 404 from {url}. The body begins:\nno such page\n")
     );
 }
@@ -540,7 +550,7 @@ fn statuses_at_the_edges_of_2xx() {
             code(&output).is_none(),
             succeeds,
             "{status}: {}",
-            text(&output)
+            fakes::text_of(&output)
         );
     }
 }
@@ -628,7 +638,7 @@ fn only_a_redirect_status_with_a_location_redirects() {
 fn the_error_body_is_cut_at_2048_bytes() {
     let server = serve([response(500, Some("text/plain"), "x".repeat(3000))]);
     let output = Rig::new().fetch(&server.url());
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     let body = message
         .split_once("begins:\n")
         .unwrap()
@@ -641,7 +651,7 @@ fn the_error_body_is_cut_at_2048_bytes() {
 fn an_error_body_cut_inside_a_character_ends_before_it() {
     let server = serve([response(500, Some("text/plain"), "\u{e9}".repeat(1500))]);
     let output = Rig::new().fetch(&server.url());
-    let message = text(&output);
+    let message = fakes::text_of(&output);
     let body = message
         .split_once("begins:\n")
         .unwrap()
@@ -657,7 +667,7 @@ fn only_the_start_of_an_error_body_is_read() {
     let server = serve([response(500, Some("text/plain"), "y".repeat(1_000_000))]);
     let output = Rig::new().fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::HttpError));
-    assert!(text(&output).len() < 4096);
+    assert!(fakes::text_of(&output).len() < 4096);
 }
 
 #[test]
@@ -666,7 +676,7 @@ fn a_3xx_without_a_location_is_an_http_error() {
         let server = serve([response(status, Some("text/plain"), "meh")]);
         let output = Rig::new().fetch(&server.url());
         assert_eq!(code(&output), Some(ErrorCode::HttpError), "{status}");
-        assert!(text(&output).starts_with(&format!("HTTP {status} from ")));
+        assert!(fakes::text_of(&output).starts_with(&format!("HTTP {status} from ")));
     }
 }
 
@@ -676,7 +686,7 @@ fn every_redirect_status_is_followed_with_a_get() {
         let server = serve([redirect(status, "/there"), ok("text/plain", "arrived")]);
         let output = Rig::new().fetch(&format!("{}/here", server.url()));
         assert_eq!(code(&output), None, "{status}");
-        assert!(text(&output).ends_with("\n\narrived"), "{status}");
+        assert!(fakes::text_of(&output).ends_with("\n\narrived"), "{status}");
         let requests = server.requests();
         assert_eq!(requests.len(), 2);
         assert!(
@@ -693,9 +703,9 @@ fn the_final_url_is_the_one_after_the_redirects() {
     let server = serve([redirect(302, "/b"), ok("text/plain", "x")]);
     let output = Rig::new().fetch(&format!("{}/a", server.url()));
     assert!(
-        text(&output).starts_with(&format!("{}/b 200 text/plain", server.url())),
+        fakes::text_of(&output).starts_with(&format!("{}/b 200 text/plain", server.url())),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -729,8 +739,8 @@ fn ten_redirects_are_followed_and_the_eleventh_fails() {
     let ten: Vec<_> = (1..=10).map(|n| redirect(302, &format!("/{n}"))).collect();
     let server = serve(ten.into_iter().chain([ok("text/plain", "end")]));
     let output = Rig::new().fetch(&format!("{}/0", server.url()));
-    assert_eq!(code(&output), None, "{}", text(&output));
-    assert!(text(&output).ends_with("\n\nend"));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+    assert!(fakes::text_of(&output).ends_with("\n\nend"));
     assert_eq!(server.requests().len(), 11);
 
     let eleven: Vec<_> = (1..=11).map(|n| redirect(302, &format!("/{n}"))).collect();
@@ -738,9 +748,9 @@ fn ten_redirects_are_followed_and_the_eleventh_fails() {
     let output = Rig::new().fetch(&format!("{}/0", server.url()));
     assert_eq!(code(&output), Some(ErrorCode::HttpError));
     assert!(
-        text(&output).contains("more than 10 redirects"),
+        fakes::text_of(&output).contains("more than 10 redirects"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert_eq!(
         server.requests().len(),
@@ -760,7 +770,11 @@ fn a_redirect_to_another_scheme_is_an_http_error_naming_it() {
         let server = serve([redirect(302, location)]);
         let output = Rig::new().fetch(&server.url());
         assert_eq!(code(&output), Some(ErrorCode::HttpError), "{location}");
-        assert!(text(&output).contains(location), "{}", text(&output));
+        assert!(
+            fakes::text_of(&output).contains(location),
+            "{}",
+            fakes::text_of(&output)
+        );
         assert_eq!(server.requests().len(), 1);
     }
 }
@@ -771,9 +785,9 @@ fn http_is_fetched_as_written_and_the_fragment_is_not_sent() {
     let url = format!("{}/p?q=1", server.url());
     let output = Rig::new().fetch(&format!("{url}#frag"));
     assert!(
-        text(&output).starts_with(&format!("{url} 200 ")),
+        fakes::text_of(&output).starts_with(&format!("{url} 200 ")),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
     assert!(url.starts_with("http://"));
     assert_eq!(server.requests()[0].path, "/p?q=1");
@@ -817,8 +831,8 @@ fn a_name_the_resolver_maps_is_fetched_at_the_address_it_gave() {
     });
     let url = format!("http://mapped.test:{port}/x");
     let output = rig.fetch(&url);
-    assert_eq!(code(&output), None, "{}", text(&output));
-    assert!(text(&output).starts_with(&format!("{url} 200 ")));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+    assert!(fakes::text_of(&output).starts_with(&format!("{url} 200 ")));
     assert_eq!(server.requests().len(), 1);
 }
 
@@ -840,7 +854,7 @@ fn a_redirect_to_the_metadata_address_is_blocked_before_any_request() {
             code(&output),
             Some(ErrorCode::BlockedHost),
             "{target}: {}",
-            text(&output)
+            fakes::text_of(&output)
         );
         assert_eq!(server.requests().len(), 1, "{target}");
     }
@@ -862,7 +876,7 @@ fn a_url_written_as_a_blocked_address_is_blocked_too() {
             code(&output),
             Some(ErrorCode::BlockedHost),
             "{url}: {}",
-            text(&output)
+            fakes::text_of(&output)
         );
     }
 }
@@ -874,7 +888,7 @@ fn a_decimal_form_of_the_metadata_address_is_blocked_after_resolution() {
         code(&output),
         Some(ErrorCode::BlockedHost),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -943,7 +957,7 @@ fn a_name_is_resolved_once_a_hop_so_a_second_answer_cannot_swap_the_address() {
             }))
     });
     let output = rig.fetch(&format!("http://rebind.test:{port}/"));
-    assert_eq!(code(&output), None, "{}", text(&output));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -956,7 +970,7 @@ fn loopback_and_internal_names_are_allowed() {
     for host in ["intranet.test", "localhost", "127.0.0.1"] {
         let server = serve([ok("text/plain", "y")]);
         let output = rig.fetch(&format!("http://{host}:{}/", port_of(&server)));
-        assert_eq!(code(&output), None, "{host}: {}", text(&output));
+        assert_eq!(code(&output), None, "{host}: {}", fakes::text_of(&output));
     }
 }
 
@@ -968,7 +982,11 @@ fn a_failed_lookup_is_connection_failed() {
     });
     let output = rig.fetch("http://nowhere.test/");
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
-    assert!(text(&output).contains("no such name"), "{}", text(&output));
+    assert!(
+        fakes::text_of(&output).contains("no such name"),
+        "{}",
+        fakes::text_of(&output)
+    );
 }
 
 #[test]
@@ -1022,9 +1040,9 @@ fn a_request_that_takes_over_sixty_seconds_times_out() {
     let output = call.wait();
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(
-        text(&output).contains("the request took over 60 seconds"),
+        fakes::text_of(&output).contains("the request took over 60 seconds"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -1054,7 +1072,7 @@ fn a_request_one_second_short_of_sixty_is_still_waiting() {
     );
     server.release();
     let output = call.wait();
-    assert_eq!(code(&output), None, "{}", text(&output));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
 }
 
 /// A response that sends its head and the first bytes of a 100-byte body,
@@ -1085,7 +1103,12 @@ fn a_deadline_that_passes_while_the_body_is_read_times_out() {
         &Deadline::after(SIGNAL),
     );
     let output = call.wait();
-    assert_eq!(code(&output), Some(ErrorCode::Timeout), "{}", text(&output));
+    assert_eq!(
+        code(&output),
+        Some(ErrorCode::Timeout),
+        "{}",
+        fakes::text_of(&output)
+    );
     assert!(
         server.await_closed(1, SIGNAL),
         "the fetch closed the socket"
@@ -1108,7 +1131,7 @@ fn a_cancel_while_the_body_is_read_stops_the_call() {
     call.cancel.cancel();
     let output = call.wait();
     assert_eq!(code(&output), None);
-    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
     assert!(
         server.await_closed(1, SIGNAL),
         "the fetch closed the socket"
@@ -1124,7 +1147,7 @@ fn a_cancel_during_a_held_response_returns_promptly_and_says_it_stopped() {
     call.cancel.cancel();
     let output = call.wait();
     assert_eq!(code(&output), None);
-    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
 }
 
 #[test]
@@ -1136,7 +1159,7 @@ fn a_call_cancelled_before_it_starts_sends_nothing() {
     let output = rig
         .tool
         .run(&arguments(&server.url()), &cancel, &Recorder::default());
-    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
     assert!(server.requests().is_empty());
 }
 
@@ -1183,9 +1206,9 @@ fn the_whole_fetch_times_out_after_five_minutes_whatever_each_hop_has_left() {
         let output = call.wait();
         assert_eq!(code(&output), Some(ErrorCode::Timeout), "hop {hop}s");
         assert!(
-            text(&output).contains("the fetch took over 5 minutes"),
+            fakes::text_of(&output).contains("the fetch took over 5 minutes"),
             "hop {hop}s: {}",
-            text(&output)
+            fakes::text_of(&output)
         );
     }
 }
@@ -1216,9 +1239,9 @@ fn a_hop_whose_own_deadline_is_earlier_than_the_fetchs_is_a_request_timeout() {
     );
     let output = call.wait();
     assert!(
-        text(&output).contains("the request took over 60 seconds"),
+        fakes::text_of(&output).contains("the request took over 60 seconds"),
         "{}",
-        text(&output)
+        fakes::text_of(&output)
     );
 }
 
@@ -1241,8 +1264,8 @@ fn a_fetch_through_a_proxy_tunnels_through_it() {
     let proxy = ConnectProxy::start().unwrap();
     let rig = Rig::new().with(|tool| tool.with_proxy(Some(proxy_through(&proxy))));
     let output = rig.fetch(&server.url());
-    assert_eq!(code(&output), None, "{}", text(&output));
-    assert!(text(&output).ends_with("via proxy"));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+    assert!(fakes::text_of(&output).ends_with("via proxy"));
     assert!(proxy.await_connects(1, SIGNAL));
     assert_eq!(
         proxy.connects(),
@@ -1262,7 +1285,7 @@ fn a_host_past_no_proxy_bypasses_the_proxy() {
         .unwrap();
     let rig = Rig::new().with(|tool| tool.with_proxy(Some(bypass)));
     let output = rig.fetch(&server.url());
-    assert_eq!(code(&output), None, "{}", text(&output));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
     assert!(proxy.connects().is_empty());
 }
 
@@ -1326,7 +1349,7 @@ fn a_name_only_the_proxy_can_resolve_is_not_refused() {
     });
     let target = format!("localhost:{}", port_of(&server));
     let output = rig.fetch(&format!("http://{target}/"));
-    assert_eq!(code(&output), None, "{}", text(&output));
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
     assert_eq!(proxy.connects(), [target]);
 }
 
@@ -1524,7 +1547,7 @@ fn a_cancel_while_the_download_is_saved_leaves_no_file() {
     held.call.cancel.cancel();
     held.release.send(()).unwrap();
     let output = held.call.wait();
-    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert_eq!(fakes::text_of(&output), "Cancelled and stopped.\n");
     assert!(no_file_in(&held.rig), "the partial artifact is removed");
     assert!(held.prefix.len() > 60 * 1024);
     drop(held.server);
@@ -1543,7 +1566,7 @@ fn a_deadline_while_the_download_is_saved_leaves_no_file() {
     let output = held.call.wait();
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("{}: the request took over 60 seconds.\n", held.url)
     );
     assert!(no_file_in(&held.rig), "the partial artifact is removed");
@@ -1765,8 +1788,8 @@ fn an_html_download_of_exactly_ten_mib_succeeds() {
     let server = serve([ok("text/html", page.clone())]);
     let rig = Rig::new();
     let output = rig.fetch(&server.url());
-    assert_eq!(code(&output), None, "{}", text(&output));
-    let path = text(&output)
+    assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
+    let path = fakes::text_of(&output)
         .split_once("; raw page at ")
         .and_then(|(_, rest)| rest.split_once("\n\n"))
         .map(|(path, _)| path.to_owned())
@@ -1785,7 +1808,7 @@ fn an_html_download_one_byte_past_ten_mib_is_too_large_and_leaves_no_file() {
     let rig = Rig::new();
     let output = rig.fetch(&url);
     assert_eq!(code(&output), Some(ErrorCode::TooLarge));
-    assert_eq!(text(&output), too_large(&url));
+    assert_eq!(fakes::text_of(&output), too_large(&url));
     assert!(no_file_in(&rig), "nothing was kept");
 }
 
@@ -1801,7 +1824,7 @@ fn an_html_body_cut_short_is_connection_failed_and_leaves_no_file() {
     assert!(server.await_replies(1, SIGNAL), "the server answered");
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!("could not fetch {url}: Peer disconnected.\n")
     );
     assert!(no_file_in(&rig), "the partial artifact is removed");
@@ -1813,7 +1836,7 @@ fn a_page_too_large_is_too_large_even_when_it_could_not_be_saved() {
     let url = format!("{}/page", server.url());
     let rig = Rig::new().with(fills_up_after_a_mib);
     let output = rig.fetch(&url);
-    assert_eq!(text(&output), too_large(&url));
+    assert_eq!(fakes::text_of(&output), too_large(&url));
     assert!(no_file_in(&rig), "the partial file is removed");
 }
 
@@ -1824,7 +1847,7 @@ fn a_page_too_large_is_too_large_even_when_its_directory_is_a_file() {
     let rig = Rig::new();
     fs::write(rig.artifacts(), "a file where the directory goes").unwrap();
     let output = rig.fetch(&url);
-    assert_eq!(text(&output), too_large(&url));
+    assert_eq!(fakes::text_of(&output), too_large(&url));
 }
 
 #[test]
@@ -1835,7 +1858,7 @@ fn an_unsupported_download_is_counted_without_being_kept() {
     let output = rig.fetch(&url);
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
     assert_eq!(
-        text(&output),
+        fakes::text_of(&output),
         format!(
             "{url} is `application/octet-stream`, which `web_fetch` cannot read ({} bytes).\n",
             4 << 20

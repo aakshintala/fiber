@@ -17,7 +17,6 @@ mod support;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -36,6 +35,7 @@ use fakes::{Scripted, ScriptedProvider, call_usage};
 
 use support::{
     CountingHooks, DEADLINE, ENDED, OPENING, REPLY, STEP, Session, Tap, assert_kinds, delivery,
+    spawn_run,
 };
 
 const MINUTE: Duration = Duration::from_secs(60);
@@ -49,17 +49,6 @@ fn session(script: Vec<Scripted>, lifetime: CacheLifetime) -> Session {
 fn arm(session: &mut Session, idle: Duration, cap: Option<u32>) {
     let looped = session.looped.take().unwrap();
     session.looped = Some(looped.idle_exit(Some(idle)).warm(cap));
-}
-
-/// Runs `run` on its own thread and returns the channel it reports on.
-fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let result = looped.run();
-        done.send(result).unwrap();
-    });
-    finished
 }
 
 fn parked(clock: &FakeClock, until: Instant, what: &str) {

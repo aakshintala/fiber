@@ -66,6 +66,11 @@ pub(crate) struct Delegates {
 }
 
 impl Delegates {
+    /// This session's id, which its delegates receive as their parent.
+    pub(crate) fn session(&self) -> &SessionId {
+        &self.parent
+    }
+
     /// Wires one session's delegates: `fiber` is the running binary the
     /// child re-executes, and `home` is Fiber home, where the child's
     /// socket lives.

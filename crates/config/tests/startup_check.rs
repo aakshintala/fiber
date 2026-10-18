@@ -424,13 +424,7 @@ fn read_script_reads_a_large_file_without_a_size_limit() {
 fn read_script_never_waits_on_a_fifo_or_its_link() {
     let setup = Setup::new();
     let fifo = setup.root().join("pipe");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&fifo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(&fifo);
     assert!(matches!(
         read_on_worker(&fifo).unwrap(),
         ScriptRead::NotChecked

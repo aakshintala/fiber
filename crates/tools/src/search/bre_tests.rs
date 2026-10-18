@@ -430,7 +430,7 @@ fn bracket_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
+    let output = fakes::wait_output(child, &format!("grep -e {pattern:?}"));
     let system_text = String::from_utf8(output.stdout).unwrap();
     let system: Vec<&str> = system_text.lines().collect();
     assert_eq!(engine, system, "bracket {pattern:?} as {translated:?}");
@@ -545,7 +545,7 @@ fn gnu_grep() -> bool {
         .spawn()
         .unwrap();
     // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
-    let output = super::super::wait_output(child, "grep --version");
+    let output = fakes::wait_output(child, "grep --version");
     String::from_utf8_lossy(&output.stdout).contains("GNU")
 }
 
@@ -626,7 +626,7 @@ fn matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str], case_i
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
+    let output = fakes::wait_output(child, &format!("grep -e {pattern:?}"));
     let system_text = String::from_utf8(output.stdout).unwrap();
     let system: Vec<&str> = system_text.lines().collect();
     assert_eq!(engine, system, "BRE {pattern:?} as {translated:?}");
@@ -766,7 +766,7 @@ fn class_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]) 
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
+    let output = fakes::wait_output(child, &format!("grep -e {pattern:?}"));
     let system_text = String::from_utf8(output.stdout).unwrap();
     let system: Vec<&str> = system_text.lines().collect();
     assert_eq!(engine, system, "class {pattern:?} as {translated:?}");

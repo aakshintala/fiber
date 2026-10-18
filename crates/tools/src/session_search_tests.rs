@@ -6,7 +6,7 @@ use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ErrorCode, Seq, SessionId};
 use fakes::{CancelToken, Recorder};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::SessionSearch;
 
@@ -56,22 +56,17 @@ impl Scan for FakeScan {
     }
 }
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn tool(scan: &Arc<FakeScan>) -> SessionSearch {
     let scan: Arc<dyn Scan> = scan.clone();
     SessionSearch::new(scan)
 }
 
 fn run(scan: &Arc<FakeScan>, arguments: Value) -> Output {
-    tool(scan).run(&args(arguments), &CancelToken::new(), &Recorder::default())
+    tool(scan).run(
+        &fakes::tool_args(arguments),
+        &CancelToken::new(),
+        &Recorder::default(),
+    )
 }
 
 fn text(output: &Output) -> String {
@@ -105,7 +100,9 @@ fn it_declares_reads_on_the_scope_it_searches() {
         ),
         (json!({"text": "x", "all_projects": true}), "/h/projects/"),
     ] {
-        let effects = search.effects(&args(arguments.clone())).unwrap();
+        let effects = search
+            .effects(&fakes::tool_args(arguments.clone()))
+            .unwrap();
 
         assert_eq!(effects.declared.effects, [Effect::Reads], "{arguments}");
         assert!(effects.declared.reversible, "{arguments}");
@@ -365,7 +362,11 @@ fn a_cancel_seen_after_the_scan_answers_cancelled() {
         cancels: Some(token.clone()),
     });
 
-    let output = tool(&scan).run(&args(json!({"text": "x"})), &token, &Recorder::default());
+    let output = tool(&scan).run(
+        &fakes::tool_args(json!({"text": "x"})),
+        &token,
+        &Recorder::default(),
+    );
 
     assert_eq!(text(&output), "Cancelled before it finished.\n");
     assert_eq!(output.error, None);

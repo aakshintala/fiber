@@ -9,7 +9,7 @@ use super::brand_string;
 use super::host_cpu;
 use super::{
     Args, Base, Only, Pass, Side, attach, bench, busy, document, idle, listing, measure_all,
-    model_name, paging, parse, resume, selected, sides, timing_names, wheel,
+    model_name, paging, parse, resume, selected, session_list, sides, timing_names, wheel,
 };
 
 fn args(line: &str) -> Result<Args, String> {
@@ -150,6 +150,7 @@ fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
         got,
         BTreeMap::from([
             ("session start", (3, 3)),
+            ("session_list", (3, 3)),
             ("terminal first frame", (3, 3)),
             ("session idle", (5, 5)),
             ("terminal idle", (5, 5)),
@@ -171,6 +172,7 @@ fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
         [
             &"paging",
             &"session start",
+            &"session_list",
             &"sessions list",
             &"terminal attach",
             &"terminal first frame",
@@ -328,7 +330,7 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
         "--only",
         "timing",
         "--skip-rows",
-        "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
     ])
     .unwrap();
     let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
@@ -367,6 +369,12 @@ fn block_rows_run_the_head_block_then_the_base_block() {
             (back, "terminal first frame", 2),
             (forward, "terminal first frame", 3),
             (back, "terminal first frame", 3),
+            (forward, "session_list", 1),
+            (back, "session_list", 1),
+            (forward, "session_list", 2),
+            (back, "session_list", 2),
+            (forward, "session_list", 3),
+            (back, "session_list", 3),
             (forward, "sessions list", 1),
             (back, "sessions list", 1),
             (forward, "terminal attach", 1),
@@ -471,7 +479,7 @@ fn fail_row(fail_head: &[u32], fail_base: &[u32]) -> (Vec<(Side, &'static str, u
         "--only",
         "timing",
         "--skip-rows",
-        "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+        "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
     ])
     .unwrap();
     let base = args("--fiber b --out ob --runs 3 --timing-runs 3 --only timing").unwrap();
@@ -583,7 +591,7 @@ fn an_error_keeps_its_notes_on_both_sides() {
             "--only",
             "timing",
             "--skip-rows",
-            "terminal first frame,paging,sessions list,terminal attach,terminal wheel",
+            "terminal first frame,session_list,paging,sessions list,terminal attach,terminal wheel",
         ])
         .unwrap()
     };
@@ -760,7 +768,7 @@ fn skip_rows_leaves_exactly_the_named_timing_workloads_out() {
         .collect();
     assert!(!kept.contains(&"session start"), "{kept:?}");
     assert!(!kept.contains(&"sessions list"), "{kept:?}");
-    assert_eq!(kept.len(), 12, "{kept:?}");
+    assert_eq!(kept.len(), 13, "{kept:?}");
     assert_eq!(kept.len() + 2, all.len());
 }
 
@@ -836,11 +844,12 @@ fn the_results_document_records_skipped_rows_after_ten_turns() {
 
 #[test]
 fn skip_rows_names_exactly_the_timing_workloads() {
-    // The pinned literal list of the six names, cited by
-    // `xtask/src/select/plan_tests.rs`: each side names the other.
+    // The six names mapped in `xtask/src/select/plan_tests.rs`, plus
+    // session_list, which runs on every base pass.
     let literal = [
         "session start",
         "terminal first frame",
+        "session_list",
         "paging",
         "sessions list",
         "terminal attach",
@@ -852,6 +861,7 @@ fn skip_rows_names_exactly_the_timing_workloads() {
         .chain(&busy::WORKLOADS)
         .chain(&busy::ONCE)
         .chain(&resume::WORKLOADS)
+        .chain(&session_list::WORKLOADS)
         .chain(&paging::WORKLOADS)
         .chain(listing::SAMPLED.iter())
         .chain(attach::SAMPLED.iter())

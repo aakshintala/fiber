@@ -60,17 +60,8 @@ fn tool(fake: Fake) -> Skill {
     Skill::new(Arc::new(fake))
 }
 
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
-
 fn name(value: &str) -> Map<String, Value> {
-    args(json!({"name": value}))
+    fakes::tool_args(json!({"name": value}))
 }
 
 /// Writes `SKILL.md` holding `text` under `dir`, creating it.
@@ -317,7 +308,7 @@ fn a_failing_body_maps_to_its_error_code() {
 fn run_with_no_name_fails_invalid_arguments() {
     let skill = tool(Fake::mapping(BTreeMap::new()));
     assert_eq!(
-        code(&run_of(&skill, &args(json!({})))),
+        code(&run_of(&skill, &fakes::tool_args(json!({})))),
         Some(ErrorCode::InvalidArguments)
     );
 }

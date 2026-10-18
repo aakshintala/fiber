@@ -529,11 +529,7 @@ fn a_repository_file_that_is_a_directory_or_a_fifo_is_refused() {
         ErrorCode::ConfigInvalid
     );
     fs::remove_dir(setup.repository()).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(setup.repository())
-        .status()
-        .unwrap();
-    assert!(made.success());
+    fakes::fifo(setup.repository());
     // Reading a FIFO would block forever, so the load gets a deadline.
     let (tx, rx) = std::sync::mpsc::channel();
     let (home, workspace) = (setup.home(), setup.workspace());

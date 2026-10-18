@@ -546,11 +546,7 @@ fn releases(dir: &Path, count: u32) -> Vec<fs::File> {
     let mut held = Vec::new();
     for n in 1..=count {
         let pipe = dir.join(format!("release-{n}.fifo"));
-        let mkfifo = std::process::Command::new("mkfifo")
-            .arg(&pipe)
-            .status()
-            .expect("mkfifo starts");
-        assert!(mkfifo.success(), "mkfifo {pipe:?}");
+        fakes::fifo(&pipe);
         held.push(
             fs::OpenOptions::new()
                 .read(true)
@@ -1668,11 +1664,7 @@ fn the_guard_is_live_while_the_child_is_held() {
     let fixture = Fixture::new("fiber-picture-held");
     let ready = fakes::children::Ready::new(fixture.path());
     let release = fixture.path().join("release.fifo");
-    let mkfifo = std::process::Command::new("mkfifo")
-        .arg(&release)
-        .status()
-        .expect("mkfifo starts");
-    assert!(mkfifo.success(), "mkfifo {release:?}");
+    fakes::fifo(&release);
     let mut held = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -1944,11 +1936,7 @@ fn cancelled_call(
     let mut client = Fixture::new(prefix);
     let ready = fakes::children::Ready::new(client.path());
     let release = client.path().join("release.fifo");
-    let mkfifo = std::process::Command::new("mkfifo")
-        .arg(&release)
-        .status()
-        .expect("mkfifo starts");
-    assert!(mkfifo.success(), "mkfifo {release:?}");
+    fakes::fifo(&release);
     // Held open until the cancelled result is in: dropping it before the
     // child opens the pipe would leave the open without a writer.
     let held = fs::OpenOptions::new()

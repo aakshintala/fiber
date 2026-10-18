@@ -57,11 +57,7 @@ fn call_plain(server: &Server, tool: &str, timeout: Duration) -> Result<Value, C
 
 /// Makes `name` a FIFO under the fixture directory.
 fn mkfifo(setup: &Setup, name: &str) {
-    let status = std::process::Command::new("mkfifo")
-        .arg(setup.dir.path().join(name))
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success(), "mkfifo creates {name}");
+    fakes::fifo(setup.dir.path().join(name));
 }
 
 /// Reads one FIFO's line on a thread, with a deadline naming the wait:

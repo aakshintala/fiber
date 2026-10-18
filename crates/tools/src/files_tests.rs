@@ -2,7 +2,6 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::process::Command;
 
 use fakes::Deadline;
 use fakes::TempDir;
@@ -174,8 +173,7 @@ fn a_directory_is_unsupported() {
 fn a_fifo_is_unsupported_without_opening_it() {
     let dir = TempDir::new("fiber-class-fifo");
     let path = dir.path().join("pipe");
-    let status = Command::new("mkfifo").arg(&path).status().unwrap();
-    assert!(status.success(), "mkfifo failed");
+    fakes::fifo(&path);
     match inspect(&path).unwrap() {
         Inspected::Unsupported { kind, .. } => assert!(kind.contains("fifo"), "{kind}"),
         Inspected::Text { .. }

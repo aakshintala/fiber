@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use config::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, mcp_cache_dir, project_config_file, project_data_dir,
-    repository_config_file,
+    repository_config_file, run_dir,
 };
 
 fn root() -> PathBuf {
@@ -87,6 +87,11 @@ fn logs_dir_is_logs_under_home() {
 #[test]
 fn docs_dir_is_docs_under_home() {
     assert_eq!(docs_dir(&root()), Path::new("/h/docs"));
+}
+
+#[test]
+fn run_dir_is_run_under_home() {
+    assert_eq!(run_dir(Path::new("/h")), Path::new("/h/run"));
 }
 
 #[test]

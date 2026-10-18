@@ -35,6 +35,7 @@ pub mod rules;
 pub mod search;
 mod secret;
 pub mod session_search;
+pub mod sessions;
 pub mod shapes;
 pub mod signing;
 pub mod skills;

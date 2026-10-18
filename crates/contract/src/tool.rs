@@ -30,6 +30,7 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
     "jobs",
     "name_session",
     "read",
+    "session_list",
     "session_search",
     "shell",
     "skill",
