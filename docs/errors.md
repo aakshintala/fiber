@@ -282,7 +282,7 @@ the lines that carry it.
 | `extension_not_found` | exit, driver command (`rewind`) | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
 | `extension_not_installed` | exit, driver command (`rewind`) | `fiber extension remove` names an extension with no directory under `extensions/`; nothing is deleted (`docs/extensions.md`, "Installing") |
 | `extension_required_failed` | exit, driver command (`rewind`) | a required extension failed to start |
-| `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions (`docs/extensions.md`, "Code a repository ships") |
+| `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions (`docs/extensions.md`, "Code a repository ships") |
 | `extension_unapproved` | exit, driver command (`rewind`) | a repository's required extension is not approved; run `fiber approve` in the repository |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
@@ -362,7 +362,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | `config_key_ignored` | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
 | `extension_failed` | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
-| `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
+| `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `login_url` | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login, and a `full` client is attached; the message gives the URL to open, and the code to enter for a device-code login (`docs/extensions.md`, "Host calls") |

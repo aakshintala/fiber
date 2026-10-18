@@ -1638,7 +1638,8 @@ the personal install loads everywhere else. The order is the one skills use:
 repository before personal ("Skills" in `docs/system-prompt.md`). It holds for
 first-party extensions too. A `notice` with code `extension_shadowed` names both
 versions, so a personal install that is newer than the repository's copy is
-visible.
+visible. Two repository copies of one name load the same way: the first
+declared loads, and the same notice names both versions.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
