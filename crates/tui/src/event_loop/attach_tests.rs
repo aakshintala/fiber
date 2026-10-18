@@ -2626,11 +2626,25 @@ fn the_raise_is_written_after_the_frame_draws() {
         "frame-enter"
     );
     // The launch open went out whole while the writer was slow: feed,
-    // recent, the `summary` subscribe and commands, no `full`.
+    // recent, the `summary` subscribe and commands, no `full`. One
+    // deadline for the whole wait: a scoped thread reads the lines
+    // into a channel, and the four takes share what remains of it.
+    let (open_tx, open_rx) = mpsc::channel();
     let mut seen = Vec::new();
-    for _ in 0..4 {
-        seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
-    }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                for _ in 0..4 {
+                    let line =
+                        socket_line(&mut reader).unwrap_or_else(|| panic!("an open line"));
+                    open_tx.send(line).unwrap_or(());
+                }
+            });
+        let open = Deadline::after(DEADLINE);
+        for _ in 0..4 {
+            seen.push(open.recv_or_fail(&open_rx, "an open line"));
+        }
+    });
     // One release, then disarmed: the first frame finishes.
     block.store(false, Ordering::SeqCst);
     release_tx
@@ -2968,9 +2982,6 @@ fn tail_open(
                                 &id,
                                 json!({"lines": doors_window(&log, &command["args"])}),
                             )),
-                        }
-                        if matches!(history, History::Drop) {
-                            break;
                         }
                     }
                     _ => write(hub_ack(&id, json!({}))),
