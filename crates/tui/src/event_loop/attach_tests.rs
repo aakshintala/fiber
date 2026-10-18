@@ -3332,7 +3332,9 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         "a full batch was taken: {taken:?}"
     );
     assert!(
-        taken[..taken.len() - 1].iter().any(|count| *count < HUB_BATCH),
+        taken[..taken.len() - 1]
+            .iter()
+            .any(|count| *count < HUB_BATCH),
         "the channel emptied mid-pass: {taken:?}"
     );
     // Every frame written: the landing's alone, holding the session's
