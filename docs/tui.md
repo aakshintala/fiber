@@ -2064,17 +2064,30 @@ as the person scrolls, with the `history` command, which reads by `seq` over
 the session's offset table (`docs/invocation.md`, "Driver commands";
 `docs/events.md`, "Resume").
 
-- **Opening is one streaming pass** over the session's lines, as its `full`
-  subscription sends them. It builds the panel's cards, and counts every row,
-  keeping each row's `seq`. No event is kept: each is
-  applied to the panel's folds and dropped.
+- **Opening reads the last page, then makes one streaming pass.** The
+  terminal subscribes at `summary` and asks `history`, with no `from_seq`,
+  for the session's last lines. It cuts them into pages and asks for the
+  lines before them until it holds the pages that fill the screen up from
+  its last row, and begin at a turn's start. The first frame draws those
+  pages. The terminal then raises the subscription to `full`.
+  The pass goes over the session's lines as the `full` subscription sends
+  them. It builds the panel's cards and counts every row, keeping each
+  row's `seq`. No event is kept: each is applied to the panel's folds and
+  dropped. The pass renders no page for display.
   The terminal opens a pass on a `full` acknowledgement with `last_seq`,
   or on `stream_reopened` with `last_seq` (`docs/events.md`). It ends the
-  pass when it folds that `seq`. No `last_seq` means no pass is open.
+  pass when it folds that `seq`. No `last_seq` means no pass is open, and
+  an empty log means the first frame draws no history.
   A pass of any session the terminal holds at `full`, an open item's
-  included, blocks `history`. Until it ends, a frame draws the cards held
-  and leaves dropped pages blank; recounting at a new width, search and
-  copy wait. EOF, `stream_closed`, a failed read, a disconnect and lowering
+  included, blocks `history`. Until it ends, the conversation on screen
+  doesn't change: a frame draws the pages already held, and the panel
+  shows the cards folded so far. The scroll bar appears when the pass
+  ends. Scrolling, recounting at a new width, search and copy wait.
+  The one exception: rows that depend on turns before the held pages (an
+  orphaned job's completion, an automatic handoff's trigger, a ledger
+  toggled earlier: only rows of these kinds) may change in the frame where
+  the pass ends.
+  EOF, `stream_closed`, a failed read, a disconnect and lowering
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
   or fails as usual with no connection.
