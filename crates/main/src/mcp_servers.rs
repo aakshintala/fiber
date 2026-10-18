@@ -233,6 +233,8 @@ enum Entry {
 /// What a session started: the failures for the log and the running
 /// servers for the session's end.
 pub(crate) struct SessionServers {
+    /// Uncapped built-in and MCP tools before extension registrations.
+    pub base_tools: Vec<(String, Arc<dyn Tool>)>,
     /// Built-in and MCP declarations before extension replacements.
     pub kept_infos: Vec<ToolInfo>,
     /// Startup servers that did not fail, in specification order.
@@ -349,6 +351,7 @@ pub(crate) fn session_tools(
     server_names.retain(|name| !started.failed.iter().any(|failure| failure.server == *name));
     tools.extend(started.tools);
     infos.extend(started.infos);
+    let base_tools = tools.clone();
     let kept_infos = infos.clone();
     if let Err(failure) = add_extension_tools(&mut tools, &mut infos, extension_tools) {
         started.servers.stop();
@@ -374,6 +377,7 @@ pub(crate) fn session_tools(
         servers: Arc::clone(&servers),
     };
     let servers = SessionServers {
+        base_tools,
         kept_infos,
         server_names,
         failed,

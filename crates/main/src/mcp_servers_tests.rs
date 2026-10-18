@@ -907,6 +907,21 @@ fn an_extension_replacement_keeps_the_original_mcp_info_for_reload() {
     );
     assert!(session.kept_infos.iter().any(|info| info.name == "read"));
     assert_eq!(
+        session
+            .base_tools
+            .iter()
+            .filter(|(_, tool)| tool.definition().name == "mcp__db__echo")
+            .map(|(owner, _)| owner.as_str())
+            .collect::<Vec<_>>(),
+        ["db"]
+    );
+    assert!(
+        session
+            .base_tools
+            .iter()
+            .any(|(_, tool)| tool.definition().name == "read")
+    );
+    assert_eq!(
         tools
             .iter()
             .filter(|(_, tool)| tool.definition().name == "mcp__db__echo")

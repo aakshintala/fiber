@@ -137,14 +137,10 @@ fn reload_landings_do_not_allow_carried_state_to_suppress_newer_writes() {
 fn reload_keeps_retained_provider_state_writable() {
     let home = Home::new();
     home.install("goal", "");
-    let package = home.home().join("extensions/fiber.test-goal");
-    let manifest = package.join("extension.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
-    value["providers"] = json!({"p":[]});
-    std::fs::write(manifest, value.to_string()).unwrap();
-    std::fs::create_dir(package.join("providers")).unwrap();
-    std::fs::write(package.join("providers/p.lua"), "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',7); return {} end}})").unwrap();
+    install_provider(
+        &home,
+        "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',7); return {} end}})",
+    );
     let mut old = home.load(&[]);
     Arc::get_mut(&mut old).unwrap().retain_lua_providers(&[]);
     let held = old.clone();
@@ -187,14 +183,10 @@ impl crate::Browser for ReloadBrowser {
 fn reload_browser_wiring_reaches_new_vms_without_replacing_the_old_browser() {
     let home = Home::new();
     home.install("goal", "");
-    let package = home.home().join("extensions/fiber.test-goal");
-    let manifest = package.join("extension.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
-    value["providers"] = json!({"p":[]});
-    std::fs::write(manifest, value.to_string()).unwrap();
-    std::fs::create_dir(package.join("providers")).unwrap();
-    std::fs::write(package.join("providers/p.lua"), "fiber.provider('p',{credential={timeout=5000,run=function() pcall(host.oauth.refresh,function() error('refresh') end); host.oauth.open('https://login.example/verify'); return {token='token',expires_at=1800000000} end}})").unwrap();
+    install_provider(
+        &home,
+        "fiber.provider('p',{credential={timeout=5000,run=function() pcall(host.oauth.refresh,function() error('refresh') end); host.oauth.open('https://login.example/verify'); return {token='token',expires_at=1800000000} end}})",
+    );
     let old = home.load(&[]);
     let old_browser = Arc::new(ReloadBrowser::default());
     old.browse_with(old_browser.clone(), Arc::new(|| true));
@@ -394,14 +386,10 @@ fn state_late_provider_vm_uses_the_sessions_live_registry() {
             init += &hook("after_tool", "state.set('starts',10)", "blocking");
         }
         home.install("goal", &init);
-        let package = home.home().join("extensions/fiber.test-goal");
-        let manifest = package.join("extension.json");
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
-        value["providers"] = json!({"p":[]});
-        std::fs::write(manifest, value.to_string()).unwrap();
-        std::fs::create_dir(package.join("providers")).unwrap();
-        std::fs::write(package.join("providers/p.lua"), "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',state.get('starts')); return {} end}})").unwrap();
+        install_provider(
+            &home,
+            "fiber.provider('p',{models={timeout=5000,run=function() state.set('provider',state.get('starts')); return {} end}})",
+        );
         let mut session = home.load(&[]);
         assert!(session.notices().is_empty(), "{:?}", session.notices());
         if hooked {
@@ -947,4 +935,15 @@ fn state_take_between_hook_calls_passes() {
         assert_eq!(take_lines(&session, contexts).len(), 1);
         assert!(session.take_change_state().is_empty());
     }
+}
+
+fn install_provider(home: &Home, lua: &str) {
+    let package = home.home().join("extensions/fiber.test-goal");
+    let manifest = package.join("extension.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    value["providers"] = json!({"p":[]});
+    std::fs::write(manifest, value.to_string()).unwrap();
+    std::fs::create_dir(package.join("providers")).unwrap();
+    std::fs::write(package.join("providers/p.lua"), lua).unwrap();
 }

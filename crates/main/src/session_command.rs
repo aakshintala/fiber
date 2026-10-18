@@ -461,16 +461,6 @@ pub(crate) fn run_new(
             return Err(e);
         }
     };
-    // What the session loads once its offer step has run, before its first
-    // preamble: the repository code approved since the process started.
-    let late = Arc::new(std::sync::Mutex::new(crate::reload::Late::default()));
-    let load = crate::reload::record_load(
-        session_servers.later.into_load(
-            crate::reload::record_declarations(session.declarer(), late.clone()),
-            caps.clone(),
-        ),
-        late.clone(),
-    );
     session.shell(driver);
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
@@ -503,45 +493,26 @@ pub(crate) fn run_new(
         hosted_stands,
         backend: extensions.search_backend(),
     };
-    let names = tools
-        .iter()
-        .map(|(_, tool)| tool.definition().name)
-        .collect();
-    let base_tools = tools
-        .iter()
-        .rev()
-        .skip(extensions.tools().len())
-        .rev()
-        .filter(|(owner, tool)| !(owner == "builtin" && tool.definition().name == "web_search"))
-        .cloned()
-        .collect();
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
     let (switcher, switching) = switching.diagnostics(Arc::clone(&diag)).split(door);
-    let reloader = crate::reload::State {
+    let (reload, load, servers, prompts, server_failures) = crate::reload::State::new(
         sources,
-        template: prompt_inputs.clone(),
-        current: current.clone(),
-        switching: switching.clone(),
-        tools: base_tools,
-        kept_infos: session_servers.kept_infos,
-        server_names: session_servers.server_names,
-        prompt_rows: prompt_rows.clone(),
-        late,
-        declare: session.declarer(),
-        replace: session.reloader(),
-        drive: session.driver(),
-        attended: session.attended(),
-        answerable: !one_turn,
-        log: log.clone(),
-        diag: diag.clone(),
-        names: std::sync::Mutex::new(names),
-    }
-    .preparer();
+        prompt_inputs.clone(),
+        current.clone(),
+        switching.clone(),
+        &tools,
+        &session,
+        session_servers,
+        !one_turn,
+        log.clone(),
+        diag.clone(),
+    );
+    let reloader = reload.preparer();
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     let reads = switching.reads();
     if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
-        session_servers.servers.stop();
+        servers.stop();
         close(session, log, &home, &dir, &workspace, &*clock);
         return Ok(code);
     }
@@ -551,7 +522,7 @@ pub(crate) fn run_new(
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
-    let fetch_prompts = session_servers.prompts.clone();
+    let fetch_prompts = prompts.clone();
     let fetch: r#loop::FetchPrompt = Arc::new(move |server, prompt, text, cancel| {
         fetch_prompts.get(server, prompt, text, cancel)
     });
@@ -623,7 +594,7 @@ pub(crate) fn run_new(
                 started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                     session_extensions::written(&log, &current.get())?;
-                    r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
+                    r#loop::mcp_servers_started(&log, server_failures, mcp.notices)?;
                     Ok(looped)
                 })
             });
@@ -679,7 +650,7 @@ pub(crate) fn run_new(
             }
         }
     }
-    session_servers.servers.stop();
+    servers.stop();
     close(session, log, &home, &dir, &workspace, &*clock);
     Ok(code)
 }

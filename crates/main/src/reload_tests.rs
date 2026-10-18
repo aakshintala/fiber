@@ -257,22 +257,20 @@ fn reviewer_credentials_publish_only_when_installed_and_are_reused_afterwards() 
 fn spawn_failure_runs_no_preparation_and_names_the_reload_thread() {
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
-    let build: BuildReload = Arc::new(move |_| {
+    let build = move |_: &r#loop::ReloadRoute| {
         count.fetch_add(1, Ordering::SeqCst);
         Err(contract::inbox::Rejection {
             code: contract::ErrorCode::ConfigInvalid,
             message: "must not run".into(),
         })
+    };
+    let prepare = preparer(build, |purpose, _| {
+        assert_eq!(purpose, "reload");
+        Err(doors::failure(
+            contract::ErrorCode::IoFailed,
+            "a thread for the reload: injected spawn failure",
+        ))
     });
-    let prepare = preparer(
-        build,
-        Arc::new(|_| {
-            Err(doors::failure(
-                contract::ErrorCode::IoFailed,
-                "a thread for the credential read: injected spawn failure",
-            ))
-        }),
-    );
     let error = match prepare(&r#loop::ReloadRoute {
         model: "p/m".into(),
         credential: None,
@@ -292,7 +290,7 @@ fn spawn_failure_runs_no_preparation_and_names_the_reload_thread() {
 fn config_rejection_passes_through_without_installing() {
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
-    let build: BuildReload = Arc::new(move |route| {
+    let build = move |route: &r#loop::ReloadRoute| {
         assert_eq!(route.model, "p/current");
         assert_eq!(route.credential.as_deref(), Some("work"));
         count.fetch_add(1, Ordering::SeqCst);
@@ -300,8 +298,8 @@ fn config_rejection_passes_through_without_installing() {
             code: contract::ErrorCode::ConfigInvalid,
             message: "config.json: invalid JSON".into(),
         })
-    });
-    let prepare = preparer(build, Arc::new(|work| Ok(work())));
+    };
+    let prepare = preparer(build, |_, work| Ok(work()));
     let error = match prepare(&r#loop::ReloadRoute {
         model: "p/current".into(),
         credential: Some("work".into()),

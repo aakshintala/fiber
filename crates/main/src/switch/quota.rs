@@ -72,7 +72,8 @@ struct Silent {
 
 struct Store {
     providers: Vec<(String, ProviderData)>,
-    config: Config,
+    /// Credential labels and sources remain fixed across reloads.
+    startup_config: Config,
     now: Arc<Mutex<super::Reloadable>>,
     started: Weak<StartLock>,
     reads: Arc<Reads>,
@@ -124,7 +125,7 @@ impl Switching {
             .collect();
         Arc::new(Store {
             providers,
-            config: self.config.clone(),
+            startup_config: self.startup_config.clone(),
             now: self.now.clone(),
             started: Arc::downgrade(&self.started),
             reads: self.reads.clone(),
@@ -270,7 +271,7 @@ impl Store {
             .loader
             .clone();
         for (extension, data) in &self.providers {
-            let labels = self.config.credentials().labels(data);
+            let labels = self.startup_config.credentials().labels(data);
             if labels.is_empty() {
                 continue;
             }
@@ -292,7 +293,7 @@ impl Store {
                     .iter()
                     .map(|label| failed(&data.name, label))
                     .collect();
-                let lua = started.start(&loader, &this.config, &data.name, &extension);
+                let lua = started.start(&loader, &this.startup_config, &data.name, &extension);
                 drop(started);
                 let lua = match lua {
                     Ok(lua) => lua,
@@ -317,8 +318,13 @@ impl Store {
                     };
                     let key =
                         crate::lua_providers::session_credential(Some(&lua), &data, &label, || {
-                            crate::credential::switch_credential(&this.config, &data, &label, &run)
-                                .map(|read| read.secret)
+                            crate::credential::switch_credential(
+                                &this.startup_config,
+                                &data,
+                                &label,
+                                &run,
+                            )
+                            .map(|read| read.secret)
                         });
                     match key {
                         Ok((key, _)) => held.push(Label {
@@ -340,10 +346,10 @@ impl Store {
             let outcome = if fail {
                 Err(doors::failure(ErrorCode::IoFailed, "the read failed"))
             } else {
-                self.reads.run(read)
+                self.reads.run("credential read", read)
             };
             #[cfg(not(test))]
-            let outcome = self.reads.run(read);
+            let outcome = self.reads.run("credential read", read);
             let (keep_going, held) = {
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 apply_outcome(&mut state, &provider, &names, outcome)

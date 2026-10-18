@@ -164,25 +164,28 @@ impl StartLock {
     }
 }
 
-/// What preparing a switch reads: the whole startup registry, holding no
-/// Lua provider, every model every provider names before placeholders are
-/// filled, the configuration, each key read so far with the label each
-/// provider is on, and the Lua providers loaded now: the session's and its
-/// reviewer's.
+/// Non-route inputs replaced together when a reload installs.
 #[derive(Clone)]
 pub(crate) struct Reloadable {
     pub(crate) config: Arc<Config>,
+    /// Re-cap rebuilt tools from their uncapped originals on reload or switch.
     pub(crate) caps: r#loop::ResultCaps,
     pub(crate) backend: Option<Arc<dyn contract::search::SearchBackend>>,
     pub(crate) hosted_stands: bool,
     pub(crate) loader: Loader,
 }
 
+/// What preparing a switch reads: the whole startup registry, holding no
+/// Lua provider, every model every provider names before placeholders are
+/// filled, the configuration, each key read so far with the label each
+/// provider is on, and the Lua providers loaded now: the session's and its
+/// reviewer's.
 pub(crate) struct Switching {
     pub(crate) now: Arc<Mutex<Reloadable>>,
     registry: Providers,
     naming: Vec<(String, String)>,
-    config: Config,
+    /// Route thinking and credentials stay fixed to the startup configuration.
+    startup_config: Config,
     remembered: Mutex<Remembered>,
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     started: Arc<StartLock>,
@@ -244,7 +247,7 @@ impl Switching {
                 hosted_stands: false,
                 loader,
             })),
-            config,
+            startup_config: config,
             remembered: Mutex::new(remembered),
             started: Arc::new(StartLock::seeded(&loaded)),
             loaded: Mutex::new(loaded.into_iter().collect()),
@@ -430,7 +433,7 @@ impl Switching {
             .get(name)
             .cloned()
             .unwrap_or_else(|| match data {
-                Some(data) => self.config.credentials().credential_label(data),
+                Some(data) => self.startup_config.credentials().credential_label(data),
                 None => String::new(),
             })
     }
@@ -454,7 +457,7 @@ impl Switching {
                 (Some(lua), _) => Some(lua),
                 (None, Some(extension)) => Some(
                     self.started
-                        .start(&loader, &self.config, &want.name, extension)
+                        .start(&loader, &self.startup_config, &want.name, extension)
                         .map_err(|e| crate::failed(e.code(), e))?,
                 ),
                 (None, None) => None,
@@ -480,7 +483,7 @@ impl Switching {
                         &want.name,
                         Some(data),
                     );
-                    let labels = self.config.credentials().labels(data);
+                    let labels = self.startup_config.credentials().labels(data);
                     if want.label != current && !labels.contains(&want.label) {
                         return Err(crate::credential::no_label(
                             &want.name,
@@ -493,7 +496,7 @@ impl Switching {
                         self.reads.credential(command, timeout, &*loader.clock)
                     };
                     let read = crate::credential::switch_credential(
-                        &self.config,
+                        &self.startup_config,
                         data,
                         &want.label,
                         &run,
@@ -578,7 +581,7 @@ pub(crate) fn prepare(
     let thinking = crate::settings::thinking(
         resolved.thinking,
         asked.or(chosen),
-        &switching.config,
+        &switching.startup_config,
         resolved.model,
         &reference,
         &mut notices,
@@ -613,7 +616,7 @@ pub(crate) fn prepare(
     let shared = Arc::clone(switching);
     let read: Read = switching
         .reads
-        .run(move || {
+        .run("credential read", move || {
             let got = shared.read(session_want)?;
             Ok((got, judge_want.map(|want| shared.read(want))))
         })

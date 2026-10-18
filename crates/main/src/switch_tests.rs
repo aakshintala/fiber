@@ -1549,7 +1549,7 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
     let extension = loader.owners.get("lp").unwrap();
     let lua = switching
         .started
-        .start(&loader, &switching.config, "lp", extension)
+        .start(&loader, &switching.startup_config, "lp", extension)
         .unwrap();
     assert!(lua.registers("credential").unwrap());
     let weak = Arc::downgrade(&lua);
@@ -1557,7 +1557,7 @@ fn a_dead_start_lock_entry_restarts_the_provider() {
     assert!(weak.upgrade().is_none());
     let lua = switching
         .started
-        .start(&loader, &switching.config, "lp", extension)
+        .start(&loader, &switching.startup_config, "lp", extension)
         .unwrap();
     assert!(lua.registers("credential").unwrap());
     assert_eq!(

@@ -4,29 +4,30 @@ use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
 
-type BuildReload =
-    Arc<dyn Fn(&r#loop::ReloadRoute) -> Result<r#loop::ReloadPrepared, Rejection> + Send + Sync>;
-type RunReload = Arc<
-    dyn Fn(
-            Box<dyn FnOnce() -> Result<r#loop::ReloadPrepared, Rejection> + Send>,
-        ) -> Result<Result<r#loop::ReloadPrepared, Rejection>, Failure>
-        + Send
-        + Sync,
->;
-
-pub(crate) fn preparer(build: BuildReload, run: RunReload) -> r#loop::PrepareReload {
+pub(crate) fn preparer(
+    build: impl Fn(&r#loop::ReloadRoute) -> Result<r#loop::ReloadPrepared, Rejection>
+    + Send
+    + Sync
+    + 'static,
+    run: impl Fn(
+        &str,
+        Box<dyn FnOnce() -> Result<r#loop::ReloadPrepared, Rejection> + Send>,
+    ) -> Result<Result<r#loop::ReloadPrepared, Rejection>, Failure>
+    + Send
+    + Sync
+    + 'static,
+) -> r#loop::PrepareReload {
+    let build = Arc::new(build);
     Arc::new(move |route| {
+        // debt: two route fields copied here, derive Clone when ReloadRoute's interface next changes.
         let route = r#loop::ReloadRoute {
             model: route.model.clone(),
             credential: route.credential.clone(),
         };
         let build = build.clone();
-        run(Box::new(move || build(&route))).map_err(|error| Rejection {
+        run("reload", Box::new(move || build(&route))).map_err(|error| Rejection {
             code: error.code,
-            message: error.message.replace(
-                "a thread for the credential read:",
-                "a thread for the reload:",
-            ),
+            message: error.message,
         })?
     })
 }
@@ -96,12 +97,79 @@ pub(crate) struct State {
 }
 
 impl State {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one session's reload inputs and door wiring"
+    )]
+    pub(crate) fn new(
+        sources: config::Sources,
+        template: r#loop::PromptInputs,
+        current: Arc<crate::session_extensions::Current>,
+        switching: Arc<crate::switch::Switching>,
+        tools: &[(String, Arc<dyn contract::tool::Tool>)],
+        session: &doors::Session,
+        servers: crate::mcp_servers::SessionServers,
+        answerable: bool,
+        log: Arc<log::Log>,
+        diag: Arc<log::diag::Diag>,
+    ) -> (
+        Self,
+        r#loop::LoadApproved,
+        Arc<mcp::Servers>,
+        mcp::Prompts,
+        Vec<contract::events::McpServerFailed>,
+    ) {
+        let late = Arc::new(std::sync::Mutex::new(Late::default()));
+        let load = record_load(
+            servers.later.into_load(
+                record_declarations(session.declarer(), late.clone()),
+                switching.reloadable().caps,
+            ),
+            late.clone(),
+        );
+        let names = tools
+            .iter()
+            .map(|(_, tool)| tool.definition().name)
+            .collect();
+        let tools = servers
+            .base_tools
+            .into_iter()
+            .filter(|(owner, tool)| !(owner == "builtin" && tool.definition().name == "web_search"))
+            .collect();
+        let state = Self {
+            sources,
+            template,
+            current,
+            switching,
+            tools,
+            kept_infos: servers.kept_infos,
+            server_names: servers.server_names,
+            prompt_rows: servers.prompts.commands(),
+            late,
+            declare: session.declarer(),
+            replace: session.reloader(),
+            drive: session.driver(),
+            attended: session.attended(),
+            answerable,
+            log,
+            diag,
+            names: std::sync::Mutex::new(names),
+        };
+        (
+            state,
+            load,
+            servers.servers,
+            servers.prompts,
+            servers.failed,
+        )
+    }
+
     pub(crate) fn preparer(self) -> r#loop::PrepareReload {
         let reads = self.switching.reads();
         let state = Arc::new(self);
         preparer(
-            Arc::new(move |route| state.prepare(route)),
-            Arc::new(move |work| reads.run(work)),
+            move |route| state.prepare(route),
+            move |purpose, work| reads.run(purpose, work),
         )
     }
 
