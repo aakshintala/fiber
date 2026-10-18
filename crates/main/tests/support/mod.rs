@@ -25,12 +25,20 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 
 pub(crate) mod package;
 pub(crate) mod pty;
 
+#[allow(
+    unused_imports,
+    reason = "each test binary uses its own subset of the helpers"
+)]
+pub(crate) use fakes::wire::{
+    function_call, hello, hello_inline_completed, hello_item_done, hello_single_delta, stream,
+    text_reply,
+};
 #[allow(
     unused_imports,
     reason = "each test binary uses its own subset of the helpers"
@@ -701,37 +709,6 @@ impl Socket {
     }
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-pub(crate) fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-pub(crate) fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// Guards every session the hub starts in `workspace`: each carries the
 /// workspace path on its command line. Dropping it kills every process
 /// whose command line holds the path, and its process group; its watchdog
@@ -886,30 +863,11 @@ pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
     );
 }
 
-/// A finished `function_call` for `name` with `arguments`.
-pub(crate) fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
 /// A `session_status` line: ephemeral, and written by an observer thread, so
 /// where it falls among the loop's own lines is not what these tests pin.
 /// `tests/socket.rs` reads it.
 pub(crate) fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
-}
-
-/// An `openai-responses` stream answering `text`: what a scripted
-/// reviewer verdict reads as.
-pub(crate) fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": text}]
-    }})])
 }
 
 pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
@@ -1105,43 +1063,6 @@ pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
         .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
         .map(|line| line["kind"].as_str().unwrap())
         .collect()
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-pub(crate) fn hello_inline_completed() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-pub(crate) fn hello_single_delta() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hello."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-pub(crate) fn hello_item_done() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-    }})])
 }
 
 pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
