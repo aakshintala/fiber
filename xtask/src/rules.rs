@@ -244,7 +244,6 @@ pub(crate) fn unsafe_mismatches(
 /// test seam. An entry must refuse an id of 1 or less before anything
 /// runs: group -1 reaches every process the user owns.
 const SIGNAL_ALLOWLIST: &[&str] = &[
-    "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
     "crates/main/src/switch/read.rs",
     "crates/tui/src/paste_image.rs",
