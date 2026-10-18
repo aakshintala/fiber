@@ -3180,7 +3180,7 @@ fn an_empty_log_draws_no_history_and_raises() {
 
 /// The tail read stashes other inputs and replays them in order: two
 /// notices arriving mid-read wait the answer out, then fold oldest
-/// first with the answer wait holding at most two.
+/// first with the answer wait holding the commands reply and two notices.
 #[test]
 fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
     let log = super::handoff_log(3, "the last reply");
@@ -3196,7 +3196,7 @@ fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
         History::Windows,
         vec![notice("first"), notice("second")],
     );
-    assert!(open.lp.hub.answer_stash_peak() <= 2);
+    assert!(open.lp.hub.answer_stash_peak() <= 3);
     drop(open.tx);
     assert_eq!(open.lp.run(&open.rx), 0);
     let texts: Vec<String> = open

@@ -859,7 +859,7 @@ fn accept_summary(app: &mut App, session: &str, ack: &str) {
 
 /// Starts a session from the draft and accepts the start for `session`:
 /// the app attached, its `full` subscribe in flight.
-fn start_session(app: &mut App, session: &str) {
+fn start_session(app: &mut App, session: &str) -> Vec<Value> {
     let Effect::Send(lines) = enter_text(app, "hi") else {
         panic!("Enter sends the start");
     };
@@ -876,6 +876,7 @@ fn start_session(app: &mut App, session: &str) {
     assert_eq!(out.len(), 3);
     assert_eq!(out[0]["command"], "subscribe");
     assert_eq!(out[2]["command"], "prompt");
+    out
 }
 
 #[test]
@@ -978,7 +979,14 @@ fn a_started_session_is_recorded_full_and_leaving_lowers_it() {
 fn opening_a_summary_session_sends_no_subscribe_then_raises() {
     let mut app = home();
     linked(&mut app);
-    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let started = start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let full = started[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", full))
+            .is_empty()
+    );
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
         "fix the parser",
