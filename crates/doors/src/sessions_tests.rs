@@ -775,8 +775,7 @@ fn send_message(
     rx
 }
 
-fn accept_message_peer(home: &Home, id: &str, deadline: &Deadline) -> (UnixListener, UnixStream) {
-    let listener = home.listener(id);
+fn accept_message_peer(listener: UnixListener, deadline: &Deadline) -> UnixStream {
     listener.set_nonblocking(true).unwrap();
     let mut fds = [PollFd::new(&listener, PollFlags::IN)];
     let bound = rustix::event::Timespec::try_from(deadline.left()).unwrap();
@@ -792,7 +791,7 @@ fn accept_message_peer(home: &Home, id: &str, deadline: &Deadline) -> (UnixListe
     let timeout = deadline.left().max(Duration::from_millis(1));
     stream.set_read_timeout(Some(timeout)).unwrap();
     stream.set_write_timeout(Some(timeout)).unwrap();
-    (listener, stream)
+    stream
 }
 
 struct Exchange {
@@ -826,7 +825,7 @@ fn read_exchange(stream: &UnixStream) -> (Exchange, BufReader<UnixStream>) {
     (Exchange { sub, msg, text }, reader)
 }
 
-fn assert_closed(stream: &UnixStream, deadline: &Deadline) {
+fn assert_closed(stream: &UnixStream) {
     let mut one = [0u8; 1];
     let mut reader = stream.try_clone().unwrap();
     match reader.read(&mut one) {
@@ -834,7 +833,6 @@ fn assert_closed(stream: &UnixStream, deadline: &Deadline) {
         Ok(_) => panic!("the sender writes no third line after its answer"),
         Err(e) => panic!("the sender closes straight after its answer: {e}"),
     }
-    let _ = deadline;
 }
 
 #[test]
@@ -842,8 +840,9 @@ fn message_delivers_past_noise_and_closes_at_once() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "the parser is fixed".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (exchange, _) = read_exchange(&stream);
     assert_eq!(exchange.text, "the parser is fixed");
     writeln!(stream, "{}", accepted(&exchange.sub)).unwrap();
@@ -857,7 +856,7 @@ fn message_delivers_past_noise_and_closes_at_once() {
     writeln!(stream, "not JSON").unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
     assert_eq!(deadline.recv_or_fail(&result, "message delivered"), Ok(()));
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }
 
 #[test]
@@ -871,8 +870,9 @@ fn message_rejections_pass_through_unchanged() {
         let home = Home::new();
         let cancel = Arc::new(CancelToken::new());
         let deadline = Deadline::after(fakes::deadline::WAITS);
+        let listener = home.listener(ID);
         let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-        let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+        let mut stream = accept_message_peer(listener, &deadline);
         let (exchange, _) = read_exchange(&stream);
         writeln!(stream, "{}", accepted(&exchange.sub)).unwrap();
         writeln!(stream, "{}", rejected(&exchange.msg, code, message)).unwrap();
@@ -887,7 +887,7 @@ fn message_rejections_pass_through_unchanged() {
             }
             other => panic!("a {code} rejection passes through unchanged: {other:?}"),
         }
-        assert_closed(&stream, &deadline);
+        assert_closed(&stream);
     }
 }
 
@@ -896,8 +896,9 @@ fn a_rejected_subscribe_then_an_accepted_message_is_delivered() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (exchange, _) = read_exchange(&stream);
     // The parent-bound socket of a delegate on another harness accepts only
     // `message`, so a subscribe rejection before the message answer is
@@ -910,7 +911,7 @@ fn a_rejected_subscribe_then_an_accepted_message_is_delivered() {
     .unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
     assert_eq!(deadline.recv_or_fail(&result, "message delivered"), Ok(()));
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }
 
 #[test]
@@ -1014,8 +1015,9 @@ fn message_closing_before_the_answer_is_unreachable() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, stream) = accept_message_peer(&home, ID, &deadline);
+    let stream = accept_message_peer(listener, &deadline);
     let (_exchange, _) = read_exchange(&stream);
     drop(stream);
     assert_eq!(
@@ -1026,8 +1028,9 @@ fn message_closing_before_the_answer_is_unreachable() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (exchange, _) = read_exchange(&stream);
     writeln!(stream, "{}", accepted(&exchange.sub)).unwrap();
     drop(stream);
@@ -1042,8 +1045,9 @@ fn a_line_over_the_cap_is_unreachable() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (_exchange, _) = read_exchange(&stream);
     let long = "x".repeat(MAX_LINE + 10);
     stream.write_all(long.as_bytes()).unwrap();
@@ -1060,8 +1064,9 @@ fn a_mibibyte_of_text_arrives_whole() {
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
     let text = "y".repeat(1024 * 1024);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, text.clone(), cancel);
-    let (_listener, stream) = accept_message_peer(&home, ID, &deadline);
+    let stream = accept_message_peer(listener, &deadline);
     // The peer reads slowly, one byte at a time, so the sender's non-blocking
     // writes fill the send buffer at least once on the way to a mebibyte.
     let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -1085,7 +1090,7 @@ fn a_mibibyte_of_text_arrives_whole() {
     let mut stream = stream;
     writeln!(stream, "{}", accepted(&msg)).unwrap();
     assert_eq!(deadline.recv_or_fail(&result, "mebibyte delivered"), Ok(()));
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }
 
 #[test]
@@ -1093,8 +1098,9 @@ fn message_waits_for_the_answer_until_cancelled() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), Arc::clone(&cancel));
-    let (_listener, stream) = accept_message_peer(&home, ID, &deadline);
+    let stream = accept_message_peer(listener, &deadline);
     let (_exchange, _) = read_exchange(&stream);
     // The listener accepts and never answers; the call holds until the
     // turn is cancelled, then the listener reads end of file.
@@ -1104,7 +1110,7 @@ fn message_waits_for_the_answer_until_cancelled() {
         deadline.recv_or_fail(&result, "cancelled wait"),
         Err(MessageError::Cancelled)
     );
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }
 
 #[test]
@@ -1134,15 +1140,16 @@ fn the_sender_checks_no_schema_version() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (exchange, _) = read_exchange(&stream);
     let mut ack = accepted(&exchange.sub);
     ack["schema_version"] = serde_json::json!(contract::SCHEMA_VERSION + 1);
     writeln!(stream, "{ack}").unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
     assert_eq!(deadline.recv_or_fail(&result, "version unchecked"), Ok(()));
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }
 
 #[test]
@@ -1150,8 +1157,9 @@ fn answers_for_another_command_are_skipped() {
     let home = Home::new();
     let cancel = Arc::new(CancelToken::new());
     let deadline = Deadline::after(fakes::deadline::WAITS);
+    let listener = home.listener(ID);
     let result = send_message(&home, ID, FROM, "hello".into(), cancel);
-    let (_listener, mut stream) = accept_message_peer(&home, ID, &deadline);
+    let mut stream = accept_message_peer(listener, &deadline);
     let (exchange, _) = read_exchange(&stream);
     writeln!(stream, "{}", accepted(&exchange.sub)).unwrap();
     writeln!(stream, "{}", accepted("c_someone_else")).unwrap();
@@ -1166,5 +1174,5 @@ fn answers_for_another_command_are_skipped() {
         deadline.recv_or_fail(&result, "other command skipped"),
         Ok(())
     );
-    assert_closed(&stream, &deadline);
+    assert_closed(&stream);
 }

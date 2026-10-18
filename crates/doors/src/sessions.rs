@@ -267,10 +267,7 @@ impl Sessions for SessionSockets {
             return Err(MessageError::Cancelled);
         }
         let path = self.run.join(&to.0);
-        let fd = crate::hub::nonblocking_socket().map_err(|e| MessageError::Io {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
+        let fd = crate::hub::nonblocking_socket().map_err(|e| message_io(&path, e))?;
         let Ok(address) = rustix::net::SocketAddrUnix::new(&path) else {
             return Err(MessageError::Unreachable);
         };
@@ -289,7 +286,7 @@ impl Sessions for SessionSockets {
                 "command": "subscribe",
                 "args": {"level": "summary"},
             }))
-            .map_err(|_| MessageError::Unreachable)?,
+            .map_err(|e| message_io(&path, e))?,
         );
         out.push(b'\n');
         out.extend_from_slice(
@@ -298,25 +295,16 @@ impl Sessions for SessionSockets {
                 "command": "message",
                 "args": {"from_session_id": &from.0, "text": text},
             }))
-            .map_err(|_| MessageError::Unreachable)?,
+            .map_err(|e| message_io(&path, e))?,
         );
         out.push(b'\n');
-        let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| MessageError::Io {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
+        let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| message_io(&path, e))?;
         wake_read
             .set_nonblocking(true)
-            .map_err(|e| MessageError::Io {
-                path: path.clone(),
-                message: e.to_string(),
-            })?;
+            .map_err(|e| message_io(&path, e))?;
         wake_write
             .set_nonblocking(true)
-            .map_err(|e| MessageError::Io {
-                path: path.clone(),
-                message: e.to_string(),
-            })?;
+            .map_err(|e| message_io(&path, e))?;
         let waker: Arc<dyn Wake> = Arc::new(Waker(wake_write));
         self.clock.subscribe(Arc::downgrade(&waker));
         cancel.subscribe(Arc::downgrade(&waker));
@@ -348,8 +336,8 @@ impl Sessions for SessionSockets {
                     poll_error = Some(io::Error::from(e));
                 }
             });
-            if poll_error.is_some() {
-                return Err(MessageError::Unreachable);
+            if let Some(error) = poll_error {
+                return Err(message_io(&path, error));
             }
             let mut wake_bytes = [0; 256];
             match wake_read.read(&mut wake_bytes) {
@@ -438,6 +426,13 @@ fn valid_id(name: &str) -> bool {
 
 fn io_error(path: &Path, error: io::Error) -> ListError {
     ListError::Io {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    }
+}
+
+fn message_io(path: &Path, error: impl std::fmt::Display) -> MessageError {
+    MessageError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
     }

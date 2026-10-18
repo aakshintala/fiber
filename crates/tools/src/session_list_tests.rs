@@ -12,10 +12,6 @@ struct FakeSessions {
     result: Result<Vec<Running>, ListError>,
     cancellations: Mutex<Vec<bool>>,
 }
-#[allow(
-    clippy::panic,
-    reason = "session_list tests never message; a message is the test's failure"
-)]
 impl Sessions for FakeSessions {
     fn scope(&self) -> PathBuf {
         "/h/run/".into()

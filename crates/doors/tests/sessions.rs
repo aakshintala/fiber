@@ -8,15 +8,19 @@
 )]
 mod support;
 
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{Event, SessionState, SessionStatus};
+use contract::inbox::Delivery;
 use contract::sessions::{Running, Sessions};
 use contract::shapes::{Tokens, Usage};
 use doors::{Session, SessionSockets, mint};
 use fakes::CancelToken;
+use fakes::Client;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -120,11 +124,6 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
         Deadline::after(fakes::deadline::WAITS).recv_or_fail(&finished, "session closed");
     }
 }
-
-use contract::ErrorCode;
-use contract::inbox::Delivery;
-use fakes::Client;
-use std::sync::mpsc::Receiver;
 
 fn served() -> support::Opened {
     support::Opened::open(vec![])

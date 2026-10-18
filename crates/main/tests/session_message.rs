@@ -262,12 +262,11 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
         .collect();
     let s_id = s_lines[0]["session_id"].as_str().unwrap();
     for target in [&t_id, &b_id, &e_session, &random_id] {
-        let (started, resolved, completed) = call_lines(&s_lines, target);
+        let (started, resolved, _) = call_lines(&s_lines, target);
         assert_eq!(started["payload"]["effects"], json!(["writes"]), "{target}");
         assert_eq!(started["payload"]["reversible"], false, "{target}");
         assert!(started["payload"].get("paths").is_none(), "{started}");
         assert_eq!(resolved["payload"]["decided_by"], "reviewer", "{target}");
-        let _ = (started, resolved, completed);
     }
     let (_, _, t_completed) = call_lines(&s_lines, &t_id);
     assert_eq!(completed_text(&t_completed), "delivered");
@@ -281,9 +280,8 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
     }
     // The message arrives on T as a turn whose input names S.
     let t_log = read_log(&setup, &t_id);
-    let turn = t_log
-        .iter()
-        .find(|line| {
+    assert!(
+        t_log.iter().any(|line| {
             line["kind"] == "turn_started"
                 && line["payload"]["input"].as_array().is_some_and(|input| {
                     input.iter().any(|item| {
@@ -292,9 +290,9 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
                             && item["from_session_id"] == s_id
                     })
                 })
-        })
-        .unwrap_or_else(|| panic!("T takes the message as a turn"));
-    let _ = turn;
+        }),
+        "T takes the message as a turn"
+    );
     // Between the subscribe and the message's turn no `clients` line
     // arrives, and the status still says one client.
     let mut fed = std::mem::take(&mut t_lines);
@@ -340,6 +338,9 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
     let deadline = setup.deadline;
     let _guard = support::SessionGuard::arm(deadline, &setup.root.path().to_string_lossy());
     let prompt = "message yourself with the word pineapple";
+    // The sent text shares no word with the prompt, so only the framed
+    // session-message item can carry it into the next model request.
+    const SENT: &str = "the lighthouse keeps its lamp lit";
     let own = Arc::new(Mutex::new(None::<String>));
     let responder_own = Arc::clone(&own);
     let server = ProviderServer::start_responding(move |request: &Request| {
@@ -361,7 +362,7 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
             .unwrap()
             .clone()
             .expect("start answered");
-        support::stream(&[message_call("call_self", &id, "pineapple")])
+        support::stream(&[message_call("call_self", &id, SENT)])
     })
     .unwrap();
     install(&setup, &server);
@@ -413,15 +414,14 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
         completed["payload"]["content"][0]["text"], "delivered",
         "{completed}"
     );
-    let steering = t_log
-        .iter()
-        .find(|line| {
+    assert!(
+        t_log.iter().any(|line| {
             line["kind"] == "steering_applied"
                 && line["payload"]["source"] == "session"
                 && line["payload"]["from_session_id"] == t_id
-        })
-        .unwrap_or_else(|| panic!("the self-message steers the turn"));
-    let _ = steering;
+        }),
+        "the self-message steers the turn"
+    );
     // The next model request of that turn carries the sent text framed.
     let bodies: Vec<Vec<u8>> = server
         .requests()
@@ -431,11 +431,18 @@ fn a_hub_started_session_messages_itself_and_takes_it_as_steering_at_its_next_st
         .collect();
     assert!(bodies.len() >= 2, "the turn calls the model again");
     let next: Value = serde_json::from_slice(bodies.last().unwrap()).unwrap();
+    let input = next["input"].as_array().unwrap();
     assert!(
-        serde_json::to_string(&next["input"])
-            .unwrap()
-            .contains("pineapple"),
-        "the framed message carries the text"
+        input.iter().any(|item| {
+            let flat = serde_json::to_string(item).unwrap();
+            // The provider flattens the framed text into a user item, so
+            // the marker and the session id pin the item as the framed
+            // session message, and only steering put the text there.
+            flat.contains("Fiber: a message from session")
+                && flat.contains(&t_id)
+                && flat.contains(SENT)
+        }),
+        "the framed session-message item carries the sent text"
     );
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
     support::close_session(&t_closer);
