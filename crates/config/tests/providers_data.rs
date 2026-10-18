@@ -1,10 +1,9 @@
 //! `docs/model-routing.md`, "What a provider extension declares": a named
 //! `reviewer_model` is one of its provider's own models and never a
-//! contributor model. This file reads the shipped `providers/` directory at
-//! run time; `provider_data.rs` reads synthetic documented data instead.
+//! contributor model. This file compiles in the shipped provider files;
+//! `provider_data.rs` reads synthetic documented data instead.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
-#![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 use std::path::{Path, PathBuf};
 
@@ -16,37 +15,36 @@ fn package(name: &str) -> PathBuf {
 
 #[test]
 fn a_shipped_reviewer_model_is_in_its_providers_list_and_is_not_a_contributor_model() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
-    let mut packages: Vec<PathBuf> = Vec::new();
-    // `root.join(".")` is `root`: the directory read takes a join on the
-    // joined base, the shape a shipped-package read takes (`docs/ci.md`,
-    // "Selection"), rather than the bare manifest-rooted name.
-    for entry in std::fs::read_dir(root.join(".")).unwrap() {
-        let dir = entry.unwrap().path();
-        if dir.is_dir() {
-            packages.push(dir);
-        }
-    }
-    packages.sort();
-    assert!(!packages.is_empty(), "no packages under {}", root.display());
+    // Every first-party `providers/<package>/providers/<name>.json`, compiled in:
+    // listing them at run time would read the repository at test time
+    // (`docs/ci.md`, "Selection").
+    const PROVIDER_FILES: &[&str] = &[
+        include_str!("../../../providers/anthropic/providers/anthropic.json"),
+        include_str!("../../../providers/codex/providers/codex.json"),
+        include_str!("../../../providers/gemini/providers/gemini.json"),
+        include_str!("../../../providers/muse/providers/muse.json"),
+        include_str!("../../../providers/openai/providers/openai.json"),
+        include_str!("../../../providers/opencode/providers/opencode-go.json"),
+        include_str!("../../../providers/opencode/providers/opencode-zen.json"),
+        include_str!("../../../providers/openrouter/providers/openrouter.json"),
+    ];
     let mut checked = 0;
-    for dir in &packages {
-        for provider in config::read_providers(dir).unwrap() {
-            let Some(model) = provider.reviewer_model.as_deref() else {
-                continue;
-            };
-            checked += 1;
-            assert!(
-                !model.contains("contributor"),
-                "{} names {model:?}, a contributor model",
-                provider.name
-            );
-            assert!(
-                provider.models.is_empty() || provider.models.iter().any(|m| m.id == model),
-                "{} names {model:?} outside its models",
-                provider.name
-            );
-        }
+    for text in PROVIDER_FILES {
+        let provider: config::ProviderData = serde_json::from_str(text).unwrap();
+        let Some(model) = provider.reviewer_model.as_deref() else {
+            continue;
+        };
+        checked += 1;
+        assert!(
+            !model.contains("contributor"),
+            "{} names {model:?}, a contributor model",
+            provider.name
+        );
+        assert!(
+            provider.models.is_empty() || provider.models.iter().any(|m| m.id == model),
+            "{} names {model:?} outside its models",
+            provider.name
+        );
     }
     assert!(checked > 0, "no shipped provider names a reviewer model");
 }
