@@ -440,8 +440,88 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     assert_eq!(request, json!({"id": "c_status", "command": "status"}));
 }
 
+/// Whether `stream` is in blocking mode, read from the socket itself.
+fn is_blocking(stream: &UnixStream) -> bool {
+    !rustix::fs::fcntl_getfl(stream)
+        .unwrap()
+        .contains(rustix::fs::OFlags::NONBLOCK)
+}
+
+#[test]
+fn ask_restores_blocking_after_a_reply() {
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(accepted("c_status", "1.2.3", 1).as_bytes())
+        .unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = ANSWER;
+    let reply = super::ask(
+        &stream,
+        clock.now() + within,
+        within,
+        &*clock,
+        &mut || {},
+        &mut || {},
+    )
+    .unwrap();
+    assert_eq!(reply.version, "1.2.3");
+    assert!(is_blocking(&stream), "a reply leaves the stream blocking");
+}
+
+#[test]
+fn ask_restores_blocking_after_a_close_before_the_answer() {
+    let (stream, peer) = UnixStream::pair().unwrap();
+    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = ANSWER;
+    let Err(error) = super::ask(
+        &stream,
+        clock.now() + within,
+        within,
+        &*clock,
+        &mut || {},
+        &mut || {},
+    ) else {
+        panic!("a close before the answer is an error");
+    };
+    assert!(error.message.contains("closed"), "{}", error.message);
+    assert!(
+        is_blocking(&stream),
+        "a close before the answer leaves the stream blocking"
+    );
+}
+
+#[test]
+fn ask_restores_blocking_after_the_deadline() {
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = Duration::ZERO;
+    let Err(error) = super::ask(
+        &stream,
+        clock.now() + within,
+        within,
+        &*clock,
+        &mut || {},
+        &mut || {},
+    ) else {
+        panic!("a deadline is an error");
+    };
+    assert!(
+        error.message.contains("did not answer"),
+        "{}",
+        error.message
+    );
+    assert!(
+        is_blocking(&stream),
+        "a deadline leaves the stream blocking"
+    );
+}
+
 #[test]
 fn an_answer_followed_by_a_close_is_read() {
+    // The one test through `ask` reaching the closed-peer `InvalidInput` side (macOS only; Linux never refuses).
     let (_dir, home) = home();
     let (_got, _hub) = fake_hub(&home, |mut stream| {
         stream
