@@ -14,7 +14,7 @@ mod support;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -23,7 +23,7 @@ use contract::tool::Tool;
 use fakes::CancelToken;
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value};
-use support::{Deadline, KillGroup, Setup, spawn_watched};
+use support::{Deadline, KillGroup, Output, Setup, spawn_watched};
 
 impl Setup {
     fn new_with_workspace() -> Self {
@@ -46,7 +46,7 @@ impl Setup {
     /// under the test's [`Deadline`] in its own process group with a watchdog beside
     /// it, and asserts that nothing it started is left behind.
     #[track_caller]
-    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Run {
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -88,7 +88,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        Run::from(output)
+        Output::from(output)
     }
 }
 
@@ -98,23 +98,6 @@ struct CancelOnDrop(CancelToken);
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
         self.0.cancel();
-    }
-}
-
-/// What one `fiber` run wrote.
-struct Run {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-impl From<Output> for Run {
-    fn from(output: Output) -> Self {
-        Self {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
     }
 }
 

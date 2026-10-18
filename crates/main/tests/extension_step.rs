@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::json;
-use support::{Deadline, Setup, spawn_watched};
+use support::{Deadline, Output, Setup, spawn_watched};
 
 /// The install step: it records its directory in `where`, then leaves a
 /// script that reads the payload through that recorded directory. The
@@ -64,7 +64,7 @@ impl Setup {
     /// Runs `fiber extension` with `args` and no terminal, so it does not
     /// ask.
     #[track_caller]
-    fn extension(&self, args: &[&str]) -> Run {
+    fn extension(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(["extension"])
@@ -92,21 +92,13 @@ impl Setup {
             ),
         };
         watchdog.stand_down(self.deadline.cleanup());
-        Run {
-            code: output.status.code(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        Output::from(output)
     }
 }
 
 fn write(file: &PathBuf, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-struct Run {
-    code: Option<i32>,
-    stderr: String,
 }
 
 /// The installed directory, and what the step recorded there: its path is
