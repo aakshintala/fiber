@@ -2448,9 +2448,14 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
 /// A backend sending each flush's buffer text to the test's channel, so
 /// the test orders the first frame against the hub's reads. Like
 /// `loop_tests` `CountingBackend`, but recording instead of counting.
+/// While armed, the flush reports and then waits for the test's release:
+/// the raise reaching the socket before the release proves it was
+/// written before `draw` returned.
 struct RecordBackend {
     inner: ratatui::backend::TestBackend,
     events: mpsc::Sender<String>,
+    block: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: mpsc::Receiver<()>,
 }
 
 impl crate::screen::SyncEmit for RecordBackend {
@@ -2512,15 +2517,24 @@ impl ratatui::backend::Backend for RecordBackend {
     fn flush(&mut self) -> std::result::Result<(), Self::Error> {
         let text = crate::view::text(self.inner.buffer());
         self.events.send(format!("frame\n{text}")).unwrap_or(());
+        if self.block.load(std::sync::atomic::Ordering::SeqCst) {
+            self.events.send("frame-enter".to_owned()).unwrap_or(());
+            fakes::Deadline::after(DEADLINE)
+                .recv(&self.release)
+                .unwrap_or_else(|err| panic!("the frame never released: {err}"));
+        }
         self.inner.flush()
     }
 }
 
 /// The open's `full` raise is written after the first frame draws, never
-/// before it: the recording backend reports the flush and the fake hub
-/// reports the `subscribe full` it reads, on one channel, in order.
+/// before it. The recording backend's armed flush parks the frame's
+/// worker mid-`draw`: a raise on the socket before the test's release
+/// fails, and the raise after it passes. Moving the raise before `draw`
+/// in a scratch copy fails this test at the parked read.
 #[test]
 fn the_raise_is_written_after_the_frame_draws() {
+    use std::sync::atomic::{AtomicBool, Ordering};
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
     app.set_size(60, 12);
     app.set_home(crate::home::Launch {
@@ -2533,7 +2547,7 @@ fn the_raise_is_written_after_the_frame_draws() {
         version: "0.0.1".to_owned(),
         model: None,
         thinking: None,
-        logo_glyph: "⌇".to_owned(),
+        logo_glyph: "\u{2318}".to_owned(),
         keys: crate::KeysSetup::default(),
         rail_share: 15.0,
         panel_share: 21.0,
@@ -2543,9 +2557,13 @@ fn the_raise_is_written_after_the_frame_draws() {
     });
     app.set_size(60, 12);
     let (events_tx, events) = mpsc::channel();
+    let block = std::sync::Arc::new(AtomicBool::new(false));
+    let (release_tx, release) = mpsc::channel();
     let backend = RecordBackend {
         inner: ratatui::backend::TestBackend::new(60, 12),
-        events: events_tx.clone(),
+        events: events_tx,
+        block: std::sync::Arc::clone(&block),
+        release,
     };
     let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = super::super::Loop {
@@ -2574,45 +2592,52 @@ fn the_raise_is_written_after_the_frame_draws() {
         tick: crate::tick::TickThread::idle(),
     };
     let (ours, theirs) = pair();
-    let (cmds_tx, cmds) = mpsc::channel();
-    // The fake hub answers nothing: the test only orders the loop's
-    // writes. It reports the `full` raise it reads to the same channel
-    // that carries the frame, so program order is the channel's order,
-    // and hands each first-stage subscribe's id back for the test to ack.
-    std::thread::Builder::new()
-        .name("raise-hub".to_owned())
-        .spawn(move || {
-            let mut reader = std::io::BufReader::new(theirs);
-            let mut text = String::new();
-            loop {
-                text.clear();
-                match std::io::BufRead::read_line(&mut reader, &mut text) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                if command["command"] != "subscribe" {
-                    continue;
-                }
-                if command["args"]["level"] == "full" {
-                    events_tx
-                        .send("command(subscribe full)".to_owned())
-                        .unwrap_or(());
-                } else if let Some(id) = command["id"].as_str() {
-                    cmds_tx.send(id.to_owned()).unwrap_or(());
-                }
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    theirs
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let mut reader = std::io::BufReader::new(theirs);
+    let socket_line = |reader: &mut std::io::BufReader<UnixStream>| {
+        let mut text = String::new();
+        match std::io::BufRead::read_line(reader, &mut text) {
+            Ok(0) => panic!("the hub hung up"),
+            Ok(_) => Some(text),
+            Err(_) => None,
+        }
+    };
     let (tx, rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Connected(ours, hello()), &rx), None);
     let wait = Deadline::after(DEADLINE);
     let first = wait.recv_or_fail(&events, "the first frame");
     assert!(first.starts_with("frame\n"), "{first:?}");
-    // The first frame drew with no raise: the `summary` subscribe went
-    // out, no `full`. Acking the summary makes the raise due, and the
-    // next frame writes it.
-    let summary = wait.recv_or_fail(&cmds, "the summary subscribe");
+    // The launch open went out whole: feed, recent, the `summary`
+    // subscribe and commands, no `full`.
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        seen.push(socket_line(&mut reader).unwrap_or_else(|| panic!("an open line")));
+    }
+    let lines: Vec<serde_json::Value> = seen
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let subscribes: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "subscribe")
+        .collect();
+    assert_eq!(subscribes.len(), 1, "{lines:?}");
+    assert_eq!(subscribes[0]["args"]["level"], "summary");
+    let summary = subscribes[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a summary id"))
+        .to_owned();
+    // The next frame repaints whole: the resize drops `last`, so the
+    // armed flush parks inside `draw` even when the screen did not change.
+    lp.screen
+        .resize(60, 12)
+        .unwrap_or_else(|err| panic!("resize: {err}"));
+    while events.try_recv().is_ok() {}
+    // Acking the summary makes the raise due; the worker parks in the
+    // next frame's flush, before `draw` returns.
+    block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
         kind: "command_accepted".to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
@@ -2625,17 +2650,36 @@ fn the_raise_is_written_after_the_frame_draws() {
             .into_iter()
             .collect(),
     });
-    assert_eq!(lp.step(Input::Hub(ack), &rx), None);
+    let worker = std::thread::Builder::new()
+        .name("raise-frame".to_owned())
+        .spawn(move || lp.step(Input::Hub(ack), &rx))
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
     drop(tx);
-    let mut frames = 1;
-    loop {
-        let event = wait.recv_or_fail(&events, "the raise after the frame");
-        if event == "command(subscribe full)" {
-            break;
-        }
-        assert!(event.starts_with("frame\n"), "{event:?}");
-        frames += 1;
-    }
-    assert!(frames >= 1);
-    drop(rx);
+    let flushed = wait.recv_or_fail(&events, "the parked frame");
+    assert!(flushed.starts_with("frame\n"), "{flushed:?}");
+    assert_eq!(
+        wait.recv_or_fail(&events, "the parked flush"),
+        "frame-enter"
+    );
+    // The raise is not on the socket yet: it goes out after `draw`
+    // returns, which waits on the release below. A raise here fails.
+    assert!(
+        socket_line(&mut reader).is_none(),
+        "the raise was written before `draw` returned"
+    );
+    // One release, then disarmed: later flushes in this step run
+    // through, so the frame always finishes after exactly one park.
+    block.store(false, Ordering::SeqCst);
+    release_tx
+        .send(())
+        .unwrap_or_else(|err| panic!("release: {err}"));
+    reader
+        .get_mut()
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    let raise = socket_line(&mut reader).unwrap_or_else(|| panic!("the raise"));
+    let raise: serde_json::Value = serde_json::from_str(&raise).unwrap_or_default();
+    assert_eq!(raise["command"], "subscribe");
+    assert_eq!(raise["args"], json!({"level": "full"}));
+    assert_eq!(worker.join().unwrap_or_else(|_| panic!("the worker")), None);
 }
