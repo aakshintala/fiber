@@ -55,7 +55,7 @@ mod images;
 pub(crate) mod items;
 mod keyboard;
 mod links;
-mod model_picker;
+pub(crate) mod model_picker;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod moving;

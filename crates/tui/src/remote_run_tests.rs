@@ -18,6 +18,15 @@ use crate::configure_fake::Fake;
 /// The hub's global file: the workspace derives from its parent.
 const GLOBAL: &str = "/hub/.fiber/config.json";
 
+/// The terminal's start bytes, before its first frame: the mode-enable
+/// sequences the test waits for before sending any input.
+const START: &[u8] =
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+
+/// The terminal's restore bytes, after its last frame.
+const RESTORE: &[u8] =
+    b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
+
 /// The client's lists, holding only `zed/z1`: `run` must never read
 /// them on a remote terminal.
 fn client_models(calls: Arc<Mutex<usize>>) -> crate::ReadModels {
@@ -163,32 +172,12 @@ fn the_start_pick_lists_the_hubs_models() {
         },
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
-    // The tick runs only while something drawn moves, so frames only
-    // draw on input: drain every byte the terminal is sent, so no
-    // write blocks, and scan them for the hub's models.
-    let drained = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&drained);
-    let mut main = pair
-        .main
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    std::thread::Builder::new()
-        .name("remote-run-drain".to_owned())
-        .spawn(move || {
-            use std::io::Read as _;
-            let mut buf = [0u8; 4096];
-            loop {
-                match main.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => {
-                        if let Ok(mut held) = sink.lock() {
-                            held.extend_from_slice(&buf[..n]);
-                        }
-                    }
-                }
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The watcher is the only reader from the first frame to end of
+    // file: it keeps draining, so the terminal never blocks writing a
+    // frame, and each marker arrives whole under one hang-guard
+    // deadline. The tick runs only while something drawn moves, so no
+    // input goes out before the terminal is ready.
+    let frames = crate::pty_watch::watch(&pair.main, vec![b"m1" as &[u8], b"m2", RESTORE]);
     let (terminal, hub) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let (reported, lines) = mpsc::channel();
     std::thread::Builder::new()
@@ -239,48 +228,25 @@ fn the_start_pick_lists_the_hubs_models() {
                 && models_refresh(line, "cached")
         },
     );
-    // No input until the first frame is read; then moving the
-    // selection redraws without touching the rows. The rows draw
-    // provider and id in separate styled cells, so the halves, not
-    // the references, are what the bytes hold.
+    // No input until the terminal is ready: the first chunk starts with
+    // the mode-enable sequences and ends at the hub's first model, so
+    // the start pick already lists it. The rows draw provider and id in
+    // separate styled cells, so the halves, not the references, are what
+    // the bytes hold.
     let mut pair = pair;
     let wait = Deadline::start();
-    let opened = loop {
-        {
-            let held = drained.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-            if !held.is_empty() {
-                break true;
-            }
-        }
-        if wait.left().is_zero() {
-            break false;
-        }
-        let (pause, paused) = mpsc::channel::<()>();
-        let pause_wait = Deadline::after(std::time::Duration::from_millis(50));
-        assert!(pause_wait.recv(&paused).is_err());
-        drop(pause);
-    };
-    assert!(opened, "no first frame");
-    let listed = loop {
-        pair.main
-            .write_all(b"\x1b[B")
-            .unwrap_or_else(|err| panic!("write: {err}"));
-        // One sanctioned wait between pokes: sleeping is banned, so
-        // the pause is a receive that never arrives.
-        let (pause, paused) = mpsc::channel::<()>();
-        let pause_wait = Deadline::after(std::time::Duration::from_millis(200));
-        assert!(pause_wait.recv(&paused).is_err());
-        drop(pause);
-        let held = drained.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-        let held: &[u8] = &held;
-        if held.windows(2).any(|w| w == b"m1") && held.windows(2).any(|w| w == b"m2") {
-            break true;
-        }
-        if wait.left().is_zero() {
-            break false;
-        }
-    };
-    assert!(listed, "no frame lists the hub's models");
+    let first = crate::pty_watch::watched(&frames, "the hub's first model", &wait);
+    assert!(
+        first.starts_with(START),
+        "the first chunk starts with the start bytes: {first:?}"
+    );
+    // The start pick lists the hub's catalogue, but the loop parks
+    // after what it already drew: moving the selection redraws the
+    // rest without touching the rows.
+    pair.main
+        .write_all(b"\x1b[B")
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    let second = crate::pty_watch::watched(&frames, "the hub's second model", &wait);
     assert_eq!(
         *calls.lock().unwrap_or_else(|err| panic!("lock: {err}")),
         0,
@@ -301,19 +267,31 @@ fn the_start_pick_lists_the_hubs_models() {
         0,
         "the client's lists were read"
     );
-    let held = drained.lock().unwrap_or_else(|err| panic!("lock: {err}"));
-    let held: &[u8] = &held;
-    assert!(
-        !held.windows(2).any(|w| w == b"z1"),
-        "a frame lists the client's model"
-    );
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
+    let rest = crate::pty_watch::watched(&frames, "the restore bytes", &wait);
+    assert!(
+        rest.ends_with(RESTORE),
+        "the last chunk ends with the restore bytes: {rest:?}"
+    );
     match Deadline::after(DEADLINE).recv(&finished) {
         Ok(code) => assert_eq!(code, 0),
         Err(err) => panic!("waited {DEADLINE:?} for quit: {err}"),
     }
+    // Every byte from the first frame to the restore lists the hub's
+    // models and never the client's: the restore is written after the
+    // last frame, so waiting for it proves the output is complete.
+    let all = [first, second, rest].concat();
+    let all: &[u8] = &all;
+    assert!(
+        all.windows(2).any(|w| w == b"m1") && all.windows(2).any(|w| w == b"m2"),
+        "no frame lists the hub's models"
+    );
+    assert!(
+        !all.windows(2).any(|w| w == b"z1"),
+        "a frame lists the client's model"
+    );
     assert_eq!(
         *calls.lock().unwrap_or_else(|err| panic!("lock: {err}")),
         0,

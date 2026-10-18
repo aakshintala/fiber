@@ -158,7 +158,7 @@ impl Remote {
         let model: Option<String> =
             text("model").and_then(|text| serde_json::from_str::<String>(&text).ok());
         let thinking: Option<String> = model.as_deref().and_then(|model| {
-            text(&format!("models.\"{model}\".thinking"))
+            text(&crate::app::model_picker::canonical_thinking_key(model))
                 .and_then(|text| serde_json::from_str::<String>(&text).ok())
         });
         let scoped: Vec<String> = text("scoped_models")

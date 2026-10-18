@@ -3405,8 +3405,7 @@ fn chip_rows() -> Value {
     json!({"rows": [
         {"key": "model", "shown": "value", "value": "\"hub/m\"",
          "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-        {"key": "models.\"hub/m\".thinking", "shown": "value", "value": "\"high\"",
-         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+        {"key": "models.hub/m.thinking", "shown": "value", "value": "\"high\"",         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
         {"key": "scoped_models", "shown": "value", "value": "[\"hub/m\"]",
          "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
     ]})
@@ -3447,20 +3446,21 @@ use std::io::Read as _;
 /// A hub rejection's code and message.
 type Rejection = (String, String);
 
-/// Asserts the hub reads nothing for a short wait: the app wrote no
-/// line. The watcher shares its socket with the scripted player, so
-/// the short timeout is restored to blocking after: the player's
-/// reads never inherit it under load.
+/// Asserts the hub reads nothing: the app wrote no line. The fold,
+/// save or choice the test just took joined its thread, so every
+/// synchronous write finished; a nonblocking read proves the wire is
+/// empty without waiting on the clock. The watcher shares its socket
+/// with the scripted player, so the read is restored to blocking
+/// after: the player's reads never inherit it.
 fn quiet(watcher: &UnixStream) {
-    watcher
-        .set_read_timeout(Some(std::time::Duration::from_millis(200)))
-        .unwrap();
+    watcher.set_nonblocking(true).unwrap();
     let mut byte = [0; 1];
-    assert!(
-        (&*watcher).read(&mut byte).is_err(),
-        "the app wrote a line it owes nothing"
+    let idle = matches!(
+        (&*watcher).read(&mut byte),
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock
     );
-    watcher.set_read_timeout(None).unwrap();
+    watcher.set_nonblocking(false).unwrap();
+    assert!(idle, "the app wrote a line it owes nothing");
 }
 
 /// A `settings` answer naming only the scoped list: the chip has no
@@ -3485,8 +3485,33 @@ fn chip_rejection(code: &str, message: &str) -> (String, Value, Result<Value, Re
     )
 }
 
+/// A `settings` answer at `workspace` naming only the scoped list:
+/// the chip has no model, so an owed start pick opens.
+fn chip_settings_scoped_at(
+    workspace: &str,
+    scoped: &str,
+) -> (String, Value, Result<Value, Rejection>) {
+    (
+        "configure".to_owned(),
+        json!({"operation": "settings", "workspace": workspace}),
+        Ok(json!({"rows": [
+            {"key": "scoped_models", "shown": "value", "value": scoped,
+             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+        ]})),
+    )
+}
+
 /// A `models` answer holding `references`, each with one level.
 fn models_with(references: &[&str]) -> (String, Value, Result<Value, Rejection>) {
+    models_with_at("/hub", references)
+}
+
+/// A `models` answer at `workspace` holding `references`, each with
+/// one level.
+fn models_with_at(
+    workspace: &str,
+    references: &[&str],
+) -> (String, Value, Result<Value, Rejection>) {
     let models: Vec<Value> = references
         .iter()
         .map(|reference| {
@@ -3497,7 +3522,7 @@ fn models_with(references: &[&str]) -> (String, Value, Result<Value, Rejection>)
         .collect();
     (
         "configure".to_owned(),
-        json!({"operation": "models", "workspace": "/hub", "refresh": "stale"}),
+        json!({"operation": "models", "workspace": workspace, "refresh": "stale"}),
         Ok(json!({"models": models, "notices": [], "lists": []})),
     )
 }
@@ -3830,6 +3855,40 @@ fn a_failed_read_then_a_reconnect_opens_the_pick_once() {
     let (app, _) = fold(app, hub_hello());
     Deadline::start().recv_or_fail(&hub.done, "wire script");
     assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
+    quiet(&hub.watcher);
+}
+
+#[test]
+fn the_deferred_start_pick_reads_models_at_the_chosen_workspace() {
+    // The first chip read fails, so the pick stays owed; choosing a
+    // workspace answers the next chip read with no model, and the
+    // owed pick opens over its catalogue.
+    let (mut app, hub) = scripted_remote(vec![
+        global_file(),
+        chip_rejection("invalid_arguments", "bad settings"),
+        chip_settings_scoped_at("/hub/p", "[\"hub/m\"]"),
+        models_with_at("/hub/p", &["hub/m"]),
+    ]);
+    app.owe_start_pick();
+    hub.start();
+    let (app, _) = fold(app, hub_hello());
+    assert!(app.model_picker.open.is_none());
+    assert!(app.chip_read_failed());
+    // With the link up the choice reads the chips at once; the player
+    // checks each line's workspace, so a stale catalogue workspace
+    // fails the script here and below.
+    let app = choosing(app, "/hub/p");
+    assert!(!app.chip_read_owed());
+    // The next hello runs the owed pick: it opens over the catalogue
+    // read at the chosen workspace.
+    let (app, _) = fold(app, hub_hello());
+    Deadline::start().recv_or_fail(&hub.done, "wire script");
+    assert_eq!(open_mode(&app), Some(crate::model_picker::Mode::Choose));
+    assert_eq!(selected(&app).as_deref(), Some("hub/m"));
+    assert_eq!(
+        app.remote().map(|remote| remote.reading()),
+        Some(std::path::PathBuf::from("/hub/p"))
+    );
     quiet(&hub.watcher);
 }
 

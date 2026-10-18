@@ -1031,7 +1031,6 @@ fn catalogue_reads_use_the_workspace_in_use() {
 #[test]
 fn catalogue_reads_wait_for_the_link_and_end_on_reconnect() {
     use crate::catalogue::Refresh;
-    use std::time::Duration;
     let mut hub = Hub::new(Arc::new(Fake::new(vec![])));
     hub.router.detach();
     hub.remote.set_workspace(PathBuf::from("/remote/ws"));
@@ -1041,11 +1040,17 @@ fn catalogue_reads_wait_for_the_link_and_end_on_reconnect() {
     thread::spawn(move || {
         tx.send(remote.models(Refresh::Cached)).unwrap_or(());
     });
-    // Nothing is written while detached.
+    // Nothing is written while detached: the worker parks waiting for
+    // the link, so no line goes out.
+    while hub.router.link_waiters() != 1 {
+        assert!(
+            !deadline.left().is_zero(),
+            "a catalogue read did not wait for the link"
+        );
+        thread::yield_now();
+    }
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&hub.lines)
-            .is_err(),
+        hub.lines.try_recv().is_err(),
         "a catalogue read wrote while detached"
     );
     // After attach the hub reads the models line and the read answers.
@@ -1169,7 +1174,7 @@ fn chip_read_takes_the_hub_model_thinking_and_scope() {
         json!({"rows": [
             {"key":"model","shown":"value","value":"\"hub/m\"",
              "layer":"global","file":"/hub/config.json","scope":"global_only"},
-            {"key":"models.\"hub/m\".thinking","shown":"value","value":"\"high\"",
+            {"key":"models.hub/m.thinking","shown":"value","value":"\"high\"",
              "layer":"global","file":"/hub/config.json","scope":"global_only"},
             {"key":"scoped_models","shown":"value","value":"[\"hub/m\"]",
              "layer":"global","file":"/hub/config.json","scope":"global_only"},
@@ -1181,6 +1186,46 @@ fn chip_read_takes_the_hub_model_thinking_and_scope() {
             model: Some("hub/m".to_owned()),
             thinking: Some("high".to_owned()),
             scoped: vec!["hub/m".to_owned()],
+        }
+    );
+}
+
+#[test]
+fn chip_read_quotes_a_dotted_model_in_the_thinking_key() {
+    // A reference holding a dot keeps its quotes in canonical spelling:
+    // `acme/m.1` reads `models."acme/m.1".thinking`.
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let (tx, rx) = mpsc::channel();
+    let remote = Arc::clone(&hub.remote);
+    thread::spawn(move || {
+        tx.send(remote.chip(Path::new(""))).unwrap_or(());
+    });
+    let line = Deadline::start().recv_or_fail(&hub.lines, "global file");
+    assert_eq!(line["command"], "configure");
+    assert_eq!(line["args"], json!({"operation":"global_file"}));
+    hub.reply(&line, json!({"file": "/hub/config.json"}));
+    let line = Deadline::start().recv_or_fail(&hub.lines, "settings");
+    assert_eq!(line["command"], "configure");
+    assert_eq!(
+        line["args"],
+        json!({"operation":"settings","workspace":"/hub"})
+    );
+    hub.reply(
+        &line,
+        json!({"rows": [
+            {"key":"model","shown":"value","value":"\"acme/m.1\"",             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"models.\"acme/m.1\".thinking","shown":"value","value":"\"low\"",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+            {"key":"scoped_models","shown":"value","value":"[\"acme/m.1\"]",
+             "layer":"global","file":"/hub/config.json","scope":"global_only"},
+        ]}),
+    );
+    assert_eq!(
+        Deadline::start().recv_or_fail(&rx, "chip").unwrap(),
+        Chip {
+            model: Some("acme/m.1".to_owned()),
+            thinking: Some("low".to_owned()),
+            scoped: vec!["acme/m.1".to_owned()],
         }
     );
 }
@@ -1276,10 +1321,10 @@ fn chip_read_detached_writes_nothing_and_reports_the_lost_link() {
     let error = hub.remote.chip(Path::new("/hub")).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "connection lost");
+    // The loop path fails before writing: the error above is the whole
+    // proof, and the wire stays empty without waiting on the clock.
     assert!(
-        Deadline::after(std::time::Duration::from_millis(200))
-            .recv(&hub.lines)
-            .is_err(),
+        hub.lines.try_recv().is_err(),
         "a detached read writes nothing"
     );
 }

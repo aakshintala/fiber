@@ -70,7 +70,6 @@ impl App {
         if remote && !self.take_start_pick() {
             return Vec::new();
         }
-        let _ = self.take_start_pick();
         if remote
             && self
                 .home
@@ -95,7 +94,10 @@ impl App {
         let Some(read) = self.models_reader() else {
             return Vec::new();
         };
-        let refresh = self.model_picker.take_read().unwrap_or(Refresh::Stale);
+        // The open read for itself: take its read through the loop's
+        // operation, recording the workspace the hub's catalogue read
+        // uses, as `take_reads` does.
+        let refresh = self.take_reads().unwrap_or(Refresh::Stale);
         match read(refresh) {
             Ok(catalogue) => self.on_models(Ok(catalogue)),
             Err(error) => {
@@ -829,7 +831,7 @@ impl App {
 /// as `config`'s dotted-path display spells it. `main` hands the terminal
 /// canonical keys, so this plain string supersedes the choice's own key
 /// with no parsing here.
-pub(in crate::app) fn canonical_thinking_key(reference: &str) -> String {
+pub(crate) fn canonical_thinking_key(reference: &str) -> String {
     if reference.contains('.') {
         format!("models.\"{reference}\".thinking")
     } else {
