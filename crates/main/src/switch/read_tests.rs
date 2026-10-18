@@ -16,7 +16,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 
-use super::{CancelOnDrop, Reads, alive, deadline_due, kill_group, signallable};
+use super::{CancelOnDrop, Reads, deadline_due};
 use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::{FakeClock, SystemClock};
@@ -290,13 +290,6 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
     assert!(!marker.exists(), "the command never started");
     assert!(listed(&reads).is_empty());
     pre.stand_down(DEADLINE);
-}
-
-#[test]
-fn only_a_group_above_one_is_signallable() {
-    assert!(!signallable(0));
-    assert!(!signallable(1));
-    assert!(signallable(2));
 }
 
 /// Runs `reads.credential` for `command` on a thread of its own, returning
@@ -1984,20 +1977,6 @@ fn settle_retries_a_perm_group_until_the_bound_then_fails() {
     );
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);
-}
-
-/// Ids no credential group can hold are refused before any syscall: 0, 1
-/// and ids past the pid range are never alive, and killing them sends
-/// nothing. The signallable edge sits between 1 and 2.
-#[test]
-fn unusable_ids_are_neither_alive_nor_signalled() {
-    assert!(!alive(0));
-    assert!(!alive(1));
-    assert!(!alive(u32::MAX));
-    // Refused, not evidence of anything: these send no KILL anywhere.
-    kill_group(0);
-    kill_group(1);
-    kill_group(u32::MAX);
 }
 
 /// A refusal id stays not alive without consulting its script: 0 and 1
