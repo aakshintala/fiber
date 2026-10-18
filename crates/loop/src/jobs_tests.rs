@@ -4349,6 +4349,54 @@ fn an_artifact_only_output_file_change_writes_its_carried_state() {
 }
 
 #[test]
+fn an_artifact_only_completion_answer_writes_no_carried_state() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let staged = Arc::clone(&hooks);
+    hooks.answer_with(move |seen| {
+        if seen.delivery == Some(JobDelivery::OutputFile) {
+            return unchanged();
+        }
+        // Staged when the completion answers: the artifact-only answer
+        // must not commit it, since a completion ignores artifact text.
+        staged.stage_state(vec![StateLine {
+            extension: "redactor".into(),
+            key: "last_seen".into(),
+            value: Some((json!(JOB), OnFork::AtPoint)),
+            landing: 0,
+        }]);
+        artifacted("ARTIFACT")
+    });
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, OUT, b"old\n");
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The completion ignores the artifact text, so the artifact-only
+    // answer commits no carried state: under the
+    // `artifact_counts || artifact.is_some()` mutant the state line is
+    // written. The output file is untouched, so only the completion
+    // pass stages state.
+    let all: Vec<String> = log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect();
+    assert!(
+        !all.contains(&"extension_state_set".to_owned()),
+        "an artifact-only completion answer writes no carried state: {all:?}"
+    );
+    let end = world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the unchanged end is logged");
+    assert!(end.payload.get("notice").is_none());
+    assert!(end.payload.get("changed_by").is_none());
+    assert_eq!(output_bytes(&world, OUT), b"old\n");
+}
+
+#[test]
 fn a_monitor_replacement_is_cut_as_a_batch_is() {
     let replacement = (0..50)
         .map(|_| "x".repeat(99))

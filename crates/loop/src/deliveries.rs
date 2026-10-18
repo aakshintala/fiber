@@ -558,10 +558,14 @@ pub(crate) fn read_output(path: &Path, between: impl FnOnce()) -> Result<OutputR
         rustix::fs::Mode::empty(),
     )
     .map_err(|error| {
-        // A link refuses with `LOOP`, a socket with `NXIO`: neither is
-        // a regular file, without ever following or blocking on the
-        // path. Anything else is a read failure (missing, unreadable).
-        if error == rustix::io::Errno::LOOP || error == rustix::io::Errno::NXIO {
+        // A link refuses with `LOOP`; a socket with `NXIO` on Linux and
+        // `OPNOTSUPP` on macOS: none is a regular file, without ever
+        // following or blocking on the path. Anything else is a read
+        // failure (missing, unreadable).
+        if error == rustix::io::Errno::LOOP
+            || error == rustix::io::Errno::NXIO
+            || error == rustix::io::Errno::OPNOTSUPP
+        {
             Unreadable::NotRegular
         } else {
             Unreadable::Io
@@ -763,27 +767,16 @@ fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
     name.push(".fiber-redact");
     let sibling = path.with_file_name(name);
     let permissions = std::fs::metadata(path).map(|stat| stat.permissions()).ok();
-    let mut created = false;
     let replaced = (|| -> std::io::Result<()> {
-        let mut sibling_file = match std::fs::OpenOptions::new()
+        // A sibling this call did not create (a job could leave it as
+        // a link): unlink the name itself without following it, then
+        // create exclusively. Removing an absent name fails silently,
+        // so the open below reports the real error.
+        let _removed = std::fs::remove_file(&sibling);
+        let mut sibling_file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&sibling)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                // A sibling this call did not create (a job could leave
-                // it as a link): unlink the name itself without
-                // following it, then create exclusively.
-                std::fs::remove_file(&sibling)?;
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&sibling)?
-            }
-            Err(error) => return Err(error),
-        };
-        created = true;
+            .open(&sibling)?;
         sibling_file.write_all(bytes)?;
         sibling_file.sync_all()?;
         drop(sibling_file);
@@ -791,10 +784,9 @@ fn replace_output(path: &Path, bytes: &[u8]) -> Result<(), crate::Error> {
             std::fs::set_permissions(&sibling, permissions)?;
         }
         std::fs::rename(&sibling, path)?;
-        created = false;
         Ok(())
     })();
-    if replaced.is_err() && created {
+    if replaced.is_err() {
         let _removed = std::fs::remove_file(&sibling);
     }
     replaced.map_err(|source| log::Error::Io {
