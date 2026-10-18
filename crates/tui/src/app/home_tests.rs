@@ -1194,7 +1194,19 @@ fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
         json!({"state": "streaming"}),
     ));
     let lines = open_first(&mut app);
-    let ack = lines[0]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    let summary = lines[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", summary))
+            .is_empty()
+    );
+    // The staged open raises `full` after the first frame; only the
+    // raise's acknowledgement ends the gate.
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    let ack = raise["id"].as_str().unwrap_or_else(|| panic!("ack id"));
     assert!(
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
             .is_empty()
