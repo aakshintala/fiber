@@ -26,12 +26,13 @@ use log::{Error, Log, read};
 use serde_json::json;
 
 /// Run as a child by `a_failed_write_poisons_the_log_and_reopening_repairs_it`,
-/// under a file-size limit, on the session in `LOG_TEST_SESSIONS`. Run on its
-/// own it does nothing.
+/// under a file-size limit, on the session in `LOG_TEST_SESSIONS`. It is
+/// `#[ignore]`d and panics without `LOG_TEST_SESSIONS`.
 #[test]
+#[ignore = "child/needs LOG_TEST_SESSIONS; run with --run-ignored only"]
 fn child_writing_past_a_file_size_limit() {
     let Ok(sessions) = std::env::var("LOG_TEST_SESSIONS") else {
-        return;
+        panic!("the failing-write child needs LOG_TEST_SESSIONS set");
     };
     let log = Log::open(
         Path::new(&sessions),
@@ -132,6 +133,7 @@ fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
         .arg(r#"trap '' XFSZ; ulimit -f 2048; exec "$0" "$@""#)
         .arg(std::env::current_exe().unwrap())
         .args([
+            "--ignored",
             "--exact",
             "child_writing_past_a_file_size_limit",
             "--nocapture",

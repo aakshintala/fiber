@@ -688,16 +688,7 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
         deadline: support::Deadline::start(),
     };
     let hold = setup.workspace().join("hold");
-    let mut make = std::process::Command::new("mkfifo");
-    make.arg(&hold)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    assert!(
-        support::run_to_exit(setup.deadline, "make the hold FIFO", make)
-            .status
-            .success()
-    );
+    fakes::fifo(&hold);
     let release = fs::OpenOptions::new()
         .read(true)
         .write(true)

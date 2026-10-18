@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/key_map_tests.rs
-assertion_line: 59
 expression: "screen(&app, 160, 48)"
 ---
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -8,7 +7,7 @@ expression: "screen(&app, 160, 48)"
   Key map                                                                                                                                                    ✕
 
   Every binding by area, with its other paths.
-  36 actions, 26 with other paths
+  37 actions, 26 with other paths
 
   All  Sessions  The input box  The conversation  Steering  Requests, models and help
   Type to search shortcuts› █
@@ -23,6 +22,7 @@ expression: "screen(&app, 160, 48)"
     Sessions                   Delete the selected exited session in the session list (on the row)       Delete, or Backspace · click the row's ✕
     The input box              Recall an earlier prompt from the project of the session on screen (in    ↑
                                an empty box)
+    The input box              Move focus from an empty input box into the rail (in an empty box)        ←
     The input box              Search those prompts                                                      Ctrl+R
     The input box              Move by word                                                              ⌥← ⌥→, Ctrl+← Ctrl+→
     The input box              Delete a word                                                             ⌥Backspace
@@ -42,8 +42,7 @@ expression: "screen(&app, 160, 48)"
     The conversation           Next or previous match (with search open)                                 Enter or ↓, Shift+Enter or ↑
     The conversation           Jump to the end                                                           End · click "↓ New messages below"
     Steering                   Select a queued steering message                                          ⌥↑ ⌥↓ · its mouse target
-    Steering                   Amend it                                                                  Enter · its mouse target
-  ↓ Steering                   Drop it                                                                   ⌥X · its mouse target
+  ↓ Steering                   Amend it                                                                  Enter · its mouse target
 
   ↑↓ move · ←→ tabs · Esc closes
 

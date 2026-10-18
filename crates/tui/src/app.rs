@@ -56,7 +56,7 @@ mod images;
 pub(crate) mod items;
 mod keyboard;
 mod links;
-mod model_picker;
+pub(crate) mod model_picker;
 #[path = "app_mouse.rs"]
 mod mouse;
 mod moving;
@@ -1151,10 +1151,11 @@ impl App {
         self.draft.rows(self.draft_width()).len().min(cap)
     }
 
-    /// Whether the quit hint shows: armed by a first Ctrl+C. The quit
+    /// Whether the quit hint or the rail hint shows: armed by a first
+    /// Ctrl+C, or while the rail holds focus. The quit
     /// question draws as an overlay, not through the hint.
     pub(crate) fn hint(&self) -> bool {
-        self.armed_at.is_some()
+        self.armed_at.is_some() || self.rail_state.focused().is_some()
     }
 
     /// Whether new output arrived while scrolled up.

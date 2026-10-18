@@ -22,7 +22,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call};
+use support::{Deadline, KillGroup, Setup, function_call};
 
 impl Setup {
     fn new_with_fs_root() -> Self {
@@ -254,27 +254,12 @@ impl Fiber {
     }
 }
 
-/// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
-/// [`Deadline`].
-#[track_caller]
-fn mkfifo(setup: &Setup, path: &Path) {
-    let mut command = Command::new("mkfifo");
-    command
-        .arg(path)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = support::run_to_exit(setup.deadline, "mkfifo", command);
-    assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
-}
-
 /// `ready.fifo` in the test's root, read as a [`fakes::children::Ready`]
 /// whose open takes what remains of the test's [`Deadline`].
 #[track_caller]
 fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
     let fifo = setup.root.path().join("ready.fifo");
-    mkfifo(setup, &fifo);
+    fakes::fifo(&fifo);
     fakes::children::Ready::at(&fifo, &|| setup.deadline.left())
 }
 
@@ -282,15 +267,6 @@ fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
 /// is not what these tests pin.
 fn is_status(line: &Value) -> bool {
     line["kind"] == "session_status"
-}
-
-/// Kills process group `group` on drop; forgotten once the group is empty.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// An `openai-responses` stream of `events`, then its completion.
@@ -601,7 +577,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     // The blocking open and read run on a thread, and the wait below
     // carries the deadline, so nothing polls and no clock is read.
     let death = setup.root.path().join("death.fifo");
-    mkfifo(&setup, &death);
+    fakes::fifo(&death);
     // A server that writes its pid, then never answers `initialize`. The
     // recorded signal gives the starting server the documented stop:
     // stdin closed, SIGTERM, then SIGKILL 800 ms later. It ignores SIGTERM
@@ -677,7 +653,7 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     // On the base commit the server gets only the bound's SIGKILL, so
     // the marker is never written and this fails there.
     let hold = setup.root.path().join("hold.fifo");
-    mkfifo(&setup, &hold);
+    fakes::fifo(&hold);
     // The server's `read` opens the FIFO, and this write-end open
     // blocks until it does: it runs on a thread, and the receive
     // below carries the deadline. The binding holds the write end

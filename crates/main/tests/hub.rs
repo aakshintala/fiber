@@ -15,7 +15,6 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
@@ -371,15 +370,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     // its log and lock exist. Its command line carries a marker.
     let marker = format!("{workspace}/blocked-mcp");
     let fifo = setup.root.path().join("ready.fifo");
-    let mut mkfifo = std::process::Command::new("mkfifo");
-    mkfifo
-        .arg(&fifo)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .process_group(0);
-    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "{made:?}");
+    fakes::fifo(&fifo);
     let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
     let ready_path = ready.path().to_string_lossy().into_owned();
     write_json(

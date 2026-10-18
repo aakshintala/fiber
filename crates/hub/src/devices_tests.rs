@@ -122,14 +122,7 @@ fn a_fifo_does_not_hold_authentication_open() {
     let temp = Temp::new();
     fs::create_dir_all(temp.devices()).unwrap();
     let path = temp.devices().join("pipe");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&path)
-            .status()
-            .unwrap()
-            .success(),
-        "create test FIFO at {path:?}"
-    );
+    fakes::fifo(&path);
 
     let home = temp.dir.clone();
     let (done, returned) = mpsc::channel();

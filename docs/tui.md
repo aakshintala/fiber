@@ -303,11 +303,11 @@ rail sets it once. Home is the rail at full width ("Home").
 **← reaches the rail.** In an empty input box, ← moves focus into the rail,
 on the card of the session on screen; with text in the box, ← moves the
 cursor. The focused card is lifted: its tint lifted, as hover draws it
-("Mouse and hover"). The input box's stripe and text dim while the rail has
+("Mouse and hover"); with no colour it is bold and its box is not dim, while the other cards' boxes stay dim. The input box's stripe and text dim while the rail has
 focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · → or
 Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
 project groups, Enter switches to the focused card's session, and → or Esc
-gives focus back to the input box. A second ← widens the rail to home. When
+gives focus back to the input box. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
 the rail is hidden, by the person or for width ("Shedding"), one ← from an
 empty input box opens home.
 
@@ -570,7 +570,7 @@ a click on it returns too. The views are:
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, each model's input and output prices,
   and what a switch to it costs to rebuild the prompt cache. Choosing a model
-  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
+  saves the global `model`, and choosing a level saves `models."<provider/model>".thinking` to the global file. On a remote terminal it lists the hub's catalogue, the models the hub's machine can reach (`docs/invocation.md`, "What the hub speaks", `models`), and a session started from it runs on the hub. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
   all" toggle on Tab. Typing filters the list on every letter: each
@@ -1471,6 +1471,7 @@ search box and the draft shows without a cursor.
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
+| Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
 | Delete a word | `delete_word` | ⌥Backspace | |
@@ -1554,7 +1555,7 @@ A global action acts in all six. The rest act only where they are listed:
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
   `delete_word`, `line_start_end`, `paste_image`.
-- Input: `send`, `recall_prompt`.
+- Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
   `copy_focused`, `focus_area`.

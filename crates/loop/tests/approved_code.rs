@@ -31,7 +31,9 @@ use fakes::{Scripted, ScriptedProvider};
 use log::Watcher;
 use serde_json::json;
 
-use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, read_until, tool_call_reply};
+use support::{
+    DEADLINE, MODEL, Session, TestTool, delivery, ignore, read_until, spawn_run, tool_call_reply,
+};
 
 /// A fake repository: a fixed list of unapproved items.
 #[derive(Default)]
@@ -155,17 +157,6 @@ fn loader(
 
 fn counter() -> (Arc<AtomicUsize>, Arc<Mutex<Option<r#loop::OfferOutcome>>>) {
     (Arc::new(AtomicUsize::new(0)), Arc::new(Mutex::new(None)))
-}
-
-/// Runs `run` on its own thread.
-fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let result = looped.run();
-        done.send(result).unwrap();
-    });
-    finished
 }
 
 #[track_caller]
@@ -1478,10 +1469,12 @@ fn start_rewound(
                 session_id: contract::SessionId("s_test".into()),
                 seq: contract::Seq(at),
             },
-            note,
-            summary: None,
             worktree: None,
-            name: r#loop::latest_name(&session.dir),
+            how: r#loop::Continuation::Rewind {
+                note,
+                summary: None,
+                name: r#loop::latest_name(&session.dir),
+            },
         },
     )
     .unwrap()

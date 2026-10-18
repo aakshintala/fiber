@@ -25,6 +25,7 @@ mod rules;
 mod secret;
 mod settings;
 mod startup_check;
+mod switches;
 mod themes;
 mod write;
 
@@ -63,7 +64,7 @@ pub use home::{
 pub use layout::{
     crashes_dir, docs_dir, extension_data_dir, extensions_dir, global_config_file,
     images_cache_dir, logs_dir, mcp_cache_dir, project_config_file, project_data_dir,
-    repository_config_file,
+    repository_config_file, run_dir,
 };
 pub use mcp_tokens::McpTokenFiles;
 pub use names::{SHORT_NAMES, dir_name, full_name, short_name};
@@ -79,6 +80,7 @@ pub use startup_check::{
     McpRefusal, McpRefusalKind, McpServer, McpServers, McpTransport, ScriptRead, mcp_server_key,
     mcp_servers, quoted_segment, read_script,
 };
+pub use switches::{SwitchLayer, ToolOwner, ToolSwitch, switch_skill, switch_tool};
 pub use themes::{theme_names, theme_text};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,

@@ -91,7 +91,7 @@ impl HostScript {
             unmet.push(format!(
                 "host.exec[{}] unused: request {}",
                 index.saturating_add(1),
-                entry.request
+                redact_env(&entry.request)
             ));
         }
         for (index, entry) in state.oauth.iter().enumerate().skip(state.oauth_next) {
@@ -158,11 +158,15 @@ impl HostScript {
         let index = state.exec_next;
         let entry = state.exec.get(index).cloned();
         let Some(entry) = entry else {
-            state.misses.push(miss("exec", index, &request));
+            state
+                .misses
+                .push(miss("exec", index, &redact_env(&request)));
             return Err(no_reply("exec"));
         };
         if json_matches(&entry.request, &request).is_err() {
-            state.misses.push(miss("exec", index, &request));
+            state
+                .misses
+                .push(miss("exec", index, &redact_env(&request)));
             return Err(no_reply("exec"));
         }
         state.exec_next = index.saturating_add(1);
@@ -266,6 +270,19 @@ fn lowercase_headers(request: &mut Value) {
     *headers = normalized;
 }
 
+/// A request with each `env` value replaced by `<redacted>`: names stay,
+/// so a diagnostic names the variable without disclosing its value, which
+/// may be a secret. Any other shape is unchanged.
+fn redact_env(request: &Value) -> Value {
+    let mut redacted = request.clone();
+    if let Some(env) = redacted.get_mut("env").and_then(Value::as_object_mut) {
+        for value in env.values_mut() {
+            *value = Value::String("<redacted>".to_owned());
+        }
+    }
+    redacted
+}
+
 fn miss(kind: &str, index: usize, request: &Value) -> String {
     format!(
         "host.{kind}[{}] miss: request {request}",
@@ -323,6 +340,15 @@ impl ExecRequest {
             (
                 "cwd".to_owned(),
                 Value::String(self.cwd.display().to_string()),
+            ),
+            (
+                "env".to_owned(),
+                Value::Object(
+                    self.env
+                        .iter()
+                        .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                        .collect(),
+                ),
             ),
         ]))
     }

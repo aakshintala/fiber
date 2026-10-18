@@ -14,15 +14,13 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
 use serde_json::json;
-use support::{Deadline, Setup};
+use support::{Deadline, Setup, spawn_watched};
 
 /// The install step: it records its directory in `where`, then leaves a
 /// script that reads the payload through that recorded directory. The
@@ -104,18 +102,6 @@ impl Setup {
 fn write(file: &PathBuf, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-// debt: `spawn_watched` copies `approve.rs`'s, as the other binary test
-// files in this crate each do; move every copy into `fakes` together when a
-// change to one has to be made in all.
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let watchdog = Watchdog::group(child.id());
-    (child, watchdog)
 }
 
 struct Run {

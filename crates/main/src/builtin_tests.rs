@@ -266,6 +266,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "handoff",
             "name_session",
             "read",
+            "session_list",
             "session_search",
             "shell",
             "skill",
@@ -286,6 +287,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "handoff",
             "name_session",
             "read",
+            "session_list",
             "session_search",
             "shell",
             "skill",
@@ -809,6 +811,41 @@ fn no_hosted_search_with_a_backend_declares_fibers_own_tool() {
         matches!(info.source, contract::events::ToolSource::Builtin),
         "{:?}",
         info.source
+    );
+}
+
+#[test]
+fn session_list_declares_reads_on_run_in_fiber_home() {
+    let root = fakes::TempDir::new("fiber-session-list");
+    let home = root.path().join("home");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _, _, _, _) = super::builtin(
+        root.path().join("fiber-stub"),
+        &home,
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let (_, tool) = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "session_list")
+        .expect("session_list is registered");
+    let effects = tool.effects(&serde_json::Map::new()).unwrap();
+    assert_eq!(effects.declared.effects, [contract::shapes::Effect::Reads]);
+    assert_eq!(
+        effects.declared.paths,
+        Some(vec![format!("{}/run/", home.display())])
     );
 }
 

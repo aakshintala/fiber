@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, answered, complete_lines, first_line, group_alive};
+use support::{Deadline, KillGroup, Setup, answered, complete_lines, first_line, group_alive};
 
 /// `fiber session --id <id> --workspace <workspace>`, drained as `start` drains it.
 #[track_caller]
@@ -87,7 +87,7 @@ fn hello() -> Response {
     Response::stream(body)
 }
 
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
+fn spawn_watchdog_script(command: &mut Command) -> (Child, Watchdog) {
     let child = command.process_group(0).spawn().unwrap();
     let group = child.id();
     let guard = KillGroup(group);
@@ -141,14 +141,6 @@ impl Watchdog {
 impl Drop for Watchdog {
     fn drop(&mut self) {
         drop(self.stdin.take());
-    }
-}
-
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
     }
 }
 
@@ -238,7 +230,7 @@ fn start_with(setup: &Setup, args: &[&str]) -> Running {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let (mut child, watchdog) = spawn_watched(&mut command);
+    let (mut child, watchdog) = spawn_watchdog_script(&mut command);
     let group = child.id();
     let guard = KillGroup(group);
     let stdout = child.stdout.take().unwrap();

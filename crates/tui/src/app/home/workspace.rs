@@ -11,6 +11,21 @@ use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
 use crate::keys::Key;
+use crate::remote::Chip;
+
+/// Whether the home chips' configuration is read: owed until one
+/// read answers, failed until a new workspace or link owes it again.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) enum ChipRead {
+    /// The next outgoing pass reads and folds the chips.
+    #[default]
+    Owed,
+    /// One read answered: the chips are the hub's.
+    Answered,
+    /// The read failed: a notice says why, until a new workspace or
+    /// link owes the next read.
+    Failed,
+}
 
 /// The workspace chooser: the picked workspace, whether it is in git,
 /// the new worktree switch and the picker.
@@ -28,6 +43,10 @@ pub(super) struct Chooser {
     worktree: bool,
     /// The workspace picker above the box, while open.
     picker: Option<Picker>,
+    /// Whether the home chips' configuration is read.
+    pub(super) chip_read: ChipRead,
+    /// Whether the loop owes the pick the picker opens for.
+    pub(super) start_pick: bool,
 }
 
 /// The workspace picker: the recent workspaces shown by the picker, the
@@ -308,10 +327,17 @@ impl App {
 
     /// The open picker's queued `directories` lines, once the link is
     /// up: queued directories go out at the end of every `on_line`.
+    /// Before them the home chips read once: the hub model, thinking
+    /// and scope fold into the launch, and a failed read is a notice
+    /// until a new workspace or link owes the next one.
     pub(super) fn picker_asks(&mut self) -> Vec<String> {
         if self.link != Link::Up {
             return Vec::new();
         }
+        if self.home.is_none() {
+            return Vec::new();
+        }
+        self.read_chips();
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
@@ -326,10 +352,130 @@ impl App {
             .collect()
     }
 
+    /// Reads the home chips' configuration when one is owed, folding
+    /// it into the launch: the hub model and thinking on screen, and
+    /// the scoped list the checklist marks. With no remote nothing is
+    /// owed and nothing is read; a failed read is a notice. An answer
+    /// names only what the hub configures: an absent model, level or
+    /// list keeps the chip's text, and a flag-named key keeps its flag.
+    fn read_chips(&mut self) {
+        // `Failed` waits for a new workspace or link: only `Owed`
+        // reads here.
+        if !self.chip_read_owed() {
+            return;
+        }
+        let owed = self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.chip_read == ChipRead::Owed);
+        if !owed {
+            return;
+        }
+        let Some(remote) = self.remote() else {
+            // A local home owes no chip read: there is no hub to ask.
+            if let Some(home) = self.home.as_mut() {
+                home.chooser.chip_read = ChipRead::Answered;
+            }
+            return;
+        };
+        let read = remote.chip(&self.workspace());
+        self.fold_chip(read);
+    }
+
+    /// Folds a chip read into the launch: the hub model and thinking
+    /// on screen, and the scoped list the checklist marks. A flag
+    /// names its key, so the layer's `model=` and thinking keys stand:
+    /// the answer never replaces them. A rejection is one notice with
+    /// the hub's code and message, and the chip keeps its text.
+    fn fold_chip(&mut self, read: Result<Chip, crate::configure::ConfigureError>) {
+        match read {
+            Ok(chip) => {
+                let thinking_key = chip
+                    .model
+                    .as_deref()
+                    .map(super::super::model_picker::canonical_thinking_key);
+                let overrides = self.launch_overrides.clone();
+                let Some(home) = self.home.as_mut() else {
+                    return;
+                };
+                if chip.model.is_some() && !Self::override_names("model", &overrides) {
+                    home.launch.model = chip.model;
+                }
+                if chip.thinking.is_some()
+                    && !Self::override_names("thinking", &overrides)
+                    && thinking_key
+                        .as_deref()
+                        .is_none_or(|key| !Self::override_names(key, &overrides))
+                {
+                    home.launch.thinking = chip.thinking;
+                }
+                home.launch.scoped_models = chip.scoped.clone();
+                home.chooser.chip_read = ChipRead::Answered;
+                self.model_picker.adopt_scoped(chip.scoped);
+            }
+            Err(error) => {
+                if let Some(home) = self.home.as_mut() {
+                    home.chooser.chip_read = ChipRead::Failed;
+                }
+                let code = serde_json::to_value(&error.code)
+                    .ok()
+                    .and_then(|code| code.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "io_failed".to_owned());
+                self.push_notice(&code, error.message);
+            }
+        }
+    }
+
+    /// Whether the launch layer names `key`: a flag's `key=value` or a
+    /// bare `key` stands, so the chip read never replaces it.
+    fn override_names(key: &str, overrides: &[String]) -> bool {
+        overrides
+            .iter()
+            .any(|text| text.split_once('=').map_or(text.as_str(), |(key, _)| key) == key)
+    }
+
+    /// Whether the chips still need their read: owed, or failed and
+    /// waiting for its re-owe. The read itself runs only in state
+    /// `Owed`; `Failed` waits for a new workspace or link.
+    pub(in crate::app) fn chip_read_owed(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| matches!(home.chooser.chip_read, ChipRead::Owed | ChipRead::Failed))
+    }
+
+    /// Whether the last chip read failed: the start pick stays owed
+    /// until a new workspace or link reads the chips again.
+    pub(in crate::app) fn chip_read_failed(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.chip_read == ChipRead::Failed)
+    }
+
+    /// Owes the pick the picker opens for: the next outgoing pass
+    /// reads it, opening on the answered catalogue.
+    pub(crate) fn owe_start_pick(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.start_pick = true;
+        }
+    }
+
+    /// Takes the owed start pick, if one waits.
+    pub(crate) fn take_start_pick(&mut self) -> bool {
+        self.home
+            .as_mut()
+            .map(|home| std::mem::replace(&mut home.chooser.start_pick, false))
+            .unwrap_or(false)
+    }
+
     /// Forgets the picker's in-flight `directories` ids: with a typed
     /// text open their directories queue again, asked once more, while
     /// with the recents alone open they drop. The cache stays either way.
+    /// The chips read again on the next pass: the hub and its levels
+    /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.chip_read = ChipRead::Owed;
+        }
         if let Some(home) = self.home.as_mut()
             && let Some(picker) = home.chooser.picker.as_mut()
         {
@@ -459,10 +605,23 @@ impl App {
     }
 
     /// Chooses `workspace` for the next `start` and names its project
-    /// for `prompt_history`.
+    /// for `prompt_history`. The chips belong to the old workspace, so
+    /// with the link up the chips read at once at the new workspace,
+    /// and with it down the next hello reads them.
     pub(in crate::app) fn choose_workspace(&mut self, workspace: String) {
         if let Some(home) = self.home.as_mut() {
             home.choose(workspace);
+        }
+        if self.link == Link::Up
+            && let Some(remote) = self.remote()
+        {
+            let read = remote.chip(&self.workspace());
+            self.fold_chip(read);
+            self.sync_project();
+            return;
+        }
+        if let Some(home) = self.home.as_mut() {
+            home.chooser.chip_read = ChipRead::Owed;
         }
         self.sync_project();
     }

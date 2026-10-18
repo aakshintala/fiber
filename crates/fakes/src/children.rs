@@ -46,11 +46,7 @@ impl Ready {
     #[track_caller]
     pub fn new(dir: &Path) -> Self {
         let path = dir.join("ready.fifo");
-        match Command::new("mkfifo").arg(&path).status() {
-            Ok(status) if status.success() => {}
-            Ok(status) => panic!("mkfifo {} exited {status}", path.display()),
-            Err(err) => panic!("mkfifo {}: {err}", path.display()),
-        }
+        crate::fifo(&path);
         Self::at(&path, &|| OPEN_DEADLINE)
     }
 

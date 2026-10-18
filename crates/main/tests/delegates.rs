@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, SessionGuard, function_call};
+use support::{Deadline, KillGroup, SessionGuard, function_call};
 
 /// Installs provider `name` with model `m` on `protocol` at `url`, with
 /// `extra` merged into the model's fields (such as `thinking_levels`).
@@ -189,15 +189,6 @@ fn kinds(lines: &[Value]) -> Vec<String> {
         .iter()
         .map(|line| line["kind"].as_str().unwrap().to_owned())
         .collect()
-}
-
-/// Kills the process group on drop, waited out under cleanup time.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// A running `fiber` process: its drained stdout lines, its stderr, and its

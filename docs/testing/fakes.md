@@ -63,11 +63,15 @@ is a real child session process, because it is Fiber. The fakes are:
 - child processes that misbehave on purpose: ignore SIGTERM, leave descendants,
   escape their process group
 - a fixture Lua extension that registers a tool, a provider and each hook
-- a scripted foreign harness, standing in for a delegate that is not Fiber
 - a local OAuth token endpoint
 - a refused address, loopback port 1: a connect is reset, and a bind of port 0
   never draws it, so no concurrent listener can take it
 - a second client on a session's socket
+- test helpers for what many test files share: `fakes::fifo` makes a FIFO
+  by one function, `fakes::tool_args` builds a tool call's argument map
+  and `fakes::text_of` reads a tool result's text, and `fakes::wait_output`
+  returns a spawned system tool's output under a deadline, killing its
+  group on expiry
 - a fake clock, whose time moves only when the test advances it to a named
   park through `advance_when_parked`, naming the expected park and the advance
   separately; `advance_marked` marks each thread's latest park, so

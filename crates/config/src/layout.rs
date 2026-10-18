@@ -67,3 +67,8 @@ pub fn logs_dir(home: &Path) -> PathBuf {
 pub fn docs_dir(home: &Path) -> PathBuf {
     home.join("docs")
 }
+
+/// `<home>/run`: where running sessions listen. Never creates it.
+pub fn run_dir(home: &Path) -> PathBuf {
+    home.join("run")
+}

@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{Deadline, Run, Setup, group_alive, hello_inline_completed as hello};
+use support::{Deadline, KillGroup, Run, Setup, group_alive, hello_inline_completed as hello};
 
 impl Setup {
     fn new_with_fx_root() -> Self {
@@ -135,15 +135,6 @@ fn feed(child: &mut std::process::Child, input: &str) {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
         Err(e) => panic!("writing to the stdin of `fiber`: {e}"),
     });
-}
-
-/// Kills process group `group` on drop.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 /// The turn's own requests. The background quota() fetch races the turn: it

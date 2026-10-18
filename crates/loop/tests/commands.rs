@@ -396,9 +396,7 @@ fn standing_ask() -> StandingRules {
 /// ends because `close` was taken.
 #[track_caller]
 fn run_until_close(session: &mut Session) -> Vec<Envelope> {
-    let looped = session.looped.take().unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    let finished = support::spawn_run(session);
     let lines = session.lines();
     Deadline::after(support::DEADLINE)
         .recv(&finished)

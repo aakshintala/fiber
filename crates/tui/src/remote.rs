@@ -7,31 +7,50 @@
 //! Lock order: login state, router state, then the link write lock. Router
 //! state is released before writing; credits are never locked under login
 //! state or router state. No lock is held while waiting for an answer.
+//! The catalogue workspace (`Remote.reading`) is its own leaf lock (L5):
+//! taken only to copy the path, never across a router call, a wait or a send.
 
 mod decode;
 mod login;
 mod router;
 
 use crate::ThemeSetting;
+use crate::catalogue::{Catalogue, ListAge, ModelEntry, Price, PriceTier, Refresh};
 use crate::configure::{
     BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
-    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, SkillsDisabled, Stored,
-    SwitchScope, ToolGroup, ToolSwitches,
+    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
+    Stored, SwitchScope, ToolGroup, ToolSwitches,
 };
 use contract::clock::Clock;
 use contract::{ErrorCode, Secret};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub(crate) use login::RemoteLogin;
 pub(crate) use router::{AskError, Caller, Cancel, Pending, Router};
+
+/// The home chips' configuration: the hub model and thinking level on
+/// screen, and the scoped models the checklist marks. Each is absent
+/// when the hub leaves it unset, redacts it, or writes what is not
+/// JSON: the fold keeps the chip's text for those.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Chip {
+    pub(crate) model: Option<String>,
+    pub(crate) thinking: Option<String>,
+    pub(crate) scoped: Vec<String>,
+}
 
 /// The hub's configuration, with client-owned terminal settings kept local.
 pub(crate) struct Remote {
     local: Arc<dyn Configure>,
     client_dir: PathBuf,
     router: Arc<Router>,
+    /// The workspace the catalogue reads use: `take_reads` stores the
+    /// workspace in use just before it returns a read, so every read
+    /// after the first goes there. Empty until the first read.
+    reading: Mutex<PathBuf>,
 }
 impl Remote {
     pub(crate) fn new(local: Arc<dyn Configure>, client_dir: PathBuf, router: Arc<Router>) -> Self {
@@ -39,7 +58,17 @@ impl Remote {
             local,
             client_dir,
             router,
+            reading: Mutex::new(PathBuf::new()),
         }
+    }
+    /// Stores the workspace the catalogue reads use, taking no other lock.
+    pub(crate) fn set_workspace(&self, workspace: PathBuf) {
+        *support::lock(&self.reading) = workspace;
+    }
+    /// The workspace the catalogue reads use, for tests.
+    #[cfg(test)]
+    pub(crate) fn reading(&self) -> PathBuf {
+        support::lock(&self.reading).clone()
     }
     fn call<T>(
         &self,
@@ -59,13 +88,114 @@ impl Remote {
         decode(&decode::result(&line, operation)?).ok_or_else(|| decode::io_error(operation))
     }
     fn workspace(&self, workspace: &Path) -> Result<PathBuf, ConfigureError> {
+        self.workspace_as(workspace, Caller::Loop)
+    }
+    /// Resolves the workspace a `configure` operation sends: a non-empty
+    /// workspace passes as given when absolute (`docs/invocation.md`,
+    /// "What the hub speaks": every workspace is absolute); an empty one
+    /// reads the hub's global file and sends its parent directory. A worker
+    /// read asks `global_file` without writing the cache, which only the
+    /// loop path writes, with its connection epoch.
+    fn workspace_as(
+        &self,
+        workspace: &Path,
+        caller: Caller<'_>,
+    ) -> Result<PathBuf, ConfigureError> {
         if !workspace.as_os_str().is_empty() {
-            return Ok(workspace.into());
+            if workspace.is_absolute() {
+                return Ok(workspace.into());
+            }
+            return Err(decode::io_error("workspace"));
         }
-        let file = self.hub_global()?;
+        let file = match caller {
+            Caller::Loop => self.hub_global()?,
+            Caller::Worker(cancel) => self.hub_global_worker(cancel)?,
+        };
+        if !file.is_absolute() {
+            return Err(decode::io_error("global_file"));
+        }
         file.parent()
             .map(Path::to_path_buf)
             .ok_or_else(|| decode::io_error("global_file"))
+    }
+    /// The hub's global file for a worker read: the cached copy when the
+    /// loop path has set it, else one `global_file` ask, without writing
+    /// the cache.
+    fn hub_global_worker(&self, cancel: &Cancel) -> Result<PathBuf, ConfigureError> {
+        if let Some(file) = self.router.cached_global() {
+            return Ok(file);
+        }
+        let line = self
+            .router
+            .ask(
+                "configure",
+                json!({"operation":"global_file"}),
+                Caller::Worker(cancel),
+            )
+            .map_err(ask_error)?;
+        decode::file(&decode::result(&line, "global_file")?)
+            .ok_or_else(|| decode::io_error("global_file"))
+    }
+    /// Reads the home chips' configuration at the workspace in use: the
+    /// model and thinking rows, and the scoped models list. The loop
+    /// path asks, so the read rides the connection the loop holds.
+    pub(crate) fn chip(&self, workspace: &Path) -> Result<Chip, ConfigureError> {
+        let workspace = self.workspace_as(workspace, Caller::Loop)?;
+        let rows = self.call(
+            "settings",
+            json!({"workspace":workspace}),
+            Caller::Loop,
+            decode::settings,
+        )?;
+        let text = |key: &str| {
+            rows.iter()
+                .find(|row| row.key == key)
+                .and_then(|row| match &row.value {
+                    Shown::Value(text) => Some(text.clone()),
+                    Shown::Unset | Shown::Union { .. } | Shown::Redacted(_) => None,
+                })
+        };
+        let model: Option<String> =
+            text("model").and_then(|text| serde_json::from_str::<String>(&text).ok());
+        let thinking: Option<String> = model.as_deref().and_then(|model| {
+            text(&crate::app::model_picker::canonical_thinking_key(model))
+                .and_then(|text| serde_json::from_str::<String>(&text).ok())
+        });
+        let scoped: Vec<String> = text("scoped_models")
+            .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+            .unwrap_or_default();
+        Ok(Chip {
+            model,
+            thinking,
+            scoped,
+        })
+    }
+    /// Reads the hub's catalogue at `refresh` for the workspace in use,
+    /// copied out before anything is sent: the mutex is never held across
+    /// a wait. The picker's refresh rides as a word, one per level.
+    fn models(&self, refresh: Refresh) -> Result<Catalogue, ConfigureError> {
+        let reading = support::lock(&self.reading).clone();
+        let workspace = self.workspace_as(&reading, Caller::Worker(&Cancel::default()))?;
+        let word = match refresh {
+            Refresh::Cached => "cached",
+            Refresh::Stale => "stale",
+            Refresh::Every => "every",
+        };
+        let line = self
+            .router
+            .ask(
+                "configure",
+                json!({"operation":"models","workspace":workspace,"refresh":word}),
+                Caller::Worker(&Cancel::default()),
+            )
+            .map_err(ask_error)?;
+        decode_models(&decode::result(&line, "models")?).ok_or_else(|| decode::io_error("models"))
+    }
+    /// Reads the hub's catalogue as the picker's `ReadModels`: a hub
+    /// rejection keeps its message, so the picker's notice shows it.
+    pub(crate) fn catalogue_reader(self: &Arc<Self>) -> crate::ReadModels {
+        let remote = Arc::clone(self);
+        Arc::new(move |refresh| remote.models(refresh).map_err(|error| error.message))
     }
     /// Searches on the hub, delivering only ranked rows to the loop.
     pub(crate) fn search(
@@ -155,6 +285,12 @@ impl Remote {
         let line = pending.wait().map_err(ask_error)?;
         let file = decode::file(&decode::result(&line, "global_file")?)
             .ok_or_else(|| decode::io_error("global_file"))?;
+        // Every workspace is absolute (`docs/invocation.md`, "What the hub
+        // speaks"), so a relative answer is an error, never the cache's
+        // content: the cache holds only a path workspaces derive from.
+        if !file.is_absolute() {
+            return Err(decode::io_error("global_file"));
+        }
         self.router.cache_global(epoch, file.clone());
         Ok(file)
     }
@@ -185,6 +321,90 @@ fn scope_name(scope: SwitchScope) -> &'static str {
     }
 }
 
+/// A required field: absent or of the wrong type fails the whole answer.
+macro_rules! read {
+    ($value:expr, $key:expr) => {
+        serde_json::from_value($value.get($key)?.clone()).ok()
+    };
+}
+/// An optional field: absent reads as none, but a present field of the
+/// wrong type, null included, fails the whole answer.
+macro_rules! optional {
+    ($value:expr, $key:expr) => {
+        $value
+            .get($key)
+            .map(|present| serde_json::from_value(present.clone()))
+            .transpose()
+            .ok()
+    };
+}
+/// One size tier's prices, field for field.
+fn decode_tier(value: &Value) -> Option<PriceTier> {
+    Some(PriceTier {
+        input_tokens_above: read!(value, "input_tokens_above")?,
+        micros_per_mtok: read!(value, "micros_per_mtok")?,
+        input: read!(value, "input")?,
+        output: read!(value, "output")?,
+    })
+}
+/// One model's prices, tiers in the hub's order.
+fn decode_price(value: &Value) -> Option<Price> {
+    Some(Price {
+        micros_per_mtok: read!(value, "micros_per_mtok")?,
+        input: read!(value, "input")?,
+        output: read!(value, "output")?,
+        tiers: value
+            .get("tiers")?
+            .as_array()?
+            .iter()
+            .map(decode_tier)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+/// One model as the picker lists it.
+fn decode_entry(value: &Value) -> Option<ModelEntry> {
+    Some(ModelEntry {
+        reference: read!(value, "reference")?,
+        provider: read!(value, "provider")?,
+        id: read!(value, "id")?,
+        name: optional!(value, "name")?,
+        levels: read!(value, "levels")?,
+        default_level: optional!(value, "default_level")?,
+        configured: optional!(value, "configured")?,
+        roles: read!(value, "roles")?,
+        price: match optional!(value, "price")? {
+            None => None,
+            Some(price) => Some(decode_price(&price)?),
+        },
+    })
+}
+/// One provider's list time.
+fn decode_age(value: &Value) -> Option<ListAge> {
+    Some(ListAge {
+        provider: read!(value, "provider")?,
+        updated_ms: optional!(value, "updated_ms")?,
+        stale: read!(value, "stale")?,
+    })
+}
+/// The hub's catalogue, whole or not at all: a missing or mistyped field
+/// anywhere fails the answer, so no partial catalogue is ever stored.
+fn decode_models(value: &Value) -> Option<Catalogue> {
+    Some(Catalogue {
+        models: value
+            .get("models")?
+            .as_array()?
+            .iter()
+            .map(decode_entry)
+            .collect::<Option<Vec<_>>>()?,
+        notices: read!(value, "notices")?,
+        lists: value
+            .get("lists")?
+            .as_array()?
+            .iter()
+            .map(decode_age)
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
 /// Ownership follows the first key segment, never the file path.
 pub(crate) fn client_owned(key: &str) -> bool {
     let first = if let Some(quoted) = key.strip_prefix('"') {
@@ -412,15 +632,20 @@ impl Drop for RemoteCopy {
         drop(std::fs::remove_dir_all(&self.dir));
     }
 }
-/// The seam installed on the app, and the remote-only operations if applicable.
+/// The seam installed on the app, the remote-only operations if applicable,
+/// and the model lists the picker reads.
 pub(crate) struct Seams {
     pub(crate) seam: Option<Arc<dyn Configure>>,
     pub(crate) remote: Option<Arc<Remote>>,
+    pub(crate) models: Option<crate::ReadModels>,
 }
 /// Wraps only a remote terminal's seam; local launches retain the original.
+/// On a remote terminal the picker's reader is the hub's catalogue, and the
+/// client's reader is dropped unread, with or without a seam.
 pub(crate) fn seams(
     location: &crate::LaunchLocation,
     seam: Option<Arc<dyn Configure>>,
+    models: Option<crate::ReadModels>,
     router: &Arc<Router>,
 ) -> Seams {
     if matches!(location, crate::LaunchLocation::Remote { .. }) {
@@ -433,17 +658,25 @@ pub(crate) fn seams(
                     .unwrap_or_default()
             });
             let remote = Arc::new(Remote::new(local, client_dir, Arc::clone(router)));
+            let models = Some(remote.catalogue_reader());
             return Seams {
                 seam: Some(Arc::clone(&remote) as Arc<dyn Configure>),
                 remote: Some(remote),
+                models,
             };
         }
+        drop(models);
         return Seams {
             seam: None,
             remote: None,
+            models: None,
         };
     }
-    Seams { seam, remote: None }
+    Seams {
+        seam,
+        remote: None,
+        models,
+    }
 }
 
 #[cfg(test)]

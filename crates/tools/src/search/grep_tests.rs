@@ -1402,7 +1402,7 @@ fn gnu_grep() -> bool {
         .spawn()
         .unwrap();
     // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
-    let output = super::super::wait_output(child, "grep --version");
+    let output = fakes::wait_output(child, "grep --version");
     String::from_utf8_lossy(&output.stdout).contains("GNU grep")
 }
 
@@ -1453,7 +1453,7 @@ fn matches_like_grep(
         std::io::Write::write_all(child.stdin.as_mut().unwrap(), given).unwrap();
     }
     drop(child.stdin.take());
-    let output = super::super::wait_output(child, &format!("system grep {args:?}"));
+    let output = fakes::wait_output(child, &format!("system grep {args:?}"));
     if sorted {
         // Lines as a set: the built-in visits files in sorted order where
         // the system's order is unspecified.

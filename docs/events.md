@@ -1118,7 +1118,7 @@ A client half reads it to decide whether it draws for this session
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `extensions` | array | yes | one object per loaded extension: `name` (string) and `version` (string) |
+| `extensions` | array | yes | one object per loaded extension: `name` (string), `version` (string) and `replaces` (array of strings, absent when empty): the built-in tools and commands its manifest lists in `replaces`, in manifest order, as declared (`docs/extensions.md`, 'What an extension is') |
 
 #### `extension_state_set`
 

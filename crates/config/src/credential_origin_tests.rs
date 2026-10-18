@@ -113,14 +113,6 @@ fn reads(path: &std::path::Path) -> bool {
     seam::take_reads().contains(&path.to_path_buf())
 }
 
-fn mkfifo(path: &std::path::Path) {
-    let made = std::process::Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .unwrap();
-    assert!(made.success(), "mkfifo {}", path.display());
-}
-
 #[test]
 fn a_configured_file_swapped_for_a_fifo_is_absent_and_unread() {
     let key = Home::new(|root| {
@@ -143,7 +135,7 @@ fn a_configured_file_swapped_for_a_fifo_is_absent_and_unread() {
         &path,
         |path| {
             fs::remove_file(path).unwrap();
-            mkfifo(path);
+            fakes::fifo(path);
         },
     );
     assert!(matches!(outcome, Ok(Presence::Absent)), "{outcome:?}");
@@ -168,7 +160,7 @@ fn a_stored_file_swapped_for_a_fifo_is_not_plain_and_unread() {
         &path,
         |path| {
             fs::remove_file(path).unwrap();
-            mkfifo(path);
+            fakes::fifo(path);
         },
     );
     assert!(

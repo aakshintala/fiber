@@ -3019,6 +3019,7 @@ fn two_runs_send_byte_identical_preambles() {
             "jobs",
             "name_session",
             "read",
+            "session_list",
             "session_search",
             "shell",
             "skill",

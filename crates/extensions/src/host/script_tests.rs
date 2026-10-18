@@ -312,3 +312,77 @@ fn exec_call_past_the_script_is_a_miss_at_the_next_index() {
     assert!(unmet[0].contains("host.exec[2]"), "{}", unmet[0]);
     assert!(unmet[0].contains("status"), "{}", unmet[0]);
 }
+
+#[test]
+fn an_exec_miss_redacts_env_values_but_keeps_names() {
+    let script = HostScript::new(
+        vec![],
+        vec![exec(json!({
+            "program": "sh",
+            "args": [],
+            "cwd": "/w",
+            "env": {"FIBER_X": "s3cret-value"}
+        }))],
+        Vec::new(),
+    );
+    let mismatch = script.exec(json!({
+        "program": "sh",
+        "args": [],
+        "cwd": "/w",
+        "env": {"FIBER_X": "actual-s3cret"}
+    }));
+    assert_eq!(
+        mismatch,
+        Err((
+            ErrorCode::IoFailed,
+            "host.exec: the case scripts no reply for this request".to_owned(),
+        ))
+    );
+    let unmet = script.unmet();
+    assert_eq!(unmet.len(), 2);
+    for line in &unmet {
+        assert!(!line.contains("s3cret-value"), "{line}");
+        assert!(!line.contains("actual-s3cret"), "{line}");
+        assert!(line.contains("<redacted>"), "{line}");
+        assert!(line.contains("FIBER_X"), "{line}");
+    }
+}
+
+#[test]
+fn an_unused_exec_entry_redacts_env_values_but_keeps_names() {
+    let script = HostScript::new(
+        vec![],
+        vec![exec(json!({
+            "program": "sh",
+            "args": [],
+            "cwd": "/w",
+            "env": {"FIBER_X": "s3cret-value"}
+        }))],
+        Vec::new(),
+    );
+    let unmet = script.unmet();
+    assert_eq!(unmet.len(), 1);
+    assert!(!unmet[0].contains("s3cret-value"), "{}", unmet[0]);
+    assert!(unmet[0].contains("<redacted>"), "{}", unmet[0]);
+    assert!(unmet[0].contains("FIBER_X"), "{}", unmet[0]);
+}
+
+#[test]
+fn an_exec_request_with_the_same_env_matches_its_entry() {
+    let request = json!({
+        "program": "sh",
+        "args": [],
+        "cwd": "/w",
+        "env": {"FIBER_X": "s3cret-value"}
+    });
+    let script = HostScript::new(vec![], vec![exec(request.clone())], Vec::new());
+    assert_eq!(
+        script.exec(request),
+        Ok(ExecReply {
+            code: 0,
+            stdout: "ok".to_owned(),
+            stderr: String::new(),
+        })
+    );
+    assert!(script.unmet().is_empty());
+}

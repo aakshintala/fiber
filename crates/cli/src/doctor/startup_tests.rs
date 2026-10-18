@@ -412,11 +412,7 @@ fn a_fifo_under_the_selected_label_cannot_be_used() {
     setup.write_config(&json!({"model": "fake/m"}));
     let dir = setup.home().join("credentials/fake");
     fs::create_dir_all(&dir).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(dir.join("default"))
-        .output()
-        .unwrap();
-    assert!(made.status.success());
+    fakes::fifo(dir.join("default"));
     let (code, line) = setup.blocked(&[], &env_of(&[]));
     assert_eq!(code, ErrorCode::ConfigInvalid);
     assert!(
@@ -509,11 +505,7 @@ fn an_unselected_fifo_is_information_not_a_blocker() {
     setup.store("fake", "default", "k");
     let dir = setup.home().join("credentials/fake");
     fs::create_dir_all(&dir).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(dir.join("other"))
-        .output()
-        .unwrap();
-    assert!(made.status.success());
+    fakes::fifo(dir.join("other"));
     // The label is configured so it lists (stored listing holds regular
     // files only); at `locate` the stored FIFO wins over the configured
     // file, and its plain-metadata check reports without reading a key.
@@ -1023,11 +1015,7 @@ fn a_scripted_fifo_is_not_checked_and_never_waits() {
     let setup = Setup::new();
     setup.fake();
     setup.write_config(&json!({"model": "scripted/pipe.lua"}));
-    let made = std::process::Command::new("mkfifo")
-        .arg(setup.workspace().join("pipe.lua"))
-        .output()
-        .unwrap();
-    assert!(made.status.success());
+    fakes::fifo(setup.workspace().join("pipe.lua"));
     // The scripted reference reads no credential: the installed
     // provider's missing key blocks nothing.
     let lines = setup.ready(&[], &env_of(&[]));
@@ -1243,11 +1231,7 @@ fn another_providers_fifo_under_its_label_never_waits() {
     setup.store("a", "default", "k");
     let dir = setup.home().join("credentials/other");
     fs::create_dir_all(&dir).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(dir.join("default"))
-        .output()
-        .unwrap();
-    assert!(made.status.success());
+    fakes::fifo(dir.join("default"));
     let lines = setup.ready(&[], &env_of(&[]));
     assert!(
         lines

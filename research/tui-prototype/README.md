@@ -618,6 +618,7 @@ A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` ope
 | `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the Ctrl+S mark, "this session only · nothing saved" |
 | `filtered` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered`: the query `mini`, four matching models across two providers, matched letters underlined |
 | `filtered-empty` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered-empty`: the query `zzz`, one muted `No models match` line |
+| `hub` | `cargo run --release -- fixtures/idle.jsonl --static --picker hub`: the hub's catalogue on a remote terminal, two providers with five models and none of the twelve local ids |
 
 Live keys while it is open: typing filters the list over provider, id and display name with the matched letters underlined, Backspace edits the query, Esc clears the query first and then closes, Enter on an empty list stays open; ↑/↓ move between models, ←/→ between the focused model's thinking chips, Enter chooses and closes, Ctrl+S marks the choice this session only (then nothing is saved), Tab toggles show all when scoped, Ctrl+R refreshes every list (cosmetic). Clicking a row focuses it; clicking a chip focuses that chip.
 

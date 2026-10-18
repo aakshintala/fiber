@@ -1171,7 +1171,7 @@ pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-pub(crate) const TOOL_NAMES: [&str; 14] = [
+pub(crate) const TOOL_NAMES: [&str; 15] = [
     "ask_user",
     "delegate_message",
     "delegate_models",
@@ -1181,6 +1181,7 @@ pub(crate) const TOOL_NAMES: [&str; 14] = [
     "jobs",
     "name_session",
     "read",
+    "session_list",
     "session_search",
     "shell",
     "skill",

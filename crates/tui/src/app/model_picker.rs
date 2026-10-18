@@ -30,19 +30,94 @@ impl App {
         self.model_picker.store(result);
     }
 
-    /// The model-list read the loop owes, if one is owed.
+    /// The model-list read the loop owes, if one is owed. On a remote
+    /// terminal the hub's catalogue reads use the workspace in use, stored
+    /// just before the read is returned; with no read owed nothing is stored.
     pub(crate) fn take_reads(&mut self) -> Option<Refresh> {
-        self.model_picker.take_read()
+        let read = self.model_picker.take_read();
+        if read.is_some()
+            && let Some(remote) = self.remote()
+        {
+            remote.set_workspace(self.workspace());
+        }
+        read
+    }
+
+    /// Runs the owed start pick: opening Choose, asking the open's
+    /// read now (`Stale`, or the read the open owes), and installing
+    /// the answer. The pick waits for the chips: it opens only when
+    /// the hub named no model, and a named one drops it. A remote
+    /// terminal with no hub yet keeps the pick owed: the sync read
+    /// would park on the link the loop itself brings up. A local home
+    /// runs at once, as before. With no reader the open still shows;
+    /// a models error is a notice as today, opening nothing.
+    pub(crate) fn start_model_pick(&mut self) -> Vec<String> {
+        let remote = self.remote().is_some();
+        if remote && self.link != super::Link::Up {
+            self.owe_start_pick();
+            return Vec::new();
+        }
+        if !remote && self.link == super::Link::Up {
+            // A local home picks once at startup, before the link
+            // exists: later hellos must not reopen it.
+            return Vec::new();
+        }
+        if remote && self.chip_read_failed() {
+            // The chips failed: the pick stays owed until a new
+            // workspace or link reads them.
+            return Vec::new();
+        }
+        if remote && !self.take_start_pick() {
+            return Vec::new();
+        }
+        if remote
+            && self
+                .home
+                .as_ref()
+                .and_then(|home| home.launch.model.as_deref())
+                .is_some()
+        {
+            // The hub named the chip's model: the pick is taken and
+            // dropped, never opened.
+            return Vec::new();
+        }
+        // The open reads for itself: on the loop thread take its read
+        // and ask it now, so the loop owes the thread nothing more.
+        // At startup the loop does not exist yet, so a local open only
+        // opens: the cached read the loop asks after the first frame
+        // fills it, and the first frame draws at once. With no reader
+        // the open still shows.
+        self.open_model_picker(Mode::Choose);
+        if !remote {
+            return Vec::new();
+        }
+        let Some(read) = self.models_reader() else {
+            return Vec::new();
+        };
+        // The open read for itself: take its read through the loop's
+        // operation, recording the workspace the hub's catalogue read
+        // uses, as `take_reads` does.
+        let refresh = self.take_reads().unwrap_or(Refresh::Stale);
+        match read(refresh) {
+            Ok(catalogue) => self.on_models(Ok(catalogue)),
+            Err(error) => {
+                self.on_models(Err(error));
+                self.model_picker.close();
+            }
+        }
+        Vec::new()
     }
 
     /// Opens the model picker: each open starts fresh, on the on-screen
     /// model's row, else the first row. On home the pending session-only
     /// choice names it, else the chips; attached, the panel fold does.
     /// Each open asks `Stale`. One swapped view shows at a time, so
-    /// another swapped view closes.
+    /// another swapped view closes. A fresh open reads for itself, so
+    /// an owed start pick drops: the open's own read supersedes it.
     pub(crate) fn open_model_picker(&mut self, mode: Mode) -> super::Effect {
         self.close_config_view();
         self.close_session_view();
+        let _ = self.take_start_pick();
         let on_screen = if self.on_home() {
             self.home_model()
         } else {
@@ -756,7 +831,7 @@ impl App {
 /// as `config`'s dotted-path display spells it. `main` hands the terminal
 /// canonical keys, so this plain string supersedes the choice's own key
 /// with no parsing here.
-fn canonical_thinking_key(reference: &str) -> String {
+pub(crate) fn canonical_thinking_key(reference: &str) -> String {
     if reference.contains('.') {
         format!("models.\"{reference}\".thinking")
     } else {

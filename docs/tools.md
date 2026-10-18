@@ -1152,7 +1152,7 @@ each session's latest `session_status`, read on a `summary` subscription to
 its socket (`docs/events.md`). The list includes the calling session, marked
 as itself, so the model can see its own id and name. The tool declares
 `reads`. The call connects to every session's socket at once and waits at most
-2 s in all (`docs/performance.md`). A session that accepted the connection but
+2 s in all, for up to 1,000 running sessions (`docs/performance.md`). A session that accepted the connection but
 sent no `session_status` in time is listed by id with `answering: false`.
 
 **`session_message` addresses a session by its full id.** The model lists
@@ -1426,7 +1426,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`), `name_session`, `session_list`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.

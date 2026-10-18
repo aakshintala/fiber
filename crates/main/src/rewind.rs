@@ -92,10 +92,12 @@ pub(crate) fn session_rewound(
         None,
         Some(r#loop::Rewound {
             from: point,
-            note,
-            summary,
             worktree,
-            name,
+            how: r#loop::Continuation::Rewind {
+                note,
+                summary,
+                name,
+            },
         }),
         reads,
     ) {

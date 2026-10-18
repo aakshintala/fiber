@@ -187,7 +187,7 @@ pub(crate) fn text_reply(text: &str, context: usize) -> Response {
 }
 
 /// A reply calling `name` with `arguments`, a JSON object's text.
-fn call_reply(id: &str, name: &str, arguments: &str, context: usize) -> Response {
+pub(crate) fn call_reply(id: &str, name: &str, arguments: &str, context: usize) -> Response {
     stream(
         &[json!({"type": "response.output_item.done", "item": {
             "type": "function_call", "id": format!("fc_{id}"), "call_id": id,

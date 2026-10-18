@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -47,6 +48,7 @@ fn request(program: &str, args: &[&str], cwd: PathBuf, cap: usize) -> ExecReques
         program: program.into(),
         args: args.iter().map(|s| (*s).into()).collect(),
         cwd,
+        env: BTreeMap::new(),
         cap,
         own_group: true,
         stdout_read: None,
@@ -59,6 +61,7 @@ fn sh_pid(script: &str, cwd: PathBuf, cap: usize) -> ExecRequest {
         program: "sh".into(),
         args: vec!["-c".into(), script.into()],
         cwd,
+        env: BTreeMap::new(),
         cap,
         own_group: false,
         stdout_read: None,
@@ -177,6 +180,26 @@ fn the_session_environment_is_visible() {
         .expect("waited {DEADLINE:?} for the env run")
         .expect("the env run spawns");
     assert_eq!(String::from_utf8_lossy(&ran.stdout), home);
+}
+
+#[test]
+fn env_overrides_an_inherited_variable() {
+    let (_dir, cwd) = dir("fiber-exec-env-override");
+    let clock = FakeClock::new();
+    let mut req = sh("printf %s \"$HOME\"", cwd, CAP);
+    req.env.insert("HOME".to_owned(), "/from-env".to_owned());
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the env run")
+        .expect("the env run spawns");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "/from-env");
+}
+
+#[test]
+fn env_is_empty_by_default() {
+    let (_dir, cwd) = dir("fiber-exec-env-default");
+    assert!(sh("exit 0", cwd, CAP).env.is_empty());
 }
 
 #[test]
@@ -858,6 +881,7 @@ fn a_pid_mode_missing_program_reports_its_spawn_error() {
         program: "fiber-definitely-missing-xyz".into(),
         args: Vec::new(),
         cwd,
+        env: BTreeMap::new(),
         cap: CAP,
         own_group: false,
         stdout_read: None,

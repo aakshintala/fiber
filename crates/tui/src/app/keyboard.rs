@@ -101,6 +101,9 @@ impl App {
     /// as its own keys ahead of the bindings, so a rebound `recall_prompt`
     /// or `focus_next_prev` leaves them to home.
     fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        if let Some(effect) = self.rail_stroke(&stroke, now) {
+            return effect;
+        }
         if self.home_owns_arrows()
             && stroke.mods == Mods::NONE
             && matches!(

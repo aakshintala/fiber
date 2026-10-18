@@ -400,10 +400,12 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
         },
         r#loop::Rewound {
             from,
-            note: "continued".into(),
-            summary: None,
             worktree: None,
-            name: r#loop::latest_name(&session.dir),
+            how: r#loop::Continuation::Rewind {
+                note: "continued".into(),
+                summary: None,
+                name: r#loop::latest_name(&session.dir),
+            },
         },
     )
     .unwrap()
@@ -425,4 +427,108 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
     let texts = user_texts(&requests[0].conversation);
     assert_eq!(texts[texts.len() - 2], "after the rewind");
     assert_eq!(texts[texts.len() - 1], "three");
+}
+
+#[test]
+fn a_forked_loop_runs_session_start_with_reason_fork() {
+    let mut session = Session::new(
+        vec![
+            Scripted::text("First."),
+            Scripted::text("Second."),
+            Scripted::text("Third."),
+        ],
+        None,
+    );
+    let hooks = StartHooks::new();
+    hooks.answer(start_added("fiber.test/inbox", "at the start"));
+    hooks.answer(start_added("fiber.test/inbox", "after the fork"));
+    hook(Arc::clone(&hooks), &mut session);
+    session.inbox.send(delivery("one")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.inbox.send(delivery("two")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(hooks.calls(), 1);
+    drop(session.looped.take());
+
+    // B continues A's session from turn 2's start, as `rewind` does.
+    let lines: Vec<Envelope> = log::read(&session.dir).unwrap();
+    let mut starts = lines
+        .iter()
+        .filter(|line| line.kind == "turn_started")
+        .map(|line| line.seq.unwrap().0);
+    starts.next().unwrap();
+    let from = contract::shapes::Point {
+        session_id: SessionId("s_test".into()),
+        seq: Seq(starts.next().unwrap() - 1),
+    };
+    let home = session.dir.parent().unwrap().to_path_buf();
+    let clock = Arc::clone(&session.clock) as Arc<dyn contract::clock::Clock>;
+    let log = Arc::new(
+        log::Log::create(
+            &home,
+            contract::SessionId("s_rewound".into()),
+            clock.clone(),
+        )
+        .unwrap(),
+    );
+    let provider = Arc::new(ScriptedProvider::new(vec![Scripted::text("Third.")]));
+    let (tx, rx) = mpsc::channel();
+    let mut prompt = r#loop::PromptInputs::new(
+        home,
+        "/bin/sh".into(),
+        log.dir().join("events.jsonl").display().to_string(),
+        clock,
+        fakes::CONTEXT_WINDOW,
+    );
+    prompt.credential = Some("work".into());
+    let mut rewound = r#loop::Loop::rewound(
+        r#loop::Session {
+            log,
+            provider: provider.clone(),
+            model: r#loop::Model {
+                reference: support::MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: r#loop::Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: session.rules.clone(),
+            },
+        },
+        r#loop::Rewound {
+            from,
+            worktree: None,
+            how: r#loop::Continuation::Fork {
+                parent: contract::events::Parent {
+                    session_id: SessionId("s_test".into()),
+                    delegate_id: contract::JobId("j_fork".into()),
+                },
+            },
+        },
+    )
+    .unwrap()
+    .hooks(Arc::clone(&hooks) as Arc<dyn contract::hook::Hooks>);
+    let task = r#loop::fork_task(&SessionId("s_test".into()), 1, "check it");
+    tx.send(delivery(&task)).unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = rewound.turn().unwrap();
+        done.send((rewound, outcome)).unwrap();
+    });
+    let (_, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended in time");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(hooks.calls(), 2);
+    assert_eq!(hooks.seen()[1].0, "Fork");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 1);
+    let texts = user_texts(&requests[0].conversation);
+    assert_eq!(texts[texts.len() - 2], "after the fork");
+    assert_eq!(texts[texts.len() - 1], task);
 }

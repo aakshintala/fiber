@@ -8,7 +8,9 @@ use ratatui::layout::Rect;
 
 use super::draw;
 use crate::app::App;
+use crate::home::Launch;
 use crate::keys::{Edit, Key};
+use crate::stroke::{Code, Mods, Stroke};
 use crate::theme::Role;
 use contract::clock::Clock;
 
@@ -708,4 +710,144 @@ fn an_open_search_panel_reserves_no_rows() {
     let mut bottomed = area.bottom();
     let topped = draw(&closed, area, &mut bottomed, &mut plain, &mut Vec::new());
     assert_eq!((top, bottom), (topped, bottomed));
+}
+
+/// An attached app `width` by `height` with one live session, home set
+/// so the rail lays out, and `draft` typed.
+fn with_card(width: u16, height: u16) -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        rail_share: 15.0,
+        panel_share: 21.0,
+        ..Default::default()
+    });
+    app.set_size(width, height);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "session_status",
+        serde_json::json!({
+            "name": "fix the parser", "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    ));
+    app
+}
+
+/// Types `draft` into the box.
+fn type_draft(app: &mut App, draft: &str) {
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in draft.chars() {
+        app.on_key(Key::Char(ch), now);
+    }
+}
+
+/// The box prompt's cell: the \u{203a} in the bottom three rows.
+fn box_prompt(buf: &Buffer, area: Rect) -> (u16, u16) {
+    for y in area.bottom().saturating_sub(3)..area.bottom() {
+        for x in area.left()..area.right() {
+            if buf[(x, y)].symbol() == "\u{203a}" {
+                return (x, y);
+            }
+        }
+    }
+    panic!("a box prompt")
+}
+
+/// Presses ← through the bindings.
+fn press_left(app: &mut App) {
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_press(
+        Stroke {
+            code: Code::Left,
+            mods: Mods::NONE,
+        },
+        now,
+    );
+}
+
+#[test]
+fn the_box_goes_muted_and_dim_while_the_rail_is_focused() {
+    use ratatui::style::Modifier;
+    let mut app = with_card(200, 40);
+    press_left(&mut app);
+    assert!(app.rail_state().focused().is_some());
+    // Typing into the box keeps the rail's focus.
+    type_draft(&mut app, "hi");
+    assert!(app.rail_state().focused().is_some());
+    let area = Rect::new(0, 0, 200, 40);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let (x, y) = box_prompt(&buf, area);
+    assert_eq!(buf[(x.saturating_sub(2), y)].symbol(), "▌");
+    assert_eq!(
+        buf[(x.saturating_sub(2), y)].fg,
+        Role::Muted.color(),
+        "the stripe"
+    );
+    assert!(buf[(x, y)].modifier.contains(Modifier::DIM), "the prompt");
+    assert_eq!(buf[(x.saturating_add(2), y)].symbol(), "h");
+    assert!(
+        buf[(x.saturating_add(2), y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "the text"
+    );
+}
+
+#[test]
+fn the_box_keeps_its_accent_stripe_without_focus() {
+    use ratatui::style::Modifier;
+    let mut app = with_card(200, 40);
+    type_draft(&mut app, "hi");
+    assert_eq!(app.rail_state().focused(), None);
+    let area = Rect::new(0, 0, 200, 40);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let (x, y) = box_prompt(&buf, area);
+    assert_eq!(buf[(x.saturating_sub(2), y)].symbol(), "▌");
+    assert_eq!(
+        buf[(x.saturating_sub(2), y)].fg,
+        Role::Accent.color(),
+        "the stripe"
+    );
+    assert!(
+        !buf[(x.saturating_add(2), y)]
+            .modifier
+            .contains(Modifier::DIM),
+        "the text"
+    );
+}
+
+#[test]
+fn no_color_the_text_stays_dim_while_the_rail_is_focused() {
+    use ratatui::style::Modifier;
+    let mut app = with_card(200, 40);
+    press_left(&mut app);
+    assert!(app.rail_state().focused().is_some());
+    type_draft(&mut app, "hi");
+    assert!(app.rail_state().focused().is_some());
+    let area = Rect::new(0, 0, 200, 40);
+    let (buf, _, _) = no_color_drawn(&app, area);
+    let (x, y) = box_prompt(&buf, area);
+    let mut text = 0;
+    for at in x..area.right() {
+        if buf[(at, y)].symbol() == "h" || buf[(at, y)].symbol() == "i" {
+            assert!(
+                buf[(at, y)].modifier.contains(Modifier::DIM),
+                "the text at {at}"
+            );
+            text += 1;
+        }
+    }
+    assert_eq!(text, 2, "the draft");
 }
