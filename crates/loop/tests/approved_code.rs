@@ -1469,10 +1469,12 @@ fn start_rewound(
                 session_id: contract::SessionId("s_test".into()),
                 seq: contract::Seq(at),
             },
-            note,
-            summary: None,
             worktree: None,
-            name: r#loop::latest_name(&session.dir),
+            how: r#loop::Continuation::Rewind {
+                note,
+                summary: None,
+                name: r#loop::latest_name(&session.dir),
+            },
         },
     )
     .unwrap()

@@ -268,6 +268,7 @@ fn a_session_start_hook_is_shown_why_the_session_started() {
     for (reason, word) in [
         (StartReason::Start, "start"),
         (StartReason::Resume, "resume"),
+        (StartReason::Fork, "fork"),
         (StartReason::Rewind, "rewind"),
         (StartReason::Handoff, "handoff"),
     ] {
