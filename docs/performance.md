@@ -80,7 +80,7 @@ a 20-thousand-token one fit the same ceiling.
 | `paging` jig, open pass and first frame | 1,347 ms | Linux x86_64 | measured | 725 ms | 828 ms | 1049 ms | 11 % | 4 % |
 | `paging` jig, slowest frame that loaded pages | 7 ms | Linux x86_64 | measured | 8 ms | 5 ms | 10 ms | 16 % | 4 % |
 | `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured | 9 ms | 9 ms | 13 ms | 11 % | 5 % |
-| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured | 67 ms | 77 ms | 99 ms | 16 % | 8 % |
+| `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured | 67 ms | 77 ms | 106 ms | 16 % | 8 % |
 | `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured | 7 ms | 4 ms | 6 ms | 56 % | 32 % |
 | `paging` jig at scale 16, slowest re-count at a new width | 20 times the same run's scale-1 re-count | Linux x86_64 | picked | — | — | — | — | — |
 | `paging` jig at scale 16, a search of the whole session with no match | 20 times the same run's scale-1 search | Linux x86_64 | picked | — | — | — | — | — |
