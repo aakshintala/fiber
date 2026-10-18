@@ -790,7 +790,10 @@ fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
         .unwrap_or_else(|| panic!("a dropped page"));
     app.load_failed(&range, "page failed");
     // Following leaves the failed page for the resident, unrelated tail.
-    app.on_key(crate::keys::Key::End, std::time::Instant::now());
+    app.on_key(
+        crate::keys::Key::End,
+        contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref()),
+    );
     let before = landing_top_text(&app);
     assert_eq!(app.attached_screen().top(), None, "End follows the tail");
     let top = app.attached_screen().top();
@@ -811,7 +814,10 @@ fn a_failed_held_landing_does_not_move_the_top_on_a_later_load() {
 #[test]
 fn a_scrolled_held_landing_does_not_move_the_top_on_a_later_load() {
     let (mut app, log) = held_landing_with_dropped_pages();
-    app.on_key(crate::keys::Key::PageDown, std::time::Instant::now());
+    app.on_key(
+        crate::keys::Key::PageDown,
+        contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref()),
+    );
     let top = app.attached_screen().top();
     let before = landing_top_text(&app);
     let range = app
