@@ -75,7 +75,7 @@ pub use secret::{
     mcp_secret_name_ok, read_credential, read_secret, store_credential, store_secret,
     valid_env_key,
 };
-pub use settings::{SettingInfo, SettingValue};
+pub use settings::{NotesFile, ReviewerNotes, SettingInfo, SettingValue, reviewer_notes};
 pub use startup_check::{
     McpRefusal, McpRefusalKind, McpServer, McpServers, McpTransport, ScriptRead, mcp_server_key,
     mcp_servers, quoted_segment, read_script,
@@ -83,9 +83,10 @@ pub use startup_check::{
 pub use switches::{SwitchLayer, ToolOwner, ToolSwitch, switch_skill, switch_tool};
 pub use themes::{theme_names, theme_text};
 pub use write::{
-    Layer, ListChange, ListEdit, Scope, clear_global_if_equals, edit_list, get_global,
-    insert_entry, remove_entry, remove_extension_settings, replace_global, set,
-    set_global_if_unset, settings_file, update_global_entries, write_atomic,
+    FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved, NotesWrite, Scope,
+    clear_global_if_equals, edit_list, get_global, insert_entry, remove_entry,
+    remove_extension_settings, replace_global, save_reviewer_notes, set, set_global_if_unset,
+    settings_file, update_global_entries, version, write_atomic,
 };
 
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
