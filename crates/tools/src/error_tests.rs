@@ -5,7 +5,7 @@ use contract::ErrorCode;
 
 use super::{
     ArgumentsError, AskUserError, FileError, ImageReadError, PdfError, ReadError, SkillError,
-    ToolError, WebSearchError,
+    ToolError, WebSearchError, WriteError,
 };
 use crate::error::{SessionListError, SessionMessageError};
 
@@ -443,6 +443,68 @@ fn a_read_pdf_failure_reaches_the_root() {
     assert_eq!(
         root.to_string(),
         "`pages` must be a page or a range such as `3` or `1-5`, counted from 1."
+    );
+}
+
+#[test]
+fn a_stale_write_names_what_to_do() {
+    let error = WriteError::StaleNotRead {
+        path: std::path::PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::StaleFile);
+    assert_eq!(
+        error.to_string(),
+        "`/a.txt` was not read in this context. Read it first."
+    );
+    let error = WriteError::StaleChanged {
+        path: std::path::PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::StaleFile);
+    assert_eq!(
+        error.to_string(),
+        "`/a.txt` changed since it was read. Read it first."
+    );
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::StaleFile);
+}
+
+#[test]
+fn an_unwritable_file_names_the_cause() {
+    let error = FileError::CouldNotWrite {
+        path: std::path::PathBuf::from("/a.txt"),
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "`/a.txt` could not be written: denied.");
+    let root = ToolError::from(WriteError::from(error));
+    assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn an_unwritable_kind_names_its_hint() {
+    let error = FileError::Unsupported {
+        path: std::path::PathBuf::from("/d"),
+        kind: "a directory".to_owned(),
+        size: 0,
+        hint: "",
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        crate::files::unsupported_message(std::path::Path::new("/d"), "a directory", 0, "")
+    );
+}
+
+#[test]
+fn a_pdf_over_the_cap_names_the_cap() {
+    let error = FileError::PdfOverCap {
+        path: std::path::PathBuf::from("/a.pdf"),
+        size: 200_000_000,
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        crate::pdf::over_cap_message(std::path::Path::new("/a.pdf"), 200_000_000)
     );
 }
 

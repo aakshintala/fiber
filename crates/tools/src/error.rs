@@ -12,7 +12,7 @@ mod media;
 mod misc;
 mod session;
 
-pub(crate) use file_tools::ReadError;
+pub(crate) use file_tools::{ReadError, WriteError};
 pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
@@ -49,6 +49,9 @@ pub(crate) enum ToolError {
     /// `read` failed.
     #[error(transparent)]
     Read(#[from] ReadError),
+    /// `write` failed.
+    #[error(transparent)]
+    Write(#[from] WriteError),
     /// `web_search` has nothing to run or the backend failed.
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
@@ -68,6 +71,7 @@ impl ToolError {
             Self::Pdf(error) => error.code(),
             Self::Image(error) => error.code(),
             Self::Read(error) => error.code(),
+            Self::Write(error) => error.code(),
             Self::WebSearch(error) => error.code(),
         }
     }
@@ -130,6 +134,35 @@ pub(crate) enum FileError {
         /// The path as the call named it.
         raw: String,
     },
+    /// The file could not be written.
+    #[error("`{}` could not be written: {source}.", path.display())]
+    CouldNotWrite {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A directory, device or file the tool will not write.
+    #[error("{}", crate::files::unsupported_message(path, kind, *size, hint))]
+    Unsupported {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+        /// Detected type, such as `a directory` or `binary data`.
+        kind: String,
+        /// Size in bytes.
+        size: u64,
+        /// Extra sentence, or empty.
+        hint: &'static str,
+    },
+    /// A PDF over the 100 MiB cap, never readable and never writable.
+    #[error("{}", crate::pdf::over_cap_message(path, *size))]
+    PdfOverCap {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+        /// Size in bytes, from the file's metadata.
+        size: u64,
+    },
 }
 
 impl FileError {
@@ -140,6 +173,8 @@ impl FileError {
             Self::ChangedBeforeRead { .. } | Self::ChangedBeforeWrite { .. } => {
                 ErrorCode::PathChanged
             }
+            Self::CouldNotWrite { .. } => ErrorCode::ToolError,
+            Self::Unsupported { .. } | Self::PdfOverCap { .. } => ErrorCode::UnsupportedFile,
         }
     }
 }
