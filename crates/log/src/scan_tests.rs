@@ -748,3 +748,14 @@ fn started_first_reads_the_workspace_repository_and_delegate() {
         assert_eq!(started_first(&dir).unwrap().delegate, delegate, "{parent}");
     }
 }
+
+#[test]
+fn started_first_with_an_unopenable_log_is_corrupt() {
+    let home = fakes::TempDir::new("log-started-first-loop");
+    let dir = home.path().join("s");
+    fs::create_dir_all(&dir).unwrap();
+    // A symlink loop makes `File::open` fail with an error other than
+    // `NotFound` (ELOOP), without root or permissions.
+    std::os::unix::fs::symlink("events.jsonl", dir.join("events.jsonl")).unwrap();
+    assert!(matches!(started_first(&dir), Err(FirstLineError::Corrupt)));
+}
