@@ -32,7 +32,7 @@ use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId}
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
-use r#loop::{Loop, Model, Permissions, PromptInputs, Rewound, rewind_note};
+use r#loop::{Continuation, Loop, Model, Permissions, PromptInputs, Rewound, rewind_note};
 use serde_json::{Map, Value, json};
 
 use support::{
@@ -184,10 +184,12 @@ fn start_b_with_summary(
         },
         Rewound {
             from,
-            note,
-            summary,
             worktree,
-            name: r#loop::latest_name(&session.dir),
+            how: Continuation::Rewind {
+                note,
+                summary,
+                name: r#loop::latest_name(&session.dir),
+            },
         },
     )
     .unwrap();
@@ -1119,10 +1121,12 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
                 session_id: SessionId("s_model00000001".into()),
                 seq: Seq(1),
             },
-            note: String::new(),
-            summary: None,
             worktree: None,
-            name: r#loop::latest_name(&a_dir),
+            how: Continuation::Rewind {
+                note: String::new(),
+                summary: None,
+                name: r#loop::latest_name(&a_dir),
+            },
         },
     )
     .unwrap();
@@ -3426,10 +3430,12 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
                 session_id: SessionId("s_test".into()),
                 seq: at,
             },
-            note: rewind_note(&parent.dir, at).unwrap(),
-            summary: None,
             worktree: None,
-            name: None,
+            how: Continuation::Rewind {
+                note: rewind_note(&parent.dir, at).unwrap(),
+                summary: None,
+                name: None,
+            },
         },
     )
     .unwrap()

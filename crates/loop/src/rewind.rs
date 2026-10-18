@@ -1,11 +1,11 @@
-//! Starting a session that continues another from a step boundary
-//! (`docs/events.md`, "Rewind"): the inherited preamble, the note, and the
-//! old session's worktree.
+//! Starting a rewind or fork from a step boundary (`docs/events.md`,
+//! "Rewind" and `docs/delegates.md`, "Forks"): the inherited preamble,
+//! history and worktree.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use contract::events::{Event, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
+use contract::events::{Event, Parent, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
 use contract::{ActionId, Seq};
@@ -18,46 +18,64 @@ pub(crate) mod command;
 pub(crate) mod stop;
 pub(crate) mod summary;
 
-/// What the new session starts from: the point, the note, and the old
-/// session's worktree.
+/// What a rewind or fork starts from: a point and its inherited worktree.
 pub struct Rewound {
     /// The point the new session continues from.
     pub from: Point,
-    /// Fiber's note: files written, shell calls and jobs since the point.
-    pub note: String,
-    /// The old session's summary of the path after the point, when requested.
-    pub summary: Option<String>,
-    /// The old session's worktree, when it runs in one: the new session
-    /// runs there too and never removes it (`docs/events.md`, "Rewind").
+    /// The continued session's worktree, when it runs in one. The new
+    /// session runs there too and never removes it.
     pub worktree: Option<Worktree>,
-    /// The rewound session's latest `session_named`, from
-    /// [`latest_name`]: the new session writes a copy after
-    /// `session_started`, so the name and a pin carry over.
-    pub name: Option<SessionNamed>,
+    /// Whether this is a person's rewind or a delegate's fork.
+    pub how: Continuation,
+}
+
+/// How a session continues another's history from a point.
+pub enum Continuation {
+    /// A person's rewind (`docs/events.md`, "Rewind").
+    Rewind {
+        /// Fiber's note: files written, shell calls and jobs since the point.
+        note: String,
+        /// The old session's summary of the path after the point, when requested.
+        summary: Option<String>,
+        /// The latest name and pin, copied after `session_started`.
+        name: Option<SessionNamed>,
+    },
+    /// A delegate's fork (`docs/delegates.md`, "Forks").
+    Fork {
+        /// The parent session and its delegate job.
+        parent: Parent,
+    },
 }
 
 impl Loop {
-    /// Starts a session that continues another from `start.from`, whose
-    /// history is the old log folded to the point: `session_started`
-    /// carries `forked_from`, the note and the summary, and the
-    /// old session's worktree, with no `parent`. The chain
-    /// now includes this line, so the fold gives the new session the old
-    /// log's history to the point. The new session starts with no jobs, so
-    /// it clears its orphans, then builds through [`Loop::resume`], sending
-    /// the fold's latest `preamble_built` verbatim as its first request.
-    /// It writes no `preamble_built`: nothing was built. Everything a new
-    /// loop runs on rides [`crate::Session`].
+    /// Starts a rewind or fork with the old log folded through `start.from`.
+    /// A rewind carries its note, summary and name; a fork carries its parent.
+    /// Both inherit the worktree, start without jobs and send the latest
+    /// logged preamble verbatim, without writing a new `preamble_built`.
+    /// Everything a new loop runs on rides [`crate::Session`].
     pub fn rewound(session: Session, start: Rewound) -> Result<Self, Error> {
+        let (parent, rewind, name, reason) = match start.how {
+            Continuation::Rewind {
+                note,
+                summary,
+                name,
+            } => (
+                None,
+                Some(Rewind { summary, note }),
+                name,
+                contract::hook::StartReason::Rewind,
+            ),
+            Continuation::Fork { parent } => {
+                (Some(parent), None, None, contract::hook::StartReason::Fork)
+            }
+        };
         session.log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: session.permissions.workspace.clone(),
                 variables: variables(),
-                parent: None,
+                parent,
                 forked_from: Some(start.from),
-                rewind: Some(Rewind {
-                    summary: start.summary,
-                    note: start.note,
-                }),
+                rewind,
                 worktree: start.worktree,
             }),
             None,
@@ -66,15 +84,15 @@ impl Loop {
         // The name goes with the conversation: a copy of the parent's
         // latest `session_named`, `by` included, so a pin holds
         // (`docs/events.md`, "Rewind").
-        if let Some(named) = start.name {
+        if let Some(named) = name {
             session
                 .log
                 .append(&Event::SessionNamed(named), None, None)?;
         }
         let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
-        // The new session starts with no jobs: the jobs the folded history
-        // holds open were stopped by the rewind in the old log, not orphaned.
+        // The new session owns none of the jobs the folded history holds:
+        // a rewind stopped them, and a fork leaves them with its parent.
         // The handoff carry drops them too, so a handoff started in the new
         // session names no job. It continues the logged build verbatim, so it
         // writes no `model_changed` for a label the log changed after the
@@ -83,9 +101,9 @@ impl Loop {
         folded.settings = None;
         let mut rewound = Loop::resume(session, folded)?;
         rewound.handoff.carry.jobs.clear();
-        // A rewound session starts for its own reason, whatever the
+        // A rewind or fork starts for its own reason, whatever the
         // preamble it adopted was built for.
-        rewound.lifecycle.reason = contract::hook::StartReason::Rewind;
+        rewound.lifecycle.reason = reason;
         if let Some(built) = logged {
             let tools = rewound
                 .tools
