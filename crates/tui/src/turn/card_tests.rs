@@ -1353,3 +1353,21 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         );
     }
 }
+
+/// The closing line's seq ends only a closed card: noting a seq on an
+/// open card moves no ending, while the line that closed one does.
+#[test]
+fn an_open_card_keeps_no_end_seq() {
+    use contract::Seq;
+    let mut cards = fresh();
+    start(&mut cards, "look");
+    text(&mut cards, "a_m", "hello");
+    let turn = cards.turns.last_mut().expect("the open card");
+    turn.note_seq(Some(Seq(0)));
+    assert!(turn.end_seq.is_none(), "an open card ends nowhere");
+    done(&mut cards);
+    let turn = cards.turns.last_mut().expect("the closed card");
+    assert!(turn.ended.is_some(), "the card closed");
+    turn.note_seq(Some(Seq(9)));
+    assert_eq!(turn.end_seq, Some(Seq(9)), "the closing line ends it");
+}
