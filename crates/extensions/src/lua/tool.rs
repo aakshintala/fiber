@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use contract::clock::Wake;
 use contract::inbox::Delivery;
 use contract::shapes::{DeclaredEffects, Effect};
-use contract::tool::{Cancel, InnerCalls};
+use contract::tool::{Bound, Cancel, InnerCalls};
 use mlua::{Function, Lua, Table, Value as LuaValue};
 use serde_json::Value;
 
@@ -38,6 +38,9 @@ pub(crate) struct DeclaredTool {
     /// arguments returns them.
     pub(crate) effects: Option<DeclaredEffects>,
     pub(crate) timeout: Duration,
+    /// How many bytes of the start and of the end of a long result the
+    /// model is sent (`docs/tools.md`, "Bounded results").
+    pub(crate) keep: Bound,
 }
 
 /// What `fiber.tool` registered: each tool's definition, and its `run` and
@@ -133,7 +136,7 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
     }
     let LuaValue::Table(spec) = spec else {
         return Err(
-            "it takes a table of `description`, `input_schema`, `effects`, `timeout` and `run`"
+            "it takes a table of `description`, `input_schema`, `effects`, `timeout`, `run` and optionally `keep`"
                 .to_owned(),
         );
     };
@@ -170,6 +173,7 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
     let LuaValue::Function(run) = field("run")? else {
         return Err("`run` must be a function".to_owned());
     };
+    let keep = self::keep(&field("keep")?)?;
     Ok((
         DeclaredTool {
             name,
@@ -177,6 +181,7 @@ fn read(name: &LuaValue, spec: &LuaValue) -> Result<Functions, String> {
             input_schema,
             effects,
             timeout,
+            keep,
         },
         run,
         effects_fn,
@@ -189,6 +194,61 @@ fn is_tool_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// A tool's `keep`: the byte counts of the start and of the end of a
+/// long result the model is sent (`docs/tools.md`, "Bounded results").
+/// Either may be omitted and defaults to 0; at least one is above 0.
+/// A nil value is absent and gives `Bound::DEFAULT`.
+fn keep(value: &LuaValue) -> Result<Bound, String> {
+    if value.is_nil() {
+        return Ok(Bound::DEFAULT);
+    }
+    let LuaValue::Table(table) = value else {
+        return Err("`keep` must be a table of `start` and `end`".to_owned());
+    };
+    for pair in table.pairs::<LuaValue, LuaValue>() {
+        let (key, _) = pair.map_err(|e| e.to_string())?;
+        let name = match &key {
+            LuaValue::String(text) => text
+                .to_str()
+                .map(|held| held.to_owned())
+                .unwrap_or_else(|_| "string".to_owned()),
+            LuaValue::Integer(n) => n.to_string(),
+            LuaValue::Number(n) => n.to_string(),
+            LuaValue::Boolean(b) => b.to_string(),
+            LuaValue::Nil
+            | LuaValue::LightUserData(_)
+            | LuaValue::Table(_)
+            | LuaValue::Function(_)
+            | LuaValue::Thread(_)
+            | LuaValue::UserData(_)
+            | LuaValue::Error(_)
+            | LuaValue::Other(_) => key.type_name().to_owned(),
+        };
+        if name != "start" && name != "end" {
+            return Err(format!("`keep`: `{name}` is not `start` or `end`"));
+        }
+    }
+    let pair = |key: &str| -> Result<usize, String> {
+        let value = table.get::<LuaValue>(key).map_err(|e| e.to_string())?;
+        if value.is_nil() {
+            return Ok(0);
+        }
+        let Some(n) = value.as_integer() else {
+            return Err(format!("`keep`: `{key}` must be a whole number of bytes"));
+        };
+        usize::try_from(n).map_err(|_| format!("`keep`: `{key}` must be a whole number of bytes"))
+    };
+    let start = pair("start")?;
+    let end = pair("end")?;
+    if start == 0 && end == 0 {
+        return Err("`keep`: `start` and `end` cannot both be 0".to_owned());
+    }
+    start
+        .checked_add(end)
+        .map(|_| Bound { start, end })
+        .ok_or_else(|| "`keep`: `start` plus `end` is too large".to_owned())
 }
 
 /// A tool's `input_schema`: a table that reads as a JSON object whose `type`
