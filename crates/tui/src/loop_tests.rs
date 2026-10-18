@@ -1157,9 +1157,11 @@ fn drain_by_chunk<T>(
     finished: &mpsc::Receiver<T>,
 ) -> Result<T, String> {
     loop {
-        match reached.recv_timeout(window) {
+        // One fresh window per signal through the shared deadline
+        // type: each fold renews the no-progress bound.
+        match Deadline::after(window).recv(reached) {
             Ok(()) => {
-                let _ = release.send(());
+                release.send(()).unwrap_or(());
             }
             Err(_) => match finished.try_recv() {
                 Ok(done) => return Ok(done),
