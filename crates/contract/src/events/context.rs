@@ -90,6 +90,21 @@ pub struct QuotaNoticed {
     pub notice_at: f64,
 }
 
+/// `quota_rearmed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuotaRearmed {
+    /// The provider's name.
+    pub provider: String,
+    /// The credential label whose quota re-armed.
+    pub credential: String,
+    /// The window's name, or `credit` for a credit.
+    pub window: String,
+    /// The percent used at the reading below the threshold.
+    pub percent_used: f64,
+    /// The threshold, `quota.notice_at`.
+    pub notice_at: f64,
+}
+
 /// `retry_scheduled`. The envelope's `action_id` is the failed assistant
 /// message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

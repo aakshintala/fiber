@@ -61,6 +61,7 @@ mod process;
 mod progress;
 mod prompt;
 mod questions;
+mod quota_notice;
 mod reload;
 mod resume;
 mod retry;
@@ -99,6 +100,7 @@ pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::{DisabledReader, PromptInputs};
+pub use quota_notice::QuotaRead;
 pub use reload::{PrepareReload, PromptPatch, ReloadPrepared, ReloadRoute, ReloadSettings};
 pub use resume::{Resumed, resumed};
 pub use retry::{Decision, Retry};
@@ -299,6 +301,7 @@ pub struct Loop {
     handoff: handoff::State,
     /// The session's jobs, and how far the loop is in ending with them.
     ending: jobs::Ending,
+    quota_notices: quota_notice::Notices,
     /// An idle wait's warming state (`docs/prompt-cache.md`, "Warming while idle").
     warming: warm::Warming,
     /// How a `model` command is prepared, with what the session started with.
@@ -382,6 +385,7 @@ struct Seed {
     session_blocks: u64,
     repository: offer::State,
     naming: naming::Naming,
+    fired: quota_notice::Fired,
     context: Option<Vec<contract::Envelope>>,
     ledger: usage::Ledger,
     carry: handoff::Carry,
@@ -461,6 +465,7 @@ impl Loop {
                 session_blocks: 0,
                 repository: offer::State::default(),
                 naming: naming::Naming::default(),
+                fired: quota_notice::Fired::default(),
                 context: None,
                 ledger: usage::Ledger::default(),
                 carry: handoff::Carry::default(),
@@ -500,6 +505,7 @@ impl Loop {
             session_blocks,
             repository,
             naming,
+            fired,
             context,
             ledger,
             carry,
@@ -593,6 +599,7 @@ impl Loop {
             on_rewrite: None,
             handoff: handoff::State::new(carry),
             ending: jobs::Ending::default(),
+            quota_notices: quota_notice::Notices::new(fired),
             warming: warm::Warming::default(),
             switcher: None,
             reloader: None,

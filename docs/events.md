@@ -838,10 +838,22 @@ Durable.
 |---|---|---|---|
 | `provider` | string | yes | the provider's name |
 | `credential` | string | yes | the credential label whose quota crossed (`docs/model-routing.md`, "Credentials") |
-| `window` | string | yes | the window's name, as the provider reports it |
+| `window` | string | yes | the window's name, as the provider reports it, or `credit` for a credit |
 | `percent_used` | number | yes | the percent used when the notice was given |
 | `resets_at` | integer | no | when the window resets, where the provider reports it |
 | `notice_at` | number | yes | the threshold it crossed, `quota.notice_at` |
+
+#### `quota_rearmed`
+
+Durable. A window, or a credit as the window `credit`, that gave a `quota_noticed` read below `quota.notice_at`, so its next crossing gives a notice again (`docs/tools.md`, "The notice"). It is written once per re-arm; a window re-armed by its reset time writes none.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `provider` | string | yes | the provider's name |
+| `credential` | string | yes | the credential label (`docs/model-routing.md`, "Credentials") |
+| `window` | string | yes | the window's name, as the provider reports it, or `credit` for a credit |
+| `percent_used` | number | yes | the percent used at the reading below the threshold |
+| `notice_at` | number | yes | the threshold, `quota.notice_at` |
 
 #### `retry_scheduled`
 

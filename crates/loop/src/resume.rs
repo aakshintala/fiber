@@ -104,6 +104,7 @@ pub struct Resumed {
     /// `session_named` in the own log, in log order (`docs/tools.md`,
     /// "Naming the session").
     pub(crate) naming: crate::naming::Naming,
+    pub(crate) fired: crate::quota_notice::Fired,
     /// The latest `preamble_built` in the chain: a rewound session sends
     /// it verbatim as its first request (`docs/events.md`, "Rewind").
     /// `None` when the chain holds none yet.
@@ -306,6 +307,7 @@ impl Loop {
             thinking,
             offers,
             naming,
+            fired,
             settings,
             ..
         } = resumed;
@@ -378,6 +380,7 @@ impl Loop {
                 session_blocks,
                 repository: crate::offer::State::resumed(offers),
                 naming,
+                fired,
                 context,
                 ledger,
                 carry,
