@@ -540,7 +540,7 @@ fn a_literal_sized_split_summary_survives_below_one_mib() {
             polled,
         }),
     );
-    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let cutoff = home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap();
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
         let mut seen = Vec::new();
@@ -548,10 +548,10 @@ fn a_literal_sized_split_summary_survives_below_one_mib() {
             client.list_until_with_read(cutoff, &CancelToken::new(), &mut |stream, chunk| {
                 let n = stream.read(chunk)?;
                 seen.extend_from_slice(&chunk[..n]);
-                if let Some(end) = seen.iter().position(|byte| *byte == b'\n') {
-                    if seen.len() - end - 1 >= 4096 {
-                        prefix_read.store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
+                if let Some(end) = seen.iter().position(|byte| *byte == b'\n')
+                    && seen.len() - end > 4096
+                {
+                    prefix_read.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 Ok(n)
             });
@@ -577,7 +577,7 @@ fn would_block_after_readiness_preserves_the_subscription() {
     let expected = status("ready after WouldBlock");
     let peer = Peer::answer(&home, ID, expected.clone());
     let client = home.client();
-    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let cutoff = home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap();
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
         let mut injected = false;
@@ -615,7 +615,7 @@ fn a_hard_read_error_closes_the_peer_without_advancing_time() {
         stream.write_all(&bytes).unwrap();
     });
     let client = home.client();
-    let cutoff = home.clock.origin() + LIST_DEADLINE - CLEANUP_MARGIN;
+    let cutoff = home.clock.origin() + LIST_DEADLINE.checked_sub(CLEANUP_MARGIN).unwrap();
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
         let mut injected = false;
