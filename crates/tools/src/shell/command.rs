@@ -159,13 +159,7 @@ pub(crate) fn execute(
         cmd.env(crate::search::matches::MATCHES_ENV, path);
     }
     support::group::detach(&mut cmd, tty);
-    let (child, listing) = support::group::spawn(&mut cmd).map_err(|source| match source {
-        support::group::Error::Spawn(error) => error,
-        support::group::Error::Refused(id) => {
-            std::io::Error::other(format!("refusing to list process group {id}"))
-        }
-        support::group::Error::Signal { source, .. } => source,
-    })?;
+    let (child, listing) = support::group::spawn(&mut cmd)?;
     // The parent drops every write end, or every secondary, so EOF arrives
     // when the last holder exits.
     drop(cmd);
