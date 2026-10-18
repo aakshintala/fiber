@@ -906,27 +906,6 @@ impl App {
                                 .filter(|page| page.lines > 0)
                                 .map(|page| page.last_seq)
                                 .max();
-                            if last.is_none() {
-                                // The tail read failed and installed no
-                                // preview, so the pass's lines are the
-                                // only copy: land them as the screen
-                                // instead of dropping them with the fold.
-                                let taken = std::mem::replace(&mut self.overlay, Overlay::None);
-                                let Overlay::Folding {
-                                    fold, busy, held, ..
-                                } = taken
-                                else {
-                                    unreachable!("stream_closed without the pass it matched");
-                                };
-                                let fresh = self.attached_screen().pages().fresh();
-                                self.overlay = Overlay::Folding {
-                                    session,
-                                    fold: Box::new(fresh),
-                                    busy,
-                                    held,
-                                };
-                                self.land(*fold, held);
-                            }
                             self.overlay = Overlay::Kept { last };
                             self.attached_screen_mut().set_frozen(false);
                         }
