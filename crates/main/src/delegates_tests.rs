@@ -360,20 +360,13 @@ fn the_launch_runs_the_child_session_with_its_ids_model_and_prompt() {
         argv,
         [
             "session",
-            "--id",
-            "s_child",
-            "--workspace",
-            "/w",
-            "--model",
-            "fake/m:high",
-            "--prompt",
-            "scan the tree",
-            "--parent",
-            "s_parent",
-            "--delegate-id",
-            "j_1",
-            "--depth",
-            "1",
+            "--id=s_child",
+            "--workspace=/w",
+            "--model=fake/m:high",
+            "--prompt=scan the tree",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
         ]
     );
 }
@@ -388,8 +381,8 @@ fn launch_carries_the_childs_depth() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     assert!(
-        argv.windows(4)
-            .any(|args| args == ["--delegate-id", "j_1", "--depth", "2"])
+        argv.windows(2)
+            .any(|args| args == ["--delegate-id=j_1", "--depth=2"])
     );
 }
 
@@ -574,21 +567,16 @@ fn a_resume_builds_the_resume_argv_with_the_message_whole_and_no_model() {
         argv,
         [
             "session",
-            "--id",
-            "s_child",
-            "--workspace",
-            "/w",
+            "--id=s_child",
+            "--workspace=/w",
             "--resume",
             "--prompt=- also check Y",
-            "--parent",
-            "s_parent",
-            "--delegate-id",
-            "j_1",
-            "--depth",
-            "1",
+            "--parent=s_parent",
+            "--delegate-id=j_1",
+            "--depth=1",
         ]
     );
-    assert!(!argv.iter().any(|arg| arg == "--model"));
+    assert!(!argv.iter().any(|arg| arg.starts_with("--model")));
 }
 
 #[test]

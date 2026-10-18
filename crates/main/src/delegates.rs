@@ -497,29 +497,13 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 }
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
-    let mut command = Command::new(fiber);
-    let workspace = launched.workspace.to_string_lossy();
-    command.args([
-        "session",
-        "--id",
-        &launched.session_id.0,
-        "--workspace",
-        &workspace,
-    ]);
-    if launched.resume {
-        // A resume continues the delegate's own session with one
-        // unattended turn: no `--model` (fixed when the delegate
-        // started), and the message as one `--prompt=<text>` argument, so
-        // a message starting with `-` reaches the child whole.
-        command.args(["--resume", &format!("--prompt={}", launched.prompt)]);
-    } else {
-        command.args(["--model", &launched.model, "--prompt", &launched.prompt]);
-        // A role naming a credential label runs the child under it: the
-        // label travels as a run override, so the child's `preamble_built`
-        // records it. The value is a JSON string, so a label that parses
-        // as JSON still arrives as a string. Nothing for no label, and
-        // nothing on a resume, which continues the recorded session.
-        if let Some(label) = launched.credential.as_deref() {
+    // A role naming a credential label runs the child under it: the
+    // label travels as a run override, so the child's `preamble_built`
+    // records it. The value is a JSON string, so a label that parses
+    // as JSON still arrives as a string. Nothing for no label, and
+    // nothing on a resume, which continues the recorded session.
+    let overrides = match launched.credential.as_deref() {
+        Some(label) if !launched.resume => {
             let provider = launched.model.split('/').next().unwrap_or_default();
             let key = config::path::display(&[
                 "providers".to_owned(),
@@ -527,23 +511,30 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
                 "credential".to_owned(),
             ]);
             let value = serde_json::Value::String(label.to_owned());
-            command.args(["-c", &format!("{key}={value}")]);
+            vec![format!("{key}={value}")]
         }
-    }
-    command.args([
-        "--parent",
-        &launched.parent.0,
-        "--delegate-id",
-        &launched.job_id.0,
-        "--depth",
-        &launched.depth.to_string(),
-    ]);
+        _ => Vec::new(),
+    };
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
     // environment").
-    if r#loop::variables_source() == VariablesSource::LoginShell {
-        command.arg("--login-shell");
-    }
+    let args = crate::cli::SessionArgs {
+        id: launched.session_id.0.clone(),
+        workspace: launched.workspace.clone(),
+        model: (!launched.resume).then(|| launched.model.clone()),
+        overrides,
+        prompt: Some(launched.prompt.clone()),
+        resume: launched.resume,
+        credential: None,
+        worktree: false,
+        rewound_from: None,
+        parent: Some(launched.parent.0.clone()),
+        delegate_id: Some(launched.job_id.0.clone()),
+        depth: Some(launched.depth),
+        login_shell: r#loop::variables_source() == VariablesSource::LoginShell,
+    };
+    let mut command = Command::new(fiber);
+    command.args(args.to_argv());
     command
 }
 

@@ -224,12 +224,24 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         credential: Option<&str>,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        let mut command = session_command(&self.exe, id, workspace, None, false, true, None);
-        // One argument, so an empty or leading-hyphen label from the
-        // wire cannot be consumed as another flag.
-        if let Some(label) = credential {
-            command.arg(format!("--credential={label}"));
-        }
+        // The hub never sets `login_shell` here: `apply` appends it from
+        // the environment, so it stays last.
+        let args = cli::SessionArgs {
+            id: id.0.clone(),
+            workspace: workspace.to_path_buf(),
+            model: None,
+            overrides: Vec::new(),
+            prompt: None,
+            resume: true,
+            credential: credential.map(str::to_owned),
+            worktree: false,
+            rewound_from: None,
+            parent: None,
+            delegate_id: None,
+            depth: None,
+            login_shell: false,
+        };
+        let mut command = session_command_from(&self.exe, args);
         apply(&mut command, &self.environments.get());
         spawn(id, command)
     }
@@ -257,9 +269,9 @@ fn apply(command: &mut Command, environment: &hub::Environment) {
     }
 }
 
-/// The session command a `start` spawns: `session_command` with one `-c
-/// <override>` per override, in order. An override is passed unchanged,
-/// as one value of `-c`, so it never becomes another flag.
+/// The session command a `start` spawns: one `-c` per override, in
+/// order. An override travels through `to_argv`, which keeps a value
+/// starting with `-` attached to its flag.
 fn start_command(
     exe: &Path,
     id: &SessionId,
@@ -268,10 +280,38 @@ fn start_command(
     overrides: &[&str],
     worktree: bool,
 ) -> Command {
-    let mut command = session_command(exe, id, workspace, model, worktree, false, None);
-    for override_text in overrides {
-        command.arg("-c").arg(override_text);
-    }
+    // The hub never sets `login_shell` here: `apply` appends it from
+    // the environment, so it stays last.
+    session_command_from(
+        exe,
+        cli::SessionArgs {
+            id: id.0.clone(),
+            workspace: workspace.to_path_buf(),
+            model: model.map(str::to_owned),
+            overrides: overrides.iter().map(|text| (*text).to_owned()).collect(),
+            prompt: None,
+            resume: false,
+            credential: None,
+            worktree,
+            rewound_from: None,
+            parent: None,
+            delegate_id: None,
+            depth: None,
+            login_shell: false,
+        },
+    )
+}
+
+/// `exe` plus the argv of `args`, in its own process group with stdout
+/// piped for the drain.
+fn session_command_from(exe: &Path, args: cli::SessionArgs) -> Command {
+    let mut command = Command::new(exe);
+    command.args(args.to_argv());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
     command
 }
 
@@ -288,31 +328,26 @@ fn session_command(
     resume: bool,
     rewound_from: Option<&SessionId>,
 ) -> Command {
-    let mut command = Command::new(exe);
-    command
-        .arg("session")
-        .arg("--id")
-        .arg(&id.0)
-        .arg("--workspace")
-        .arg(workspace);
-    if let Some(model) = model {
-        command.arg("--model").arg(model);
-    }
-    if worktree {
-        command.arg("--worktree");
-    }
-    if resume {
-        command.arg("--resume");
-    }
-    if let Some(from) = rewound_from {
-        command.arg("--rewound-from").arg(&from.0);
-    }
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0);
-    command
+    // The hub never sets `login_shell` here: `apply` appends it from
+    // the environment, so it stays last.
+    session_command_from(
+        exe,
+        cli::SessionArgs {
+            id: id.0.clone(),
+            workspace: workspace.to_path_buf(),
+            model: model.map(str::to_owned),
+            overrides: Vec::new(),
+            prompt: None,
+            resume,
+            credential: None,
+            worktree,
+            rewound_from: rewound_from.map(|from| from.0.clone()),
+            parent: None,
+            delegate_id: None,
+            depth: None,
+            login_shell: false,
+        },
+    )
 }
 
 /// Spawns `command` for session `id` and drains its stdout on a thread.
