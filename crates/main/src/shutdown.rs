@@ -28,7 +28,6 @@ pub(crate) fn arm(signals: &Signals, reads: &Arc<crate::switch::Reads>) {
         Box::new(move || {
             bound_reads.cancel();
             support::group::kill_every_group();
-            extensions::kill_every_group();
         }),
     );
 }
@@ -72,7 +71,6 @@ pub(crate) fn start(
         }),
         Box::new(|| {
             support::group::kill_every_group();
-            extensions::kill_every_group();
         }),
     );
     if started.is_some() {

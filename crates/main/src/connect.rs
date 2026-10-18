@@ -24,24 +24,22 @@ use serde_json::Value;
 /// Whether this Fiber speaks `protocol`, checked before anything is read
 /// for the model `reference`: `bedrock-converse` fails as [`connect`] does.
 pub(crate) fn speaks(protocol: Protocol, reference: &str) -> Result<(), Failure> {
-    match protocol {
-        Protocol::BedrockConverse => Err(unspoken(reference)),
-        Protocol::OpenaiResponses
-        | Protocol::OpenaiCompletions
-        | Protocol::AnthropicMessages
-        | Protocol::GoogleGenerativeAi
-        | Protocol::Scripted => Ok(()),
+    match extensions::protocol_refusal(protocol, reference) {
+        Some(message) => Err(failure(ErrorCode::ProtocolUnsupported, message)),
+        None => Ok(()),
     }
 }
 
 /// The model `reference` speaks a protocol this Fiber does not speak.
 fn unspoken(reference: &str) -> Failure {
-    failure(
-        ErrorCode::ProtocolUnsupported,
-        format!(
-            "The model `{reference}` speaks a protocol this Fiber does not speak yet; pick another model."
+    match extensions::protocol_refusal(Protocol::BedrockConverse, reference) {
+        Some(message) => failure(ErrorCode::ProtocolUnsupported, message),
+        // Unreachable: the shared check refuses `bedrock-converse`.
+        None => failure(
+            ErrorCode::ProtocolUnsupported,
+            format!("The model `{reference}` speaks bedrock-converse."),
         ),
-    )
+    }
 }
 
 /// Where a session runs: the workspace a `scripted` model's path resolves

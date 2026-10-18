@@ -364,6 +364,7 @@ impl Loop {
                 | Delivery::Shell(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)) => {
                     self.admit_idle(now, &mut TurnInput::of(Vec::new()))?;

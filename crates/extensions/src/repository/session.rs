@@ -4,10 +4,14 @@
 //! between calls: each gathers the repository again, through the index, so
 //! an unchanged file is not read.
 
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use config::ProjectKey;
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{OfferDecision, OfferedItem};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
@@ -72,6 +76,36 @@ fn failed(e: &Error, message: String) -> Failure {
 }
 
 impl RepositoryCode for SessionOffer {
+    fn file(&self, path: &str) -> Result<String, Failure> {
+        let failed = |code, why: String| Failure {
+            code,
+            message: format!("{path}: {why}"),
+            retry_after_ms: None,
+            provider: None,
+        };
+        let io = |e: std::io::Error| failed(ErrorCode::IoFailed, e.to_string());
+        let invalid = |why: &str| failed(ErrorCode::InvalidArguments, why.to_owned());
+        let root = self.workspace.canonicalize().map_err(io)?;
+        let resolved = root.join(path).canonicalize().map_err(io)?;
+        if !resolved.starts_with(&root) {
+            return Err(invalid("is outside the workspace"));
+        }
+        // debt: a concurrent local writer can swap a path component for a link
+        // between resolution and opening; fixed when a measured need arises to
+        // defend a repository against a concurrent local writer.
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(resolved)
+            .map_err(io)?;
+        if !file.metadata().map_err(io)?.is_file() {
+            return Err(invalid("is not a regular file"));
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(io)?;
+        String::from_utf8(bytes).map_err(|_| invalid("is not UTF-8 text"))
+    }
+
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
         let items =
             declared_items(&self.workspace, self.clock.as_ref()).map_err(|e| failure(&e))?;

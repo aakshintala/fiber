@@ -504,6 +504,7 @@ impl Vm {
                     | host::Request::Drive(_)
                     | host::Request::Ask(_)
                     | host::Request::Tool(_)
+                    | host::Request::Model(_)
                     | host::Request::Exec(_),
                 ) => return Err(self.yielded()),
             }
@@ -567,7 +568,7 @@ impl Vm {
             return Err(self.yielded());
         }
         let kind = kind.to_str().map_err(|e| self.error(&e))?;
-        host::request_from(
+        let request = host::request_from(
             &kind,
             yielded.next(),
             timeout,
@@ -575,7 +576,33 @@ impl Vm {
             self.memory_cap,
         )
         .map_err(|e| self.error(&e))?
-        .ok_or_else(|| self.yielded())
+        .ok_or_else(|| self.yielded())?;
+        // A `/`-relative program resolves against the extension's own
+        // directory and must stay inside it. Under a case runner's host
+        // script the request keeps the program as written, so a case
+        // matches what the Lua wrote; an ordinary session runs the
+        // resolved path.
+        match request {
+            host::Request::Exec(mut req) => {
+                match host::exec::resolve_in_package(&req.program, &self.dir) {
+                    Ok(path) => {
+                        if self.host_script.is_none() {
+                            req.program = path;
+                        }
+                    }
+                    Err(text) => return Err(self.error(&mlua::Error::RuntimeError(text))),
+                }
+                Ok(host::Request::Exec(req))
+            }
+            host::Request::Http(_)
+            | host::Request::Ask(_)
+            | host::Request::Tool(_)
+            | host::Request::Drive(_)
+            | host::Request::Model(_)
+            | host::Request::Callback { .. }
+            | host::Request::Lock
+            | host::Request::Sleep(_) => Ok(request),
+        }
     }
 
     /// A full garbage collection, so a lock handle left in a coroutine the

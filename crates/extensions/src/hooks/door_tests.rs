@@ -268,6 +268,7 @@ fn tool_answer() -> Box<contract::events::ToolCallCompleted> {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     })
 }
 

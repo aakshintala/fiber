@@ -23,6 +23,8 @@ pub(crate) struct PinnedFile {
     /// Its path under the item's base directory, `/`-separated: the package
     /// directory for an extension, the repository root for the rest.
     pub(crate) rel: String,
+    /// Its path under the workspace, `/`-separated: what an offer lists.
+    pub(crate) listed: String,
     /// The file the content was read from: symbolic links resolved, and
     /// inside the repository.
     pub(crate) path: PathBuf,
@@ -200,13 +202,21 @@ fn extension(root: &Path, ext: &RepositoryExtension, clock: &dyn Clock) -> Resul
             Found::Nothing => {}
         }
     }
+    let base = dir
+        .strip_prefix(root)
+        .ok()
+        .and_then(Path::to_str)
+        .ok_or_else(|| Error::Pin {
+            item: name.clone(),
+            why: format!("{} is not a UTF-8 path", dir.display()),
+        })?;
     Ok(RepoItem {
         kind: OfferedKind::Extension,
         name,
         path: ext.path.clone(),
         required: ext.required,
         declaration: None,
-        files: sorted(files),
+        files: sorted(files, base),
         outside,
         named: BTreeMap::new(),
         dir,
@@ -254,7 +264,7 @@ fn entry_item(
         path: path.to_owned(),
         required,
         declaration: Some(json!({"name": name, "entry": entry})),
-        files: sorted(files),
+        files: sorted(files, ""),
         outside,
         named,
         dir: PathBuf::new(),
@@ -278,10 +288,17 @@ fn named_paths(entry: &Value) -> Vec<&str> {
     command.into_iter().chain(args).collect()
 }
 
-fn sorted(files: BTreeMap<String, PathBuf>) -> Vec<PinnedFile> {
+fn sorted(files: BTreeMap<String, PathBuf>, base: &str) -> Vec<PinnedFile> {
     files
         .into_iter()
-        .map(|(rel, path)| PinnedFile { rel, path })
+        .map(|(rel, path)| {
+            let listed = if base.is_empty() {
+                rel.clone()
+            } else {
+                format!("{base}/{rel}")
+            };
+            PinnedFile { rel, listed, path }
+        })
         .collect()
 }
 

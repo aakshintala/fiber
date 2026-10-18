@@ -213,7 +213,8 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         | Delivery::Resolved(..)
         | Delivery::ExtensionExec(_)
         | Delivery::InnerCall(_)
-        | Delivery::ExtensionLog(_) => {
+        | Delivery::ExtensionLog(_)
+        | Delivery::ExtensionUsage(_) => {
             panic!("no job runs here")
         }
     }
@@ -680,6 +681,33 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
             let empty = response(&client, "c_hist0");
             assert_eq!(rejection(&empty), ("invalid_arguments", PAST));
             assert_eq!(command_id(&empty), Some("c_hist0"));
+            send(&client, r#"{"id":"c_empty","command":"history","args":{}}"#);
+            let empty = response(&client, "c_empty");
+            assert_eq!(kind(&empty), "command_accepted", "{empty}");
+            assert_eq!(
+                empty["payload"]["result"]["lines"].as_array().unwrap().len(),
+                0
+            );
+            send(
+                &client,
+                r#"{"id":"c_empty_to","command":"history","args":{"to_seq":3}}"#,
+            );
+            let empty_to = response(&client, "c_empty_to");
+            assert_eq!(kind(&empty_to), "command_accepted", "{empty_to}");
+            assert_eq!(
+                empty_to["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            send(&client, r#"{"id":"c_bare","command":"history"}"#);
+            let bare = response(&client, "c_bare");
+            assert_eq!(kind(&bare), "command_accepted", "{bare}");
+            assert_eq!(
+                bare["payload"]["result"]["lines"].as_array().unwrap().len(),
+                0
+            );
 
             send(&client, r#"{"id":"c_tools","command":"tools"}"#);
             let tools = response(&client, "c_tools");
@@ -697,6 +725,42 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
             assert_eq!(lines.as_array().unwrap().len(), 256);
             assert_eq!(lines[0]["seq"], 0);
             assert_eq!(lines[255]["seq"], 255);
+            let window = |id: &str, args: &str| -> Vec<u64> {
+                send(
+                    &client,
+                    &format!(r#"{{"id":"{id}","command":"history","args":{args}}}"#),
+                );
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+                answer["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line["seq"].as_u64().unwrap())
+                    .collect()
+            };
+            assert_eq!(window("c_last", "{}"), (44..=299).collect::<Vec<u64>>());
+            assert_eq!(
+                window("c_last_over", r#"{"to_seq":5000}"#),
+                (44..=299).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_end", r#"{"to_seq":299}"#),
+                (44..=299).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_edge", r#"{"to_seq":256}"#),
+                (1..=256).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_cap", r#"{"to_seq":255}"#),
+                (0..=255).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_under", r#"{"to_seq":254}"#),
+                (0..=254).collect::<Vec<u64>>()
+            );
+            assert_eq!(window("c_last_first", r#"{"to_seq":0}"#), vec![0]);
 
             send(
                 &client,
@@ -1062,6 +1126,54 @@ fn history_reads_only_its_window_of_the_log() {
 }
 
 #[test]
+fn history_without_from_seq_reads_only_the_last_window() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            for _ in 0..300 {
+                log.append(&step(), None, None).unwrap();
+            }
+            // The line just before the last 256.
+            corrupt(&dir, 43);
+            let client = Client::connect(&socket).unwrap();
+            // A full subscribe would read the bad line in its first page.
+            subscribe(&client, "c_sub", "summary");
+            let last: Vec<u64> = (44..=299).collect();
+            for (id, args) in [("c_last", "{}"), ("c_last_end", r#"{"to_seq":299}"#)] {
+                send(
+                    &client,
+                    &format!(r#"{{"id":"{id}","command":"history","args":{args}}}"#),
+                );
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+                let got: Vec<u64> = answer["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line["seq"].as_u64().unwrap())
+                    .collect();
+                assert_eq!(got, last, "{id}");
+            }
+            // The window ending one line earlier holds the bad line.
+            send(
+                &client,
+                r#"{"id":"c_bad","command":"history","args":{"to_seq":298}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_bad")),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
 fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
@@ -1193,6 +1305,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1232,6 +1345,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1323,6 +1437,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
@@ -1419,6 +1534,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -1462,6 +1578,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Message(_)
                 | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
+                | Delivery::ExtensionUsage(_)
                 | Delivery::Shell(..)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -3543,6 +3660,147 @@ fn quota_without_a_reader_answers_empty() {
                 answer["payload"]["result"],
                 serde_json::json!({"quota": [], "notice_at": 80.0})
             );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn credentials_answers_without_waiting_for_the_inbox() {
+    let opened = Opened::open(vec![]);
+    let rows = serde_json::json!({"provider":"fake", "credentials":["default","home","work"], "credential":"home"});
+    let labels: contract::events::CredentialLabels = serde_json::from_value(rows.clone()).unwrap();
+    opened.session.credentials(
+        Arc::new(move || Some(labels.clone())),
+        Arc::new(|| "fake".into()),
+    );
+    let socket = opened.socket.clone();
+    opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
+        let client = Client::connect(&socket).unwrap();
+        send(&client, r#"{"id":"early","command":"credentials"}"#);
+        assert_eq!(rejection(&response(&client, "early")), ("not_subscribed", NOT_SUBSCRIBED));
+        subscribe(&client, "sub", "full");
+        send(&client, r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#);
+        send(&client, r#"{"id":"labels","command":"credentials"}"#);
+        let answer = response(&client, "labels");
+        assert_eq!(kind(&answer), "command_accepted");
+        assert_eq!(answer["payload"]["result"], rows);
+        send(&client, r#"{"id":"bad","command":"credentials","args":{"future":1}}"#);
+        assert_eq!(rejection(&response(&client, "bad")), ("invalid_arguments", UNFIT));
+        Ok(())
+    }).unwrap();
+    opened.close();
+}
+
+#[test]
+fn credentials_without_a_reader_is_unknown() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(
+                &client,
+                r#"{"id":"labels","command":"credentials","args":{}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "labels")),
+                (
+                    "unknown_command",
+                    "`credentials` is not built in this Fiber yet."
+                )
+            );
+            send(
+                &client,
+                r#"{"id":"switch","command":"credential","args":{"label":"work"}}"#,
+            );
+            let Delivery::Credential(_, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            ack.0(Ok(None));
+            let answer = response(&client, "switch");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert!(answer["payload"].get("result").is_none());
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn credentials_after_its_session_is_gone_is_closing() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .credentials(Arc::new(|| None), Arc::new(|| "fake".into()));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(&client, r#"{"id":"labels","command":"credentials"}"#);
+            assert_eq!(rejection(&response(&client, "labels")), ("closing", ENDED));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn a_credential_acceptance_names_the_provider_read_when_the_loop_answers() {
+    let opened = Opened::open(vec![]);
+    let provider = Arc::new(Mutex::new(String::from("fake")));
+    let read = Arc::clone(&provider);
+    opened.session.credentials(
+        Arc::new(|| None),
+        Arc::new(move || read.lock().unwrap().clone()),
+    );
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "sub", "full");
+            send(
+                &client,
+                r#"{"id":"switch","command":"credential","args":{"label":"work"}}"#,
+            );
+            let Delivery::Credential(args, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            assert_eq!(args.label, "work");
+            *provider.lock().unwrap() = "other".into();
+            ack.0(Ok(None));
+            let answer = response(&client, "switch");
+            assert_eq!(kind(&answer), "command_accepted");
+            assert_eq!(
+                answer["payload"]["result"],
+                serde_json::json!({"provider":"other"})
+            );
+            send(
+                &client,
+                r#"{"id":"reject","command":"credential","args":{"label":"nope"}}"#,
+            );
+            let Delivery::Credential(_, ack) =
+                Deadline::after(DEADLINE).recv_or_fail(&inbox, "rejected credential delivery")
+            else {
+                panic!("expected credential");
+            };
+            ack.0(Err(Rejection {
+                code: ErrorCode::CredentialMissing,
+                message: "no such label".into(),
+            }));
+            let answer = response(&client, "reject");
+            assert_eq!(rejection(&answer), ("credential_missing", "no such label"));
+            assert!(answer["payload"].get("result").is_none());
             Ok(())
         })
         .unwrap();

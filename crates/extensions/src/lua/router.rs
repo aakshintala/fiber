@@ -46,6 +46,9 @@ pub(super) struct Router {
     /// The in-process driver `host.drive` sends through, set late by
     /// `drive_to`. None before it, or once the extension is sealed.
     driver: Option<Arc<dyn contract::extension::Drive>>,
+    /// The session's model `host.model` calls through, set late by
+    /// `model_to`. None before it, or once the extension is sealed.
+    model: Option<Arc<dyn contract::model::HostModel>>,
     /// Ephemeral events emitted before any emitter, in call order, flushed
     /// on the first one: at most [`MAX_PENDING_EVENTS`], oldest dropped
     /// first.
@@ -91,6 +94,7 @@ impl Router {
     /// Records the extension's drop: anything routed after this is dropped.
     pub(super) fn dispose(&mut self) {
         self.disposed = true;
+        self.model = None;
     }
 
     /// The deliveries that ended before any inbox, in call order.
@@ -221,11 +225,41 @@ impl Hub {
         shared.router.driver.clone()
     }
 
+    /// Hands the session's model to this extension's `host.model`. A later
+    /// model replaces the last, as `set_inbox` does.
+    pub(crate) fn set_model(&self, model: std::sync::Arc<dyn contract::model::HostModel>) {
+        let mut shared = self.lock();
+        if shared.router.disposed {
+            return;
+        }
+        shared.router.model = Some(model);
+    }
+
+    /// The model `host.model` calls through: none before `model_to`, once
+    /// dropped, or once sealed, so no call follows `fiber_exited`.
+    pub(crate) fn model(&self) -> Option<std::sync::Arc<dyn contract::model::HostModel>> {
+        let shared = self.lock();
+        if shared.router.disposed || shared.router.sealed {
+            return None;
+        }
+        shared.router.model.clone()
+    }
+
     /// Drops every later emission and delivery from this extension; called by
     /// `Session::quiesce` before `fiber_exited`. A running callback is not
-    /// stopped; only its output is dropped.
+    /// stopped; only its output is dropped. The injected model goes with
+    /// the seal, and every in-flight call's cancel is set, so no call
+    /// follows `fiber_exited`.
     pub(crate) fn seal(&self) {
-        self.lock().router.sealed = true;
+        let mut shared = self.lock();
+        shared.router.sealed = true;
+        shared.router.model = None;
+        let cancels: Vec<std::sync::Arc<super::host_calls::ModelCancel>> =
+            shared.models.values().cloned().collect();
+        drop(shared);
+        for cancel in cancels {
+            cancel.end();
+        }
     }
 
     /// Routes an extension delivery to the loop's inbox, or buffers it in

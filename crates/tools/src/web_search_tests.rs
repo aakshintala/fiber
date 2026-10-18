@@ -27,6 +27,7 @@ fn a_search_declares_network_reversible_with_an_empty_subject() {
     assert_eq!(effects.declared.paths, None);
     assert_eq!(effects.subject.as_deref(), Some(""));
     assert_eq!(effects.prefix, None);
+    assert_eq!(effects.hosts, Some(Vec::new()));
 }
 
 #[test]
@@ -348,4 +349,34 @@ fn a_cancelled_search_returns_no_content_and_no_error() {
         &Recorder::default(),
     );
     assert_eq!(output, contract::tool::Output::default());
+}
+
+#[test]
+fn backend_search_surfaces_only_its_result_urls_in_order() {
+    for results in [
+        vec![],
+        vec![
+            result("One", "https://one.test/a", "text"),
+            result("Two", "https://two.test/b", "text"),
+        ],
+    ] {
+        let expected: Vec<_> = results.iter().map(|r| r.url.clone()).collect();
+        let (_, tool) = backend(Stub::results(results));
+        assert_eq!(tool.effects(&Map::new()).unwrap().hosts, Some(vec![]));
+        let output = tool.run(
+            &args(json!({"query":"rust"})),
+            &CancelToken::new(),
+            &Recorder::default(),
+        );
+        assert_eq!(output.hosts_surfaced, expected);
+        assert_eq!(output.error, None);
+    }
+    let (_, tool) = backend(Stub::failure(ErrorCode::ToolError, "failed"));
+    let output = tool.run(
+        &args(json!({"query":"rust"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.hosts_surfaced.is_empty());
+    assert_eq!(output.error.unwrap().code, ErrorCode::ToolError);
 }

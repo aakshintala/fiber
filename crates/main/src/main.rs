@@ -19,11 +19,14 @@ mod late_emit;
 mod launch;
 mod lua_providers;
 mod mcp_servers;
+mod model_host;
 mod model_list;
 mod open;
 mod parts;
 mod prompt_files;
 mod read_signals;
+mod reap;
+mod reload;
 mod resume;
 mod rewind;
 mod scripted;
@@ -43,6 +46,8 @@ mod live_tests;
 #[cfg(test)]
 #[path = "lua_warm_tests.rs"]
 mod lua_warm_tests;
+#[cfg(test)]
+mod model_host_tests;
 #[cfg(test)]
 #[path = "read_signals_entry_tests.rs"]
 mod read_signals_entry_tests;
@@ -223,7 +228,9 @@ fn run() -> i32 {
                 ::cli::extension_reinstall(&name, env!("CARGO_PKG_VERSION"), clock.as_ref())
             }
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
-            cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
+            cli::ExtensionCommands::Test { path } => {
+                ::cli::extension_test(path.as_deref(), fiber, Arc::clone(&clock))
+            }
         },
         cli::Invocation::Run(Some(cli::Commands::Mcp(command)), _) => {
             mcp_command(command, Arc::clone(&clock))
@@ -262,6 +269,9 @@ fn run() -> i32 {
                 (None, false) => ::cli::LogoutTarget::Only,
             };
             ::cli::run_logout(args.provider.as_deref(), target)
+        }
+        cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
+            ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
@@ -616,7 +626,7 @@ fn run_turn(
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
-    extensions: &extensions::SessionExtensions,
+    current: &session_extensions::Current,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
@@ -653,7 +663,7 @@ fn run_turn(
     }
     // `fiber_exited` is the last line: nothing on the door side follows it.
     session.quiesce();
-    let written = write_state_at_exit(log, dir, extensions);
+    let written = write_state_at_exit(log, dir, &current.get());
     let ran = ran.and(written.map_err(|error| failed(error.code(), error)));
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
@@ -836,18 +846,27 @@ fn terminal(
 }
 
 /// Starts `fiber hub serve` detached, as every client of the hub does when
-/// none is running (`docs/invocation.md`, "The hub").
+/// none is running (`docs/invocation.md`, "The hub"). The child is handed
+/// to its reaper thread at once: the hub keeps running while the thread
+/// owns its wait. A reaper thread that never starts leaves the child
+/// running unreaped, and its failure is recorded in the diagnostic log.
 fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
     let exe = exe.map_err(io::Error::other)?;
-    std::process::Command::new(exe)
+    let child = std::process::Command::new(exe)
         .arg("hub")
         .arg("serve")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0)
-        .spawn()
-        .map(|_| ())
+        .spawn()?;
+    if let Err(error) = reap::on_thread(child) {
+        startup_log::record(
+            &failed(ErrorCode::IoFailed, format!("hub reap: {error}")),
+            Arc::new(clock::System),
+        );
+    }
+    Ok(())
 }
 
 /// Connects to the hub under `home`, starting it with `fiber` when none runs.

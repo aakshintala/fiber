@@ -2,7 +2,7 @@
 //! defaults (`docs/configuration.md`).
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use config::{Config, ModelData, ProjectKey, Sources};
@@ -102,18 +102,14 @@ pub(crate) fn thinking(
     notices: &mut Vec<Notice>,
 ) -> Result<Option<ThinkingLevel>, Failure> {
     if let Some(level) = suffix.or(session) {
-        return if model.thinking_levels.contains(&level) {
-            Ok(Some(level))
-        } else {
-            Err(Failure {
+        return match extensions::thinking_refusal(level, model, reference) {
+            Some(message) => Err(Failure {
                 code: ErrorCode::InvalidArguments,
-                message: format!(
-                    "The thinking level `{level}` is not one model `{reference}` takes: it {}.",
-                    takes(model),
-                ),
+                message,
                 retry_after_ms: None,
                 provider: None,
-            })
+            }),
+            None => Ok(Some(level)),
         };
     }
     // The layer that set the winning value also names its key: a layer's
@@ -136,29 +132,13 @@ pub(crate) fn thinking(
                 message: format!(
                     "The `{key}` setting `{level}` was ignored: model `{reference}` {}. \
                      The model's own default applies.",
-                    takes(model),
+                    extensions::takes(model),
                 ),
                 extension: None,
             });
             Ok(model.thinking_default)
         }
         None => Ok(model.thinking_default),
-    }
-}
-
-/// What a model takes, for a message: "takes `low`, `high`" or "takes no
-/// thinking level".
-fn takes(model: &ModelData) -> String {
-    let levels = model
-        .thinking_levels
-        .iter()
-        .map(|l| format!("`{l}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if levels.is_empty() {
-        "takes no thinking level".to_owned()
-    } else {
-        format!("takes {levels}")
     }
 }
 
@@ -184,15 +164,12 @@ mod warm_tests;
 /// credential is read or any connection made. The loop holds the window
 /// as a plain `u64` and trusts it to be positive.
 pub(crate) fn context_window(model: &ModelData, reference: &str) -> Result<u64, Failure> {
-    match model.context_window {
-        Some(window) if window > 0 => Ok(window),
-        _ => Err(Failure {
-            code: ErrorCode::NoModel,
-            message: format!("The model `{reference}` declares no `context_window`."),
-            retry_after_ms: None,
-            provider: None,
-        }),
-    }
+    extensions::context_window(model, reference).map_err(|error| Failure {
+        code: error.code(),
+        message: error.to_string(),
+        retry_after_ms: None,
+        provider: None,
+    })
 }
 
 #[cfg(test)]
@@ -261,3 +238,55 @@ pub(crate) fn skills_disabled_reader(
 #[cfg(test)]
 #[path = "skills_disabled_tests.rs"]
 mod skills_disabled_tests;
+
+/// The person's `shell.read_only` entries as the shell classifier takes
+/// them: one `(command, flags)` pair per command, shared with every
+/// [`tools::Shell`] clone so a reload can replace the contents without
+/// rebuilding the shell.
+pub(crate) type ShellReadOnly = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
+/// Each person-configured `shell.read_only."<command>".flags` entry, by
+/// command name (`docs/configuration.md`, "Keys"; `docs/tools.md",
+/// "Other command-line tools"). The key is person-only: a repository
+/// value is ignored with a notice before merging, so the checked merged
+/// configuration holds personal entries only. An entry without a complete
+/// string `flags` array gives no entry; an explicit empty array gives the
+/// command with no flags. Entries come out in name order: the merged
+/// object's map iterates its keys in order.
+pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
+    let mut entries = Vec::new();
+    let read_only = config
+        .merged(None)
+        .get("shell")
+        .and_then(|shell| shell.get("read_only"))
+        .cloned()
+        .unwrap_or_default();
+    let Value::Object(read_only) = read_only else {
+        return entries;
+    };
+    for (name, entry) in read_only {
+        let Value::Object(entry) = entry else {
+            continue;
+        };
+        let Some(Value::Array(flags)) = entry.get("flags") else {
+            continue;
+        };
+        let mut listed = Vec::new();
+        let mut complete = true;
+        for flag in flags {
+            let Value::String(flag) = flag else {
+                complete = false;
+                break;
+            };
+            listed.push(flag.clone());
+        }
+        if complete {
+            entries.push((name, listed));
+        }
+    }
+    entries
+}
+
+#[cfg(test)]
+#[path = "shell_read_only_tests.rs"]
+mod shell_read_only_tests;

@@ -555,6 +555,11 @@ impl LuaExtension {
         self.hub.set_driver(drive);
     }
 
+    /// Hands the session's model to this extension's `host.model`.
+    pub(crate) fn set_model(&self, model: std::sync::Arc<dyn contract::model::HostModel>) {
+        self.hub.set_model(model);
+    }
+
     /// Sets whether a client can answer this extension's `host.ask`.
     pub(crate) fn set_answerable(&self, yes: bool) {
         self.hub.lock().answerable = yes;

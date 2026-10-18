@@ -101,8 +101,7 @@ another's code by path. Code shared between extensions reaches an extension in
 one of two ways: the extension vendors a copy, or it depends on the extension
 that holds the code.
 
-A native binary is run as a process extension, or through `host.exec`
-("Host calls").
+The binary for this platform installs as `bin/<last segment of the manifest name>`: with `"name": "github.com/acme/fiber-acme"` that is `bin/fiber-acme` on every platform. A binary installed before this change gets that name at the next `fiber extension update`. A native binary is run as a process extension, or through `host.exec` ("Host calls") as `host.exec("bin/fiber-acme", args)`.
 
 ## Lua extensions
 
@@ -247,13 +246,14 @@ fiber.command(name, { description, timeout, run })
 
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
-A tool's `effects` is a table, `{ effects, paths?, reversible }` as
-`docs/permissions.md`, "Effects", declares, or a function of the call's
+A tool's `effects` is a table, `{ effects, paths?, reversible, hosts? }` as
+`docs/permissions.md`, "Effects", and `docs/tools.md`, "What a tool declares",
+declare, or a function of the call's
 arguments that returns one. The function is bounded by the tool's `timeout`,
 and an error fails the call `tool_error` before it runs. `run` returns a
 string, one text part, or `{ content, details?, error = { code, message }?,
-control? }`, where `control` takes the fields any tool may set
-(`docs/tools.md`, "What a result carries"). A raised error fails the call
+control?, hosts_surfaced? }`, where `control` and `hosts_surfaced` take what
+any tool may set (`docs/tools.md`, "What a result carries"). A raised error fails the call
 `tool_error` with its message. When two extensions register one tool name,
 neither gets it, a `notice` names both, and configuration can leave one out
 (`extensions."<name>".tools.disabled`, `docs/configuration.md`).
@@ -319,10 +319,22 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   where `{id}` is the calling session's own id, a fork's included, so it never
   shares the session's key or the reviewer's (`docs/prompt-cache.md`). The
   retry policy applies within the callback's timeout. At `budget.usd` it
-  raises `budget_exceeded` and does not fail the turn. Any callback may call
-  it, bounded by that callback's timeout.
+  raises `budget_exceeded` and does not fail the turn. Wrong arguments are
+  an error in the calling code, as `host.tool` documents for its own:
+  `opts` must be a table; `model` a `provider/model` reference, never a
+  role; `system` a string when present; `messages` a non-empty list of
+  `{ role, content }` with `role` `user` or `assistant` and `content` a
+  string or a list of `text`, `image` or `pdf` parts; `max_tokens` a
+  positive integer. `usage.cost` is null when the provider knew no cost
+  for the call. Any callback may call it, bounded by that callback's
+  timeout.
 - **`host.exec`** runs a program in its own process group, which is stopped on
-  cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). Inside a
+  cancel and at shutdown as a tool's is (`docs/tools.md`, "Shell"). A `program`
+  containing `/` that is not absolute resolves against the extension's
+  directory and must stay inside it; a path that leaves the directory is an
+  error naming the path. A bare name resolves on `PATH`, and an absolute path
+  is used as written. The child's working directory is unchanged: the
+  workspace, by default. Inside a
   tool call, the tool's declared `executes` effect is what the permission
   decision judges. Outside one, in a hook, watcher, timer or command, it runs
   without asking: the person approved the extension, and a process extension
@@ -1035,7 +1047,10 @@ entries instead of replacing the list:
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's
-environment. It runs once for each time its hook point or event comes round.
+environment. The command's program resolves as follows: a bare name on
+`PATH`, a path containing `/` against the workspace (the command's working
+directory), an absolute path as written. The package-relative rule is for
+`host.exec` and `process.program` only. It runs once for each time its hook point or event comes round.
 
 **What the command reads.** Standard input carries one JSON line: the hook
 request a process extension receives for that point ("Process extensions"),
@@ -1642,6 +1657,8 @@ everywhere.
 The summary shows what the manifest and the files tell. It does not list the
 new tools, hooks, watchers or commands an extension adds: a Lua extension
 registers those only when its script runs, and installing runs none of its
-code. The full source is one key away, so a person can read them.
+code. The full source is one key away, so a person can read them. An offer
+lists each item's files; a client reads one with `offered_file`
+(`docs/invocation.md`, "Driver commands").
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsextensionsmd).

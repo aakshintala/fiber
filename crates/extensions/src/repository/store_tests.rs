@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use super::declared_tests::Repo;
 use super::{Decision, Index, RepoItem, Store, hash};
 use crate::Error;
-use crate::host::exec::{GRACE, GROUP_POLL};
 use crate::prepare::INSTALL_STEP_DEADLINE;
+use support::group::{GRACE, GROUP_POLL};
 
 const KEY: &str = "-tmp-project-.git";
 

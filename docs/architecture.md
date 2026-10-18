@@ -63,7 +63,7 @@ ephemeral event where it is display-only.
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Answers configuration reads and writes through a trait `hub` defines and `main` supplies, using the existing configuration implementation. The same trait supplies file search and device-code login on the hub's machine. Holds no session and no push credential; does no TLS. |
 | `doors` | The hub client: a client's list of hubs and its connections (`docs/invocation.md`, "Several hubs"). Also `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits", and counts a PDF's pages and cuts a page range. Only `main` depends on it, so no session process runs image code. |
-| `cli` | Every command that does not run a session: `login`, `logout`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/reinstall/list/test`, `config get/set`, `hub add`, `hub remove`, `hub install`, `hub uninstall`, `hub status`, `hub refresh`, `hub pair`, `hub token list` and `hub token revoke` today, and later `upgrade` as it is built. It also reads and refreshes the model lists that `fiber models` and the terminal's model picker show. `main` dispatches to it. |
+| `cli` | Every command that does not run a session: `login`, `logout`, `doctor`, `approve`, `sessions`, `sessions export`, `sessions delete`, `sessions prune`, `sessions search`, `models`, `extension install/update/remove/reinstall/list/test`, `config get/set`, `hub add`, `hub remove`, `hub install`, `hub uninstall`, `hub status`, `hub refresh`, `hub pair`, `hub token list` and `hub token revoke` today, and later `upgrade` as it is built. It also reads and refreshes the model lists that `fiber models` and the terminal's model picker show. `main` dispatches to it. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -119,7 +119,8 @@ images, `Scan`, the session log search in `log` that `tools` uses for
 `session_search`, `SearchBackend`, the Lua search backend in `extensions`
 that `tools` uses for Fiber's own `web_search`, `Skills`, skill
 discovery in `loop` that `tools` uses for `skill`, and `TokenFiles`, credential
-files in `config` that `mcp` uses for remote servers' OAuth tokens.
+files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
+the session's model call in `main` that `extensions` uses for `host.model`.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
@@ -304,7 +305,7 @@ thread reading that delegate stops the running delegates at once
 A driver command that writes no durable event is not queued either. The
 thread reading the client's connection handles it at once, even while a
 model response streams: `subscribe`, `history`, `background`, `job_stop`,
-`job_input`, `shell` with `send` false, and `tools`. It answers each of them itself,
+`job_input`, `offered_file`, `shell` with `send` false, and `tools`. It answers each of them itself,
 except `shell`, which it starts on a thread of its own (the "one per running
 tool call" row in "The threads") before it reads on, so a `cancel` on the
 same connection reaches it.

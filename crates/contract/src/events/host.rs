@@ -408,6 +408,30 @@ pub enum CommandResult {
         /// Percent used at which little is left.
         notice_at: f64,
     },
+    /// For `offered_file`: the file's text.
+    OfferedFile {
+        /// The file's full UTF-8 text.
+        text: String,
+    },
+    /// For `credentials`.
+    Credentials(CredentialLabels),
+    /// For `credential`: the provider the switch applies to.
+    CredentialSwitch {
+        /// The provider whose credential label switches.
+        provider: String,
+    },
+}
+
+/// The labels of the provider a credential command would switch now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CredentialLabels {
+    /// The provider's name.
+    pub provider: String,
+    /// Its credential labels, sorted.
+    pub credentials: Vec<String>,
+    /// The label the provider uses now; absent until used, or when scripted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// One provider credential label's cached quota, with no age.

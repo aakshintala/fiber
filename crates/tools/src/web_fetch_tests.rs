@@ -1339,6 +1339,7 @@ fn the_effects_are_network_and_irreversible_with_the_url_as_parsed() {
     assert_eq!(effects.declared.paths, None);
     assert_eq!(effects.subject.as_deref(), Some("https://example.com/"));
     assert_eq!(effects.prefix.as_deref(), Some("https://example.com/"));
+    assert_eq!(effects.hosts, Some(vec!["https://example.com/".into()]));
     let effects = tool
         .effects(&arguments("http://localhost:8080/a/b?x=1"))
         .unwrap();
@@ -1347,6 +1348,11 @@ fn the_effects_are_network_and_irreversible_with_the_url_as_parsed() {
         Some("http://localhost:8080/a/b?x=1")
     );
     assert_eq!(effects.prefix.as_deref(), Some("http://localhost:8080/"));
+    assert_eq!(effects.hosts, Some(vec!["http://localhost:8080/".into()]));
+    let effects = tool
+        .effects(&arguments("http://user@localhost:8080/a?x=1"))
+        .unwrap();
+    assert_eq!(effects.hosts, Some(vec!["http://localhost:8080/".into()]));
 }
 
 #[test]

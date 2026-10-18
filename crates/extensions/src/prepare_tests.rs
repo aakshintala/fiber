@@ -17,17 +17,75 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
-use crate::host::exec::{GRACE, GROUP_POLL};
+use support::group::{GRACE, GROUP_POLL};
 
 /// How long a test waits on the run before it fails.
 const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 #[test]
-fn a_url_names_its_file_without_the_query() {
-    assert_eq!(binary_name("https://x/y/tool-1.0?sig=1"), Some("tool-1.0"));
-    for bad in ["https://x/y/", "https://x/..", "https://x/y/.?a"] {
+fn the_manifest_name_names_the_binary_file() {
+    assert_eq!(
+        binary_name("github.com/acme/fiber-acme"),
+        Some("fiber-acme")
+    );
+    assert_eq!(binary_name("acme"), Some("acme"));
+    for bad in ["", "a/", "a/.", "a/.."] {
         assert_eq!(binary_name(bad), None, "{bad}");
     }
+}
+
+#[test]
+fn a_manifest_name_with_no_file_fails_before_any_download() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "a/",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": "0".repeat(64) } },
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-prepare-no-file");
+    let clock = FakeClock::new();
+    let err = super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap_err();
+    let crate::Error::Download { name, why } = err else {
+        panic!("a nameless binary fails as its download failed: {err}");
+    };
+    assert_eq!(name, "a/", "the failure names the manifest");
+    assert!(why.contains("`a/`"), "the failure names the name: {why}");
+    assert!(
+        server.requests().is_empty(),
+        "no download was made: {:?}",
+        server.requests()
+    );
+}
+
+#[test]
+fn prepare_over_an_old_url_named_file_leaves_it_in_place() {
+    let body = b"#!/bin/sh\necho hi\n";
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap();
+    let url = format!("{}/tool-1.0", server.url());
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "binaries": { platform(): { "url": url, "sha256": super::hex(ring::digest::digest(&ring::digest::SHA256, body).as_ref()) } },
+    }))
+    .unwrap();
+    let dir = fakes::TempDir::new("fiber-prepare-stale");
+    let stale = dir.path().join("bin").join("tool-1.0");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(&stale, b"stale").unwrap();
+    let clock = FakeClock::new();
+    super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap();
+    assert_eq!(std::fs::read(&stale).unwrap(), b"stale");
+    assert_eq!(
+        std::fs::read(dir.path().join("bin").join("acme")).unwrap(),
+        body
+    );
 }
 
 #[test]

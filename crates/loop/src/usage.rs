@@ -113,6 +113,22 @@ pub(crate) fn recorded(
     Recorded { line, lookable }
 }
 
+/// One `usage_recorded` for an extension's `host.model` call: `recorded`
+/// with `extension` set, so the loop ledger counts it under the calling
+/// extension (`docs/extensions.md`, "Host calls").
+pub fn extension_line(
+    usage: CallUsage,
+    inline_cost: Option<f64>,
+    model: &str,
+    prices: Option<&Cost>,
+    subscription: bool,
+    extension: &str,
+) -> UsageRecorded {
+    let mut recorded = recorded(usage, inline_cost, model, prices, subscription);
+    recorded.line.extension = Some(extension.to_owned());
+    recorded.line
+}
+
 impl crate::Loop {
     /// Writes and ledgers a call's usage that ended without a reply.
     pub(crate) fn write_unfinished(

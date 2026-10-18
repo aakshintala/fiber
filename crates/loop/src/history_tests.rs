@@ -8,15 +8,17 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    CacheLifetime, CallStatus, DecidedBy, Decision, Event, HandoffCompleted, InputItem,
-    ModelChanged, ModelSettings, Outcome, PermissionResolved, PreambleBuilt, PreambleReason,
-    SessionStarted, SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested,
-    TurnStarted, UsageRecorded, Variables, VariablesSource,
+    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
+    HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged, ModelSettings,
+    OpeningMessage, Outcome, PermissionResolved, PreambleBuilt, PreambleReason, RanBy,
+    SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied, SwitchSource,
+    ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
@@ -158,6 +160,7 @@ fn denied() -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 
@@ -541,6 +544,7 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     });
     write_log(
         &sessions,
@@ -621,6 +625,7 @@ fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     });
     let (_home, sessions) = sessions("pdf-rewrite");
     write_log(
@@ -854,4 +859,697 @@ fn an_unreadable_name_line_fails_the_resume() {
     let Err(crate::Error::Unreadable(_)) = fold(&log::history(&sessions.join(C)).unwrap()) else {
         panic!("the unreadable name line read");
     };
+}
+
+#[test]
+fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
+    use contract::events::{InstructionFile, InstructionReason, InstructionSent};
+    let (_home, sessions) = sessions("known-hosts");
+    let named = |url: &str| {
+        Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: url.into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: None,
+                },
+                changed_by: None,
+            }],
+        })
+    };
+    let mut allowed =
+        crate::completion::resolved(None, Decision::Allow, DecidedBy::Reviewer, None, None);
+    allowed.hosts = Some(vec!["https://allowed.test/".into()]);
+    let mut surfaced = crate::completion::completed("https://page-only.test/".into(), None);
+    surfaced.hosts_surfaced = vec!["https://surfaced.test/".into()];
+    let parent = [
+        started("/w", None),
+        named("https://person.test/"),
+        Event::InstructionFile(InstructionFile {
+            path: "AGENTS.md".into(),
+            reason: InstructionReason::OwnEdit,
+            extension: None,
+            content: Some("https://instructions.test/".into()),
+            sent: InstructionSent::Full,
+        }),
+        Event::ToolCallCompleted(surfaced),
+        Event::PermissionResolved(allowed),
+        named("https://after.test/"),
+    ];
+    let lines: Vec<_> = parent
+        .iter()
+        .enumerate()
+        .map(|(seq, event)| envelope(A, u64::try_from(seq).unwrap(), None, None, event))
+        .collect();
+    write_log(&sessions, A, &lines);
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 4)))),
+            envelope(B, 1, None, None, &named("https://child.test/")),
+        ],
+    );
+    let child = resumed(&sessions.join(B)).unwrap();
+    let fork = forked(&sessions.join(A), Seq(4)).unwrap();
+    for hosts in [&child.known_hosts, &fork.known_hosts] {
+        assert!(hosts.all_known(&[
+            "https://person.test/".into(),
+            "https://surfaced.test/".into(),
+            "https://allowed.test/".into()
+        ]));
+        assert!(!hosts.all_known(&["https://instructions.test/".into()]));
+        assert!(!hosts.all_known(&["https://after.test/".into()]));
+        assert!(!hosts.all_known(&["https://page-only.test/".into()]));
+    }
+    assert!(child.known_hosts.all_known(&["https://child.test/".into()]));
+    assert!(!fork.known_hosts.all_known(&["https://child.test/".into()]));
+    assert!(
+        !forked(&sessions.join(A), Seq(3))
+            .unwrap()
+            .known_hosts
+            .all_known(&["https://allowed.test/".into()])
+    );
+    assert!(
+        forked(&sessions.join(A), Seq(5))
+            .unwrap()
+            .known_hosts
+            .all_known(&["https://after.test/".into()])
+    );
+}
+
+#[test]
+fn known_hosts_resume_and_fork_keep_changes_without_surfaced_hosts() {
+    use contract::events::{FileChange, InstructionFile, InstructionReason, InstructionSent};
+
+    let (_home, sessions) = sessions("known-hosts-changes");
+    let instruction = Event::InstructionFile(InstructionFile {
+        path: "AGENTS.md".into(),
+        reason: InstructionReason::Changed,
+        extension: None,
+        content: Some("https://instructions.test/".into()),
+        sent: InstructionSent::Full,
+    });
+    let mut changed = crate::completion::completed(String::new(), None);
+    changed.changes = Some(vec![FileChange {
+        path: "AGENTS.md".into(),
+        added: 1,
+        removed: 0,
+    }]);
+    let parent = [
+        started("/w", None),
+        instruction.clone(),
+        Event::ToolCallCompleted(changed),
+        instruction,
+    ];
+    let lines: Vec<_> = parent
+        .iter()
+        .enumerate()
+        .map(|(seq, event)| envelope(A, u64::try_from(seq).unwrap(), None, None, event))
+        .collect();
+    assert!(!lines[2].payload.contains_key("hosts_surfaced"));
+    assert!(lines[2].payload.contains_key("changes"));
+    write_log(&sessions, A, &lines);
+
+    let before = forked(&sessions.join(A), Seq(1)).unwrap();
+    assert!(
+        before
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
+    let after = forked(&sessions.join(A), Seq(2)).unwrap();
+    assert!(
+        !after
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
+    let resumed = resumed(&sessions.join(A)).unwrap();
+    let fork = forked(&sessions.join(A), Seq(3)).unwrap();
+    assert!(
+        !resumed
+            .known_hosts
+            .all_known(&["https://instructions.test/".into()])
+    );
+    assert_eq!(resumed.known_hosts, fork.known_hosts);
+}
+
+#[test]
+fn known_hosts_history_skips_results_without_a_surfaced_list_before_deserializing() {
+    let (_home, sessions) = sessions("known-hosts-unparsed");
+    let mut result = envelope(
+        A,
+        1,
+        None,
+        None,
+        &Event::ToolCallCompleted(crate::completion::completed(
+            "https://page.test/".into(),
+            None,
+        )),
+    );
+    result
+        .payload
+        .insert("content".into(), json!({"not":"content parts"}));
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            result.clone(),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(!folded.known_hosts.all_known(&["https://page.test/".into()]));
+    result.payload.insert("hosts_surfaced".into(), json!([]));
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None)), result],
+    );
+    assert!(resumed(&sessions.join(A)).is_err());
+}
+
+fn requested() -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: "read".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    })
+}
+
+fn inner_requested() -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: "inner".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: Some(RanBy {
+            extension: "ext".into(),
+            anchor: Anchor::OuterCall(ActionId("a_0".into())),
+        }),
+        provider_item: None,
+    })
+}
+
+fn skilled_completed(status: CallStatus, name: &str, path: &str) -> Event {
+    Event::ToolCallCompleted(ToolCallCompleted {
+        status,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![ContentPart::Text { text: "ok".into() }],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: Some(Control {
+            handoff: None,
+            questions: None,
+            skill: Some(SkillLoad {
+                name: name.into(),
+                path: path.into(),
+            }),
+            name: None,
+        }),
+        changed_by: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+    })
+}
+
+fn begun() -> Event {
+    Event::HandoffStarted(HandoffStarted {
+        trigger: HandoffTrigger::Person,
+    })
+}
+
+fn resent(skills: &[(&str, &str, &str)]) -> Event {
+    Event::SkillsResent(SkillsResent {
+        skills: skills
+            .iter()
+            .map(|(name, path, content)| SkillSent {
+                name: (*name).into(),
+                path: (*path).into(),
+                content: (*content).into(),
+            })
+            .collect(),
+    })
+}
+
+fn opening() -> Event {
+    Event::OpeningMessage(OpeningMessage {
+        environment: Environment {
+            date: "2023-11-14".into(),
+            os: "test-os".into(),
+            arch: "test-arch".into(),
+            shell: "/bin/sh".into(),
+            workspace: "/w".into(),
+            git: None,
+            session_log: "/w/s_test/events.jsonl".into(),
+        },
+        instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
+        skills: Vec::new(),
+    })
+}
+
+fn alpha() -> SkillLoad {
+    SkillLoad {
+        name: "alpha".into(),
+        path: "/w/alpha/SKILL.md".into(),
+    }
+}
+
+fn seed_log() -> Vec<(u64, Option<&'static str>, Option<&'static str>, Event)> {
+    vec![
+        (0, None, None, started("/w", None)),
+        (1, Some("t_1"), None, message_turn("ask")),
+        (2, Some("t_1"), Some("a_1"), requested()),
+        (
+            3,
+            Some("t_1"),
+            Some("a_1"),
+            skilled_completed(CallStatus::Completed, "alpha", "/w/alpha/SKILL.md"),
+        ),
+        (4, Some("t_2"), None, message_turn("ask")),
+        (5, Some("t_2"), None, begun()),
+        (6, Some("t_2"), None, handoff()),
+    ]
+}
+
+fn write_seed_log(sessions: &Path) {
+    write_log(
+        sessions,
+        A,
+        &seed_log()
+            .iter()
+            .map(|(seq, turn, action, event)| envelope(A, *seq, *turn, *action, event))
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn the_seed_holds_the_loads_before_the_handoff_window() {
+    let (_home, sessions) = sessions("seed-loads");
+    write_seed_log(&sessions);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    // The load predates the handoff turn's window, yet the seed holds it,
+    // so the rebuilt restart arms the resend.
+    assert_eq!(folded.seed.skills, [alpha()]);
+}
+
+#[test]
+fn failed_inner_and_pre_handoff_loads_never_seed() {
+    let (_home, sessions) = sessions("seed-loads-filtered");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &turn()),
+            envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
+            // A successful load before an earlier completed handoff.
+            envelope(
+                A,
+                3,
+                Some("t_1"),
+                Some("a_1"),
+                &skilled_completed(CallStatus::Completed, "old", "/w/old/SKILL.md"),
+            ),
+            envelope(A, 4, Some("t_1"), Some("a_2"), &requested()),
+            // A failed call's skill never counts.
+            envelope(
+                A,
+                5,
+                Some("t_1"),
+                Some("a_2"),
+                &skilled_completed(CallStatus::Failed, "nope", "/w/nope/SKILL.md"),
+            ),
+            envelope(A, 6, Some("t_1"), Some("a_3"), &inner_requested()),
+            // An inner call's skill never counts.
+            envelope(
+                A,
+                7,
+                Some("t_1"),
+                Some("a_3"),
+                &skilled_completed(CallStatus::Completed, "inner", "/w/inner/SKILL.md"),
+            ),
+            envelope(A, 8, Some("t_2"), None, &turn()),
+            envelope(A, 9, Some("t_2"), None, &handoff()),
+            envelope(A, 10, Some("t_3"), None, &turn()),
+            envelope(A, 11, Some("t_3"), Some("a_4"), &requested()),
+            envelope(
+                A,
+                12,
+                Some("t_3"),
+                Some("a_4"),
+                &skilled_completed(CallStatus::Completed, "beta", "/w/beta/SKILL.md"),
+            ),
+            envelope(A, 13, Some("t_4"), None, &turn()),
+            envelope(A, 14, Some("t_4"), None, &handoff()),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(
+        folded.seed.skills,
+        [SkillLoad {
+            name: "beta".into(),
+            path: "/w/beta/SKILL.md".into(),
+        }]
+    );
+}
+
+/// A log whose one skill load of `status` predates the handoff, as
+/// [`seed_log`] holds a completed one: only a completed Fiber-run load
+/// arms the resend.
+fn status_log(status: CallStatus) -> Vec<(u64, Option<&'static str>, Option<&'static str>, Event)> {
+    vec![
+        (0, None, None, started("/w", None)),
+        (1, Some("t_1"), None, turn()),
+        (2, Some("t_1"), Some("a_1"), requested()),
+        (
+            3,
+            Some("t_1"),
+            Some("a_1"),
+            skilled_completed(status, "alpha", "/w/alpha/SKILL.md"),
+        ),
+        (4, Some("t_2"), None, turn()),
+        (5, Some("t_2"), None, handoff()),
+    ]
+}
+
+/// Folds [`status_log`] and checks the seed holds no skill and the live
+/// render agrees with the rebuild: the load of that status never counts.
+fn check_status_seeds_nothing(name: &str, status: CallStatus) {
+    let (_home, sessions) = sessions(name);
+    let lines: Vec<Envelope> = status_log(status)
+        .iter()
+        .map(|(seq, turn, action, event)| envelope(A, *seq, *turn, *action, event))
+        .collect();
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.seed.skills.is_empty());
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut carry = crate::handoff::Carry::default();
+    for line in &lines {
+        let Some(event) = Event::from_envelope(line).unwrap() else {
+            continue;
+        };
+        crate::conversation::render(
+            &mut live,
+            &event,
+            line.action_id.as_ref(),
+            "fake/model-1",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert!(carry.skills.is_empty());
+    let rebuilt = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn a_cancelled_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-cancelled", CallStatus::Cancelled);
+}
+
+#[test]
+fn a_denied_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-denied", CallStatus::Denied);
+}
+
+#[test]
+fn a_failed_skill_load_seeds_nothing() {
+    check_status_seeds_nothing("seed-failed", CallStatus::Failed);
+}
+
+#[test]
+fn a_crash_after_handoff_completed_rebuilds_the_armed_resend() {
+    let (_home, sessions) = sessions("crash-window-one");
+    write_seed_log(&sessions);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    let window = vec![
+        envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
+        envelope(A, 5, Some("t_2"), None, &begun()),
+        envelope(A, 6, Some("t_2"), None, &handoff()),
+    ];
+    let (_, _, _, carry) =
+        rebuild_and_sent(&window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
+    assert_eq!(carry.resend, [alpha()]);
+    assert!(carry.skills.is_empty());
+}
+
+#[test]
+fn a_crash_after_skills_resent_rebuilds_no_resend() {
+    let (_home, sessions) = sessions("crash-window-two");
+    write_seed_log(&sessions);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    let window = vec![
+        envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
+        envelope(A, 5, Some("t_2"), None, &begun()),
+        envelope(A, 6, Some("t_2"), None, &handoff()),
+        envelope(
+            A,
+            7,
+            Some("t_2"),
+            None,
+            &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha body.")]),
+        ),
+    ];
+    let (conversation, _, _, carry) =
+        rebuild_and_sent(&window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
+    assert!(carry.resend.is_empty());
+    assert_eq!(carry.skills, [alpha()]);
+    assert_eq!(
+        conversation,
+        [
+            Input::User {
+                text: "ask".into(),
+                images: Vec::new(),
+            },
+            Input::User {
+                text: String::new(),
+                images: Vec::new(),
+            },
+            Input::User {
+                text: "/w/alpha/SKILL.md\n\nAlpha body.".into(),
+                images: Vec::new(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_complete_handoff_rebuilds_the_opening_and_the_skills() {
+    let (_home, sessions) = sessions("crash-window-complete");
+    write_seed_log(&sessions);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    let window = vec![
+        envelope(A, 4, Some("t_2"), None, &message_turn("ask")),
+        envelope(A, 5, Some("t_2"), None, &begun()),
+        envelope(A, 6, Some("t_2"), None, &handoff()),
+        envelope(
+            A,
+            7,
+            Some("t_2"),
+            None,
+            &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha body.")]),
+        ),
+        envelope(A, 8, Some("t_2"), None, &opening()),
+    ];
+    let (conversation, _, _, carry) =
+        rebuild_and_sent(&window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
+    assert!(carry.resend.is_empty());
+    assert_eq!(conversation.len(), 4);
+    assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
+    assert_eq!(
+        conversation[1],
+        Input::User {
+            text: "ask".into(),
+            images: Vec::new(),
+        }
+    );
+    assert_eq!(
+        conversation[3],
+        Input::User {
+            text: "/w/alpha/SKILL.md\n\nAlpha body.".into(),
+            images: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_skill_sent_again_is_seeded_at_the_next_handoff() {
+    let (_home, sessions) = sessions("seed-resent");
+    write_seed_log(&sessions);
+    let mut lines: Vec<Envelope> = seed_log()
+        .iter()
+        .map(|(seq, turn, action, event)| envelope(A, *seq, *turn, *action, event))
+        .collect();
+    lines.push(envelope(
+        A,
+        7,
+        Some("t_2"),
+        None,
+        &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha body.")]),
+    ));
+    lines.push(envelope(A, 8, Some("t_2"), None, &opening()));
+    lines.push(envelope(A, 9, Some("t_3"), None, &turn()));
+    lines.push(envelope(A, 10, Some("t_3"), None, &begun()));
+    lines.push(envelope(A, 11, Some("t_3"), None, &handoff()));
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(folded.seed.skills, [alpha()]);
+}
+
+#[test]
+fn an_empty_resend_seeds_nothing() {
+    let (_home, sessions) = sessions("seed-empty-resent");
+    write_seed_log(&sessions);
+    let mut lines: Vec<Envelope> = seed_log()
+        .iter()
+        .map(|(seq, turn, action, event)| envelope(A, *seq, *turn, *action, event))
+        .collect();
+    lines.push(envelope(A, 7, Some("t_2"), None, &resent(&[])));
+    lines.push(envelope(A, 8, Some("t_2"), None, &opening()));
+    lines.push(envelope(A, 9, Some("t_3"), None, &turn()));
+    lines.push(envelope(A, 10, Some("t_3"), None, &begun()));
+    lines.push(envelope(A, 11, Some("t_3"), None, &handoff()));
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.seed.skills.is_empty());
+}
+
+#[test]
+fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
+    let (_home, sessions) = sessions("seed-provider-run");
+    let provided = Event::ToolCallCompleted(ToolCallCompleted {
+        status: CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![ContentPart::Text { text: "ok".into() }],
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: Some(Control {
+            handoff: None,
+            questions: None,
+            skill: Some(alpha()),
+            name: None,
+        }),
+        changed_by: None,
+        provider_item: Some(json!({"type": "hosted_tool_call"})),
+        hosts_surfaced: Vec::new(),
+    });
+    let lines = vec![
+        envelope(A, 0, None, None, &started("/w", None)),
+        envelope(A, 1, Some("t_1"), None, &turn()),
+        envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
+        envelope(A, 3, Some("t_1"), Some("a_1"), &provided),
+        envelope(A, 4, Some("t_2"), None, &turn()),
+        envelope(A, 5, Some("t_2"), None, &handoff()),
+    ];
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.seed.skills.is_empty());
+    // The live render and the rebuild render the same bytes.
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut carry = crate::handoff::Carry::default();
+    for line in &lines {
+        let Some(event) = Event::from_envelope(line).unwrap() else {
+            continue;
+        };
+        crate::conversation::render(
+            &mut live,
+            &event,
+            line.action_id.as_ref(),
+            "fake/model-1",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert!(carry.skills.is_empty());
+    let rebuilt = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn a_skill_load_with_hosts_reaches_the_seed_and_the_known_hosts() {
+    let (_home, sessions) = sessions("seed-hosts");
+    let mut loaded = skilled_completed(CallStatus::Completed, "alpha", "/w/alpha/SKILL.md");
+    let Event::ToolCallCompleted(ref mut done) = loaded else {
+        unreachable!();
+    };
+    done.hosts_surfaced = vec!["https://example.com/search".into()];
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &turn()),
+            envelope(A, 2, Some("t_1"), Some("a_1"), &requested()),
+            envelope(A, 3, Some("t_1"), Some("a_1"), &loaded),
+            envelope(A, 4, Some("t_2"), None, &turn()),
+            envelope(A, 5, Some("t_2"), None, &handoff()),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    // A completion carrying both a skill load and surfaced hosts updates both folded states.
+    assert_eq!(folded.seed.skills, [alpha()]);
+    assert!(
+        folded
+            .known_hosts
+            .all_known(&["https://example.com/search".to_owned()])
+    );
+}
+
+#[test]
+fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
+    let seed = crate::handoff::Carry {
+        skills: vec![alpha()],
+        ..crate::handoff::Carry::default()
+    };
+    let lines = vec![
+        envelope(A, 0, Some("t_1"), None, &message_turn("ask")),
+        envelope(A, 1, Some("t_1"), Some("a_1"), &requested()),
+        envelope(
+            A,
+            2,
+            Some("t_1"),
+            Some("a_1"),
+            &skilled_completed(CallStatus::Completed, "alpha", "/w/alpha/SKILL.md"),
+        ),
+        envelope(A, 3, Some("t_1"), None, &handoff()),
+        envelope(
+            A,
+            4,
+            Some("t_1"),
+            None,
+            &resent(&[("alpha", "/w/alpha/SKILL.md", "Alpha body.")]),
+        ),
+        envelope(A, 5, Some("t_1"), None, &opening()),
+    ];
+    let (conversation, _) = summary_conversation(&lines, 3, "fake/model-1", seed.clone()).unwrap();
+    // The cut handoff adds no input: the call and its result only, no
+    // skill text and no opening.
+    assert_eq!(conversation.len(), 3);
+    assert!(
+        !conversation
+            .iter()
+            .any(|input| matches!(input, Input::User { text, .. } if text.contains("Alpha body."))),
+        "{conversation:?}"
+    );
+    // The cut changes no carry: no resend is armed, and the old context's
+    // loads stay loaded, as rendering the prefix alone shows.
+    let (_, _, _, carry) =
+        rebuild_and_sent(&lines[..3], "fake/model-1", &HashSet::new(), seed).unwrap();
+    assert!(carry.resend.is_empty());
+    assert_eq!(carry.skills, [alpha()]);
 }

@@ -475,6 +475,7 @@ fn resolved(id: &str) -> Event {
         grant: None,
         rule: None,
         reviewer: None,
+        hosts: None,
     })
 }
 

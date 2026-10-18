@@ -1001,3 +1001,27 @@ fn run_asking_asks_naming_the_configured_server() {
     wait.recv_or_fail(&seen, "the second field's ask");
     setup.stop(started.servers);
 }
+
+#[test]
+fn an_open_world_tool_declares_unknown_hosts() {
+    let dir = fakes::TempDir::new("mcp-hosts");
+    let tool = declare(
+        "fx",
+        "echo",
+        Hints {
+            read_only: Some(true),
+            destructive: None,
+            open_world: Some(true),
+        },
+        std::sync::Weak::new(),
+        dir.path(),
+    );
+    let effects = tool.effects(&arguments()).unwrap();
+    assert_eq!(effects.hosts, None);
+    assert!(
+        effects
+            .declared
+            .effects
+            .contains(&contract::shapes::Effect::Network)
+    );
+}

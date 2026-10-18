@@ -12,6 +12,7 @@ config = { path = "../config" }
 net = { path = "../net" }
 thiserror.workspace = true
 log = { path = "../log" }
+rustix.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
 support = { path = "../support" }

@@ -81,119 +81,42 @@ impl std::fmt::Debug for ProgramFields {
     }
 }
 
-/// Reads the merged `mcp.servers`: one spec per entry with a `command`
-/// or a `url`, partitioned into the person's servers and the
-/// repository's. A server is the repository's when the repository layer
-/// declares an entry of that name holding at least one value, or when
-/// any of its effective `command`, `args`, `env` or `url` entries comes
-/// from the repository layer, so nothing offered ever runs unapproved: a
-/// person's server the repository only tweaks needs approval too. An
-/// entry with both `command` and `url` is never started: without
-/// `required` it is skipped with a `notice`, with `required` the whole
-/// read fails, before the partition, whatever layers supplied them.
+/// Reads the merged `mcp.servers` through the shared startup
+/// classification: one spec per runnable entry, partitioned into the
+/// person's servers and the repository's, which start only approved. A
+/// `required` refusal fails the whole read; any other refusal becomes a
+/// `notice`.
 pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
+    // The classification both `main` and `fiber doctor` share; the six
+    // refusal sentences live there, byte for byte.
+    let checked =
+        config::mcp_servers(config, &mcp::url_has_userinfo).map_err(|refusal| Failure {
+            code: ErrorCode::ConfigInvalid,
+            message: refusal.message(),
+            retry_after_ms: None,
+            provider: None,
+        })?;
     let mut specs = Vec::new();
     let mut repository = Vec::new();
     let mut notices = Vec::new();
-    let Some((Value::Object(servers), _)) = config.get("mcp.servers", None) else {
-        return Ok(Specs {
-            specs,
-            repository,
-            notices,
+    for refusal in checked.refused {
+        notices.push(Notice {
+            code: ErrorCode::ConfigInvalid,
+            message: refusal.message(),
+            extension: None,
         });
-    };
-    // The repository's own declarations, after the key check: an entry
-    // with no value is not a declaration and gates nothing.
-    let workspace = config.extensions().workspace().to_path_buf();
-    let declared = config::declared(&workspace).ok();
-    // `serde_json::Map` is a `BTreeMap` without `preserve_order`
-    // (`docs/dependencies.md`), so this is name order.
-    for name in servers.keys() {
-        let entry = spec(config, name);
-        let spec = match entry {
-            Entry::Neither => continue,
-            Entry::Both { name, required } => {
-                if required {
-                    return Err(Failure {
-                        code: ErrorCode::ConfigInvalid,
-                        message: format!(
-                            "The required MCP server `{name}` declares both `command` and `url`, so Fiber cannot start it. Keep the one you mean."
-                        ),
-                        retry_after_ms: None,
-                        provider: None,
-                    });
-                }
-                notices.push(Notice {
-                    code: ErrorCode::ConfigInvalid,
-                    message: format!(
-                        "The MCP server `{name}` declares both `command` and `url`, so Fiber starts neither. Keep the one you mean."
-                    ),
-                    extension: None,
-                });
-                continue;
-            }
-            Entry::Userinfo { name, required } => {
-                if required {
-                    return Err(Failure {
-                        code: ErrorCode::ConfigInvalid,
-                        message: format!(
-                            "The required MCP server `{name}` has a user name or password in its `url`, so Fiber cannot start it. Take them out of the URL."
-                        ),
-                        retry_after_ms: None,
-                        provider: None,
-                    });
-                }
-                notices.push(Notice {
-                    code: ErrorCode::ConfigInvalid,
-                    message: format!("The MCP server `{name}` has a user name or password in its `url`, so Fiber does not start it. Take them out of the URL."),
-                    extension: None,
-                });
-                continue;
-            }
-            Entry::BadSecret {
-                name,
-                secret,
-                required,
-            } => {
-                if required {
-                    return Err(Failure {
-                        code: ErrorCode::ConfigInvalid,
-                        message: format!(
-                            "The required MCP server `{name}` names the secret `{secret}`, which must be `mcp.{name}.<KEY>`, so Fiber cannot start it. Name the secret after the server."
-                        ),
-                        retry_after_ms: None,
-                        provider: None,
-                    });
-                }
-                notices.push(Notice {
-                    code: ErrorCode::ConfigInvalid,
-                    message: format!(
-                        "The MCP server `{name}` names the secret `{secret}`, which must be `mcp.{name}.<KEY>`, so Fiber does not start it. Name the secret after the server."
-                    ),
-                    extension: None,
-                });
-                continue;
-            }
-            Entry::Spec(spec) => spec,
-        };
-        let declared_entry = declared
-            .as_ref()
-            .is_some_and(|declared| declared.mcp_servers.contains_key(name));
-        // An error reading the declarations puts every server with a
-        // `command` on the repository side: nothing runs unapproved.
-        let declared_entry = declared_entry || declared.is_none();
-        if declared_entry
-            || from_repository(config, name, "command")
-            || from_repository(config, name, "args")
-            || from_repository(config, name, "url")
-            || env_from_repository(config, name)
-        {
+    }
+    for server in checked.servers {
+        let name = server.name.clone();
+        let repository_side = server.repository;
+        let built = spec(config, server);
+        if repository_side {
             repository.push(RepositorySpec {
-                spec,
-                fields: program_fields(config, name),
+                spec: built,
+                fields: program_fields(config, &name),
             });
         } else {
-            specs.push(spec);
+            specs.push(built);
         }
     }
     Ok(Specs {
@@ -203,36 +126,68 @@ pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
     })
 }
 
-/// What one `mcp.servers` entry declares: a spec, both transports
-/// (never started), or nothing to start.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "the spec is built and matched at once; boxing would allocate per entry"
-)]
-enum Entry {
-    /// A runnable spec, of either transport.
-    Spec(mcp::ServerSpec),
-    /// Both `command` and `url`, with whether the entry is `required`.
-    Both { name: String, required: bool },
-    /// A URL with userinfo must never reach ureq's Basic authentication.
-    Userinfo { name: String, required: bool },
-    /// An env `{ "secret" }` name that is not exactly
-    /// `mcp.<server>.<KEY>`: the server reads only its own secrets.
-    BadSecret {
-        /// The server's name.
-        name: String,
-        /// The secret name, never its value.
-        secret: String,
-        /// Whether the entry is `required`.
-        required: bool,
-    },
-    /// Neither: nothing to start.
-    Neither,
+/// Builds the spec for a classified server: the transport with its
+/// secret reader, timeouts, hints and tool gates from the merged
+/// configuration. Each secret reference is read when the server starts,
+/// through the closure below, so the values never enter the spec.
+fn spec(config: &Config, server: config::McpServer) -> mcp::ServerSpec {
+    let config::McpServer {
+        name,
+        required,
+        transport,
+        ..
+    } = server;
+    let transport = match transport {
+        config::McpTransport::Stdio {
+            command,
+            args,
+            env,
+            secrets,
+        } => {
+            // Each reference is read when the server starts, through the
+            // closure below, so the values never enter the spec.
+            let credentials = config.credentials().clone();
+            let reader: mcp::SecretReader =
+                Arc::new(move |secret: &str| match credentials.secret(secret) {
+                    Ok(Some(value)) => Ok(value.expose().to_owned()),
+                    Ok(None) => Err(mcp::SecretError::Missing),
+                    Err(error) => Err(mcp::SecretError::Unreadable(error.to_string())),
+                });
+            mcp::Transport::Stdio(mcp::StdioSpec {
+                command,
+                args,
+                env,
+                secrets,
+                reader,
+                run: None,
+            })
+        }
+        config::McpTransport::Remote { url } => mcp::Transport::Http {
+            url,
+            tokens: Arc::new(config.credentials().mcp_token_files()),
+        },
+    };
+    mcp::ServerSpec {
+        name: name.clone(),
+        transport,
+        startup_timeout: millis(config, &name, "startup_timeout_ms", Duration::ZERO),
+        call_timeout: millis(config, &name, "timeout_ms", mcp::DEFAULT_CALL_TIMEOUT),
+        enabled: server_field(config, &name, "tools.enabled").map(|(value, _)| strings(&value)),
+        disabled: config.list(&config::mcp_server_key(&name, "tools.disabled"), None),
+        hints: hints(config, &name),
+        required,
+    }
 }
 
 /// What a session started: the failures for the log and the running
 /// servers for the session's end.
 pub(crate) struct SessionServers {
+    /// Uncapped built-in and MCP tools before extension registrations.
+    pub base_tools: Vec<(String, Arc<dyn Tool>)>,
+    /// Built-in and MCP declarations before extension replacements.
+    pub kept_infos: Vec<ToolInfo>,
+    /// Startup servers that did not fail, in specification order.
+    pub server_names: Vec<String>,
     /// One per server that failed to start or missed its deadline.
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
@@ -278,6 +233,7 @@ pub(crate) fn session_tools(
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
     timing: Option<contract::diag::Timing>,
+    shell_read_only: crate::settings::ShellReadOnly,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -300,6 +256,7 @@ pub(crate) fn session_tools(
         delegates,
         skills,
         timing.clone(),
+        shell_read_only,
     )?;
     // A repository server whose current content is approved starts with
     // the session exactly as a person's server does; any other waits for
@@ -322,6 +279,7 @@ pub(crate) fn session_tools(
     let mut specs = specs;
     specs.extend(prepared.ready);
     let cache = config::mcp_cache_dir(home);
+    let mut server_names: Vec<_> = specs.iter().map(|spec| spec.name.clone()).collect();
     let started = mcp::start_observed(
         specs,
         workspace,
@@ -341,8 +299,11 @@ pub(crate) fn session_tools(
             provider: None,
         });
     }
+    server_names.retain(|name| !started.failed.iter().any(|failure| failure.server == *name));
     tools.extend(started.tools);
     infos.extend(started.infos);
+    let base_tools = tools.clone();
+    let kept_infos = infos.clone();
     if let Err(failure) = add_extension_tools(&mut tools, &mut infos, extension_tools) {
         started.servers.stop();
         return Err(failure);
@@ -367,6 +328,9 @@ pub(crate) fn session_tools(
         servers: Arc::clone(&servers),
     };
     let servers = SessionServers {
+        base_tools,
+        kept_infos,
+        server_names,
         failed,
         servers,
         prompts: started.prompts,
@@ -392,7 +356,7 @@ fn declares_resources(tools: &[(String, Arc<dyn Tool>)]) -> bool {
 /// of them share a name: the extensions settled that. The `tools` answer
 /// lists the tool that is declared, so a replaced row goes. Infos end
 /// sorted by name.
-fn add_extension_tools(
+pub(crate) fn add_extension_tools(
     tools: &mut Vec<(String, Arc<dyn Tool>)>,
     infos: &mut Vec<ToolInfo>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,
@@ -410,76 +374,9 @@ fn add_extension_tools(
     Ok(())
 }
 
-/// What the server `name` declares: a spec, both transports, or
-/// nothing. The merged `command`, `args`, `env` and `url`
-/// are the person's and the repository's merged key by key; a
-/// repository's share is partitioned out by `specs`, never skipped here.
-fn spec(config: &Config, name: &str) -> Entry {
-    let command = config.text(&server_key(name, "command"), None);
-    let url = config.text(&server_key(name, "url"), None);
-    let required = config
-        .flag(&server_key(name, "required"), None)
-        .unwrap_or_default();
-    if url.as_deref().is_some_and(mcp::url_has_userinfo) {
-        return Entry::Userinfo {
-            name: name.to_owned(),
-            required,
-        };
-    }
-    let transport = match (command, url) {
-        (Some(_), Some(_)) => {
-            return Entry::Both {
-                name: name.to_owned(),
-                required,
-            };
-        }
-        (Some(command), None) => {
-            let args = config.list(&server_key(name, "args"), None);
-            let (env, secrets) = server_env(config, name);
-            for secret in secrets.values() {
-                if !config::mcp_secret_name_ok(name, secret) {
-                    return Entry::BadSecret {
-                        name: name.to_owned(),
-                        secret: secret.clone(),
-                        required,
-                    };
-                }
-            }
-            // Each reference is read when the server starts, through the
-            // closure below, so the values never enter the spec.
-            let credentials = config.credentials().clone();
-            let reader: mcp::SecretReader =
-                Arc::new(move |secret: &str| match credentials.secret(secret) {
-                    Ok(Some(value)) => Ok(value.expose().to_owned()),
-                    Ok(None) => Err(mcp::SecretError::Missing),
-                    Err(error) => Err(mcp::SecretError::Unreadable(error.to_string())),
-                });
-            mcp::Transport::Stdio(mcp::StdioSpec {
-                command,
-                args,
-                env,
-                secrets,
-                reader,
-                run: None,
-            })
-        }
-        (None, Some(url)) => mcp::Transport::Http {
-            url,
-            tokens: Arc::new(config.credentials().mcp_token_files()),
-        },
-        (None, None) => return Entry::Neither,
-    };
-    let spec = mcp::ServerSpec {
-        name: name.to_owned(),
-        transport,
-        startup_timeout: millis(config, name, "startup_timeout_ms", Duration::ZERO),
-        call_timeout: millis(config, name, "timeout_ms", mcp::DEFAULT_CALL_TIMEOUT),
-        enabled: server_field(config, name, "tools.enabled").map(|(value, _)| strings(&value)),
-        disabled: config.list(&server_key(name, "tools.disabled"), None),
-        hints: hints(config, name),
-        required,
-    };
-    Entry::Spec(spec)
+/// The merged value of `mcp.servers."<name>".<field>` and its layer.
+fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
+    config.get(&config::mcp_server_key(server, field), None)
 }
 
 /// The merged `command`, `args`, `env` and `url` the repository's layer
@@ -493,7 +390,11 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
     if let Some((Value::Object(merged), _)) = server_field(config, server, "env") {
         for key in merged.keys() {
             if let Some((value, Source::Repository(_))) = config.get(
-                &format!("mcp.servers.{}.env.{}", quoted(server), quoted(key)),
+                &format!(
+                    "mcp.servers.{}.env.{}",
+                    config::quoted_segment(server),
+                    config::quoted_segment(key)
+                ),
                 None,
             ) {
                 env.insert(key.clone(), value);
@@ -508,56 +409,11 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
     }
 }
 
-/// The merged value of `mcp.servers."<name>".<field>` and its layer.
-fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
-    config.get(&server_key(server, field), None)
-}
-
-/// Whether the merged value of one field effectively comes from the
-/// repository's layer.
-fn from_repository(config: &Config, server: &str, field: &str) -> bool {
-    server_field(config, server, field)
-        .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
-}
-
-/// Whether any effective `env` entry comes from the repository's layer:
-/// `env` merges key by key, so each entry's provenance is checked
-/// individually. `command` (`Str`) and `args` (`StrList`, which replaces)
-/// are whole values, so [`from_repository`] on the field is exact for them.
-fn env_from_repository(config: &Config, server: &str) -> bool {
-    let Some((Value::Object(env), _)) = server_field(config, server, "env") else {
-        return false;
-    };
-    env.keys().any(|key| {
-        config
-            .get(
-                &format!("mcp.servers.{}.env.{}", quoted(server), quoted(key)),
-                None,
-            )
-            .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
-    })
-}
-
-/// A dotted-path segment, quoted when it holds a dot.
-fn quoted(segment: &str) -> String {
-    if segment.contains('.') {
-        format!("\"{segment}\"")
-    } else {
-        segment.to_owned()
-    }
-}
-
-/// The `mcp.servers."<name>".<field>` key, quoting the name as
-/// [`server_field`] does.
-fn server_key(name: &str, field: &str) -> String {
-    format!("mcp.servers.{}.{field}", quoted(name))
-}
-
 /// The `field` timeout in milliseconds: the schema default when the key
 /// has one, else `default`.
 fn millis(config: &Config, server: &str, field: &str, default: Duration) -> Duration {
     config
-        .count(&server_key(server, field), None)
+        .count(&config::mcp_server_key(server, field), None)
         .map(Duration::from_millis)
         .unwrap_or(default)
 }
@@ -575,38 +431,15 @@ pub(crate) fn strings(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The merged `env`: literals by key, and `{ "secret" }` references by
-/// key, never their values. The load check holds every layer to strings
-/// or `{ "secret" }` objects, so anything else here is unreachable and
-/// ignored. A name that is not exactly `mcp.<server>.<KEY>` is kept, and
-/// refused by `spec`, so the notice names the server.
-fn server_env(
-    config: &Config,
-    server: &str,
-) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
-    let Some((Value::Object(merged), _)) = server_field(config, server, "env") else {
-        return (BTreeMap::new(), BTreeMap::new());
-    };
-    let mut env = BTreeMap::new();
-    let mut secrets = BTreeMap::new();
-    for (key, value) in merged {
-        if let Some(text) = value.as_str() {
-            env.insert(key, text.to_owned());
-        } else if let Some(name) = value.get("secret").and_then(Value::as_str) {
-            secrets.insert(key, name.to_owned());
-        }
-    }
-    (env, secrets)
-}
-
 /// The person's hint overrides, by tool: the merged
 /// `tools."<tool>".hints` objects (`config` already drops a repository's
 /// with a notice, so the merged value is the person's).
 fn hints(config: &Config, server: &str) -> BTreeMap<String, mcp::Hints> {
     let mut overrides = BTreeMap::new();
-    let Some((Value::Object(tools), _)) =
-        config.get(&format!("mcp.servers.{}.tools", quoted(server)), None)
-    else {
+    let Some((Value::Object(tools), _)) = config.get(
+        &format!("mcp.servers.{}.tools", config::quoted_segment(server)),
+        None,
+    ) else {
         return overrides;
     };
     for (tool, entry) in tools {

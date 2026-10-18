@@ -1,6 +1,5 @@
-//! The run: spawn, readers, the stop sequence, the group list,
-//! `signal_name` and `refused_group` (`docs/extensions.md`, "Host calls";
-//! `docs/tools.md`, "Stopping a command").
+//! The run: spawn, readers, the stop sequence and the shared group list
+//! (`docs/extensions.md`, "Host calls"; `docs/tools.md`, "Stopping a command").
 
 #![allow(
     clippy::unwrap_used,
@@ -17,9 +16,9 @@ use contract::clock::Clock as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::{
-    DRAIN, ExecRequest, GROUP_POLL, group_alive, kill_every_group, refused_group, signal_name,
-};
+use super::ExecRequest;
+use super::resolve_in_package;
+use support::group::{self, DRAIN, GROUP_POLL};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 const DRAIN_BOUNDARY_DEADLINE: Duration = Duration::from_secs(4);
@@ -146,7 +145,7 @@ fn the_child_runs_in_its_own_group() {
     // Its own group: `ps` prints the pid's group, which is the child's pid.
     // The run reaps the child, so the group is empty now; the print proves
     // the child saw itself as a leader while it ran.
-    assert!(!group_alive(pgid), "the reaped group is empty");
+    assert!(!group::alive(pgid), "the reaped group is empty");
 }
 
 #[test]
@@ -201,6 +200,23 @@ fn a_missing_program_is_the_spawn_error() {
         err.message
     );
     assert!(err.ran.is_none(), "a spawn failure never ran");
+}
+
+/// A group error no spawn returns is `io_failed` with nothing logged: the
+/// refusal names the program and the cause.
+#[test]
+fn a_group_error_no_spawn_returns_is_io_failed() {
+    let (_dir, cwd) = dir("fiber-exec-spawn-error");
+    let req = request("sh", &["-c", "exit 0"], cwd, CAP);
+    let err = super::spawn_error(&req, group::Error::Refused(0));
+    assert_eq!(err.code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        err.message,
+        format!("host.exec: sh: {}", group::Error::Refused(0)),
+        "the refusal names the program and the cause"
+    );
+    assert!(err.ran.is_none(), "a spawn failure never ran");
+    assert!(err.source.is_none(), "a refusal carries no spawn error");
 }
 
 #[test]
@@ -397,8 +413,8 @@ fn kill_every_group_kills_a_listed_live_group() {
         .unwrap();
     let pgid = child.id();
     let watchdog = fakes::Watchdog::group(pgid);
-    super::groups::register(pgid);
-    kill_every_group();
+    let _listed = group::live().list(pgid).expect("the sleep group lists");
+    group::kill_every_group();
     let (done, waited) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait()).unwrap());
     let status = Deadline::after(DEADLINE)
@@ -416,19 +432,16 @@ const NO_GROUP_A: u32 = 0x9000_0001;
 const NO_GROUP_B: u32 = 0x9000_0002;
 
 #[test]
-fn finished_unlists_only_its_own_group_once_seen_empty() {
-    super::groups::register(NO_GROUP_A);
-    super::groups::register(NO_GROUP_B);
-    super::finished(NO_GROUP_A, false);
+fn unlisting_drops_only_the_entry_its_token_names() {
+    let stale = group::live().list(NO_GROUP_A).expect("group A lists");
+    let kept = group::live().list(NO_GROUP_B).expect("group B lists");
+    group::live().unlist(stale);
     assert!(
-        super::groups::listed().contains(&NO_GROUP_A),
-        "a group not seen empty stays listed"
+        !group::live().contains(NO_GROUP_A),
+        "the unlisted group leaves"
     );
-    super::finished(NO_GROUP_A, true);
-    let listed = super::groups::listed();
-    assert!(!listed.contains(&NO_GROUP_A), "a seen-empty group leaves");
-    assert!(listed.contains(&NO_GROUP_B), "another group stays");
-    super::finished(NO_GROUP_B, true);
+    assert!(group::live().contains(NO_GROUP_B), "another group stays");
+    group::live().unlist(kept);
 }
 
 /// Each stream is bounded on its own: exactly the cap returns, one byte
@@ -564,7 +577,7 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
 
 /// Spawns `script` under `sh` in its own listed group, as `run` does, with
 /// no pipes: the startup abort below has no reader to wait for.
-fn spawned(script: &str, cwd: &std::path::Path) -> std::process::Child {
+fn spawned(script: &str, cwd: &std::path::Path) -> (std::process::Child, group::Listing) {
     use std::os::unix::process::CommandExt as _;
     let mut cmd = std::process::Command::new("sh");
     cmd.args(["-c", script])
@@ -573,12 +586,13 @@ fn spawned(script: &str, cwd: &std::path::Path) -> std::process::Child {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .process_group(0);
-    super::spawn(&mut cmd).unwrap()
+    group::spawn(&mut cmd).expect("the group spawns")
 }
 
 /// Runs `abort_startup` on a worker, its answer on the receiver.
 fn abort(
     child: std::process::Child,
+    listing: group::Listing,
     cwd: PathBuf,
     clock: Arc<FakeClock>,
 ) -> mpsc::Receiver<Box<super::ExecError>> {
@@ -586,11 +600,10 @@ fn abort(
     std::thread::spawn(move || {
         let req = sh("startup", cwd, CAP);
         let shared = super::Shared::default();
-        let pgid = child.id();
         let clock_ref: Arc<dyn contract::clock::Clock> = clock;
         let err = super::abort_startup(
             &req,
-            pgid,
+            Some(listing),
             child,
             &shared,
             clock_ref.as_ref(),
@@ -611,11 +624,11 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
         ready.path().display()
     );
-    let child = spawned(&script, &cwd);
+    let (child, listing) = spawned(&script, &cwd);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let kill_at = clock.now() + Duration::from_millis(800);
-    let done = abort(child, cwd, Arc::clone(&clock));
+    let done = abort(child, listing, cwd, Arc::clone(&clock));
     assert!(
         clock.await_parked(kill_at, DEADLINE),
         "waited {DEADLINE:?} for the abort to park for the 800 ms grace"
@@ -624,10 +637,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         group_lives(pgid),
         "SIGTERM leaves the ignoring group alive through the grace"
     );
-    assert!(
-        super::groups::listed().contains(&pgid),
-        "a live group stays listed"
-    );
+    assert!(group::live().contains(pgid), "a live group stays listed");
     clock.advance(Duration::from_millis(800));
     let err = Deadline::after(DEADLINE)
         .recv(&done)
@@ -637,7 +647,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
     let ran = err.ran.expect("a started run is logged");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     assert!(
-        !super::groups::listed().contains(&pgid),
+        !group::live().contains(pgid),
         "the group leaves the list once seen empty"
     );
     watchdog.stand_down(DEADLINE);
@@ -652,10 +662,10 @@ fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
         "echo $$ > '{}'\nwhile :; do :; done\n",
         ready.path().display()
     );
-    let child = spawned(&script, &cwd);
+    let (child, listing) = spawned(&script, &cwd);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    let done = abort(child, cwd, Arc::clone(&clock));
+    let done = abort(child, listing, cwd, Arc::clone(&clock));
     // No clock move: the group ends on SIGTERM inside the grace.
     let err = Deadline::after(DEADLINE)
         .recv(&done)
@@ -663,22 +673,10 @@ fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
     let ran = err.ran.expect("a started run is logged");
     assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
     assert!(
-        !super::groups::listed().contains(&pgid),
+        !group::live().contains(pgid),
         "the group leaves the list once seen empty"
     );
     watchdog.stand_down(DEADLINE);
-}
-
-#[test]
-fn group_ids_0_and_1_are_refused() {
-    assert!(refused_group(0));
-    assert!(refused_group(1));
-    assert!(!refused_group(2));
-}
-
-#[test]
-fn signal_name_pins_sigterm() {
-    assert_eq!(signal_name(15), "SIGTERM");
 }
 
 #[test]
@@ -828,7 +826,7 @@ fn a_pid_mode_run_is_never_listed() {
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
-        !super::groups::listed().contains(&pid),
+        !group::live().contains(pid),
         "a pid-mode run is never listed while it runs"
     );
     drop(cancel);
@@ -840,7 +838,7 @@ fn a_pid_mode_run_is_never_listed() {
         .expect("waited {DEADLINE:?} for the cancelled pid-mode run")
         .expect("the cancelled pid-mode run stops");
     assert!(
-        !super::groups::listed().contains(&pid),
+        !group::live().contains(pid),
         "a pid-mode run is never listed after it ends"
     );
     assert!(
@@ -1200,11 +1198,10 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
     std::thread::spawn(move || {
         let req = sh_pid("startup", cwd, CAP);
         let shared = super::Shared::default();
-        let pgid = pid;
         let clock_ref: Arc<dyn contract::clock::Clock> = clock;
         let err = super::abort_startup(
             &req,
-            pgid,
+            None,
             child,
             &shared,
             clock_ref.as_ref(),
@@ -1222,10 +1219,7 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
     assert_eq!(err.code, contract::ErrorCode::IoFailed);
     let ran = err.ran.expect("a started run is logged");
     assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
-    assert!(
-        !super::groups::listed().contains(&pid),
-        "a pid-mode abort never lists"
-    );
+    assert!(!group::live().contains(pid), "a pid-mode abort never lists");
     assert!(
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the aborted program is gone"
@@ -1233,60 +1227,24 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
     watchdog.stand_down(DEADLINE);
 }
 
-/// A kill pass lands while a spawn is blocked before it spawns: the pass
-/// returns at once and kills every listed group, and the late spawn kills
-/// its own group and is `Interrupted` without ever listing it. Before the
-/// fix the spawn holds the group lock across the spawn, so the pass blocks
-/// behind it and the deadline below fails the test. Runs in a child
-/// process: the pass sets a sticky flag in this process.
+/// A run that starts after the kill pass is killed at its listing: the
+/// shutdown kill reaches the new group before it runs, so the run ends
+/// with its signal instead of an error. Runs in a child process: the pass
+/// sets a sticky flag in this process.
 #[test]
-fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
+fn a_run_after_the_kill_pass_is_killed_at_its_listing() {
     if std::env::var_os(CHILD).is_none() {
-        in_child("kill_passes_a_blocked_spawn_and_the_late_child_is_killed");
+        in_child("a_run_after_the_kill_pass_is_killed_at_its_listing");
         return;
     }
     use std::os::unix::process::CommandExt as _;
-    let (_dir, cwd) = dir("fiber-exec-blocked-spawn");
-    let marker = format!("fiber-exec-late-{}", cwd.display());
+    let (_dir, cwd) = dir("fiber-exec-post-kill");
     let mut first = std::process::Command::new("sleep");
     first.arg("60").process_group(0);
-    let mut child_a = super::spawn(&mut first).expect("group A spawns");
+    let (mut child_a, listing_a) = group::spawn(&mut first).expect("group A spawns");
     let pgid_a = child_a.id();
     let watchdog_a = fakes::Watchdog::group(pgid_a);
-    assert_eq!(
-        super::groups::listed(),
-        vec![pgid_a],
-        "group A listed while it runs"
-    );
-    let (entered_tx, entered_rx) = mpsc::channel::<()>();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    super::groups::pause_at_spawn(entered_tx, release_rx);
-    let late = fakes::Watchdog::matching(&marker);
-    let script = format!("sleep 30 # {marker}");
-    let late_cwd = cwd.clone();
-    let late_spawn = std::thread::spawn(move || {
-        let mut cmd = std::process::Command::new("sh");
-        cmd.args(["-c", &script])
-            .current_dir(&late_cwd)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0);
-        super::spawn(&mut cmd)
-    });
-    Deadline::after(DEADLINE)
-        .recv(&entered_rx)
-        .expect("the spawn reached its pause");
-    let (killed_tx, killed_rx) = mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        kill_every_group();
-        match killed_tx.send(()) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    Deadline::after(DEADLINE)
-        .recv(&killed_rx)
-        .expect("the kill pass returns while the spawn is blocked");
+    group::kill_every_group();
     let (done, waited) = mpsc::channel();
     std::thread::spawn(move || done.send(child_a.wait()).unwrap());
     let reaped = Deadline::after(DEADLINE)
@@ -1297,41 +1255,217 @@ fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
         fakes::group_empties(pgid_a, DEADLINE),
         "the pass killed group A"
     );
-    match release_tx.send(()) {
-        Ok(()) | Err(_) => {}
-    }
-    let error = fakes::within("the late spawn", DEADLINE, move || {
-        late_spawn.join().unwrap()
-    })
-    .expect_err("a spawn after the kill pass");
-    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    assert_eq!(
-        super::groups::listed(),
-        vec![pgid_a],
-        "the late group is never listed"
-    );
-    assert!(
-        fakes::matching_exits(&marker, DEADLINE),
-        "the late group is gone"
-    );
-    // A spawn after the pass maps through the existing non-`NotFound`
-    // failure path.
-    let clock = FakeClock::new();
-    let (_cancel, done) = spawn(sh("true", cwd, CAP), Arc::clone(&clock), None);
-    let err = Deadline::after(DEADLINE)
-        .recv(&done)
-        .expect("waited {DEADLINE:?} for the post-kill run")
-        .expect_err("a run after the kill pass never runs");
-    assert_eq!(err.code, contract::ErrorCode::IoFailed);
-    assert!(err.ran.is_none(), "a spawn failure never ran");
-    assert!(
-        err.source
-            .as_ref()
-            .is_some_and(|source| source.kind() == std::io::ErrorKind::Interrupted),
-        "the spawn failure carries its `Interrupted` error"
-    );
     use std::os::unix::process::ExitStatusExt as _;
     assert_eq!(reaped.signal(), Some(9));
+    group::live().unlist(listing_a);
+    // A spawn after the pass still lists, already SIGKILLed at its
+    // listing: the run below ends with that signal, not an error.
+    let marker = format!("fiber-exec-post-kill-{}", cwd.display());
+    let script = format!("sleep 30 # {marker}");
+    let _guard = fakes::Watchdog::matching(&marker);
+    let clock = FakeClock::new();
+    let (_cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the post-kill run")
+        .expect("the post-kill run ends with its signal");
+    assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     watchdog_a.stand_down(DEADLINE);
-    late.stand_down(DEADLINE);
+}
+
+/// The package directory, canonicalized as `Vm::load` does, with its guard.
+fn package(name: &str) -> (fakes::TempDir, PathBuf) {
+    let dir = fakes::TempDir::new(name);
+    let path = dir.path().canonicalize().unwrap();
+    (dir, path)
+}
+
+#[test]
+fn resolve_in_package_a_slash_relative_program_resolves_inside_the_package() {
+    let (_guard, package) = package("fiber-resolve-inside");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    let expected = package.join("bin").join("acme").display().to_string();
+    for program in ["bin/acme", "./bin/acme", "bin/../bin/acme"] {
+        assert_eq!(
+            resolve_in_package(program, &package),
+            Ok(expected.clone()),
+            "{program}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_past_the_package_is_refused_naming_both() {
+    let (_guard, package) = package("fiber-resolve-escape");
+    for program in ["../x", "bin/../../x"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+        assert!(
+            err.contains(package.display().to_string().as_str()),
+            "the refusal names the directory: {err}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_that_stays_inside_resolves() {
+    let (_guard, package) = package("fiber-resolve-fold");
+    assert_eq!(
+        resolve_in_package("a/../b", &package),
+        Ok(package.join("b").display().to_string())
+    );
+    assert_eq!(
+        resolve_in_package("x/..", &package),
+        Ok(package.display().to_string())
+    );
+    let err = resolve_in_package("a/../../b", &package).unwrap_err();
+    assert!(err.contains("a/../../b"), "{err}");
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_that_pops_past_the_package_is_refused_even_when_it_reenters() {
+    let (_guard, package) = package("fiber-resolve-reentry");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(package.join("bin").join("ok"), "x").unwrap();
+    // The second `..` pops past the package, which is a refusal even
+    // though the path re-enters it and exists: the fold never climbs
+    // back in. A fold that miscounted its depth would resolve this.
+    let base = package.file_name().unwrap().to_str().unwrap().to_owned();
+    let program = format!("a/../../{base}/bin/ok");
+    let err = resolve_in_package(&program, &package).unwrap_err();
+    assert!(
+        err.contains(program.as_str()),
+        "the refusal names the path: {err}"
+    );
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_nul_byte_is_refused() {
+    let (_guard, package) = package("fiber-resolve-nul");
+    // A NUL byte can never name a runnable program: canonicalizing it
+    // fails with an error other than `NotFound`, which is a refusal,
+    // never a pass. A check that popped past every error would resolve it.
+    let program = "bin/\0tool";
+    let err = resolve_in_package(program, &package).unwrap_err();
+    assert!(err.contains(program), "the refusal names the path: {err}");
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_symlink_out_of_the_package_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-link-outer");
+    let (_guard, package) = package("fiber-resolve-link-out");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(&outer, package.join("bin").join("link")).unwrap();
+    for program in ["bin/link", "bin/link/tool"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+        assert!(
+            err.contains(package.display().to_string().as_str()),
+            "the refusal names the directory: {err}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_symlink_that_stays_inside_resolves() {
+    use std::os::unix::fs::symlink;
+    let (_guard, package) = package("fiber-resolve-link-in");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(package.join("bin").join("real"), "x").unwrap();
+    symlink("real", package.join("bin").join("link")).unwrap();
+    assert_eq!(
+        resolve_in_package("bin/link", &package),
+        Ok(package.join("bin").join("link").display().to_string())
+    );
+}
+
+#[test]
+fn resolve_in_package_a_symlink_loop_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_guard, package) = package("fiber-resolve-loop");
+    symlink("b", package.join("a")).unwrap();
+    symlink("a", package.join("b")).unwrap();
+    for program in ["./a", "a/tool"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "{err}");
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dangling_link_in_the_middle_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-outer");
+    let (_guard, package) = package("fiber-resolve-dangling");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(outer.join("not-yet"), package.join("bin").join("dang")).unwrap();
+    let err = resolve_in_package("bin/dang/tool", &package).unwrap_err();
+    assert!(err.contains("bin/dang/tool"), "{err}");
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "{err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_dangling_link_is_refused_even_pointing_inside() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-in-outer");
+    let (_guard, package) = package("fiber-resolve-dangling-in");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(outer.join("not-yet"), package.join("bin").join("out")).unwrap();
+    symlink("not-yet", package.join("bin").join("in")).unwrap();
+    std::fs::write(outer.join("real"), "x").unwrap();
+    symlink(outer.join("real"), package.join("bin").join("file")).unwrap();
+    for program in ["bin/out", "bin/in", "bin/file"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+    }
+}
+
+#[test]
+fn resolve_in_package_a_tool_under_a_symlinked_directory_out_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-subdir-outer");
+    let (_guard, package) = package("fiber-resolve-subdir");
+    std::fs::write(outer.join("tool"), "x").unwrap();
+    symlink(&outer, package.join("sub")).unwrap();
+    let err = resolve_in_package("sub/tool", &package).unwrap_err();
+    assert!(err.contains("sub/tool"), "{err}");
+    let err = resolve_in_package("sub/missing", &package).unwrap_err();
+    assert!(err.contains("sub/missing"), "{err}");
+}
+
+#[test]
+fn resolve_in_package_a_bare_name_and_an_absolute_path_pass_through() {
+    let (_outer, outer) = package("fiber-resolve-passthrough-outer");
+    let (_guard, package) = package("fiber-resolve-passthrough");
+    assert_eq!(resolve_in_package("node", &package), Ok("node".into()));
+    assert_eq!(resolve_in_package("", &package), Ok(String::new()));
+    assert_eq!(
+        resolve_in_package("/usr/bin/env", &package),
+        Ok("/usr/bin/env".into())
+    );
+    let absolute = outer.join("tool").display().to_string();
+    assert_eq!(
+        resolve_in_package(&absolute, &package),
+        Ok(absolute.clone())
+    );
+}
+
+#[test]
+fn resolve_in_package_a_missing_program_inside_resolves_for_the_spawn_to_report() {
+    let (_guard, package) = package("fiber-resolve-missing");
+    assert_eq!(
+        resolve_in_package("bin/missing", &package),
+        Ok(package.join("bin").join("missing").display().to_string())
+    );
 }

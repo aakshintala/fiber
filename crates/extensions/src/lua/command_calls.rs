@@ -219,6 +219,7 @@ fn cancelled() -> Box<ToolCallCompleted> {
         control: None,
         changed_by: None,
         provider_item: None,
+        hosts_surfaced: Vec::new(),
     })
 }
 

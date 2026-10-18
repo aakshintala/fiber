@@ -7,6 +7,49 @@ use crate::{CommandId, SessionId, TurnId};
 
 const DOC: &str = include_str!("../../../docs/events.md");
 
+#[test]
+fn a_tool_call_completed_and_a_permission_resolved_omit_their_new_keys_when_empty() {
+    for (kind, payload, key) in [
+        (
+            "tool_call_completed",
+            json!({"status":"completed", "content":[]}),
+            "hosts_surfaced",
+        ),
+        (
+            "permission_resolved",
+            json!({"decision":"allow", "decided_by":"person"}),
+            "hosts",
+        ),
+    ] {
+        let event = Event::from_envelope(&line(kind, payload.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            payload
+        );
+        let mut populated = payload;
+        populated[key] = json!(["https://example.com/"]);
+        let event = Event::from_envelope(&line(kind, populated.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(event.payload().unwrap()).unwrap(),
+            populated
+        );
+    }
+    let event = Event::from_envelope(&line(
+        "tool_call_completed",
+        json!({"status":"completed", "content":[], "hosts_surfaced":[]}),
+    ))
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(event.payload().unwrap()).unwrap(),
+        json!({"status":"completed", "content":[]})
+    );
+}
+
 /// Each kind under `docs/events.md`, "Kinds", with the class its text gives
 /// and the keys its payload table lists.
 fn doc_kinds() -> BTreeMap<&'static str, (Class, BTreeSet<&'static str>)> {
@@ -461,7 +504,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
             "kept": [[0, 8192], [1040384, 1048576]],
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
-            "control": {"handoff": "note"}, "changed_by": ["e"]}),
+            "control": {"handoff": "note"}, "changed_by": ["e"],
+            "hosts_surfaced": ["https://example.com/"]}),
         ),
         (
             "tool_call_completed",
@@ -545,6 +589,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"decision": "deny", "decided_by": "reviewer",
             "reason": "no", "reviewer": {"model": "p/m", "stage": 1},
             "effects": ["executes"], "reversible": false, "paths": ["/a"],
+            "hosts": ["https://example.com/"],
             "always_reviewed": true, "arguments": {"path": "b.txt"},
             "changed_by": ["ext"]}),
         ),
@@ -596,8 +641,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "repository_code_offered",
             json!({"request_id": "r", "items": [
                 {"kind": "extension", "name": "n", "hash": "h", "required": true,
-                 "summary": "s", "version": "1.0.0", "diff": "d"},
-                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s"}]}),
+                 "summary": "s", "version": "1.0.0", "diff": "d", "files": ["tools/init.lua"]},
+                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s", "files": []}]}),
         ),
         (
             "repository_code_resolved",
@@ -1637,6 +1682,22 @@ fn an_empty_skills_result_reads_as_skills() {
 
 #[test]
 fn every_other_result_still_reads_as_its_own_variant() {
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"text": "t"}})),
+        CommandResult::OfferedFile { text: "t".into() }
+    );
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"text": "t", "size": 1}})),
+        CommandResult::ArtifactPage { .. }
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "fake", "credentials": []}})),
+        CommandResult::Credentials(_)
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "other"}})),
+        CommandResult::CredentialSwitch { .. }
+    ));
     assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
         CommandResult::Quota { .. }
@@ -1662,6 +1723,69 @@ fn every_other_result_still_reads_as_its_own_variant() {
         result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
         CommandResult::Shell { .. }
     ));
+}
+
+fn credential_labels() -> CredentialLabels {
+    CredentialLabels {
+        provider: "fake".into(),
+        credentials: vec!["default".into(), "home".into(), "work".into()],
+        credential: Some("home".into()),
+    }
+}
+
+#[test]
+fn a_credentials_result_writes_provider_labels_and_label() {
+    let accepted = CommandAccepted {
+        command_id: CommandId("c".into()),
+        result: Some(CommandResult::Credentials(credential_labels())),
+    };
+    assert_eq!(
+        serde_json::to_value(&accepted).unwrap(),
+        json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})
+    );
+}
+
+#[test]
+fn a_scripted_credentials_result_leaves_out_the_label() {
+    let result = CommandResult::Credentials(CredentialLabels {
+        provider: "scripted".into(),
+        credentials: vec![],
+        credential: None,
+    });
+    let written = serde_json::to_value(&result).unwrap();
+    assert_eq!(written, json!({"provider":"scripted", "credentials":[]}));
+    assert!(written.get("credential").is_none());
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(written).unwrap(),
+        result
+    );
+}
+
+#[test]
+fn a_credentials_result_reads_as_credentials() {
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})),
+        CommandResult::Credentials(credential_labels())
+    );
+}
+
+#[test]
+fn a_credential_switch_result_writes_and_reads_only_its_provider() {
+    let result = CommandResult::CredentialSwitch {
+        provider: "other".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"provider":"other"})
+    );
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result":{"provider":"other"}})),
+        result
+    );
 }
 
 #[test]
@@ -1706,6 +1830,16 @@ fn an_mcp_tool_names_its_server_and_its_own_name() {
         }
     );
     assert_eq!(serde_json::to_value(&info).unwrap(), payload);
+}
+
+#[test]
+fn an_old_offered_item_without_files_reads_as_empty() {
+    let item: OfferedItem = serde_json::from_value(
+        json!({"kind": "hook", "name": "h", "hash": "h", "required": false, "summary": "s"}),
+    )
+    .unwrap();
+    assert!(item.files.is_empty());
+    assert_eq!(serde_json::to_value(item).unwrap()["files"], json!([]));
 }
 
 #[test]

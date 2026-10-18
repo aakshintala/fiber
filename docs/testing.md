@@ -250,7 +250,11 @@ alive this way, then drops its stdin.
 A test that reproduces a race forces the bad interleaving with a pause point:
 a committed, test-only seam where the code under test waits until the test
 releases it. The race then happens on every run, so the red commit fails every
-time ("Proving a test bites").
+time ("Proving a test bites"). A child process the test starts, which the code
+under test waits on and which blocks on a FIFO or pipe the test holds, is such
+a seam and needs no change to the code under test. The test keeps its end open
+until the child has read the release: closing the last writer before the
+child opens the FIFO discards the line, and the child never returns.
 
 A test that needs an inbox command admitted mid-turn holds the turn where the
 loop reads its inbox, on a pending approval, and waits for that command's own

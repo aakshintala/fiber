@@ -361,6 +361,49 @@ fn a_key_with_a_dot_is_quoted_when_named() {
 }
 
 #[test]
+fn a_repository_role_credential_is_a_notice_and_keeps_its_model() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        r#"{"roles": {"fast": {"model": "a/b", "credential": "work"}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let [notice] = config.notices() else {
+        panic!("{:?}", config.notices());
+    };
+    assert_eq!(notice.code, ErrorCode::ConfigKeyIgnored);
+    assert!(notice.extension.is_none());
+    assert_eq!(
+        notice.message,
+        format!(
+            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.",
+            setup.repository().display()
+        )
+    );
+    // The role's model still applies.
+    assert_eq!(config.merged(None)["roles"]["fast"]["model"], json!("a/b"));
+}
+
+#[test]
+fn a_credential_outside_a_repository_role_is_no_notice() {
+    // A repository role without one, a person's own role with one, and a
+    // repository object that is no role raise no notice.
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"roles": {"fast": {"model": "a/b", "credential": "work"}}}"#,
+    );
+    setup.write(
+        &setup.repository(),
+        r#"{"roles": {"plain": {"model": "c/d"}},
+            "mcp": {"servers": {"gh": {"command": "gh", "env": {"TOKEN": "x"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(config.merged(None)["roles"]["fast"]["model"], json!("a/b"));
+}
+
+#[test]
 fn invalid_json_is_config_invalid_naming_the_file_and_line() {
     for (text, line, column) in [
         ("{\"model\": \"a/b\",}", 1, 17),
