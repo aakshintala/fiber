@@ -5,6 +5,11 @@ use serde_json::{Value, json};
 use crate::Response;
 
 /// An `openai-responses` stream of `events`, then a completed reply.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "a test helper; a failure is the test's"
+)]
 pub fn stream(events: &[Value]) -> Response {
     let mut body = String::new();
     for event in events {
@@ -55,6 +60,11 @@ pub fn text_reply(text: &str) -> Response {
 }
 
 /// An `openai-responses` stream answering `Hello.` in two fragments.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "a test helper; a failure is the test's"
+)]
 pub fn hello_inline_completed() -> Response {
     let events = [
         json!({"type": "response.output_text.delta", "delta": "Hel"}),
