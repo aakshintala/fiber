@@ -173,15 +173,6 @@ impl App {
             questions: Questions::default(),
             left_after_attach: None,
         });
-        // A local home owes no chip read: there is no hub to ask.
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.launch.location.hub().is_none())
-            && let Some(home) = self.home.as_mut()
-        {
-            home.chooser.chip_read = workspace::ChipRead::Answered;
-        }
         self.sync_project();
         if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
             self.open_picker();
@@ -450,11 +441,7 @@ impl App {
             return Vec::new();
         }
         let mut asks = self.picker_asks();
-        // The start pick runs on remote homes, where the chips gate
-        // it; a local home picks once at startup, never per hello.
-        if self.remote().is_some() {
-            asks.extend(self.start_model_pick());
-        }
+        asks.extend(self.start_model_pick());
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };

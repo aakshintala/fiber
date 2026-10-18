@@ -3354,6 +3354,29 @@ fn fold(mut app: App, line: Line) -> (App, Vec<String>) {
     Deadline::start().recv_or_fail(&finished, "hub fold")
 }
 
+/// Saves the checklist on a thread of its own: the save blocks for
+/// the scripted hub, so the test thread cannot save it directly.
+fn saving(mut app: App) -> (App, Effect) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let effect = ctrl_s(&mut app);
+        done.send((app, effect)).unwrap();
+    });
+    Deadline::start().recv_or_fail(&finished, "scope save")
+}
+
+/// Chooses `workspace` on a thread of its own: with the link up the
+/// choice reads the chips at once, blocking for the scripted hub.
+fn choosing(mut app: App, workspace: &str) -> App {
+    let workspace = workspace.to_owned();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        app.choose_workspace(workspace);
+        done.send(app).unwrap();
+    });
+    Deadline::start().recv_or_fail(&finished, "workspace choice")
+}
+
 fn chip_rows() -> Value {
     json!({"rows": [
         {"key": "model", "shown": "value", "value": "\"hub/m\"",
@@ -3554,12 +3577,27 @@ fn explicit_opens_run_at_once_while_the_chip_read_is_owed() {
         app.on_models(Ok(three()));
         app.open_model_picker(mode);
         assert_eq!(open_mode(&app), Some(mode));
+        let selected_before = selected(&app);
         quiet(&watcher);
         // The hello's answer, with no model, neither closes the open
         // picker nor opens a second one.
         let (app, _) = fold(app, hub_hello());
         Deadline::start().recv_or_fail(&done, "wire script");
         assert_eq!(open_mode(&app), Some(mode));
+        // The open is unchanged: its mode, selection and touched set.
+        assert_eq!(selected(&app), selected_before);
+        let touched = if mode == crate::model_picker::Mode::Scope {
+            vec![false, false, false]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            app.model_picker
+                .open
+                .as_ref()
+                .map(|open| open.toggled.clone()),
+            Some(touched)
+        );
         drop(watcher);
         drop(app);
     }
@@ -3636,10 +3674,10 @@ fn choosing_a_workspace_rereads_the_chips_at_once() {
         chip_settings(),
         chip_settings_at("/hub/p"),
     ]);
-    let (mut app, _) = fold(app, hub_hello());
+    let (app, _) = fold(app, hub_hello());
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
     // With the link up the choice reads at once at the new workspace.
-    app.choose_workspace("/hub/p".to_owned());
+    let app = choosing(app, "/hub/p");
     Deadline::start().recv_or_fail(&done, "wire script");
     assert!(home_chips(&app).contains(&"[hub/m]".to_owned()));
     quiet(&watcher);
@@ -3690,10 +3728,11 @@ fn a_local_start_pick_opens_at_once() {
     let mut app = home();
     app.start_model_pick();
     assert!(app.model_picker_open());
-    assert!(!app.chip_read_owed());
-    // With no hub, hellos and choices write nothing extra.
+    // With no hub, hellos and choices write nothing extra; the hello
+    // answers the owed chip read locally, so none stays owed.
     let (app, _) = fold(app, hub_hello());
     assert!(app.model_picker_open());
+    assert!(!app.chip_read_owed());
     drop(app);
 }
 
@@ -3813,9 +3852,10 @@ fn the_chip_answer_keeps_each_toggle() {
     // The hello's answer lists rows 1 and 2, with an uninstalled
     // `gone/x`: row 1 adopts the answer, row 2 keeps the person's
     // mark, row 3 stays unmarked.
-    let (mut app, _) = fold(app, hub_hello());
+    let (app, _) = fold(app, hub_hello());
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    assert_eq!(ctrl_s(&mut app), Effect::None);
+    let (app, effect) = saving(app);
+    assert_eq!(effect, Effect::None);
     Deadline::start().recv_or_fail(&done, "wire script");
     assert!(!app.model_picker_open());
     quiet(&watcher);
@@ -3847,5 +3887,98 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
     let (app, _) = fold(app, hub_hello());
     Deadline::start().recv_or_fail(&done, "wire script");
     assert_eq!(marks(&app), Some(vec![true, true, false]));
+    quiet(&watcher);
+}
+
+#[test]
+fn a_failed_chip_read_keeps_the_placeholders_marks() {
+    // The chosen workspace reads directly, with no `global_file`;
+    // the save writes the marked list, here empty.
+    let (mut app, done, watcher) = scripted_remote(vec![
+        chip_rejection("invalid_arguments", "bad settings"),
+        (
+            "configure".to_owned(),
+            json!({
+                "operation": "set", "workspace": "/hub", "layer": "global",
+                "key": "scoped_models", "text": "[]",
+            }),
+            Ok(json!({"file": "/hub/config.json", "warnings": []})),
+        ),
+    ]);
+    app.on_models(Ok(three()));
+    app.model_picker.scoped = vec!["acme/m2".to_owned()];
+    app.choose_workspace("/hub".to_owned());
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press_key(&mut app, Key::Down), Effect::None);
+    assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    // The rejection notices once and leaves the marks as they were.
+    let (app, _) = fold(app, hub_hello());
+    let lines = app.notices.lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    // Ctrl+S saves only what is marked: nothing.
+    let (app, effect) = saving(app);
+    assert_eq!(effect, Effect::None);
+    Deadline::start().recv_or_fail(&done, "wire script");
+    assert!(!app.model_picker_open());
+    quiet(&watcher);
+}
+
+#[test]
+fn a_catalogue_answer_after_the_toggle_keeps_it_by_reference() {
+    let (mut app, _done, watcher) = scripted_remote(Vec::new());
+    app.on_models(Ok(three()));
+    app.model_picker.scoped = vec!["acme/m2".to_owned()];
+    app.choose_workspace("/hub".to_owned());
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press_key(&mut app, Key::Down), Effect::None);
+    assert_eq!(press_key(&mut app, Key::Enter), Effect::None);
+    // A reordered catalogue carries the toggle by reference: row 2 is
+    // touched at its new first slot, and keeps its mark.
+    let mut reordered = three();
+    reordered.models.swap(0, 1);
+    app.on_models(Ok(reordered));
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(
+        app.model_picker
+            .open
+            .as_ref()
+            .map(|open| open.toggled.clone()),
+        Some(vec![true, false, false])
+    );
+    quiet(&watcher);
+}
+
+#[test]
+fn a_mark_cell_click_joins_the_toggled_set() {
+    // The chosen workspace reads directly, with no `global_file`.
+    let (mut app, done, watcher) = scripted_remote(vec![
+        (
+            "configure".to_owned(),
+            json!({"operation": "settings", "workspace": "/hub"}),
+            Ok(json!({"rows": [
+                {"key": "scoped_models", "shown": "value",
+                 "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
+                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+            ]})),
+        ),
+        set_saved(),
+    ]);
+    app.on_models(Ok(three()));
+    app.model_picker.scoped = vec!["acme/m2".to_owned()];
+    app.choose_workspace("/hub".to_owned());
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, true, false]));
+    // The mark cell click toggles row 2 the way Enter does: layout
+    // rows 0 the filter, 1 the buttons, 2 the heading, 3 row 1.
+    assert_eq!(app.model_picker.click_cell(4, 0), None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    let (app, _) = fold(app, hub_hello());
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    let (app, effect) = saving(app);
+    assert_eq!(effect, Effect::None);
+    Deadline::start().recv_or_fail(&done, "wire script");
+    assert!(!app.model_picker_open());
     quiet(&watcher);
 }

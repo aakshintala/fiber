@@ -57,6 +57,11 @@ impl App {
             self.owe_start_pick();
             return Vec::new();
         }
+        if !remote && self.link == super::Link::Up {
+            // A local home picks once at startup, before the link
+            // exists: later hellos must not reopen it.
+            return Vec::new();
+        }
         if remote && self.chip_read_failed() {
             // The chips failed: the pick stays owed until a new
             // workspace or link reads them.
