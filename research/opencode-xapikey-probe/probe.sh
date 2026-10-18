@@ -2,15 +2,15 @@
 # Probe: does https://opencode.ai/zen/go/v1/messages accept x-api-key auth?
 # The key is read from ~/.config/probe-keys/opencode-key into an env var
 # inside this script; it is never echoed, logged, or written to a file.
-# One request only, per the ticket (first attempt); the ruling on #1642
-# allowed one more request with x-opencode-session added.
+# This script makes the second request, which the #1642 ruling allowed:
+# the ticket's headers plus x-opencode-session.
 set -euo pipefail
 cd "$(dirname "$0")"
 KEY="$(cat ~/.config/probe-keys/opencode-key)"
-SESSION="$(python3 -c 'import sys,uuid; sys.stdout.write(str(uuid.uuid4()))')"
+SESSION="$(uuidgen)"
 mkdir -p raw
 STATUS="$(curl -s -o raw/messages-x-session.json -w '%{http_code}' \
-  --request POST 'https://opencode.ai/zen/go/v1/messages' \
+  'https://opencode.ai/zen/go/v1/messages' \
   --header "x-api-key: $KEY" \
   --header 'anthropic-version: 2023-06-01' \
   --header 'content-type: application/json' \

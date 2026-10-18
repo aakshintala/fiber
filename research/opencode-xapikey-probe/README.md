@@ -5,7 +5,7 @@ Question: does `POST https://opencode.ai/zen/go/v1/messages` accept the
 
 ## Method
 
-`probe.sh` on October 18, 2026, from macOS. The key is read from
+`probe.sh` made the second request, on October 18, 2026, from macOS. The key is read from
 `~/.config/probe-keys/opencode-key` into an env var inside the script; it is
 never echoed, logged, or written to a file, and neither this README nor
 any raw file carries it. Two requests in total: one per the ticket, one per
@@ -16,7 +16,9 @@ Model: `claude-haiku-5-5`, the first model in
 `anthropic-messages`. One POST to
 `https://opencode.ai/zen/go/v1/messages` with headers
 `x-api-key: $KEY`, `anthropic-version: 2023-06-01`,
-`content-type: application/json`, and no `Authorization` header. Body:
+`content-type: application/json`, `x-opencode-session: <fresh uuid>`,
+and no `Authorization` header. The first request's headers were the same,
+minus `x-opencode-session`. Body:
 `{"model":"claude-haiku-5-5","max_tokens":16,"messages":[{"role":"user","content":"Reply with the word ok."}]}`.
 
 ## Result: PASS (HTTP 200 with x-api-key alone)
@@ -39,11 +41,7 @@ change; `docs/model-routing.md` stays as checked below.
 
 ## First attempt record: FAIL (HTTP 400, before auth was evaluated)
 
-The request answered HTTP 400 with this body (`raw/messages.json`):
-
-```json
-{"type":"error","error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session and cannot be routed efficiently. Please see https://opencode.ai/docs/go/#where-can-i-use-it"}}
-```
+The request answered HTTP 400; the body is in `raw/messages.json`.
 
 Go rejected the request for the missing `x-opencode-session` header, which
 the ticket's header list omits, so the request never reached auth: the probe
