@@ -28,6 +28,38 @@ fn canonical(path: &Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn nullable_optional_arguments_read_the_whole_file_and_are_required_in_the_schema() {
+    let dir = TempDir::new("fiber-read-nullable");
+    fs::write(dir.path().join("a.txt"), "first\nsecond\n").unwrap();
+    let output = run(
+        dir.path(),
+        json!({"path": "a.txt", "offset": null, "limit": null, "pages": null}),
+    );
+    assert!(output.error.is_none());
+    assert_eq!(fakes::text_of(&output), "first\nsecond\n");
+    let schema = Files::new(dir.path().to_path_buf())
+        .read()
+        .definition()
+        .input_schema;
+    assert_eq!(
+        schema["required"],
+        json!(["path", "offset", "limit", "pages"])
+    );
+    assert_eq!(
+        schema["properties"]["offset"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        schema["properties"]["limit"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        schema["properties"]["pages"]["type"],
+        json!(["string", "null"])
+    );
+}
+
+#[test]
 fn the_bound_sits_above_the_tools_own_cut() {
     let files = Files::new(Path::new("/ws").to_path_buf());
     assert_eq!(

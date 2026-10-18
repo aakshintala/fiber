@@ -1,0 +1,59 @@
+{
+ "url": "https://openrouter.ai/api/v1/messages",
+ "request": {
+  "model": "anthropic/claude-haiku-4.5",
+  "max_tokens": 256,
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'. Pass null for every other argument."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file.",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      },
+      "offset": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "note": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "all": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "path",
+      "offset",
+      "note",
+      "all"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  ],
+  "tool_choice": {
+   "type": "auto"
+  }
+ },
+ "status": 200,
+ "elapsed_s": 2.67,
+ "body": "{\"id\":\"msg_bdrk_afvhudyhspww6trwxbnijq5qefgzk6ekjbp2wgqhknaavl7ljcjq\",\"type\":\"message\",\"role\":\"assistant\",\"container\":null,\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_bdrk_01NFP9hDyiAZxKtH96wih8wN\",\"caller\":{\"type\":\"direct\"},\"name\":\"read\",\"input\":{\"path\":\"a.txt\",\"offset\":null,\"note\":null,\"all\":null}}],\"model\":\"anthropic/claude-haiku-4.5\",\"stop_reason\":\"tool_use\",\"stop_details\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":626,\"output_tokens\":105,\"output_tokens_details\":{\"thinking_tokens\":0},\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"inference_geo\":null,\"server_tool_use\":null,\"service_tier\":\"standard\",\"speed\":\"standard\",\"cost\":0.001151,\"is_byok\":false,\"cost_details\":{\"upstream_inference_cost\":0.001151,\"upstream_inference_prompt_cost\":0.000626,\"upstream_inference_completions_cost\":0.000525}},\"context_management\":null,\"provider\":\"Amazon Bedrock\"}"
+}

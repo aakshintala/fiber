@@ -223,6 +223,8 @@ impl Trace {
 /// Its schema takes a required string `city` and an optional integer `days`.
 pub(crate) struct TestTool {
     pub(crate) name: &'static str,
+    /// An override for the default city and days schema.
+    pub(crate) schema: Option<Value>,
     /// What its effects function returns.
     pub(crate) effects: Result<DeclaredEffects, EffectsError>,
     /// The call's primary argument, as its tool reads it.
@@ -269,6 +271,7 @@ impl TestTool {
     ) -> Self {
         Self {
             name,
+            schema: None,
             effects: Ok(DeclaredEffects {
                 effects,
                 reversible: true,
@@ -318,14 +321,16 @@ impl Tool for TestTool {
         ToolDefinition {
             name: self.name.into(),
             description: format!("The test tool {}.", self.name),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string"},
-                    "days": {"type": "integer"}
-                },
-                "required": ["city"],
-                "additionalProperties": false
+            input_schema: self.schema.clone().unwrap_or_else(|| {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "days": {"type": "integer"}
+                    },
+                    "required": ["city"],
+                    "additionalProperties": false
+                })
             }),
             deferred: false,
             hosted: None,
