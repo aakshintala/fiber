@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 
 use contract::session_argv::SessionArgv;
@@ -69,7 +69,7 @@ impl Starter for SpawnStarter {
     ) -> std::io::Result<Box<dyn Started>> {
         let environment = self.environments.get();
         let args = SessionArgv {
-            id: id.0.clone(),
+            id: id.clone(),
             workspace: workspace.to_path_buf(),
             resume: true,
             credential: credential.map(str::to_owned),
@@ -131,7 +131,7 @@ fn start_command(
     session_command_from(
         exe,
         SessionArgv {
-            id: id.0.clone(),
+            id: id.clone(),
             workspace: workspace.to_path_buf(),
             model: model.map(str::to_owned),
             overrides: overrides.iter().map(|text| (*text).to_owned()).collect(),
@@ -176,12 +176,12 @@ fn session_command(
     session_command_from(
         exe,
         SessionArgv {
-            id: id.0.clone(),
+            id: id.clone(),
             workspace: workspace.to_path_buf(),
             model: model.map(str::to_owned),
             resume,
             worktree,
-            rewound_from: rewound_from.map(|from| from.0.clone()),
+            rewound_from: rewound_from.cloned(),
             login_shell,
             ..SessionArgv::default()
         },
@@ -212,7 +212,7 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
             state: shared,
         })),
         Err(error) => {
-            let mut child = lock(&child);
+            let mut child = support::lock(&child);
             match child.kill() {
                 Ok(()) | Err(_) => {}
             }
@@ -244,7 +244,7 @@ struct State {
 
 impl Started for Spawned {
     fn exited(&self) -> Option<Failure> {
-        let state = lock(&self.state.0);
+        let state = support::lock(&self.state.0);
         if !state.exited {
             return None;
         }
@@ -257,7 +257,7 @@ impl Started for Spawned {
     }
 
     fn wait_exited(&self) -> Option<Failure> {
-        let mut state = lock(&self.state.0);
+        let mut state = support::lock(&self.state.0);
         while !state.exited {
             state = self
                 .state
@@ -273,7 +273,7 @@ impl Started for Spawned {
 /// Reads the session's stdout to EOF, keeping the `fiber_exited` line
 /// printed last, then reaps the child.
 fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
-    let mut child = lock(child);
+    let mut child = support::lock(child);
     if let Some(stdout) = child.stdout.take() {
         let mut read = BufReader::new(stdout);
         let mut buf = String::new();
@@ -283,7 +283,7 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
                     if let Some(failure) = fiber_exited_error(&buf) {
-                        lock(&shared.0).failure = Some(failure);
+                        support::lock(&shared.0).failure = Some(failure);
                     }
                 }
             }
@@ -292,7 +292,7 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
     match child.wait() {
         Ok(_) | Err(_) => {}
     }
-    lock(&shared.0).exited = true;
+    support::lock(&shared.0).exited = true;
     shared.1.notify_all();
 }
 
@@ -311,10 +311,6 @@ fn fiber_exited_error(line: &str) -> Option<Failure> {
         retry_after_ms: None,
         provider: None,
     })
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

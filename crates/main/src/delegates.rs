@@ -524,7 +524,7 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     // parent's source too (`docs/invocation.md`, "A session's
     // environment").
     let args = contract::session_argv::SessionArgv {
-        id: launched.session_id.0.clone(),
+        id: launched.session_id.clone(),
         workspace: launched.workspace.clone(),
         model: (!launched.resume).then(|| launched.model.clone()),
         overrides,
@@ -533,8 +533,8 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         credential: None,
         worktree: false,
         rewound_from: None,
-        parent: Some(launched.parent.0.clone()),
-        delegate_id: Some(launched.job_id.0.clone()),
+        parent: Some(launched.parent.clone()),
+        delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),
         login_shell: r#loop::variables_source() == VariablesSource::LoginShell,
     };

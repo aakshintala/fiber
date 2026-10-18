@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use super::*;
 
+use crate::{JobId, SessionId};
+
 fn rendered(argv: &[OsString]) -> Vec<String> {
     argv.iter()
         .map(|arg| arg.to_string_lossy().into_owned())
@@ -20,7 +22,7 @@ fn rendered(argv: &[OsString]) -> Vec<String> {
 #[test]
 fn minimal_value_is_session_id_and_workspace() {
     let args = SessionArgv {
-        id: "s_0123456789abcdef".to_owned(),
+        id: SessionId("s_0123456789abcdef".to_owned()),
         workspace: PathBuf::from("/w"),
         ..SessionArgv::default()
     };
@@ -37,7 +39,7 @@ fn minimal_value_is_session_id_and_workspace() {
 #[test]
 fn full_value_lists_every_field_in_order_with_login_shell_last() {
     let args = SessionArgv {
-        id: "s_0123456789abcdef".to_owned(),
+        id: SessionId("s_0123456789abcdef".to_owned()),
         workspace: PathBuf::from("/w"),
         model: Some("fake/m".to_owned()),
         overrides: vec!["a=1".to_owned(), "b=2".to_owned()],
@@ -45,9 +47,9 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
         resume: true,
         credential: Some("work".to_owned()),
         worktree: true,
-        rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
-        parent: Some("s_bbbbbbbbbbbbbbbb".to_owned()),
-        delegate_id: Some("j_cccccccccccccccc".to_owned()),
+        rewound_from: Some(SessionId("s_aaaaaaaaaaaaaaaa".to_owned())),
+        parent: Some(SessionId("s_bbbbbbbbbbbbbbbb".to_owned())),
+        delegate_id: Some(JobId("j_cccccccccccccccc".to_owned())),
         depth: Some(2),
         login_shell: true,
     };
@@ -84,7 +86,7 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
 #[test]
 fn below_and_above_the_dash_c_edge_attach_or_split() {
     let attached = SessionArgv {
-        id: String::new(),
+        id: SessionId(String::new()),
         workspace: PathBuf::new(),
         overrides: vec!["-x=1".to_owned()],
         ..SessionArgv::default()
@@ -131,7 +133,7 @@ fn workspace_named_like_a_flag_stays_one_value() {
 #[test]
 fn non_utf8_workspace_passes_through_byte_for_byte() {
     let args = SessionArgv {
-        id: "s_0123456789abcdef".to_owned(),
+        id: SessionId("s_0123456789abcdef".to_owned()),
         workspace: PathBuf::from(OsString::from_vec(b"/w/\xff".to_vec())),
         ..SessionArgv::default()
     };
@@ -142,7 +144,7 @@ fn non_utf8_workspace_passes_through_byte_for_byte() {
 #[test]
 fn default_renders_as_the_minimal_value_with_empty_id_and_workspace() {
     let args = SessionArgv::default();
-    assert_eq!(args.id, String::new());
+    assert_eq!(args.id, SessionId(String::new()));
     assert_eq!(args.workspace, PathBuf::new());
     assert_eq!(
         args.to_argv(),

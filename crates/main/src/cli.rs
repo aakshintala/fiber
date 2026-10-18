@@ -743,7 +743,7 @@ pub(crate) struct SessionArgs {
 impl From<&SessionArgs> for contract::session_argv::SessionArgv {
     fn from(args: &SessionArgs) -> Self {
         Self {
-            id: args.id.clone(),
+            id: contract::SessionId(args.id.clone()),
             workspace: args.workspace.clone(),
             model: args.model.clone(),
             overrides: args.overrides.clone(),
@@ -751,9 +751,9 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             resume: args.resume,
             credential: args.credential.clone(),
             worktree: args.worktree,
-            rewound_from: args.rewound_from.clone(),
-            parent: args.parent.clone(),
-            delegate_id: args.delegate_id.clone(),
+            rewound_from: args.rewound_from.clone().map(contract::SessionId),
+            parent: args.parent.clone().map(contract::SessionId),
+            delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
             login_shell: args.login_shell,
         }

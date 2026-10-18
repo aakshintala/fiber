@@ -85,7 +85,7 @@ fn drained(child: Child) -> Arc<(Mutex<State>, Condvar)> {
 }
 
 fn failure_of(state: &Arc<(Mutex<State>, Condvar)>) -> Option<Failure> {
-    lock(&state.0).failure.clone()
+    support::lock(&state.0).failure.clone()
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn exited_is_none_while_the_session_runs() {
 fn exited_reports_the_drained_failure() {
     let child = printing(&[exited_line("no_model", "No model is configured.")]);
     let state = drained(child);
-    assert!(lock(&state.0).exited);
+    assert!(support::lock(&state.0).exited);
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
         state,
@@ -138,7 +138,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
         "noise".to_owned(),
     ]);
     let state = drained(child);
-    assert!(lock(&state.0).exited);
+    assert!(support::lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
     assert_eq!(failure.message, "The request was bad.");
@@ -148,7 +148,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
 fn drain_marks_exited_once_stdout_closes() {
     let child = printing(&[]);
     let state = drained(child);
-    assert!(lock(&state.0).exited);
+    assert!(support::lock(&state.0).exited);
     assert!(failure_of(&state).is_none());
 }
 

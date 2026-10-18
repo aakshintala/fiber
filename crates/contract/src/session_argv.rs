@@ -6,13 +6,15 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use crate::{JobId, SessionId};
+
 /// One session command line, as data: the order and the `--name=value`
 /// rules live in [`SessionArgv::to_argv`], the only code that writes a
 /// session argv.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionArgv {
     /// The session's id, minted by whoever starts it.
-    pub id: String,
+    pub id: SessionId,
     /// The workspace the session runs in.
     pub workspace: PathBuf,
     /// The model for this run, as a person types it.
@@ -29,15 +31,35 @@ pub struct SessionArgv {
     pub worktree: bool,
     /// Continue the session this rewind names as the session its
     /// `rewound` line points at.
-    pub rewound_from: Option<String>,
+    pub rewound_from: Option<SessionId>,
     /// The parent session: its id.
-    pub parent: Option<String>,
+    pub parent: Option<SessionId>,
     /// The delegate's job id in its parent session.
-    pub delegate_id: Option<String>,
+    pub delegate_id: Option<JobId>,
     /// This session's depth in the delegate tree, passed by its parent.
     pub depth: Option<u32>,
     /// The session's environment came from the login-shell capture.
     pub login_shell: bool,
+}
+
+impl Default for SessionArgv {
+    fn default() -> Self {
+        Self {
+            id: SessionId(String::new()),
+            workspace: PathBuf::new(),
+            model: None,
+            overrides: Vec::new(),
+            prompt: None,
+            resume: false,
+            credential: None,
+            worktree: false,
+            rewound_from: None,
+            parent: None,
+            delegate_id: None,
+            depth: None,
+            login_shell: false,
+        }
+    }
 }
 
 impl SessionArgv {
@@ -52,7 +74,7 @@ impl SessionArgv {
     #[must_use]
     pub fn to_argv(&self) -> Vec<OsString> {
         let mut argv = vec![OsString::from("session")];
-        argv.push(OsString::from(format!("--id={}", self.id)));
+        argv.push(OsString::from(format!("--id={}", self.id.0)));
         let mut workspace = OsString::from("--workspace=");
         workspace.push(&self.workspace);
         argv.push(workspace);
@@ -80,13 +102,13 @@ impl SessionArgv {
             argv.push(OsString::from("--worktree"));
         }
         if let Some(rewound_from) = &self.rewound_from {
-            argv.push(OsString::from(format!("--rewound-from={rewound_from}")));
+            argv.push(OsString::from(format!("--rewound-from={}", rewound_from.0)));
         }
         if let Some(parent) = &self.parent {
-            argv.push(OsString::from(format!("--parent={parent}")));
+            argv.push(OsString::from(format!("--parent={}", parent.0)));
         }
         if let Some(delegate_id) = &self.delegate_id {
-            argv.push(OsString::from(format!("--delegate-id={delegate_id}")));
+            argv.push(OsString::from(format!("--delegate-id={}", delegate_id.0)));
         }
         if let Some(depth) = self.depth {
             argv.push(OsString::from(format!("--depth={depth}")));
