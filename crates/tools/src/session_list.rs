@@ -29,7 +29,7 @@ impl SessionList {
 impl Tool for SessionList {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: "session_list".into(),
+            name: "session_list".to_owned(),
             description: "Lists every running Fiber session of this account: this one, other projects' sessions, delegates and their siblings. Each entry gives the session's id, name and workspace, and its parent's id when it is a delegate; this session's entry has \"self\": true. A running session that did not report in time is listed by id with \"answering\": false.".into(),
             input_schema: json!({"type":"object","properties":{},"required":[],"additionalProperties":false}),
             deferred: false,
