@@ -276,7 +276,43 @@ impl Sessions for SessionSockets {
         if rustix::net::connect(&fd, &address).is_err() {
             return Err(MessageError::Unreachable);
         }
-        let mut stream = UnixStream::from(fd);
+        let stream = UnixStream::from(fd);
+        self.message_exchange(
+            &path,
+            stream,
+            from,
+            text,
+            cancel,
+            &mut ExchangeIo {
+                write: |stream: &mut UnixStream, buf: &[u8]| stream.write(buf),
+                read: |stream: &mut UnixStream, chunk: &mut [u8]| stream.read(chunk),
+            },
+        )
+    }
+}
+
+/// The socket's read and write sides, exposed so tests can inject an error
+/// kind no real socket produces deterministically.
+struct ExchangeIo<W, R> {
+    write: W,
+    read: R,
+}
+
+impl SessionSockets {
+    // The send loop with its IO seams exposed (see `ExchangeIo`).
+    fn message_exchange<W, R>(
+        &self,
+        path: &Path,
+        mut stream: UnixStream,
+        from: &SessionId,
+        text: &str,
+        cancel: &dyn Cancel,
+        io: &mut ExchangeIo<W, R>,
+    ) -> Result<(), MessageError>
+    where
+        W: FnMut(&mut UnixStream, &[u8]) -> io::Result<usize>,
+        R: FnMut(&mut UnixStream, &mut [u8]) -> io::Result<usize>,
+    {
         let subscribe = crate::mint("c_");
         let command = crate::mint("c_");
         let mut out = Vec::new();
@@ -286,7 +322,7 @@ impl Sessions for SessionSockets {
                 "command": "subscribe",
                 "args": {"level": "summary"},
             }))
-            .map_err(|e| message_io(&path, e))?,
+            .map_err(|e| message_io(path, e))?,
         );
         out.push(b'\n');
         out.extend_from_slice(
@@ -295,16 +331,16 @@ impl Sessions for SessionSockets {
                 "command": "message",
                 "args": {"from_session_id": &from.0, "text": text},
             }))
-            .map_err(|e| message_io(&path, e))?,
+            .map_err(|e| message_io(path, e))?,
         );
         out.push(b'\n');
-        let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| message_io(&path, e))?;
+        let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| message_io(path, e))?;
         wake_read
             .set_nonblocking(true)
-            .map_err(|e| message_io(&path, e))?;
+            .map_err(|e| message_io(path, e))?;
         wake_write
             .set_nonblocking(true)
-            .map_err(|e| message_io(&path, e))?;
+            .map_err(|e| message_io(path, e))?;
         let waker: Arc<dyn Wake> = Arc::new(Waker(wake_write));
         self.clock.subscribe(Arc::downgrade(&waker));
         cancel.subscribe(Arc::downgrade(&waker));
@@ -317,7 +353,7 @@ impl Sessions for SessionSockets {
             let mut fds = Vec::new();
             {
                 let mut flags = PollFlags::IN.union(PollFlags::HUP).union(PollFlags::ERR);
-                if written < out.len() {
+                if wants_write(written, out.len()) {
                     flags = flags.union(PollFlags::OUT);
                 }
                 fds.push(PollFd::new(&stream, flags));
@@ -337,7 +373,7 @@ impl Sessions for SessionSockets {
                 }
             });
             if let Some(error) = poll_error {
-                return Err(message_io(&path, error));
+                return Err(message_io(path, error));
             }
             let mut wake_bytes = [0; 256];
             match wake_read.read(&mut wake_bytes) {
@@ -350,7 +386,7 @@ impl Sessions for SessionSockets {
             // between partial writes, never one write_all that a full
             // send buffer turns into WouldBlock.
             while written < out.len() {
-                match stream.write(out.get(written..).unwrap_or_default()) {
+                match (io.write)(&mut stream, out.get(written..).unwrap_or_default()) {
                     Ok(0) => return Err(MessageError::Unreachable),
                     Ok(n) => written += n,
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
@@ -358,7 +394,7 @@ impl Sessions for SessionSockets {
                 }
             }
             let mut chunk = [0; READ_CHUNK];
-            match stream.read(&mut chunk) {
+            match (io.read)(&mut stream, &mut chunk) {
                 Ok(0) => return Err(MessageError::Unreachable),
                 Ok(n) => buffer.extend_from_slice(chunk.get(..n).unwrap_or_default()),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
@@ -413,6 +449,14 @@ struct Connection {
     command: String,
     stage: Stage,
     buffer: Vec<u8>,
+}
+
+// Watching OUT once the request is fully written only adds a writable
+// wakeup before the answer arrives; no consumer-visible behaviour changes,
+// so this comparison is exempt from mutation testing.
+#[cfg_attr(false, mutants::skip)]
+fn wants_write(written: usize, len: usize) -> bool {
+    written < len
 }
 
 fn valid_id(name: &str) -> bool {

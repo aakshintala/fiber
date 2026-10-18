@@ -17,6 +17,7 @@ use fakes::{Deadline, TempDir};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -756,6 +757,220 @@ fn accepted(command: &str) -> Value {
 
 fn rejected(command: &str, code: &str, message: &str) -> Value {
     serde_json::json!({"kind":"command_rejected", "schema_version":contract::SCHEMA_VERSION, "payload":{"command_id":command, "code":code, "message":message}})
+}
+
+fn exchange_pair(deadline: &Deadline) -> (UnixStream, UnixStream) {
+    let (client, peer) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    peer.set_read_timeout(Some(deadline.left().max(Duration::from_millis(1))))
+        .unwrap();
+    peer.set_write_timeout(Some(deadline.left().max(Duration::from_millis(1))))
+        .unwrap();
+    (client, peer)
+}
+
+fn spawn_message_exchange<W, R>(
+    sockets: SessionSockets,
+    path: PathBuf,
+    stream: UnixStream,
+    text: String,
+    cancel: Arc<CancelToken>,
+    io: ExchangeIo<W, R>,
+) -> Receiver<Result<(), MessageError>>
+where
+    W: FnMut(&mut UnixStream, &[u8]) -> io::Result<usize> + Send + 'static,
+    R: FnMut(&mut UnixStream, &mut [u8]) -> io::Result<usize> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let from = SessionId(FROM.into());
+        let mut io = io;
+        let result =
+            sockets.message_exchange(&path, stream, &from, &text, cancel.as_ref(), &mut io);
+        tx.send(result).unwrap();
+    });
+    rx
+}
+
+fn send_ignored(stream: &mut UnixStream, line: &str) {
+    // The client may have closed already; the assertion below is on the
+    // client's answer, so a refused answer write is ignored.
+    match stream.write_all(line.as_bytes()) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+#[test]
+fn message_write_error_is_unreachable_not_retried() {
+    let home = Home::new();
+    let path = home.run().join(ID);
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let (client, mut peer) = exchange_pair(&deadline);
+    let result = spawn_message_exchange(
+        home.client(),
+        path,
+        client,
+        "hello".into(),
+        Arc::new(CancelToken::new()),
+        ExchangeIo {
+            write: {
+                let mut failed = false;
+                move |stream: &mut UnixStream, buf: &[u8]| {
+                    if !failed {
+                        failed = true;
+                        return Err(io::Error::other("injected write error"));
+                    }
+                    stream.write(buf)
+                }
+            },
+            read: |stream: &mut UnixStream, chunk: &mut [u8]| stream.read(chunk),
+        },
+    );
+    // A failed write reports unreachable at once: the peer reads end of
+    // file, with no command line before it.
+    let mut reader = BufReader::new(peer.try_clone().unwrap());
+    let mut first = String::new();
+    if reader.read_line(&mut first).unwrap() != 0 {
+        // The guard-ignoring mutant retried the failed write and pipelined
+        // the commands: answer them so it returns Ok(()) fast, not at the
+        // deadline, and the assertion below still kills it.
+        let first: Value = serde_json::from_str(&first).unwrap();
+        let mut second = String::new();
+        reader.read_line(&mut second).unwrap();
+        let second: Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(first["command"], "subscribe");
+        assert_eq!(second["command"], "message");
+        send_ignored(
+            &mut peer,
+            &format!("{}\n", accepted(first["id"].as_str().unwrap())),
+        );
+        send_ignored(
+            &mut peer,
+            &format!("{}\n", accepted(second["id"].as_str().unwrap())),
+        );
+    }
+    assert_eq!(
+        deadline.recv_or_fail(&result, "write error is unreachable"),
+        Err(MessageError::Unreachable)
+    );
+}
+
+#[test]
+fn message_read_error_is_unreachable_not_retried() {
+    let home = Home::new();
+    let path = home.run().join(ID);
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let (client, mut peer) = exchange_pair(&deadline);
+    let result = spawn_message_exchange(
+        home.client(),
+        path,
+        client,
+        "hello".into(),
+        Arc::new(CancelToken::new()),
+        ExchangeIo {
+            write: |stream: &mut UnixStream, buf: &[u8]| stream.write(buf),
+            read: {
+                let mut failed = false;
+                move |stream: &mut UnixStream, chunk: &mut [u8]| {
+                    if !failed {
+                        failed = true;
+                        return Err(io::Error::other("injected read error"));
+                    }
+                    stream.read(chunk)
+                }
+            },
+        },
+    );
+    let (exchange, _) = read_exchange(&peer);
+    send_ignored(&mut peer, &format!("{}\n", accepted(&exchange.sub)));
+    send_ignored(&mut peer, &format!("{}\n", accepted(&exchange.msg)));
+    assert_eq!(
+        deadline.recv_or_fail(&result, "read error is unreachable"),
+        Err(MessageError::Unreachable)
+    );
+    assert_closed(&peer);
+}
+
+#[test]
+fn message_prefix_at_the_cap_completes() {
+    // At one below and at exactly MAX_LINE, an unterminated prefix is not
+    // over the cap: the noise line is skipped once completed and the
+    // answer is delivered. The at-cap case kills both buffer-len mutants.
+    for size in [MAX_LINE - 1, MAX_LINE] {
+        let home = Home::new();
+        let path = home.run().join(ID);
+        let deadline = Deadline::after(fakes::deadline::WAITS);
+        let (client, mut peer) = exchange_pair(&deadline);
+        let (sig_tx, sig_rx) = mpsc::channel();
+        let fired = Arc::new(AtomicBool::new(false));
+        let total = Arc::new(AtomicUsize::new(0));
+        let result = spawn_message_exchange(
+            home.client(),
+            path,
+            client,
+            "hello".into(),
+            Arc::new(CancelToken::new()),
+            ExchangeIo {
+                write: |stream: &mut UnixStream, buf: &[u8]| stream.write(buf),
+                read: {
+                    let fired = Arc::clone(&fired);
+                    let total = Arc::clone(&total);
+                    move |stream: &mut UnixStream, chunk: &mut [u8]| {
+                        let n = stream.read(chunk)?;
+                        if total.fetch_add(n, Ordering::SeqCst) + n >= size
+                            && !fired.swap(true, Ordering::SeqCst)
+                        {
+                            match sig_tx.send(()) {
+                                Ok(()) | Err(_) => {}
+                            }
+                        }
+                        Ok(n)
+                    }
+                },
+            },
+        );
+        let (exchange, _) = read_exchange(&peer);
+        peer.write_all(&vec![b'x'; size]).unwrap();
+        deadline.recv_or_fail(&sig_rx, "client read the capped prefix");
+        // This newline ends the noise line at exactly `size`; the answer
+        // after it is delivered.
+        send_ignored(&mut peer, &format!("\n{}\n", accepted(&exchange.msg)));
+        assert_eq!(
+            deadline.recv_or_fail(&result, "capped prefix completes"),
+            Ok(()),
+            "size {size}"
+        );
+        assert_closed(&peer);
+    }
+}
+
+#[test]
+fn message_prefix_over_the_cap_is_unreachable() {
+    // One byte past the cap with no newline ends the connection, while the
+    // peer holds its side open: no later answer can rescue it.
+    let home = Home::new();
+    let path = home.run().join(ID);
+    let deadline = Deadline::after(fakes::deadline::WAITS);
+    let (client, mut peer) = exchange_pair(&deadline);
+    let result = spawn_message_exchange(
+        home.client(),
+        path,
+        client,
+        "hello".into(),
+        Arc::new(CancelToken::new()),
+        ExchangeIo {
+            write: |stream: &mut UnixStream, buf: &[u8]| stream.write(buf),
+            read: |stream: &mut UnixStream, chunk: &mut [u8]| stream.read(chunk),
+        },
+    );
+    let _ = read_exchange(&peer);
+    peer.write_all(&vec![b'x'; MAX_LINE + 1]).unwrap();
+    assert_eq!(
+        deadline.recv_or_fail(&result, "over-long prefix"),
+        Err(MessageError::Unreachable),
+        "one byte past the cap"
+    );
+    assert_closed(&peer);
 }
 
 fn send_message(
