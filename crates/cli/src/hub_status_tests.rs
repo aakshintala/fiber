@@ -455,17 +455,19 @@ fn ask_restores_blocking_after_a_reply() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = ANSWER;
-    let reply = super::ask(
-        &stream,
-        clock.now() + within,
-        within,
-        &*clock,
-        &mut || {},
-        &mut || {},
-    )
-    .unwrap();
-    assert_eq!(reply.version, "1.2.3");
-    assert!(is_blocking(&stream), "a reply leaves the stream blocking");
+    fakes::within("the ask", DEADLINE, move || {
+        let reply = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        )
+        .unwrap();
+        assert_eq!(reply.version, "1.2.3");
+        assert!(is_blocking(&stream), "a reply leaves the stream blocking");
+    });
 }
 
 #[test]
@@ -475,21 +477,23 @@ fn ask_restores_blocking_after_a_close_before_the_answer() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = ANSWER;
-    let Err(error) = super::ask(
-        &stream,
-        clock.now() + within,
-        within,
-        &*clock,
-        &mut || {},
-        &mut || {},
-    ) else {
-        panic!("a close before the answer is an error");
-    };
-    assert!(error.message.contains("closed"), "{}", error.message);
-    assert!(
-        is_blocking(&stream),
-        "a close before the answer leaves the stream blocking"
-    );
+    fakes::within("the ask", DEADLINE, move || {
+        let Err(error) = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        ) else {
+            panic!("a close before the answer is an error");
+        };
+        assert!(error.message.contains("closed"), "{}", error.message);
+        assert!(
+            is_blocking(&stream),
+            "a close before the answer leaves the stream blocking"
+        );
+    });
 }
 
 #[test]
@@ -498,25 +502,27 @@ fn ask_restores_blocking_after_the_deadline() {
     assert!(is_blocking(&stream), "the stream arrives blocking");
     let clock = FakeClock::new();
     let within = Duration::ZERO;
-    let Err(error) = super::ask(
-        &stream,
-        clock.now() + within,
-        within,
-        &*clock,
-        &mut || {},
-        &mut || {},
-    ) else {
-        panic!("a deadline is an error");
-    };
-    assert!(
-        error.message.contains("did not answer"),
-        "{}",
-        error.message
-    );
-    assert!(
-        is_blocking(&stream),
-        "a deadline leaves the stream blocking"
-    );
+    fakes::within("the ask", DEADLINE, move || {
+        let Err(error) = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        ) else {
+            panic!("a deadline is an error");
+        };
+        assert!(
+            error.message.contains("did not answer"),
+            "{}",
+            error.message
+        );
+        assert!(
+            is_blocking(&stream),
+            "a deadline leaves the stream blocking"
+        );
+    });
 }
 
 #[test]

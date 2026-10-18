@@ -260,9 +260,7 @@ fn devices(home: &Path) -> Result<Vec<String>, Failure> {
 /// bytes and silence all end there. `before_read` runs just before each
 /// answer read; `before_wait` runs after each wait's deadline check, just
 /// before [`Clock::wait_until`]. The stream comes back blocking with no
-/// read timeout, as it arrived: one restore after the exchange covers
-/// every return, so the body's six error returns and its `?` need none
-/// of their own.
+/// read timeout, as it arrived.
 fn ask(
     stream: &UnixStream,
     deadline: Instant,

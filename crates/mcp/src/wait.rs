@@ -74,12 +74,8 @@ pub(crate) struct Shared {
 impl SharedState {
     /// Whether any pending slot holds a response; read on a guard the
     /// caller already holds, inside `cv.wait_timeout_while`, so the wait
-    /// never locks twice. It stays `cfg(test)` with no outside seam:
-    /// its only callers hold that guard in `await_response`
-    /// (`server_elicit_tests.rs`), while `Shared::view` locks `inner`
-    /// again (a deadlock inside the closure) and `pending` is private
-    /// to `wait`, so reaching it from outside would widen a field or
-    /// spin on `view` instead of waiting on a signal.
+    /// never locks twice. Only `await_response` calls this while holding
+    /// the guard; `view` relocks it and `pending` is private.
     #[cfg(test)]
     pub(crate) fn holds_a_response(&self) -> bool {
         self.pending.values().any(|slot| slot.is_some())
