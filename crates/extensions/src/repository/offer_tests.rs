@@ -38,6 +38,23 @@ fn lines(item: &OfferedItem) -> Vec<&str> {
 }
 
 #[test]
+fn the_offer_lists_each_items_files() {
+    let repo = Repo::new();
+    repo.package("tools/lint", "fiber.test/lint", &json!({}));
+    repo.write("tools/hook.sh", "echo hook");
+    repo.config(&json!({"repository_extensions": [{"path": "tools/lint"}], "mcp": {"servers": {"db": {"command": "db"}}}}));
+    repo.hooks(&json!({"lint": {"command": "tools/hook.sh"}}));
+    let got = offered(&repo);
+    assert_eq!(got.len(), 3);
+    assert_eq!(
+        got[0].files,
+        ["tools/lint/extension.json", "tools/lint/init.lua"]
+    );
+    assert_eq!(got[1].files, ["tools/hook.sh"]);
+    assert!(got[2].files.is_empty());
+}
+
+#[test]
 fn an_extension_summary_shows_what_an_install_shows_and_where_it_is() {
     let repo = Repo::new();
     repo.package(

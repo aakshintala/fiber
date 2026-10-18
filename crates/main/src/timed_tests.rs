@@ -181,6 +181,7 @@ fn session(
         &super::tests::delegates(),
         super::tests::skills(),
         timing,
+        Default::default(),
     )
     .expect("the built-ins");
     (tools, images)

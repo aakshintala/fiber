@@ -58,6 +58,14 @@ impl Fake {
 }
 
 impl RepositoryCode for Fake {
+    fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+        Err(contract::shapes::Failure {
+            code: contract::ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
         let n = self.gathers.fetch_add(1, Ordering::SeqCst) + 1;
         if self.drop_clients_after.lock().unwrap().as_ref() == Some(&n)
@@ -77,6 +85,7 @@ impl RepositoryCode for Fake {
 fn item(kind: OfferedKind, name: &str, required: bool) -> Unapproved {
     Unapproved {
         offered: OfferedItem {
+            files: vec![],
             kind,
             name: name.to_owned(),
             hash: format!("h_{name}"),
@@ -326,6 +335,14 @@ fn a_rejected_reply_skips_nothing_and_a_retry_approves_both() {
         failed: AtomicBool,
     }
     impl RepositoryCode for FailOnce {
+        fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+            Err(contract::shapes::Failure {
+                code: contract::ErrorCode::IoFailed,
+                message: "This fake does not read offered files.".into(),
+                retry_after_ms: None,
+                provider: None,
+            })
+        }
         fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
             Ok(self.list.lock().unwrap().clone())
         }
@@ -1322,6 +1339,7 @@ fn a_headless_resume_over_a_changed_required_item_fails() {
             &Event::RepositoryCodeOffered(contract::events::RepositoryCodeOffered {
                 request_id: RequestId("r_old".into()),
                 items: vec![contract::events::OfferedItem {
+                    files: vec![],
                     kind: OfferedKind::McpServer,
                     name: "db".into(),
                     hash: "h_db".into(),

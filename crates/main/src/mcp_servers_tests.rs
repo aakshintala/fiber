@@ -822,6 +822,7 @@ fn wired(
                 skills,
                 extension_tools,
                 None,
+                Default::default(),
             )
             .expect("the session builds")
         });
@@ -933,6 +934,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
                 skills(),
                 Vec::new(),
                 None,
+                Default::default(),
             )
             .unwrap()
         },

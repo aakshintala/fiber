@@ -13,6 +13,189 @@ use contract::shapes::{Tokens, Usage};
 use fakes::Deadline;
 const DEADLINE: Duration = Duration::from_secs(10);
 
+fn offer_event(id: &str) -> Event {
+    Event::RepositoryCodeOffered(contract::events::RepositoryCodeOffered {
+        request_id: contract::RequestId(id.into()),
+        items: vec![],
+    })
+}
+
+fn resolution_event(id: &str) -> Event {
+    Event::RepositoryCodeResolved(contract::events::RepositoryCodeResolved {
+        request_id: contract::RequestId(id.into()),
+        decisions: vec![],
+    })
+}
+
+fn offer_log() -> (fakes::TempDir, Log) {
+    let sessions = fakes::TempDir::new("log-unit-offer");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    (sessions, log)
+}
+
+#[test]
+fn the_latest_offer_is_kept_until_its_resolution() {
+    let (_sessions, log) = offer_log();
+    let offered = log.append(&offer_event("r1"), None, None).unwrap();
+    assert_eq!(log.latest("repository_code_offered"), Some(offered.clone()));
+    log.append(&resolution_event("r2"), None, None).unwrap();
+    assert_eq!(log.latest("repository_code_offered"), Some(offered));
+    log.append(&resolution_event("r1"), None, None).unwrap();
+    assert!(log.latest("repository_code_offered").is_none());
+}
+
+#[test]
+fn a_second_offer_replaces_the_first() {
+    let (_sessions, log) = offer_log();
+    log.append(&offer_event("r1"), None, None).unwrap();
+    let second = log.append(&offer_event("r2"), None, None).unwrap();
+    assert_eq!(log.latest("repository_code_offered"), Some(second));
+}
+
+fn offer_line(kind: &str, payload: serde_json::Value) -> Envelope {
+    serde_json::from_str(&crate::fixtures::line(kind, "s_1", 1, 0, &payload)).unwrap()
+}
+
+#[test]
+fn preamble_built_ends_the_pending_offer() {
+    let mut latest = BTreeMap::new();
+    keep_latest(
+        &mut latest,
+        &offer_line(
+            "repository_code_offered",
+            serde_json::json!({"request_id": "r1", "items": []}),
+        ),
+    );
+    assert!(latest.contains_key("repository_code_offered"));
+    keep_latest(
+        &mut latest,
+        &offer_line("preamble_built", serde_json::json!({})),
+    );
+    assert!(!latest.contains_key("repository_code_offered"));
+}
+
+fn reopened_offer(lines: &[(&str, serde_json::Value)]) -> Option<Envelope> {
+    let sessions = fakes::TempDir::new("log-unit-reopen-offer");
+    let bytes: String = lines
+        .iter()
+        .enumerate()
+        .map(|(seq, (kind, payload))| {
+            crate::fixtures::line(kind, "s_1", 1, u64::try_from(seq).unwrap(), payload)
+        })
+        .collect();
+    crate::fixtures::session_log(&sessions.path().join("s_1"), bytes.as_bytes());
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.latest("repository_code_offered")
+}
+
+#[test]
+fn a_reopened_log_folds_the_pending_offer() {
+    let (sessions, log) = offer_log();
+    let offered = log.append(&offer_event("r1"), None, None).unwrap();
+    drop(log);
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(log.latest("repository_code_offered"), Some(offered));
+}
+
+#[test]
+fn a_reopened_log_folds_a_resolution() {
+    assert!(
+        reopened_offer(&[
+            (
+                "repository_code_offered",
+                serde_json::json!({"request_id": "r1", "items": []})
+            ),
+            (
+                "repository_code_resolved",
+                serde_json::json!({"request_id": "r1", "decisions": []})
+            )
+        ])
+        .is_none()
+    );
+}
+
+#[test]
+fn a_reopened_log_folds_preamble_built_after_an_offer() {
+    assert!(
+        reopened_offer(&[
+            (
+                "repository_code_offered",
+                serde_json::json!({"request_id": "r1", "items": []})
+            ),
+            ("preamble_built", serde_json::json!({}))
+        ])
+        .is_none()
+    );
+}
+
+#[test]
+fn a_line_whose_payload_does_not_parse_is_not_kept_and_removes_nothing() {
+    let mut latest = BTreeMap::new();
+    let valid = offer_line(
+        "repository_code_offered",
+        serde_json::json!({"request_id": "r1", "items": []}),
+    );
+    for kind in ["repository_code_offered", "repository_code_resolved"] {
+        keep_latest(&mut latest, &offer_line(kind, serde_json::json!({})));
+        assert!(latest.is_empty());
+        keep_latest(&mut latest, &valid);
+        keep_latest(&mut latest, &offer_line(kind, serde_json::json!({})));
+        assert_eq!(latest.get("repository_code_offered"), Some(&valid));
+        latest.clear();
+    }
+}
+
+#[test]
+fn open_refuses_an_offer_pair_line_that_fails_the_envelope_schema() {
+    for kind in ["repository_code_offered", "repository_code_resolved"] {
+        let sessions = fakes::TempDir::new("log-unit-offer-bad-schema");
+        let bytes = format!("{{\"kind\":\"{kind}\",\"seq\":0}}\n");
+        crate::fixtures::session_log(&sessions.path().join("s_1"), bytes.as_bytes());
+        let Err(error) = Log::open(
+            sessions.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        ) else {
+            panic!("{kind} must meet the envelope schema");
+        };
+        assert_eq!(error.code(), ErrorCode::LogCorrupt);
+        assert!(error.to_string().contains("line 1"));
+    }
+}
+
+#[test]
+fn a_subscribers_seed_does_not_carry_the_offer() {
+    let (_sessions, log) = offer_log();
+    log.append(&offer_event("r1"), None, None).unwrap();
+    assert_eq!(log.lock().kept_seed().count(), 0);
+    let seeded = relay(log.watch_all_seeded());
+    let after = log.append(&step(), None, None).unwrap();
+    let deadline = Deadline::after(DEADLINE);
+    let offered = deadline
+        .recv_or_fail(&seeded, "the durable offer in history")
+        .unwrap();
+    assert_eq!(offered.kind, "repository_code_offered");
+    let got = deadline
+        .recv_or_fail(&seeded, "the next live line without a duplicate offer")
+        .unwrap();
+    assert_eq!(got, after);
+}
+
 fn relay(mut watcher: Watcher) -> mpsc::Receiver<Option<Envelope>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {

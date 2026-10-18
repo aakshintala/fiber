@@ -2123,6 +2123,14 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
 struct SummaryRepository;
 
 impl contract::repository::RepositoryCode for SummaryRepository {
+    fn file(&self, _: &str) -> Result<String, contract::shapes::Failure> {
+        Err(contract::shapes::Failure {
+            code: contract::ErrorCode::IoFailed,
+            message: "This fake does not read offered files.".into(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    }
     fn unapproved(
         &self,
     ) -> Result<Vec<contract::repository::Unapproved>, contract::shapes::Failure> {
@@ -2155,6 +2163,7 @@ fn prompts_deferred_by_the_repository_offer_are_answered_after_the_summary() {
                 &Event::RepositoryCodeOffered(RepositoryCodeOffered {
                     request_id: offer.clone(),
                     items: vec![OfferedItem {
+                        files: vec![],
                         kind: OfferedKind::McpServer,
                         name: "summary-code".into(),
                         hash: "h1".into(),

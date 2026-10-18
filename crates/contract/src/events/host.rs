@@ -408,6 +408,11 @@ pub enum CommandResult {
         /// Percent used at which little is left.
         notice_at: f64,
     },
+    /// For `offered_file`: the file's text.
+    OfferedFile {
+        /// The file's full UTF-8 text.
+        text: String,
+    },
     /// For `credentials`.
     Credentials(CredentialLabels),
     /// For `credential`: the provider the switch applies to.

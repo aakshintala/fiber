@@ -108,6 +108,7 @@ pub(crate) struct Gate {
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
     jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
+    repository: OnceLock<Arc<dyn contract::repository::RepositoryCode>>,
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
     hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
@@ -390,6 +391,13 @@ impl Session {
     pub fn jobs(&self, jobs: Arc<dyn contract::jobs::Jobs>) {
         let stored = self.gate.jobs.set(jobs);
         debug_assert!(stored.is_ok(), "jobs is wired once");
+    }
+
+    /// The repository's code, which `offered_file` reads a listed file
+    /// through. With none set, it is rejected `stale_request`.
+    pub fn repository_code(&self, code: Arc<dyn contract::repository::RepositoryCode>) {
+        let stored = self.gate.repository.set(code);
+        debug_assert!(stored.is_ok(), "repository code is wired once");
     }
 
     /// The session's hooks, which receive the loop's inbox beside the jobs.
@@ -685,6 +693,10 @@ impl Gate {
         lock(&self.door).clone()
     }
 
+    pub(crate) fn repository(&self) -> Option<Arc<dyn contract::repository::RepositoryCode>> {
+        self.repository.get().cloned()
+    }
+
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
         self.jobs.get().cloned()
     }
@@ -779,6 +791,7 @@ fn open_in(
         close_now: OnceLock::new(),
         driver_shell: OnceLock::new(),
         jobs: OnceLock::new(),
+        repository: OnceLock::new(),
         hooks: Mutex::new(None),
         door: Mutex::new(None),
         images: OnceLock::new(),

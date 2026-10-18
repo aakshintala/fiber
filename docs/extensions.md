@@ -1650,6 +1650,8 @@ everywhere.
 The summary shows what the manifest and the files tell. It does not list the
 new tools, hooks, watchers or commands an extension adds: a Lua extension
 registers those only when its script runs, and installing runs none of its
-code. The full source is one key away, so a person can read them.
+code. The full source is one key away, so a person can read them. An offer
+lists each item's files; a client reads one with `offered_file`
+(`docs/invocation.md`, "Driver commands").
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsextensionsmd).
