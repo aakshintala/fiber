@@ -23,8 +23,12 @@ impl Queue {
         self.held.pop_front().map_or_else(|| self.rx.try_recv(), Ok)
     }
 
-    pub(crate) fn try_iter(&mut self) -> Vec<Delivery> {
-        self.held.drain(..).chain(self.rx.try_iter()).collect()
+    pub(crate) fn try_iter(&mut self) -> std::vec::IntoIter<Delivery> {
+        self.held
+            .drain(..)
+            .chain(self.rx.try_iter())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     pub(crate) fn recv(&mut self) -> Result<Delivery, RecvError> {

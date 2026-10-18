@@ -396,7 +396,7 @@ impl Loop {
         if let Some(hooks) = self.hooks.clone() {
             self.drain_state(&hooks, Some(turn))?;
         }
-        let waiting: Vec<Delivery> = self.inbox.try_iter();
+        let waiting: Vec<Delivery> = self.inbox.try_iter().collect();
         for delivery in waiting {
             self.admit_running(delivery, turn)?;
         }

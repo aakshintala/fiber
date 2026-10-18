@@ -299,7 +299,7 @@ impl Loop {
     /// then anything already queued, then a wait on the loop's clock until
     /// `until`. Unlike the idle wait it honours `until` while a job runs
     /// and moves no idle state.
-    fn receive(&self, until: Option<Instant>) -> Received {
+    fn receive(&mut self, until: Option<Instant>) -> Received {
         if self.cancel.state() != SignalState::Live {
             return Received::Due;
         }

@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::events::{DelegateStarted, JobStarted};
-use contract::inbox::Delivery;
+use contract::inbox::{Ack, Delivery};
 use contract::{JobId, SessionId};
 
 use super::Queue;
@@ -44,32 +44,32 @@ fn ids(deliveries: Vec<Delivery>) -> Vec<String> {
 fn extension_drain_keeps_other_deliveries_in_order() {
     let (tx, rx) = mpsc::channel();
     let mut queue = Queue::new(rx);
-    tx.send(Delivery::Wake).unwrap();
+    tx.send(Delivery::Cancelled).unwrap();
     tx.send(start("first")).unwrap();
-    tx.send(Delivery::Cancel).unwrap();
+    tx.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();
     assert_eq!(ids(queue.take_extension_jobs()), ["first"]);
     tx.send(start("second")).unwrap();
-    tx.send(Delivery::Wake).unwrap();
+    tx.send(Delivery::Cancelled).unwrap();
     tx.send(start("third")).unwrap();
     assert_eq!(ids(queue.take_extension_jobs()), ["second", "third"]);
     // Repeating the selective drain never returns a held non-start.
     assert!(queue.take_extension_jobs().is_empty());
-    let deliveries = queue.try_iter();
+    let deliveries: Vec<_> = queue.try_iter().collect();
     assert_eq!(deliveries.len(), 3);
-    assert!(matches!(deliveries[0], Delivery::Wake));
-    assert!(matches!(deliveries[1], Delivery::Cancel));
-    assert!(matches!(deliveries[2], Delivery::Wake));
+    assert!(matches!(deliveries[0], Delivery::Cancelled));
+    assert!(matches!(deliveries[1], Delivery::Close(_)));
+    assert!(matches!(deliveries[2], Delivery::Cancelled));
 }
 
 #[test]
 fn try_recv_takes_held_before_receiver() {
     let (tx, rx) = mpsc::channel();
     let mut queue = Queue::new(rx);
-    tx.send(Delivery::Wake).unwrap();
+    tx.send(Delivery::Cancelled).unwrap();
     assert!(queue.take_extension_jobs().is_empty());
-    tx.send(Delivery::Cancel).unwrap();
-    assert!(matches!(queue.try_recv(), Ok(Delivery::Wake)));
-    assert!(matches!(queue.try_recv(), Ok(Delivery::Cancel)));
+    tx.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();
+    assert!(matches!(queue.try_recv(), Ok(Delivery::Cancelled)));
+    assert!(matches!(queue.try_recv(), Ok(Delivery::Close(_))));
     assert!(matches!(queue.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
@@ -77,15 +77,15 @@ fn try_recv_takes_held_before_receiver() {
 fn blocking_reads_return_held_even_after_disconnect() {
     let (tx, rx) = mpsc::channel();
     let mut queue = Queue::new(rx);
-    tx.send(Delivery::Wake).unwrap();
-    tx.send(Delivery::Cancel).unwrap();
+    tx.send(Delivery::Cancelled).unwrap();
+    tx.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();
     assert!(queue.take_extension_jobs().is_empty());
     drop(tx);
     // Disconnection would return an error if either read reached the receiver.
     assert!(matches!(
         queue.recv_timeout(Duration::ZERO),
-        Ok(Delivery::Wake)
+        Ok(Delivery::Cancelled)
     ));
-    assert!(matches!(queue.recv(), Ok(Delivery::Cancel)));
+    assert!(matches!(queue.recv(), Ok(Delivery::Close(_))));
     assert!(matches!(queue.recv(), Err(mpsc::RecvError)));
 }

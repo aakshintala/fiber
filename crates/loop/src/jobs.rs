@@ -207,9 +207,6 @@ impl Loop {
     /// `jobs_pending_notified` with `reason` `unattended` is queued for its
     /// first step. The session does not end.
     pub(crate) fn check_jobs(&mut self, input: &mut crate::inbox::TurnInput) -> Result<(), Error> {
-        for delivery in self.inbox.try_iter() {
-            self.admit_idle(delivery, input)?;
-        }
         let running = self.running();
         self.record_waiting_extension_jobs()?;
         let model = self.model_running(running);

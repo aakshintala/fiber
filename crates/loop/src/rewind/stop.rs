@@ -150,7 +150,7 @@ impl Loop {
     /// stopped, a job's end written and anything else refused as after
     /// `rewound`.
     fn drain_waiting(&mut self) -> Result<(), Error> {
-        let deliveries = self.inbox.try_iter();
+        let deliveries = self.inbox.try_iter().collect::<Vec<_>>();
         for delivery in deliveries {
             self.stop_one(delivery)?;
         }
