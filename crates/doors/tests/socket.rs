@@ -681,6 +681,33 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
             let empty = response(&client, "c_hist0");
             assert_eq!(rejection(&empty), ("invalid_arguments", PAST));
             assert_eq!(command_id(&empty), Some("c_hist0"));
+            send(&client, r#"{"id":"c_empty","command":"history","args":{}}"#);
+            let empty = response(&client, "c_empty");
+            assert_eq!(kind(&empty), "command_accepted", "{empty}");
+            assert_eq!(
+                empty["payload"]["result"]["lines"].as_array().unwrap().len(),
+                0
+            );
+            send(
+                &client,
+                r#"{"id":"c_empty_to","command":"history","args":{"to_seq":3}}"#,
+            );
+            let empty_to = response(&client, "c_empty_to");
+            assert_eq!(kind(&empty_to), "command_accepted", "{empty_to}");
+            assert_eq!(
+                empty_to["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            send(&client, r#"{"id":"c_bare","command":"history"}"#);
+            let bare = response(&client, "c_bare");
+            assert_eq!(kind(&bare), "command_accepted", "{bare}");
+            assert_eq!(
+                bare["payload"]["result"]["lines"].as_array().unwrap().len(),
+                0
+            );
 
             send(&client, r#"{"id":"c_tools","command":"tools"}"#);
             let tools = response(&client, "c_tools");
@@ -698,6 +725,42 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
             assert_eq!(lines.as_array().unwrap().len(), 256);
             assert_eq!(lines[0]["seq"], 0);
             assert_eq!(lines[255]["seq"], 255);
+            let window = |id: &str, args: &str| -> Vec<u64> {
+                send(
+                    &client,
+                    &format!(r#"{{"id":"{id}","command":"history","args":{args}}}"#),
+                );
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+                answer["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line["seq"].as_u64().unwrap())
+                    .collect()
+            };
+            assert_eq!(window("c_last", "{}"), (44..=299).collect::<Vec<u64>>());
+            assert_eq!(
+                window("c_last_over", r#"{"to_seq":5000}"#),
+                (44..=299).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_end", r#"{"to_seq":299}"#),
+                (44..=299).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_edge", r#"{"to_seq":256}"#),
+                (1..=256).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_cap", r#"{"to_seq":255}"#),
+                (0..=255).collect::<Vec<u64>>()
+            );
+            assert_eq!(
+                window("c_last_under", r#"{"to_seq":254}"#),
+                (0..=254).collect::<Vec<u64>>()
+            );
+            assert_eq!(window("c_last_first", r#"{"to_seq":0}"#), vec![0]);
 
             send(
                 &client,
@@ -1055,6 +1118,54 @@ fn history_reads_only_its_window_of_the_log() {
                     .unwrap()
                     .len(),
                 1
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn history_without_from_seq_reads_only_the_last_window() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let log = Arc::clone(&opened.log);
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            for _ in 0..300 {
+                log.append(&step(), None, None).unwrap();
+            }
+            // The line just before the last 256.
+            corrupt(&dir, 43);
+            let client = Client::connect(&socket).unwrap();
+            // A full subscribe would read the bad line in its first page.
+            subscribe(&client, "c_sub", "summary");
+            let last: Vec<u64> = (44..=299).collect();
+            for (id, args) in [("c_last", "{}"), ("c_last_end", r#"{"to_seq":299}"#)] {
+                send(
+                    &client,
+                    &format!(r#"{{"id":"{id}","command":"history","args":{args}}}"#),
+                );
+                let answer = response(&client, id);
+                assert_eq!(kind(&answer), "command_accepted", "{answer}");
+                let got: Vec<u64> = answer["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|line| line["seq"].as_u64().unwrap())
+                    .collect();
+                assert_eq!(got, last, "{id}");
+            }
+            // The window ending one line earlier holds the bad line.
+            send(
+                &client,
+                r#"{"id":"c_bad","command":"history","args":{"to_seq":298}}"#,
+            );
+            assert_eq!(
+                rejection(&response(&client, "c_bad")),
+                ("invalid_arguments", UNFIT)
             );
             Ok(())
         })
