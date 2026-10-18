@@ -1,7 +1,7 @@
 //! Tests for the launch description: pure, over invented identity paths
 //! in a temporary directory, so no test runs a child process.
 
-use super::launch;
+use super::{launch, remote};
 use config::Config;
 
 /// Loads the configuration for `home` and `workspace`, with `overrides`
@@ -557,4 +557,122 @@ fn rail_and_panel_defaults_match_config_table() {
             .unwrap_or_else(|| panic!("{key} has no default"));
         assert_eq!(value.as_f64(), Some(expected), "{key}");
     }
+}
+
+/// A local launch over a home directory, for the remote tests to rebuild
+/// with the same arguments: the client's file values the remote launch
+/// must clear.
+fn fresh_launch(
+    dir: &fakes::TempDir,
+    workspace: &std::path::Path,
+    identity: &std::path::Path,
+    config: &Config,
+    model: Option<String>,
+    overrides: Vec<String>,
+) -> tui::Launch {
+    launch(
+        workspace.to_path_buf(),
+        identity,
+        config,
+        tui::ThemeSetting::Follow,
+        dir.path(),
+        model,
+        overrides,
+    )
+}
+
+#[test]
+fn remote_names_the_hub_and_clears_the_client_file_values() {
+    let dir = fakes::TempDir::new("fiber-launch-remote");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let configured = config(
+        dir.path(),
+        &workspace,
+        vec![
+            "model=client/m".to_owned(),
+            "thinking=high".to_owned(),
+            "scoped_models=[\"a/b\"]".to_owned(),
+        ],
+    );
+    let baseline = fresh_launch(&dir, &workspace, &identity, &configured, None, Vec::new());
+    assert_eq!(baseline.model.as_deref(), Some("client/m"));
+    assert_eq!(baseline.thinking.as_deref(), Some("high"));
+    assert_eq!(baseline.scoped_models, ["a/b"]);
+    let made = remote(
+        fresh_launch(&dir, &workspace, &identity, &configured, None, Vec::new()),
+        "box",
+    );
+    assert_eq!(
+        made.location,
+        tui::LaunchLocation::Remote {
+            hub: "box".to_owned()
+        }
+    );
+    assert_eq!(made.model, None);
+    assert_eq!(made.thinking, None);
+    assert!(made.scoped_models.is_empty());
+    assert_eq!(made.hover, baseline.hover);
+    assert_eq!(made.reduced_motion, baseline.reduced_motion);
+    assert_eq!(made.version, baseline.version);
+    assert_eq!(made.overrides, baseline.overrides);
+    assert_eq!(made.rail_share, baseline.rail_share);
+    assert_eq!(made.panel_cards, baseline.panel_cards);
+    assert_eq!(made.keys.user, baseline.keys.user);
+    assert_eq!(made.images, baseline.images);
+    assert_eq!(made.logo_glyph, baseline.logo_glyph);
+    assert_eq!(made.open_at, baseline.open_at);
+}
+
+#[test]
+fn remote_keeps_a_flag_named_model_and_drops_the_file_value() {
+    let dir = fakes::TempDir::new("fiber-launch-remote-flag");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    let configured = config(dir.path(), &workspace, vec!["model=client/m".to_owned()]);
+    // `--model x` names the chip after the hub read.
+    let made = remote(
+        fresh_launch(
+            &dir,
+            &workspace,
+            &identity,
+            &configured,
+            Some("x".to_owned()),
+            Vec::new(),
+        ),
+        "box",
+    );
+    assert_eq!(made.model.as_deref(), Some("x"));
+    // A later `-c model=` wins over `--model`, as the session reads them.
+    let made = remote(
+        fresh_launch(
+            &dir,
+            &workspace,
+            &identity,
+            &configured,
+            Some("x".to_owned()),
+            vec!["model=y".to_owned()],
+        ),
+        "box",
+    );
+    assert_eq!(made.model.as_deref(), Some("y"));
+    // A `-c thinking=` never fills the chip, so clearing always matches
+    // the local launch.
+    let plain = config(dir.path(), &workspace, Vec::new());
+    let made = remote(
+        fresh_launch(
+            &dir,
+            &workspace,
+            &identity,
+            &plain,
+            None,
+            vec!["thinking=high".to_owned()],
+        ),
+        "box",
+    );
+    assert_eq!(made.thinking, None);
 }
