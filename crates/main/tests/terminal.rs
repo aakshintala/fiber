@@ -2044,9 +2044,9 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
     // click opens the whole text in the overlay (`docs/tui.md`,
     // "Notices").
     let grid = run.wait_screen("the refusal notice", |grid| {
-        grid.rows
-            .iter()
-            .any(|row| row.contains("credential_missing") && row.contains("No credential for"))
+        grid.rows.iter().any(|row| {
+            row.contains("credential_missing") && row.contains("has no credential label")
+        })
     });
     let row = u16::try_from(
         grid.rows
@@ -2072,9 +2072,8 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
         // The overlay wraps at the width, so each fragment fits on
         // one of its rows: the message's start and its credential
         // path, which no wrap splits.
-        grid.contents
-            .contains("No credential for `fake`: nothing is stored in")
-            && grid.contents.contains("credentials/fake/nope,")
+        grid.contents.contains("`nope`. The labels for `fake` are:")
+            && grid.contents.contains("default, home, work")
     });
     assert_eq!(
         server.requests().len(),

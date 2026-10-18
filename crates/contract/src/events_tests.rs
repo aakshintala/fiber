@@ -1691,6 +1691,14 @@ fn every_other_result_still_reads_as_its_own_variant() {
         CommandResult::ArtifactPage { .. }
     ));
     assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "fake", "credentials": []}})),
+        CommandResult::Credentials(_)
+    ));
+    assert!(matches!(
+        result_of(json!({"command_id": "c", "result": {"provider": "other"}})),
+        CommandResult::CredentialSwitch { .. }
+    ));
+    assert!(matches!(
         result_of(json!({"command_id": "c", "result": {"quota": [], "notice_at": 80.0}})),
         CommandResult::Quota { .. }
     ));
@@ -1715,6 +1723,69 @@ fn every_other_result_still_reads_as_its_own_variant() {
         result_of(json!({"command_id": "c", "result": {"output": "o", "process": process}})),
         CommandResult::Shell { .. }
     ));
+}
+
+fn credential_labels() -> CredentialLabels {
+    CredentialLabels {
+        provider: "fake".into(),
+        credentials: vec!["default".into(), "home".into(), "work".into()],
+        credential: Some("home".into()),
+    }
+}
+
+#[test]
+fn a_credentials_result_writes_provider_labels_and_label() {
+    let accepted = CommandAccepted {
+        command_id: CommandId("c".into()),
+        result: Some(CommandResult::Credentials(credential_labels())),
+    };
+    assert_eq!(
+        serde_json::to_value(&accepted).unwrap(),
+        json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})
+    );
+}
+
+#[test]
+fn a_scripted_credentials_result_leaves_out_the_label() {
+    let result = CommandResult::Credentials(CredentialLabels {
+        provider: "scripted".into(),
+        credentials: vec![],
+        credential: None,
+    });
+    let written = serde_json::to_value(&result).unwrap();
+    assert_eq!(written, json!({"provider":"scripted", "credentials":[]}));
+    assert!(written.get("credential").is_none());
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(written).unwrap(),
+        result
+    );
+}
+
+#[test]
+fn a_credentials_result_reads_as_credentials() {
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result": {
+            "provider":"fake", "credentials":["default","home","work"], "credential":"home"
+        }})),
+        CommandResult::Credentials(credential_labels())
+    );
+}
+
+#[test]
+fn a_credential_switch_result_writes_and_reads_only_its_provider() {
+    let result = CommandResult::CredentialSwitch {
+        provider: "other".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"provider":"other"})
+    );
+    assert_eq!(
+        result_of(json!({"command_id":"c", "result":{"provider":"other"}})),
+        result
+    );
 }
 
 #[test]

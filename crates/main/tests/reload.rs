@@ -18,6 +18,26 @@ use std::{
 };
 use support::*;
 
+/// The event kinds without `clients`, in arrival order: it is written
+/// whenever a `full` connection attaches or leaves, so where it lands
+/// among the startup events depends on when the subscribe is handled.
+fn kinds_without_clients(stream: &[Value]) -> Vec<&str> {
+    kinds(stream)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect()
+}
+
+/// Exactly one `clients` event: the startup subscribe attaches once, and
+/// nothing else connects or leaves during the test.
+fn assert_one_clients(stream: &[Value]) {
+    let count = stream
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(count, 1, "{stream:?}");
+}
+
 struct Session {
     child: Child,
     guard: KillGroup,
@@ -63,7 +83,22 @@ impl Session {
         first_line(setup.deadline, &lines);
         let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
-        let stream = until(&client, "startup", |line| line["kind"] == "clients");
+        // `clients` is written whenever a `full` connection attaches, with
+        // no order against the startup events (`docs/events.md`): the wait
+        // returns once both `clients` and `extensions_loaded` have arrived,
+        // in any order, keeping every line in arrival order.
+        let mut seen_clients = false;
+        let mut seen_extensions = false;
+        let stream = until(&client, "startup", |line| {
+            if line["kind"] == "clients" {
+                seen_clients = true;
+            }
+            if line["kind"] == "extensions_loaded" {
+                seen_extensions = true;
+            }
+            seen_clients && seen_extensions
+        });
+        assert_one_clients(&stream);
         Self {
             child,
             guard,
@@ -77,7 +112,6 @@ impl Session {
                 "session_started",
                 "fiber_started",
                 "extensions_loaded",
-                "clients",
             ],
         }
     }
@@ -147,7 +181,13 @@ impl Session {
         assert!(!group_alive(self.setup.deadline, group));
         std::mem::forget(self.guard);
         self.watchdog.stand_down(self.setup.deadline.cleanup());
-        assert_eq!(kinds(&self.stream), self.expected, "{:?}", self.stream);
+        assert_one_clients(&self.stream);
+        assert_eq!(
+            kinds_without_clients(&self.stream),
+            self.expected,
+            "{:?}",
+            self.stream
+        );
         self.stream
     }
 }
@@ -564,11 +604,47 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     session
         .expected
         .extend(["command_accepted", "command_rejected", "fiber_exited"]);
-    assert_eq!(kinds(&session.stream), session.expected);
+    assert_one_clients(&session.stream);
+    assert_eq!(kinds_without_clients(&session.stream), session.expected);
     let rejection = session
         .stream
         .iter()
         .find(|line| line["kind"] == "command_rejected")
         .unwrap();
     assert_eq!(rejection["payload"]["code"], "closing");
+}
+
+#[test]
+fn startup_holds_extensions_loaded_behind_a_fifo_and_counts_clients_once() {
+    // `clients`-first cannot be forced from the test side: the socket
+    // binds in `Session::open` after `parts_with` loads the extensions,
+    // so a blocked startup init leaves no socket to subscribe to, and no
+    // pause point lies between the bind and `extensions_loaded`. This
+    // pins the reachable half instead: `extensions_loaded` held behind
+    // the fifo while the wait still collects both events.
+    let (setup, _server) = fixture();
+    let fifo = setup.root.path().join("startup.fifo");
+    let mut command = Command::new("mkfifo");
+    command.arg(&fifo).process_group(0);
+    assert!(
+        run_to_exit(setup.deadline, "make startup fifo", command)
+            .status
+            .success()
+    );
+    // The startup extension initialization blocks reading the fifo: the
+    // session's socket and first stdout line only exist once it completes,
+    // so the writer below rendezvouses before the subscribe, and the
+    // startup wait still collects both events whatever order they land in.
+    extension(
+        &setup,
+        &format!("host.fs.read({:?})", fifo.to_str().unwrap()),
+    );
+    let (tx, written) = mpsc::channel();
+    thread::spawn(move || {
+        fs::write(fifo, b"").unwrap();
+        tx.send(()).unwrap();
+    });
+    let session = Session::start(setup);
+    session.setup.deadline.recv(&written).unwrap();
+    session.finish();
 }

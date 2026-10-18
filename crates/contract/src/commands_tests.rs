@@ -96,6 +96,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "commands"}),
         json!({"id": "c", "command": "skills"}),
         json!({"id": "c", "command": "quota"}),
+        json!({"id": "c", "command": "credentials"}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
         json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "history", "args": {}}),
@@ -241,6 +242,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("commands", Command::Commands),
         ("skills", Command::Skills),
         ("quota", Command::Quota),
+        ("credentials", Command::Credentials),
         ("close", Command::Close(CloseArgs { now: false })),
     ] {
         let missing = format!(r#"{{"id":"c","command":"{name}"}}"#);
@@ -260,6 +262,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         ("commands", Command::Commands),
         ("skills", Command::Skills),
         ("quota", Command::Quota),
+        ("credentials", Command::Credentials),
     ] {
         let line = CommandLine {
             id: CommandId("c_1".into()),

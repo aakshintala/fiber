@@ -43,6 +43,8 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Commands { .. }
         | CommandResult::Skills { .. }
         | CommandResult::Quota { .. }
+        | CommandResult::Credentials(_)
+        | CommandResult::CredentialSwitch { .. }
         | CommandResult::History { .. }
         | CommandResult::ArtifactPage { .. }
         | CommandResult::OfferedFile { .. }

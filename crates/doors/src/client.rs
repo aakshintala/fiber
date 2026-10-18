@@ -304,6 +304,16 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let (quota, notice_at) = conn.gate.quota();
             accept(conn, id, Some(CommandResult::Quota { quota, notice_at }));
         }
+        Command::Credentials => {
+            let Some(read) = conn.gate.credentials_reader() else {
+                unknown(conn, id, name);
+                return;
+            };
+            match read() {
+                Some(labels) => accept(conn, id, Some(CommandResult::Credentials(labels))),
+                None => reject(conn, Some(id), ErrorCode::Closing, ENDED),
+            }
+        }
         Command::History(args) => {
             // The log is dropped once read, so this connection does not
             // hold the session lock.
@@ -349,6 +359,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Credential(args) => {
             let ack = inbox_ack(conn, id);
+            let ack = conn.gate.with_provider(ack);
             conn.gate.deliver(Delivery::Credential(args, ack));
         }
         Command::Name(args) => {

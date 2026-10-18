@@ -18,7 +18,9 @@ use crate::{failure, mint};
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
-use contract::events::{Clients, CommandInfo, Event, QuotaInfo, SkillInfo, ToolInfo};
+use contract::events::{
+    Clients, CommandInfo, CommandResult, CredentialLabels, Event, QuotaInfo, SkillInfo, ToolInfo,
+};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
@@ -68,6 +70,8 @@ pub struct Replacement {
     pub hooks: Option<Arc<dyn contract::hook::Hooks>>,
 }
 
+type CredentialsRead = Arc<dyn Fn() -> Option<CredentialLabels> + Send + Sync>;
+type AdmittedRead = Arc<dyn Fn() -> String + Send + Sync>;
 type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
 const DEFAULT_QUOTA_NOTICE_AT: f64 = 80.0;
 
@@ -87,6 +91,7 @@ pub(crate) struct Gate {
     /// empty until then.
     skills: Mutex<Vec<SkillInfo>>,
     quota: OnceLock<QuotaRead>,
+    credentials: OnceLock<(CredentialsRead, AdmittedRead)>,
     pub(crate) accepted: Accepted,
     /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
     /// each entry is one admitted command, a job's end or a hook's delivery,
@@ -373,6 +378,13 @@ impl Session {
         debug_assert!(stored.is_ok(), "quota is wired once");
     }
 
+    /// Wires the credential labels reader and the admitted-provider reader
+    /// before the session runs. The latter is called when the loop answers.
+    pub fn credentials(&self, labels: CredentialsRead, admitted: AdmittedRead) {
+        let stored = self.gate.credentials.set((labels, admitted));
+        debug_assert!(stored.is_ok(), "credentials are wired once");
+    }
+
     /// The session's jobs, which the `job_stop` and `background` driver
     /// commands act on (`docs/invocation.md`, "Driver commands"). With none
     /// set, both are rejected `stale_request`: no job or call is running.
@@ -654,6 +666,25 @@ impl Gate {
             .map_or_else(|| (Vec::new(), DEFAULT_QUOTA_NOTICE_AT), |read| read())
     }
 
+    pub(crate) fn credentials_reader(&self) -> Option<CredentialsRead> {
+        self.credentials.get().map(|(labels, _)| Arc::clone(labels))
+    }
+
+    pub(crate) fn with_provider(&self, ack: Ack) -> Ack {
+        let Some((_, admitted)) = self.credentials.get() else {
+            return ack;
+        };
+        let admitted = Arc::clone(admitted);
+        Ack(Box::new(move |answer| {
+            ack.0(match answer {
+                Ok(None) => Ok(Some(CommandResult::CredentialSwitch {
+                    provider: admitted(),
+                })),
+                other => other,
+            });
+        }))
+    }
+
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
         lock(&self.skills).clone()
     }
@@ -753,6 +784,7 @@ fn open_in(
         commands: Mutex::new(Vec::new()),
         skills: Mutex::new(Vec::new()),
         quota: OnceLock::new(),
+        credentials: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
         cancel: OnceLock::new(),
