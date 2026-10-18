@@ -343,6 +343,7 @@ end, { timeout = 1000 })
         process: None,
         spilled: None,
 
+        not_regular: false,
         delivery: None,
     });
     assert!(answer.notices.is_empty(), "{:?}", answer.notices);

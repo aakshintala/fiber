@@ -146,6 +146,7 @@ impl Loop {
                 process: ran.process,
                 spilled: None,
 
+                not_regular: false,
                 delivery: None,
             })
         };
@@ -337,6 +338,7 @@ impl Loop {
                             size,
                         }),
 
+                        not_regular: false,
                         delivery: None,
                     })
                 };
@@ -491,6 +493,7 @@ impl Loop {
                         process,
                         spilled: None,
 
+                        not_regular: false,
                         delivery: None,
                     })
                 };

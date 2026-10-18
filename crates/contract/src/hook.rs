@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
+use crate::ErrorCode;
 use crate::SessionId;
 use crate::events::{
     CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, InputItem, Notice,
@@ -45,6 +46,12 @@ pub struct AfterToolCall<'a> {
     /// `output_file` for a finished job's whole output file. `None` for an
     /// ordinary call.
     pub delivery: Option<JobDelivery>,
+    /// When the `output_file` pass found the path is not a regular file:
+    /// the pass failed before any hook ran, and the answer synthesizes
+    /// that failure from each hook's `on_failure`
+    /// (`docs/extensions.md`, "When a hook fails"). `content` is then
+    /// empty, and no hook runs. False for every other call.
+    pub not_regular: bool,
 }
 
 /// Which job delivery an `after_tool` hook is seeing
@@ -96,6 +103,41 @@ pub enum AfterToolOutcome {
         /// The extension whose hook failed.
         extension: String,
     },
+}
+
+/// The answer synthesizing a failed `output_file` pass over a path that is
+/// not a regular file, from the chain's registered `on_failure` values, in
+/// run order (`docs/extensions.md`, "When a hook fails"): a pure
+/// conversion of the chain's own data, and no hook runs. `chain` holds each
+/// registered `after_tool` hook's extension and whether it is `blocking`.
+/// Empty: there is no pass to fail, so `Unchanged`. A `blocking` hook: the
+/// first one in run order withholds, so the pass fails closed. All
+/// `non-blocking`: `Unchanged` with a `notice` per extension, so the path
+/// is kept and every failure is named.
+pub fn not_regular_answer(chain: &[(String, bool)]) -> AfterToolAnswer {
+    for (extension, blocking) in chain {
+        if *blocking {
+            return AfterToolAnswer {
+                outcome: AfterToolOutcome::Withheld {
+                    extension: extension.clone(),
+                },
+                changed_by: vec![extension.clone()],
+                notices: Vec::new(),
+            };
+        }
+    }
+    AfterToolAnswer {
+        outcome: AfterToolOutcome::Unchanged,
+        changed_by: Vec::new(),
+        notices: chain
+            .iter()
+            .map(|(extension, _)| Notice {
+                code: ErrorCode::HookFailed,
+                message: "The `after_tool` hook failed, so its change was dropped: the job's output file is not a regular file.".to_owned(),
+                extension: Some(extension.clone()),
+            })
+            .collect(),
+    }
 }
 
 /// The answer to an `after_tool` call.

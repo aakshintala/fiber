@@ -329,6 +329,7 @@ fn ask_full(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                     process: Some(&process),
                     spilled: None,
 
+                    not_regular: false,
                     delivery: None,
                 })
                 .notices
@@ -424,6 +425,7 @@ fn ask_plain(session: &Arc<SessionExtensions>, point: &str) -> Vec<Notice> {
                     process: None,
                     spilled: None,
 
+                    not_regular: false,
                     delivery: None,
                 })
                 .notices

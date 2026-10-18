@@ -567,6 +567,7 @@ fn tool_hooks_execute_without_timing() {
                 process: None,
                 spilled: None,
 
+                not_regular: false,
                 delivery: None,
             })
         }

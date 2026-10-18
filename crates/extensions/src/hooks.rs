@@ -746,6 +746,22 @@ impl Hooks for SessionExtensions {
     }
 
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer {
+        // A path that is not a regular file counts as a failure of the
+        // chain's `after_tool` hooks for that pass, under each hook's own
+        // `on_failure` (`docs/extensions.md`, "When a hook fails"). No
+        // hook runs: the answer synthesizes the failure from the
+        // registration, which the pass knows before it opens the file.
+        if call.not_regular {
+            let chain = self
+                .after_tool
+                .iter()
+                .filter_map(|entry| {
+                    let extension = self.lua.get(entry.extension)?;
+                    Some((extension.name().to_owned(), entry.blocking))
+                })
+                .collect::<Vec<_>>();
+            return contract::hook::not_regular_answer(&chain);
+        }
         let mut content: Option<String> = None;
         let mut details: Option<Value> = None;
         let mut artifact: Option<String> = None;

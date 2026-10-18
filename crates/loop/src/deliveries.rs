@@ -235,6 +235,7 @@ impl Loop {
                 details: None,
                 process: completed.process.as_ref(),
                 spilled: None,
+                not_regular: false,
                 delivery: Some(JobDelivery::Completion),
             },
             turn,
@@ -294,6 +295,7 @@ impl Loop {
                 details: None,
                 process: None,
                 spilled: None,
+                not_regular: false,
                 delivery: Some(JobDelivery::Monitor),
             },
             turn,
@@ -350,6 +352,7 @@ impl Loop {
                 details: None,
                 process,
                 spilled: None,
+                not_regular: false,
                 delivery: Some(JobDelivery::Delegate),
             },
             turn,
@@ -574,7 +577,12 @@ impl Loop {
     /// [`OUTPUT_LIMIT`] bytes, else its path and size. A Fiber delegate's
     /// `events.jsonl` is another session's log and is skipped, as is a
     /// job the log never started. With no hooks, or under a shutdown,
-    /// nothing is read.
+    /// nothing is read. A path that is not a regular file counts as a
+    /// failure of the chain's `after_tool` hooks for that pass, under
+    /// each hook's own `on_failure`: a `blocking` hook withholds the
+    /// path, `non-blocking` hooks keep it with a notice each, and no
+    /// registered hook leaves it alone (`docs/extensions.md`, "When a
+    /// hook fails").
     pub(crate) fn redact_output(
         &mut self,
         completed: &JobCompleted,
@@ -604,9 +612,12 @@ impl Loop {
         let path = self.log.dir().join(&started.output_path);
         let read = match read_output(&path, between) {
             Ok(read) => read,
-            Err(_) => {
+            Err(Unreadable::Io) => {
                 replace_output(&path, UNREADABLE_LINE.as_bytes())?;
                 return Ok(());
+            }
+            Err(Unreadable::NotRegular) => {
+                return self.redact_not_regular(&tool, completed, turn, &path);
             }
         };
         let (content, spilled) = match &read {
@@ -629,6 +640,7 @@ impl Loop {
                 details: None,
                 process: completed.process.as_ref(),
                 spilled: spilled.as_ref(),
+                not_regular: false,
                 delivery: Some(JobDelivery::OutputFile),
             },
             turn,
@@ -664,6 +676,54 @@ impl Loop {
         };
         if let Some(replacement) = replacement {
             replace_output(&path, &replacement)?;
+        }
+        Ok(())
+    }
+
+    /// Applies the synthesized failure of an `output_file` pass over a
+    /// path that is not a regular file: the pass asks the chain with no
+    /// input handed over, and a `blocking` answer replaces the path
+    /// itself with the withheld line while any other answer keeps it.
+    /// With no hooks, or under a shutdown, the path is left as it is.
+    fn redact_not_regular(
+        &mut self,
+        tool: &str,
+        completed: &JobCompleted,
+        turn: Option<&TurnId>,
+        path: &Path,
+    ) -> Result<(), crate::Error> {
+        let arguments = Map::new();
+        let Some(AskedDelivery { outcome, .. }) = self.ask_delivery(
+            AfterToolCall {
+                tool,
+                arguments: &arguments,
+                status: call_status(completed.status),
+                content: "",
+                details: None,
+                process: completed.process.as_ref(),
+                spilled: None,
+                delivery: Some(JobDelivery::OutputFile),
+                not_regular: true,
+            },
+            turn,
+            false,
+        )?
+        else {
+            return Ok(());
+        };
+        // No input was handed over, so a change applies to nothing and
+        // the path is kept: only a withheld answer replaces it.
+        let replacement: Option<Vec<u8>> = match outcome {
+            AfterToolOutcome::Unchanged | AfterToolOutcome::Changed { .. } => None,
+            AfterToolOutcome::Withheld { extension } => {
+                Some(format!("{}\n", withheld_line(&extension)).into_bytes())
+            }
+            AfterToolOutcome::Failed(failure) => {
+                Some(format!("{}\n", failed_line(&failure)).into_bytes())
+            }
+        };
+        if let Some(replacement) = replacement {
+            replace_output(path, &replacement)?;
         }
         Ok(())
     }

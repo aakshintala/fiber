@@ -136,6 +136,7 @@ fn exit_state_never_writes_a_dropped_changes_lines() {
                 process: None,
                 spilled: None,
 
+                not_regular: false,
                 delivery: None,
             })
         },

@@ -3476,12 +3476,34 @@ struct RecordingHooks {
     seen: Mutex<Vec<SeenCall>>,
     answer: Mutex<Option<AnswerFn>>,
     staged: Mutex<Vec<StateLine>>,
+    /// The registered `after_tool` chain the `output_file` pass sees:
+    /// each hook's extension and whether it is `blocking`. A probe over
+    /// a path that is not a regular file synthesizes its answer from
+    /// this chain, as the session's own hooks do, without running hooks.
+    chain: Mutex<Vec<(String, bool)>>,
+    /// An answer the next probe over a non-regular path returns instead
+    /// of the chain's synthesis: covers answers no chain produces.
+    probe_override: Mutex<Option<AfterToolAnswer>>,
 }
 
 impl RecordingHooks {
     /// Answers every call with `answer`.
     fn answer_with(&self, answer: impl Fn(&SeenCall) -> AfterToolAnswer + Send + 'static) {
         *self.answer.lock().unwrap() = Some(Box::new(answer));
+    }
+
+    /// Registers the `after_tool` chain the non-regular probe
+    /// synthesizes from: each hook's extension and its `blocking` flag.
+    fn set_chain(&self, chain: &[(&str, bool)]) {
+        *self.chain.lock().unwrap() = chain
+            .iter()
+            .map(|(name, blocking)| ((*name).to_owned(), *blocking))
+            .collect();
+    }
+
+    /// Makes the next non-regular probe return `answer`.
+    fn override_probe(&self, answer: AfterToolAnswer) {
+        *self.probe_override.lock().unwrap() = Some(answer);
     }
 
     /// Stages carried state lines for the next `take_change_state`.
@@ -3569,6 +3591,15 @@ impl Hooks for RecordingHooks {
                 .map(|spilled| (spilled.path.clone(), spilled.size)),
         };
         self.seen.lock().unwrap().push(seen.clone());
+        // A probe over a path that is not a regular file synthesizes
+        // the chain's failure without running hooks: the scripted answer
+        // covers ordinary calls only.
+        if call.not_regular {
+            if let Some(answer) = self.probe_override.lock().unwrap().take() {
+                return answer;
+            }
+            return contract::hook::not_regular_answer(&self.chain.lock().unwrap());
+        }
         match self.answer.lock().unwrap().as_ref() {
             Some(answer) => answer(&seen),
             None => unchanged(),
@@ -4733,6 +4764,7 @@ fn a_missing_output_file_calls_no_output_hook_and_is_replaced_with_the_unreadabl
 fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
     let hooks = Arc::new(RecordingHooks::default());
     hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    hooks.set_chain(&[("redactor", true)]);
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
@@ -4741,11 +4773,13 @@ fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
         .unwrap();
     world.send(held(JOB));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    // No hook ran: the read never follows the link, and the completion
-    // passed through untouched.
+    // No hook ran on the link: the read never follows it, and the
+    // blocking chain withholds the path itself in the probe's place.
     let calls = hooks.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
     assert!(
         std::fs::symlink_metadata(world.dir.join(OUT))
             .unwrap()
@@ -4754,7 +4788,7 @@ fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
     );
     assert_eq!(
         output_bytes(&world, OUT),
-        b"Output withheld: the job's output file could not be read.\n"
+        format!("{}\n", withheld_line()).into_bytes()
     );
     assert_eq!(
         output_bytes(&world, "artifacts/target.log"),
@@ -4767,6 +4801,7 @@ fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
 fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
     let hooks = Arc::new(RecordingHooks::default());
     hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    hooks.set_chain(&[("redactor", true)]);
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
@@ -4783,8 +4818,12 @@ fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
             std::os::unix::fs::symlink(&target, &out).unwrap();
         })
         .unwrap();
-    // The identity check failed the read: no hook ran.
-    assert!(hooks.calls().is_empty());
+    // The identity check failed the read: no hook ran, and the blocking
+    // chain withholds the path itself in the probe's place.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
     assert!(
         std::fs::symlink_metadata(world.dir.join(OUT))
             .unwrap()
@@ -4793,7 +4832,7 @@ fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
     );
     assert_eq!(
         output_bytes(&world, OUT),
-        b"Output withheld: the job's output file could not be read.\n"
+        format!("{}\n", withheld_line()).into_bytes()
     );
     assert_eq!(output_bytes(&world, "artifacts/target.log"), b"target\n");
 }
@@ -4833,6 +4872,7 @@ fn a_pre_existing_sibling_symlink_never_redirects_the_redaction_write() {
 #[cfg(unix)]
 fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
@@ -4841,8 +4881,10 @@ fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     world.send(held(JOB));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let calls = hooks.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
     assert!(
         std::fs::symlink_metadata(world.dir.join(OUT))
             .unwrap()
@@ -4851,13 +4893,14 @@ fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     );
     assert_eq!(
         output_bytes(&world, OUT),
-        b"Output withheld: the job's output file could not be read.\n"
+        format!("{}\n", withheld_line()).into_bytes()
     );
 }
 
 #[test]
 fn a_directory_at_the_output_path_fails_the_turn() {
     let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
@@ -4868,6 +4911,143 @@ fn a_directory_at_the_output_path_fails_the_turn() {
     assert!(outcome.is_err(), "{outcome:?}");
     world.looped = Some(looped);
     assert!(world.dir.join(OUT).is_dir());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_file_with_a_blocking_hook_is_withheld_naming_it() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("lint", false), ("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The probe handed no content over, and the first blocking hook in
+    // run order withholds the path itself: a failure fails closed.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_file_with_only_non_blocking_hooks_is_kept_with_a_notice_each() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("fmt", false), ("lint", false)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The probe handed no content over: every hook's failure is
+    // non-blocking, so the link stays and each hook is named in a notice.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+    let mut extensions: Vec<_> = world
+        .watched()
+        .iter()
+        .filter(|line| line.kind == "notice")
+        .map(|line| {
+            line.payload["extension"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    extensions.sort();
+    assert_eq!(extensions, vec!["fmt".to_owned(), "lint".to_owned()]);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_non_regular_output_path_with_no_after_tool_hook_is_left_alone() {
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // No hook is registered: there is no pass to fail, so the link
+    // stays, the target is untouched, and no notice names anyone.
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
+    assert!(world.watched().iter().all(|line| line.kind != "notice"));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_failed_probe_withholds_the_non_regular_path() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.override_probe(failed_hook());
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    write_output(&world, "artifacts/target.log", b"token TOKEN-1234\n");
+    std::os::unix::fs::symlink(world.dir.join("artifacts/target.log"), world.dir.join(OUT))
+        .unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", failed_line()).into_bytes()
+    );
+    assert_eq!(
+        output_bytes(&world, "artifacts/target.log"),
+        b"token TOKEN-1234\n"
+    );
 }
 
 #[test]

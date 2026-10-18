@@ -525,6 +525,7 @@ fn dispatch(session: &SessionExtensions, point: &str) -> Vec<Context> {
                 process: None,
                 spilled: None,
 
+                not_regular: false,
                 delivery: None,
             });
         }

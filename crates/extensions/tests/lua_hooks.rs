@@ -99,6 +99,7 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
             process: None,
             spilled: None,
 
+            not_regular: false,
             delivery: None,
         });
         match tx.send(answer) {

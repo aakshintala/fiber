@@ -172,6 +172,7 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
             process: None,
             spilled: None,
 
+            not_regular: false,
             delivery: None,
         })
     })
@@ -624,6 +625,7 @@ fn the_hook_is_shown_the_call_and_its_output() {
             process: Some(&process),
             spilled: None,
 
+            not_regular: false,
             delivery: None,
         })
     });
@@ -663,6 +665,7 @@ fn the_hook_is_shown_each_delivery_word_with_the_starting_tool() {
                     details: None,
                     process: None,
                     spilled: None,
+                    not_regular: false,
                     delivery: Some(delivery),
                 })
             }
@@ -688,6 +691,7 @@ fn the_hook_is_shown_each_delivery_word_with_the_starting_tool() {
                 details: None,
                 process: None,
                 spilled: None,
+                not_regular: false,
                 delivery: Some(JobDelivery::Completion),
             })
         }
@@ -722,6 +726,7 @@ fn the_hook_is_shown_a_spilled_output_file_as_path_and_size_without_content() {
             details: None,
             process: None,
             spilled: Some(&file),
+            not_regular: false,
             delivery: Some(JobDelivery::OutputFile),
         })
     });
@@ -729,6 +734,82 @@ fn the_hook_is_shown_a_spilled_output_file_as_path_and_size_without_content() {
         changed_content(&answer),
         Some("nil|/s/s_1/artifacts/s_x.txt|1048591")
     );
+}
+
+/// An `output_file` pass that found no regular file, as the pass asks it:
+/// the pass failed before any hook ran, and no content is handed over.
+#[track_caller]
+fn not_regular(session: &Arc<SessionExtensions>) -> AfterToolAnswer {
+    let session = Arc::clone(session);
+    bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Failed,
+            content: "",
+            details: None,
+            process: None,
+            spilled: None,
+            delivery: Some(JobDelivery::OutputFile),
+            not_regular: true,
+        })
+    })
+}
+
+#[test]
+fn a_not_regular_probe_withholds_on_a_blocking_hook_without_running_it() {
+    let home = Home::new();
+    home.install(
+        "scan",
+        Some(&hook(
+            "blocking",
+            "return { content = call.content .. \"changed\" }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    // Withheld, not Changed: no hook ran on the probe.
+    assert_eq!(
+        answer.outcome,
+        AfterToolOutcome::Withheld {
+            extension: "fiber.test/scan".into(),
+        }
+    );
+    assert!(answer.notices.is_empty());
+}
+
+#[test]
+fn a_not_regular_probe_with_only_non_blocking_hooks_keeps_and_names_each() {
+    let home = Home::new();
+    home.install(
+        "fmt",
+        Some(&hook(
+            "non-blocking",
+            "return { content = call.content .. \"changed\" }",
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    // Unchanged, not Changed: no hook ran on the probe.
+    assert_eq!(answer.outcome, AfterToolOutcome::Unchanged);
+    assert_eq!(answer.notices.len(), 1);
+    assert_eq!(
+        answer.notices[0].extension.as_deref(),
+        Some("fiber.test/fmt")
+    );
+}
+
+#[test]
+fn a_not_regular_probe_without_hooks_is_no_pass_to_fail() {
+    let home = Home::new();
+    home.install("plain", None, &[]);
+    let session = home.load(&[]);
+    let answer = not_regular(&session);
+    assert_eq!(answer.outcome, AfterToolOutcome::Unchanged);
+    assert!(answer.notices.is_empty());
 }
 
 #[test]
@@ -753,6 +834,7 @@ fn the_hook_is_shown_a_small_output_file_as_content_without_path() {
             details: None,
             process: None,
             spilled: None,
+            not_regular: false,
             delivery: Some(JobDelivery::OutputFile),
         })
     });
@@ -778,6 +860,7 @@ fn a_hook_returning_artifact_on_an_output_file_changes_only_the_artifact() {
             details: None,
             process: None,
             spilled: None,
+            not_regular: false,
             delivery: Some(JobDelivery::OutputFile),
         })
     });
@@ -1919,6 +2002,7 @@ fn a_hook_given_a_spilled_call_sees_its_path_and_size() {
             process: None,
             spilled: Some(&file),
 
+            not_regular: false,
             delivery: None,
         })
     });
