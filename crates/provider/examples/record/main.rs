@@ -30,6 +30,11 @@ use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
 use provider::openai_responses::Responses;
 
+#[path = "../../tests/support/record.rs"]
+mod support;
+
+use support::{Parsed, extra_body, extras};
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [protocol, base_url, model, key, request, out, rest @ ..] = args.as_slice() else {
@@ -56,46 +61,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// The trailing arguments: headers to send, and at most one `@FILE` path
-/// holding the `extra_body` object.
-type Parsed = (Vec<(String, String)>, Option<String>);
-
-/// The trailing arguments: headers, and at most one `@FILE` holding the
-/// `extra_body` object. Anything else is rejected before any request is
-/// sent.
-fn extras(args: &[String]) -> Result<Parsed, String> {
-    let mut headers = Vec::new();
-    let mut body_file = None;
-    for arg in args {
-        if let Some(path) = arg.strip_prefix('@') {
-            if path.is_empty() {
-                return Err("record: @FILE names a file holding a JSON object".into());
-            }
-            if body_file.is_some() {
-                return Err("record: one @FILE only".into());
-            }
-            body_file = Some(path.to_owned());
-            continue;
-        }
-        let Some((name, value)) = arg.split_once(':') else {
-            return Err("record: a header is NAME:VALUE".into());
-        };
-        headers.push((name.to_owned(), value.trim().to_owned()));
-    }
-    Ok((headers, body_file))
-}
-
-/// The `@FILE` JSON object, sent as the endpoint's `extra_body`.
-fn extra_body(path: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("{path}: {e}"))?;
-    value
-        .as_object()
-        .cloned()
-        .ok_or_else(|| format!("record: {path} (@FILE) must hold a JSON object"))
 }
 
 fn record(
@@ -156,7 +121,3 @@ fn record(
     let mut file = File::create(out).map_err(|e| format!("{out}: {e}"))?;
     std::io::copy(&mut stream, &mut file).map_err(|e| format!("{out}: {e}"))
 }
-
-#[cfg(test)]
-#[path = "record_tests.rs"]
-mod tests;
