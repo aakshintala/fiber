@@ -5,8 +5,6 @@
 //! listener registry, the hub's start and what it announced per session.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -100,55 +98,6 @@ pub(crate) fn reason(now: &SessionStatus, facts: &Facts<'_>) -> Option<Reason> {
         | SessionState::Retrying
         | SessionState::Jobs => None,
     }
-}
-
-/// Whether the last `TAIL` bytes of `log` hold a complete `turn_completed`
-/// line whose integer `ts` equals `since`. False when `log` cannot be read.
-pub(crate) fn turn_ended_at(log: &Path, since: u64) -> bool {
-    let Ok(mut file) = File::open(log) else {
-        return false;
-    };
-    let Ok(len) = file.metadata().map(|meta| meta.len()) else {
-        return false;
-    };
-    let from = len.saturating_sub(crate::feed::TAIL);
-    // Whether the window starts mid-line: only then is its first line
-    // partial. A window starting exactly after a newline starts at a
-    // complete line, which counts.
-    let mid_line = if from > 0 {
-        let mut probe = [0; 1];
-        if file
-            .seek(SeekFrom::Start(from - 1))
-            .and_then(|_| file.read_exact(&mut probe))
-            .is_err()
-        {
-            return false;
-        }
-        probe[0] != b'\n'
-    } else {
-        false
-    };
-    if file.seek(SeekFrom::Start(from)).is_err() {
-        return false;
-    }
-    let mut tail = Vec::new();
-    if file.read_to_end(&mut tail).is_err() {
-        return false;
-    }
-    // The tail's complete lines: a last line with no trailing newline is
-    // torn and dropped, as is a partial first line.
-    let mut parts = tail.split(|byte| *byte == b'\n');
-    parts.next_back();
-    if mid_line {
-        parts.next();
-    }
-    parts.filter(|line| !line.is_empty()).any(|line| {
-        let Ok(value) = serde_json::from_slice::<Value>(line) else {
-            return false;
-        };
-        value.get("kind").and_then(Value::as_str) == Some("turn_completed")
-            && value.get("ts").and_then(Value::as_u64) == Some(since)
-    })
 }
 
 /// Every connection's listener (a channel and writer thread each, in the
@@ -261,9 +210,20 @@ impl Attention {
     }
 
     /// The unseen-turn test is
-    /// `now.since >= started_ms && turn_ended_at(log, now.since)`. Takes no lock.
-    pub(crate) fn ended_unseen(&self, log: &Path, now: &SessionStatus) -> bool {
-        now.since >= self.started_ms && turn_ended_at(log, now.since)
+    /// `now.since >= started_ms && tail holds turn_completed(now.since)`.
+    /// Takes no lock.
+    pub(crate) fn ended_unseen(&self, dir: &Path, now: &SessionStatus) -> bool {
+        if now.since < self.started_ms {
+            return false;
+        }
+        let since = now.since;
+        log::tail_lines(dir).iter().any(|line| {
+            let Ok(value) = serde_json::from_slice::<Value>(line) else {
+                return false;
+            };
+            value.get("kind").and_then(Value::as_str) == Some("turn_completed")
+                && value.get("ts").and_then(Value::as_u64) == Some(since)
+        })
     }
 
     /// Decides through `reason`, updates `announced`, queues the line,

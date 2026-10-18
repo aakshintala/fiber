@@ -21,8 +21,6 @@
 //! A log with no complete first line is not corrupt: the hub answers
 //! `session_not_found`, as for a missing log.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
@@ -31,10 +29,8 @@ use std::time::Duration;
 use contract::diag::Op;
 use contract::{ErrorCode, SessionId};
 use log::diag::Severity;
-use serde_json::Value;
 
 use crate::connection::{Hub, Refused};
-use crate::feed::last_kind;
 use crate::start::{self, Bind};
 
 /// How long a session takes to shut down at most (`docs/invocation.md`,
@@ -71,19 +67,20 @@ pub(crate) fn resume_exited(
 /// Whether `session`'s log ends in `fiber_exited`: it has exited, even
 /// while its process is still shutting down.
 pub(crate) fn exited(home: &Path, session: &SessionId) -> bool {
-    find_log(home, session).is_some_and(|log| ends_exited(&log))
+    crate::recent::lookup_logged(home, &session.0)
+        .as_ref()
+        .is_some_and(|(_, dir)| exited_in(dir))
 }
 
-/// Whether `session`'s log is a delegate's. A log whose first line cannot
-/// be read is not.
-fn is_delegate(home: &Path, session: &SessionId) -> bool {
-    find_log(home, session)
-        .and_then(|log| recorded(&log))
-        .is_some_and(|recorded| recorded.delegate)
+/// Whether the log in `dir` ends in `fiber_exited`.
+fn exited_in(dir: &Path) -> bool {
+    log::last_kind(dir).as_deref() == Some("fiber_exited")
 }
 
-fn ends_exited(log: &Path) -> bool {
-    last_kind(log).as_deref() == Some("fiber_exited")
+/// Whether the log in `dir` is a delegate's. A log whose first line
+/// cannot be read is not.
+fn is_delegate_in(dir: &Path) -> bool {
+    recorded(dir).is_some_and(|recorded| recorded.delegate)
 }
 
 /// One pass of [`reach`]: an answer, or a wait for the exiting process,
@@ -145,26 +142,53 @@ fn attempt(
     trusted: bool,
 ) -> Step {
     if let Ok(stream) = UnixStream::connect(socket) {
-        if trusted || !exited(&hub.home, session) {
+        if trusted {
+            return Step::Done(Ok(stream));
+        }
+        // One lookup per pass, shared by both predicates: a refused
+        // connect resumes without one.
+        let found = crate::recent::lookup_logged(&hub.home, &session.0);
+        if found.as_ref().is_none_or(|(_, dir)| !exited_in(dir)) {
             return Step::Done(Ok(stream));
         }
         // A delegate is never resumed, so its exiting process is not
         // waited out.
-        if is_delegate(&hub.home, session) {
+        if found.as_ref().is_some_and(|(_, dir)| is_delegate_in(dir)) {
             return Step::Done(Err(delegate_refused()));
         }
         // The exiting process still answers on its socket.
         return Step::Wait(None);
     }
-    let Some(log) = find_log(&hub.home, session) else {
+    let Some((_, dir)) = crate::recent::lookup_logged(&hub.home, &session.0) else {
         return Step::Done(Err(not_found(session)));
     };
-    let recorded = match first_line(&log) {
-        FirstLine::Recorded(recorded) => recorded,
+    let recorded = match log::started_first(&dir) {
+        Ok(view) => {
+            let Some(workspace) = view.workspace else {
+                hub.diag.line(
+                    Severity::Warn,
+                    Some(session),
+                    "log_corrupt",
+                    &format!("Session {} has an unreadable log.", session.0),
+                );
+                return Step::Done(Err(Refused {
+                    code: ErrorCode::LogCorrupt,
+                    message: format!(
+                        "The log of session `{}` does not start with its workspace.",
+                        session.0
+                    ),
+                }));
+            };
+            Recorded {
+                workspace: PathBuf::from(workspace),
+                repository: view.repository.map(PathBuf::from),
+                delegate: view.delegate,
+            }
+        }
         // The session has not bound its socket yet: its log is empty or
         // its first line is still being written.
-        FirstLine::Incomplete => return Step::Done(Err(not_found(session))),
-        FirstLine::Corrupt => {
+        Err(log::FirstLineError::Incomplete) => return Step::Done(Err(not_found(session))),
+        Err(log::FirstLineError::Corrupt) => {
             hub.diag.line(
                 Severity::Warn,
                 Some(session),
@@ -202,7 +226,7 @@ fn attempt(
             // The exiting process still holds the lock: wait it out.
             if let Some(failure) = &failure
                 && failure.code == ErrorCode::SessionHeld
-                && ends_exited(&log)
+                && exited_in(&dir)
             {
                 return Step::Wait(Some(failure.message.clone()));
             }
@@ -250,27 +274,9 @@ fn delegate_refused() -> Refused {
     }
 }
 
-/// The first `projects/*/sessions/<session>/events.jsonl` under `home`, in
-/// project-key order. `session` has the minted shape, so the path never
-/// leaves the project's `sessions/`.
-pub(crate) fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
-    let mut projects: Vec<PathBuf> = std::fs::read_dir(home.join("projects"))
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .collect();
-    projects.sort();
-    projects
-        .into_iter()
-        .map(|project| {
-            project
-                .join("sessions")
-                .join(&session.0)
-                .join("events.jsonl")
-        })
-        .find(|log| log.is_file())
-}
-
-/// What the log's first line, its `session_started`, recorded.
+/// What the log's first line, its `session_started`, recorded, over
+/// [`log::started_first`]. `None` when that line cannot be read, is
+/// incomplete, is not `session_started` or holds no string workspace.
 pub(crate) struct Recorded {
     /// The session's workspace.
     pub(crate) workspace: PathBuf,
@@ -303,76 +309,16 @@ fn missing(path: &Path) -> bool {
         .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
 }
 
-/// What the log's first line holds: a complete `session_started` with a
-/// workspace, no complete first line yet, or a corrupt line. Completeness
-/// is decided on bytes before any decoding, so a line still being written
-/// that ends inside a multi-byte character is incomplete, not corrupt.
-/// An I/O error opening or reading the file is corrupt, as is a complete
-/// line that does not decode, does not parse, is not `session_started`,
-/// or names no string workspace.
-enum FirstLine {
-    Recorded(Recorded),
-    Incomplete,
-    Corrupt,
-}
-
-/// Reads the log's first line as bytes with `read_until(b'\n')`.
-fn first_line(log: &Path) -> FirstLine {
-    let file = match File::open(log) {
-        Ok(file) => file,
-        Err(_) => return FirstLine::Corrupt,
-    };
-    let mut bytes = Vec::new();
-    match BufReader::new(file).read_until(b'\n', &mut bytes) {
-        Ok(_) => {}
-        Err(_) => return FirstLine::Corrupt,
-    }
-    if bytes.is_empty() || bytes.last() != Some(&b'\n') {
-        return FirstLine::Incomplete;
-    }
-    let first = match String::from_utf8(bytes) {
-        Ok(first) => first,
-        Err(_) => return FirstLine::Corrupt,
-    };
-    let line: Value = match serde_json::from_str(&first) {
-        Ok(line) => line,
-        Err(_) => return FirstLine::Corrupt,
-    };
-    let kind = line.get("kind").and_then(Value::as_str);
-    if kind != Some("session_started") {
-        return FirstLine::Corrupt;
-    }
-    let payload = line.get("payload");
-    let workspace = payload
-        .and_then(|payload| payload.get("workspace"))
-        .and_then(Value::as_str);
-    // The recorded repository, when `worktree` is an object naming one
-    // as a string: any other shape records none, and never corrupts.
-    let repository = payload
-        .and_then(|payload| payload.get("worktree"))
-        .and_then(|worktree| worktree.get("repository"))
-        .and_then(Value::as_str)
-        .map(PathBuf::from);
-    match workspace {
-        Some(workspace) => FirstLine::Recorded(Recorded {
-            workspace: PathBuf::from(workspace),
-            repository,
-            delegate: payload
-                .and_then(|payload| payload.get("parent"))
-                .is_some_and(|parent| !parent.is_null()),
-        }),
-        None => FirstLine::Corrupt,
-    }
-}
-
-/// What the log's first line recorded. `None` when that line cannot be
-/// read, is incomplete, is not `session_started` or holds no string
-/// workspace.
-pub(crate) fn recorded(log: &Path) -> Option<Recorded> {
-    match first_line(log) {
-        FirstLine::Recorded(recorded) => Some(recorded),
-        FirstLine::Incomplete | FirstLine::Corrupt => None,
-    }
+/// What the log in `dir` recorded: its workspace, repository and
+/// delegate bit. `None` when that line cannot be read, is incomplete,
+/// is not `session_started` or holds no string workspace.
+pub(crate) fn recorded(dir: &Path) -> Option<Recorded> {
+    let view = log::started_first(dir).ok()?;
+    Some(Recorded {
+        workspace: PathBuf::from(view.workspace?),
+        repository: view.repository.map(PathBuf::from),
+        delegate: view.delegate,
+    })
 }
 
 fn io_failed(hub: &Hub, session: &SessionId, detail: &str) -> Refused {

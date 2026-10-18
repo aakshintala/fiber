@@ -22,7 +22,6 @@ use std::thread;
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
-use crate::feed::kind_of;
 use crate::relay::Relays;
 
 /// Per connection, in `Relays`: what the sweep needs.
@@ -41,8 +40,9 @@ pub(crate) struct Rejoin {
 /// Where `session`'s log stood when a relay to it opened, and what was read since.
 #[derive(Clone)]
 pub(crate) struct Mark {
-    /// The session's log when a relay opened; `None` when it had none.
-    log: Option<PathBuf>,
+    /// The session's directory when it held a log; `None` when it had
+    /// none.
+    pub(crate) log: Option<PathBuf>,
     /// Bytes consumed: always the end of a complete line, never a raw length.
     read: u64,
     /// Whether a `fiber_started` past the mark has no later end after it.
@@ -52,17 +52,19 @@ pub(crate) struct Mark {
 }
 
 impl Mark {
-    /// `find_log`, then the end of its last complete line (one past the
-    /// last `'\n'`; 0 when none or no log). Never the raw length: a torn
-    /// tail is discarded, and a resumed writer truncates a partial line
-    /// before appending (`docs/events.md`, "Writing"), so the resumed
-    /// `fiber_started` can land at that line's start. File IO: never under
-    /// the relays lock.
+    /// The session's logged directory, then the end of its last complete
+    /// line (one past the last `'\n'`; 0 when none or no log). Never the
+    /// raw length: a torn tail is discarded, and a resumed writer
+    /// truncates a partial line before appending (`docs/events.md`,
+    /// "Writing"), so the resumed `fiber_started` can land at that
+    /// line's start. File IO: never under the relays lock.
     pub(crate) fn now(home: &Path, session: &str) -> Mark {
-        let log = crate::resume::find_log(home, &contract::SessionId(session.to_owned()));
-        let read = log.as_deref().map_or(0, complete_len);
+        let found = crate::recent::lookup_logged(home, session);
+        let read = found
+            .as_ref()
+            .map_or(0, |(_, dir)| log::complete_len_of(dir));
         Mark {
-            log,
+            log: found.map(|(_, dir)| dir),
             read,
             live: false,
             epoch: 0,
@@ -75,9 +77,9 @@ impl Mark {
 /// Never `Mark::now`: that would place the offset after the start the
 /// resumed run already wrote. File IO: never under the relays lock.
 fn discovered(home: &Path, session: &str, epoch: u64) -> Option<Mark> {
-    let log = crate::resume::find_log(home, &contract::SessionId(session.to_owned()))?;
+    let (_, dir) = crate::recent::lookup_logged(home, session)?;
     Some(Mark {
-        log: Some(log),
+        log: Some(dir),
         read: 0,
         live: false,
         epoch,
@@ -100,17 +102,6 @@ impl Rejoin {
     pub(crate) fn closed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.closed)
     }
-}
-
-/// The end of the last complete line in the file at `log`: one past its
-/// last newline, or 0 when it has none or cannot be read. Never the raw
-/// length: a torn tail is discarded.
-fn complete_len(log: &Path) -> u64 {
-    let bytes = std::fs::read(log).unwrap_or_default();
-    bytes
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |at| at as u64 + 1)
 }
 
 /// Under the relays lock, in attach, after mint and before spawn.
@@ -384,7 +375,7 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         } else {
             mark
         };
-        let advanced = advance(mark);
+        let advanced = step(mark);
         let live = advanced.live;
         let candidate_epoch = advanced.epoch;
         {
@@ -428,63 +419,35 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
-/// Seeks to `mark.read` and streams complete lines past it:
-/// `fiber_started` makes it live; `fiber_exited` or `rewound` ends it;
-/// read moves past the last complete line only, so a partial tail is read
-/// again next time. Every consumed complete-line byte is read at most
-/// once: bytes before the offset are never read. A file shorter than
-/// `read` was replaced: resets read to 0 and live to false, then reads
-/// the new file from its start.
-fn advance(mark: Mark) -> Mark {
-    let Some(log) = mark.log.clone() else {
+/// Folds the complete lines past `mark.read` into `live`: a
+/// `fiber_started` past the mark makes it live, a `fiber_exited` or
+/// `rewound` after it ends it. `read` moves past the last complete line
+/// only, so a partial tail is read again next time. Every consumed
+/// complete-line byte is read at most once: bytes before the offset are
+/// never read. A file shorter than `read` was replaced: resets `read` to
+/// 0 and `live` to false first, then reads the new file from its start.
+/// A scan that cannot open the log returns the mark unchanged.
+fn step(mark: Mark) -> Mark {
+    let Some(dir) = mark.log.clone() else {
         return mark;
     };
-    let Ok(file) = std::fs::File::open(&log) else {
-        return mark;
-    };
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    let (mut read, mut live) = if len < mark.read {
-        // The log was replaced under the same id: start over.
-        (0, false)
-    } else {
-        (mark.read, mark.live)
-    };
-    use std::io::{BufRead, Seek, SeekFrom};
-    let mut reader = std::io::BufReader::new(file);
-    if reader.seek(SeekFrom::Start(read)).is_err() {
-        return Mark {
-            log: Some(log),
-            read,
-            live,
-            epoch: mark.epoch,
-        };
-    }
-    let mut buf = Vec::new();
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                let Some((&last, line)) = buf.split_last() else {
-                    break;
-                };
-                if last != b'\n' {
-                    // A partial tail: read again next time.
-                    break;
-                }
-                match kind_of(line) {
-                    Some(kind) if kind == "fiber_started" => live = true,
-                    Some(kind) if kind == "fiber_exited" || kind == "rewound" => live = false,
-                    _ => {}
-                }
-                read += buf.len() as u64;
-            }
+    // The last transition past the mark, if any: folding this way keeps
+    // one pass whether the log was replaced or not.
+    let mut transition: Option<bool> = None;
+    let scanned = log::lines_from(&dir, mark.read, |line| {
+        match log::kind_of(line).as_deref() {
+            Some("fiber_started") => transition = Some(true),
+            Some("fiber_exited" | "rewound") => transition = Some(false),
+            _ => {}
         }
-    }
+    });
+    let Some(scan) = scanned else {
+        return mark;
+    };
     Mark {
-        log: Some(log),
-        read,
-        live,
+        log: Some(dir),
+        read: scan.end,
+        live: transition.unwrap_or(if scan.restarted { false } else { mark.live }),
         epoch: mark.epoch,
     }
 }
