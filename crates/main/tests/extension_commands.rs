@@ -24,6 +24,11 @@ use support::{Setup, function_call, session_dir};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
+/// `SYNC` held behind a FIFO read: `run` blocks reading the FIFO before it
+/// reports status, so the test decides when `extension_ui` lands. `{fifo}`
+/// is the FIFO's path, replaced at the use site.
+const SYNC_HELD: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.fs.read(\"{fifo}\") host.status(\"synced \" .. text) end })\n";
+
 /// Every line of the command's action, not just the expected endpoints.
 fn command_action<'a>(
     lines: &'a [Value],
@@ -1111,7 +1116,19 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
-    setup.lua("worker", SYNC);
+    let fifo = setup.workspace().join("sync-hold.fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success(),
+        "make the hold fifo"
+    );
+    setup.lua(
+        "worker",
+        &SYNC_HELD.replace("{fifo}", fifo.to_str().unwrap()),
+    );
     let dir = setup.workspace().join(".agents/skills/sync-now");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
