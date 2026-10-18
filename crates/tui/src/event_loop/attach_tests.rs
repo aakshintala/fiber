@@ -3296,7 +3296,11 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     let mut taken = Vec::new();
     // Each batch end holds the loop until this send: the next part is
     // queued whole by then.
-    let resume = || release_tx.send(()).unwrap_or_else(|error| panic!("{error}"));
+    let resume = || {
+        release_tx
+            .send(())
+            .unwrap_or_else(|error| panic!("{error}"))
+    };
     let mut batch_end = |what: &str| {
         let count = wait.recv_or_fail(&ended, what);
         taken.push(count);
