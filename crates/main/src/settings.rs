@@ -251,7 +251,8 @@ pub(crate) type ShellReadOnly = Arc<Mutex<Vec<(String, Vec<String>)>>>;
 /// value is ignored with a notice before merging, so the checked merged
 /// configuration holds personal entries only. An entry without a complete
 /// string `flags` array gives no entry; an explicit empty array gives the
-/// command with no flags.
+/// command with no flags. Entries come out in name order: the merged
+/// object's map iterates its keys in order.
 pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
     let mut entries = Vec::new();
     let read_only = config
@@ -283,7 +284,6 @@ pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
             entries.push((name, listed));
         }
     }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
 }
 

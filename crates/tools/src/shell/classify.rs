@@ -260,12 +260,12 @@ fn is_option_word(cooked: &str) -> bool {
 }
 
 /// Whether `first`, the cooked first word, names a built-in command: the
-/// text before its first space, then the text after its last `/`, against
-/// the built-in names and `sed`, which has its own grammar. A configured
-/// entry under such a name is never consulted.
+/// text after its last `/`, against the built-in command names and `sed`,
+/// which has its own grammar. The whole word is used, so a quoted path
+/// holding a space still ends at its basename. A configured entry under
+/// such a name is never consulted.
 fn builtin_name(first: &str) -> bool {
-    let head = first.split(' ').next().unwrap_or(first);
-    let base = head.rsplit('/').next().unwrap_or(head);
+    let base = first.rsplit('/').next().unwrap_or(first);
     base == "sed"
         || COMMANDS
             .iter()

@@ -1238,3 +1238,19 @@ fn a_configured_call_keeps_redirects_and_refusals() {
         assert_configured_closed(command, &entries);
     }
 }
+
+#[test]
+fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
+    // A built-in basename under a spaced path is never consulted: the
+    // link-following flag stays refused.
+    let entries = [configured("/opt/my tools/grep", &["-R"])];
+    assert_configured_closed("'/opt/my tools/grep' -R pattern ws", &entries);
+    assert_configured_closed("'/opt/my tools/grep' -r pattern ws", &entries);
+    // A non-built-in basename under a spaced path is consulted, for that
+    // exact word only.
+    let spaced = [configured("/opt/my tools/jq", &[])];
+    assert_configured_reads("'/opt/my tools/jq' . f", &spaced, &["/work/.", "/work/f"]);
+    assert_configured_closed("/opt/my tools/jq . f", &spaced);
+    assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
+    assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
+}

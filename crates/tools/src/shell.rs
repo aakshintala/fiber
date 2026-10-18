@@ -264,10 +264,7 @@ impl Tool for Shell {
         // `timeout_ms` or `workdir` off the read-only fast path.
         match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => {
-                let entries = self
-                    .read_only
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let entries = support::lock(&self.read_only);
                 Ok(classify(&parsed.command, &parsed.workdir, &entries))
             }
             Err(_) => Ok(classify::executes(None, None)),
