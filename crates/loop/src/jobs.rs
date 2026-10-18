@@ -349,7 +349,7 @@ impl Loop {
                     self.write_end(turn, ahead, completed, delegate)?;
                     continue;
                 }
-                Queued::Line(line) => Event::JobLine(line),
+                Queued::Line(line) => Event::JobLine(self.deliver_line(line, Some(turn))?),
                 // Held for the step's handoff check, which runs it.
                 Queued::Handoff(_, instructions) => {
                     self.handoff.held.push(instructions);
@@ -374,6 +374,8 @@ impl Loop {
         completed: JobCompleted,
         delegate: Option<DelegateFinished>,
     ) -> Result<(), Error> {
+        let (ahead, completed, delegate) =
+            self.deliver_end(Some(turn), ahead, completed, delegate)?;
         for taken in ahead {
             self.write_taken(taken, Some(turn), None)?;
         }
