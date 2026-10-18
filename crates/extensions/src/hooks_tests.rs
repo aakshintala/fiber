@@ -409,6 +409,48 @@ fn every_enabled_extension_is_loaded_with_its_version_and_a_disabled_one_is_not(
 }
 
 #[test]
+fn loaded_extensions_carry_their_manifest_replaces_in_order() {
+    let home = Home::new();
+    home.install("a", None, &[]);
+    home.edit_manifest("a", |m| m["replaces"] = json!(["write", "read", "write"]));
+    home.install("b", None, &[]);
+    let session = home.load(&[]);
+    let loaded: Vec<(String, Vec<String>)> = session
+        .loaded()
+        .into_iter()
+        .map(|e| (e.name, e.replaces))
+        .collect();
+    assert_eq!(
+        loaded,
+        [
+            (
+                "fiber.test/a".to_owned(),
+                vec!["write".to_owned(), "read".to_owned(), "write".to_owned()],
+            ),
+            ("fiber.test/b".to_owned(), Vec::new()),
+        ]
+    );
+    // A manifest name nothing registers is a declaration, not an audit:
+    // both data-only extensions load with no notice.
+    assert!(session.notices().is_empty());
+    home.edit_manifest("a", |m| m["replaces"] = json!(["edit"]));
+    let rebuilt = home.load(&[]);
+    let again: Vec<(String, Vec<String>)> = rebuilt
+        .loaded()
+        .into_iter()
+        .map(|e| (e.name, e.replaces))
+        .collect();
+    assert_eq!(
+        again,
+        [
+            ("fiber.test/a".to_owned(), vec!["edit".to_owned()]),
+            ("fiber.test/b".to_owned(), Vec::new()),
+        ]
+    );
+    assert!(rebuilt.notices().is_empty());
+}
+
+#[test]
 fn a_loaded_extensions_directory_is_listed_and_a_disabled_ones_is_not() {
     let home = Home::new();
     home.install("data", None, &[]);
