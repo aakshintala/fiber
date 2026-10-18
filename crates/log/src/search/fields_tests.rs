@@ -106,6 +106,12 @@ fn each_searched_kind_gives_its_strings_under_its_label() {
         ),
         (
             "job_completed",
+            json!({"job_id": "j", "status": "failed", "output_tail": "tail",
+                "notice": "redacted"}),
+            vec![(ToolOutput, "tail"), (ToolOutput, "redacted")],
+        ),
+        (
+            "job_completed",
             json!({"job_id": "j", "status": "completed"}),
             vec![],
         ),

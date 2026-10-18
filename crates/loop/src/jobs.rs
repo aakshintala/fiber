@@ -85,6 +85,9 @@ pub(crate) struct Ending {
     /// The jobs check was given since the last prompt or steer, so it is
     /// not armed (`docs/invocation.md`, "Lifecycle").
     checked: bool,
+    /// What each delivery's hooks read: the jobs the log started, folded
+    /// from `job_started` and `delegate_started` on the write path.
+    pub(crate) starts: super::deliveries::Starts,
 }
 
 /// The notice's completion and its delegate's finish, when its claim
@@ -557,10 +560,14 @@ pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
     text
 }
 
-/// What a `job_completed` with no action tells the model: the job, how it
-/// ended, then any exit code, signal, error and last output. Read from the
-/// line alone, so a resume renders the same bytes.
+/// What a `job_completed` with no action tells the model: the hook's
+/// rewritten notice when one changed it, else the job, how it ended,
+/// then any exit code, signal, error and last output. Read from the line
+/// alone, so a resume renders the same bytes.
 pub(crate) fn notice_text(completed: &JobCompleted) -> String {
+    if let Some(notice) = &completed.notice {
+        return notice.clone();
+    }
     let status = match completed.status {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",

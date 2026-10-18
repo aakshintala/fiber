@@ -555,6 +555,71 @@ fn completed(id: &str) -> Event {
     })
 }
 
+/// A failed end a hook rewrote: `notice` holds what the model was sent
+/// and `output_tail` is absent, carrying the raw tail it replaced.
+fn noticed(id: &str, notice: &str) -> Event {
+    Event::JobCompleted(JobCompleted {
+        job_id: JobId(id.into()),
+        status: Outcome::Failed,
+        error: None,
+        process: None,
+        output_tail: Some("raw tail".into()),
+        notice: Some(notice.into()),
+        changed_by: Some(vec!["redactor".into()]),
+    })
+}
+
+#[test]
+fn a_rewritten_notice_rebuilds_as_the_model_saw_it() {
+    let event = noticed("j_1", "redacted notice");
+    let lines = vec![line("job_completed", &event, None)];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(user_text(&rebuilt[0]), "redacted notice");
+    let mut live = Vec::new();
+    render(
+        &mut live,
+        &event,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+    );
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn an_empty_notice_renders_nothing_and_holds_nothing() {
+    let event = noticed("j_1", "");
+    let lines = vec![line("job_completed", &event, None)];
+    assert!(super::rebuild(&lines, "fake/model-1").unwrap().is_empty());
+    let mut live = Vec::new();
+    render(
+        &mut live,
+        &event,
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+    );
+    assert!(live.is_empty());
+    // Behind an open batch the empty notice waits as nothing.
+    let waiting = vec![
+        line("tool_call_requested", &call("a"), Some("a_1")),
+        line("job_completed", &event, None),
+    ];
+    let open = std::collections::HashSet::from([ActionId("a_1".into())]);
+    let (rebuilt, _, held, _) = super::rebuild_and_sent(
+        &waiting,
+        "fake/model-1",
+        &open,
+        crate::handoff::Carry::default(),
+    )
+    .unwrap();
+    assert_eq!(shape(&rebuilt), ["call a_1"]);
+    assert!(held.is_empty());
+}
+
 fn finished(id: &str, text: &str, questions: Option<Vec<contract::shapes::Question>>) -> Event {
     Event::DelegateFinished(DelegateFinished {
         job_id: JobId(id.into()),

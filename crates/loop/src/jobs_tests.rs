@@ -19,7 +19,7 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Decision, DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome, Parent,
+    Decision, DelegateFinished, DelegateStarted, Event, JobCompleted, JobStarted, Outcome, Parent,
     ShellCommand, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
@@ -1027,6 +1027,15 @@ fn a_notice_reads_its_status_exit_signal_error_and_output() {
         notice_text(&done),
         format!("Fiber: background job {JOB} ended: completed.\nExit code 0.")
     );
+    let mut hooked = failed(JOB);
+    hooked.notice = Some("redacted".into());
+    hooked.changed_by = Some(vec!["redactor".into()]);
+    assert_eq!(notice_text(&hooked), "redacted");
+    let mut withheld = failed(JOB);
+    withheld.output_tail = None;
+    withheld.notice = Some(String::new());
+    withheld.changed_by = Some(vec!["redactor".into()]);
+    assert_eq!(notice_text(&withheld), "");
     let stopped = JobCompleted {
         status: Outcome::Cancelled,
         process: None,
@@ -3356,4 +3365,76 @@ fn a_shell_sent_during_a_turn_joins_the_next_turn_only() {
         users(&world.requests()[2]).contains(&"! echo hi\nhi".to_owned()),
         "the next turn reads the shell"
     );
+}
+
+#[test]
+fn loop_write_folds_started_jobs_and_fiber_delegates_into_the_cache() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let looped = world.looped.as_mut().unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("shell".into()),
+                extension: None,
+                description: "sleep 1".into(),
+                output_path: "artifacts/j_1.log".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::JobStarted(JobStarted {
+                job_id: JobId("j_2".into()),
+                tool: None,
+                extension: Some("e".into()),
+                description: "delegated".into(),
+                output_path: "artifacts/j_2.log".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::DelegateStarted(DelegateStarted {
+                job_id: JobId("j_2".into()),
+                delegate_session_id: SessionId("s_d".into()),
+                harness: "fiber".into(),
+                model: "fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    looped
+        .write(
+            &Event::DelegateStarted(DelegateStarted {
+                job_id: JobId("j_1".into()),
+                delegate_session_id: SessionId("s_o".into()),
+                harness: "codex".into(),
+                model: "fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let shell = looped.ending.starts.get(&JobId("j_1".into())).unwrap();
+    assert_eq!(shell.tool, "shell");
+    assert_eq!(
+        shell.output_path,
+        std::path::PathBuf::from("artifacts/j_1.log")
+    );
+    assert!(!shell.fiber);
+    let delegated = looped.ending.starts.get(&JobId("j_2".into())).unwrap();
+    assert_eq!(delegated.tool, "");
+    assert!(delegated.fiber);
 }

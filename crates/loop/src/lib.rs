@@ -39,6 +39,7 @@ mod commands;
 mod completion;
 mod conversation;
 mod delegated;
+mod deliveries;
 mod diag;
 mod error;
 mod handoff;
