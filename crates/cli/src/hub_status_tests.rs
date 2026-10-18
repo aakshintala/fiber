@@ -417,7 +417,8 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     let mut drained = 0;
     let mut piece = [0u8; 65536];
     while drained < flooded {
-        match peer.read(&mut piece) {
+        let cap = (flooded - drained).min(piece.len());
+        match peer.read(&mut piece[..cap]) {
             Ok(0) => panic!("the peer closed with flood bytes still queued"),
             Ok(read) => drained += read,
             Err(error) => panic!("draining the flood: {error}"),
