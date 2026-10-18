@@ -18,7 +18,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{Entry, Fold, Row, Turn};
+use crate::turn::{Entry, Fold, Row, Turn, target_id};
 
 mod images;
 mod live;
@@ -1020,6 +1020,200 @@ impl Pages {
     /// Ctrl+O: closes every ledger when all on the resident pages are open,
     /// else opens them all, and sets the default the dropped pages and
     /// groups made later take. The dropped pages are counted again.
+    /// An empty conversation at this one's wrap width, zone, ledger
+    /// default and image sizing; nothing else: no overrides, shells or
+    /// summaries, and the open page's recount not held.
+    pub(crate) fn fresh(&self) -> Pages {
+        let mut fresh = Pages::new(self.width);
+        fresh.fold.ledgers = self.fold.ledgers;
+        fresh.open.fold.ledgers = self.fold.ledgers;
+        fresh.zone = self.zone.clone();
+        fresh.images.sizing = self.images.sizing;
+        fresh
+    }
+
+    /// What `target` names on the fold, by the identity that survives a
+    /// refold: calls key on the call id, groups and thoughts on the
+    /// action that made them, copy targets on their reply's ordinal
+    /// with the block kept, images on their path, and `Login` as is. A
+    /// target the fold lacks is dropped: notes and orphaned-job lines
+    /// carry no identity the fold can match, so they never carry.
+    pub(crate) fn same_target(&self, target: Target, fold: &Pages) -> Option<Target> {
+        match target {
+            Target::Call(id) => self
+                .call_action(id)
+                .and_then(|action| fold.find_call(&action))
+                .map(Target::Call),
+            Target::CallView(id) => self
+                .call_action(id)
+                .and_then(|action| fold.find_call(&action))
+                .map(Target::CallView),
+            Target::Group(id) => self
+                .group_key(id)
+                .and_then(|key| fold.find_group(&key))
+                .map(Target::Group),
+            Target::Thought(id) => self
+                .thought_action(id)
+                .and_then(|action| fold.find_thought(&action))
+                .map(Target::Thought),
+            Target::Copy { reply, block } => self
+                .reply_ordinal(reply)
+                .and_then(|at| fold.reply_at(at))
+                .map(|id| Target::Copy { reply: id, block }),
+            Target::Image(id) => self
+                .image_path(id)
+                .and_then(|path| fold.images.ids.get(path).copied())
+                .map(Target::Image),
+            Target::Login => Some(Target::Login),
+            Target::Note(_) | Target::Orphans(_) => None,
+        }
+    }
+
+    /// Carries what the person opened into the fold before the swap: the
+    /// ledger default, then each override the fold resolves. A target
+    /// the fold lacks is dropped, and the fold counts once at the end.
+    pub(crate) fn carry_opens(&self, fold: &mut Pages) {
+        if self.fold.ledgers != fold.fold.ledgers {
+            fold.set_ledgers(self.fold.ledgers);
+        }
+        for (target, open) in &self.overrides {
+            let Some(resolved) = self.same_target(*target, fold) else {
+                continue;
+            };
+            for part in fold.resident_mut() {
+                set(part, &resolved, *open);
+            }
+            fold.overrides.insert(resolved, *open);
+        }
+        fold.recount();
+    }
+
+    /// Every resident part and the pending pair, for opening what
+    /// `carry_opens` resolved.
+    fn resident_mut(&mut self) -> impl Iterator<Item = &mut Part> {
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|pending| [&mut pending.before, &mut pending.next]);
+        self.closed
+            .iter_mut()
+            .flatten()
+            .chain(std::iter::once(&mut self.open))
+            .chain(pending)
+    }
+
+    /// The call id of the call `id` names, anywhere resident.
+    fn call_action(&self, id: usize) -> Option<String> {
+        self.calls().find(|(at, _)| *at == id).map(|(_, action)| action)
+    }
+
+    /// The id the fold gives the call `action` names, if it folds it.
+    fn find_call(&self, action: &str) -> Option<usize> {
+        self.calls()
+            .find(|(_, name)| name == action)
+            .map(|(id, _)| id)
+    }
+
+    /// Every resident call's id and call id.
+    fn calls(&self) -> impl Iterator<Item = (usize, String)> {
+        self.turns().flat_map(|turn| {
+            turn.groups().flat_map(|group| {
+                group.sections.iter().flat_map(|section| {
+                    section.calls.iter().map(|call| (call.id, call.action.clone()))
+                })
+            })
+        })
+    }
+
+    /// The key of the group `id` names, anywhere resident.
+    fn group_key(&self, id: usize) -> Option<String> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .filter_map(|group| group.key.clone())
+            .find(|key| target_id(key) == id)
+    }
+
+    /// The id the fold gives the group `key` names, if it folds it.
+    fn find_group(&self, key: &str) -> Option<usize> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .filter_map(|group| group.key.as_deref())
+            .find(|name| *name == key)
+            .map(target_id)
+    }
+
+    /// The action of the thought `id` names, anywhere resident.
+    fn thought_action(&self, id: usize) -> Option<String> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .flat_map(|group| {
+                group
+                    .sections
+                    .iter()
+                    .flat_map(|section| section.thoughts.iter())
+            })
+            .find(|thought| thought.id == id)
+            .map(|thought| thought.action.clone())
+    }
+
+    /// The id the fold gives the thought `action` names, if it folds it.
+    fn find_thought(&self, action: &str) -> Option<usize> {
+        self.turns()
+            .flat_map(Turn::groups)
+            .flat_map(|group| {
+                group
+                    .sections
+                    .iter()
+                    .flat_map(|section| section.thoughts.iter())
+            })
+            .find(|thought| thought.action == action)
+            .map(|thought| thought.id)
+    }
+
+    /// The ordinal of the reply `id` names among the resident replies.
+    fn reply_ordinal(&self, id: usize) -> Option<usize> {
+        self.replies().position(|at| at == id)
+    }
+
+    /// The id of the `at`th resident reply, if one folds that far.
+    fn reply_at(&self, at: usize) -> Option<usize> {
+        self.replies().nth(at)
+    }
+
+    /// Every resident reply's copy-target id, in fold order.
+    fn replies(&self) -> impl Iterator<Item = usize> {
+        self.turns().flat_map(|turn| {
+            turn.entries.iter().filter_map(|entry| match entry {
+                Entry::Reply { reply, .. } => Some(reply.id()),
+                Entry::Steer(_)
+                | Entry::Group(_)
+                | Entry::Aside(_)
+                | Entry::Band(_)
+                | Entry::Answers(_) => None,
+            })
+        })
+    }
+
+    /// The path of the image `id` names, if it drew.
+    fn image_path(&self, id: u32) -> Option<&str> {
+        self.images.parts.get(&id).map(|part| part.path.as_str())
+    }
+
+    /// Every resident turn, closed pages first.
+    fn turns(&self) -> impl Iterator<Item = &Turn> {
+        let pending = self
+            .pending
+            .as_ref()
+            .into_iter()
+            .flat_map(|pending| [&pending.before, &pending.next]);
+        self.closed
+            .iter()
+            .flatten()
+            .chain(std::iter::once(&self.open))
+            .chain(pending)
+            .flat_map(|part| part.turns.iter())
+    }
+
     pub(crate) fn toggle_ledgers(&mut self) {
         let open = {
             let mut ledgers = self
@@ -1037,6 +1231,13 @@ impl Pages {
                 !ledgers.all(|group| group.open)
             }
         };
+        self.set_ledgers(open);
+    }
+
+    /// Sets the ledger default, the dropped seeds and every resident
+    /// group, dropping group overrides; the dropped pages take it on
+    /// load. Counts every resident page again.
+    fn set_ledgers(&mut self, open: bool) {
         self.fold.ledgers = open;
         self.open.fold.ledgers = open;
         for seed in &mut self.seeds {

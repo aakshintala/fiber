@@ -17,7 +17,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Entry, Row, Turn};
+use crate::turn::{Entry, Row, Turn, target_id};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -3338,4 +3338,127 @@ fn trim_drops_only_pages_outside_the_window_and_keeps_pins() {
         }
     }
     pages.unwant(0);
+}
+
+/// One turn per call: a prompt, one step and one requested call.
+fn call_stream(calls: &[&str]) -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    for (turn, call) in calls.iter().enumerate() {
+        stream.durable(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        stream.durable("step_started", None, json!({}));
+        stream.durable("assistant_message_started", Some("a_m"), json!({}));
+        stream.request("a_m", 0, call, "read", "src/lib.rs");
+        stream.durable(
+            "assistant_message_completed",
+            Some("a_m"),
+            json!({"outcome": "completed"}),
+        );
+        stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    stream.lines
+}
+
+/// Whether each resident call for `action` draws open, in fold order.
+fn call_states(pages: &Pages, action: &str) -> Vec<bool> {
+    pages
+        .closed
+        .iter()
+        .flatten()
+        .chain(std::iter::once(&pages.open))
+        .flat_map(|part| part.turns.iter())
+        .flat_map(Turn::groups)
+        .flat_map(|group| group.sections.iter())
+        .flat_map(|section| section.calls.iter())
+        .filter(|call| call.action == action)
+        .map(|call| call.open)
+        .collect()
+}
+
+#[test]
+fn a_fresh_pages_keeps_its_settings_and_nothing_else() {
+    let mut pages = Pages::new(37);
+    for line in &call_stream(&["a_t"]) {
+        pages.apply(line);
+    }
+    pages.zone = new_york();
+    pages.toggle_ledgers();
+    pages.open(&Target::Call(target_id("a_t")));
+    pages.hold();
+    let fresh = pages.fresh();
+    assert_eq!(fresh.wrap_width(), 37);
+    assert_eq!(fresh.zone, new_york());
+    assert!(fresh.fold.ledgers);
+    assert_eq!(fresh.images.sizing, pages.images.sizing);
+    assert_eq!(fresh.index().total(), Pages::new(37).index().total());
+    assert_eq!(fresh.resident(), Pages::new(37).resident());
+    assert!(call_states(&fresh, "a_t").is_empty());
+    assert!(fresh.overrides.is_empty());
+    assert!(fresh.shells.is_empty());
+    assert!(fresh.summaries.is_empty());
+    assert!(!fresh.holding());
+}
+
+#[test]
+fn opens_in_the_preview_carry_to_the_fold_by_call() {
+    let mut preview = Pages::new(80);
+    for line in &call_stream(&["a_dup"]) {
+        preview.apply(line);
+    }
+    preview.open(&Target::Call(target_id("a_dup")));
+    preview
+        .overrides
+        .insert(Target::Call(target_id("a_ghost")), true);
+    // The fold asks for the same call twice: the same card id names two
+    // calls, and only the first is the one the preview opened.
+    let mut fold = preview.fresh();
+    for line in &call_stream(&["a_dup", "a_dup"]) {
+        fold.apply(line);
+    }
+    preview.carry_opens(&mut fold);
+    assert_eq!(call_states(&fold, "a_dup"), vec![true, false]);
+    assert_eq!(
+        fold.overrides.get(&Target::Call(target_id("a_dup"))),
+        Some(&true)
+    );
+    assert!(
+        !fold
+            .overrides
+            .contains_key(&Target::Call(target_id("a_ghost"))),
+        "a target the fold lacks is dropped"
+    );
+}
+
+#[test]
+fn a_ctrl_o_in_the_preview_carries_to_the_fold() {
+    let lines = call_stream(&["a_t"]);
+    let mut preview = Pages::new(80);
+    for line in &lines {
+        preview.apply(line);
+    }
+    // The fold is made before Ctrl+O: carrying the overrides only would
+    // leave it shut.
+    let mut fold = preview.fresh();
+    for line in &lines {
+        fold.apply(line);
+    }
+    preview.toggle_ledgers();
+    preview.carry_opens(&mut fold);
+    assert!(fold.fold.ledgers);
+    let ledgers: Vec<bool> = fold
+        .closed
+        .iter()
+        .flatten()
+        .chain(std::iter::once(&fold.open))
+        .flat_map(|part| part.turns.iter())
+        .flat_map(Turn::groups)
+        .filter(|group| group.has_ledger())
+        .map(|group| group.open)
+        .collect();
+    assert!(!ledgers.is_empty());
+    assert!(ledgers.iter().all(|open| *open));
 }
