@@ -20,7 +20,6 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -31,7 +30,7 @@ use fakes::Watchdog;
 use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::pty;
 
-use super::{Deadline, Setup, expired, kill_group_detached, kill_pid};
+use super::{Deadline, KillGroup, Setup, expired, kill_group_detached, kill_pid, spawn_watched};
 
 /// The driver's default terminal size: a test may pick the size its
 /// layout needs (the look tests use 160 by 48).
@@ -271,29 +270,6 @@ impl Terminal {
     /// The terminal side as standard IO.
     pub(crate) fn stdio(&self) -> Stdio {
         Stdio::from(self.terminal.try_clone().unwrap())
-    }
-}
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. Dropping the watchdog kills the group; standing it down exits
-/// quietly once the child is reaped and the group is empty.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop, through the guarded helper, which
-/// refuses a group id of 1 or less (`docs/testing.md`, "Waits and
-/// timeouts").
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        kill_group_detached(self.0, "KILL");
     }
 }
 

@@ -16,15 +16,14 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Watchdog};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, Setup};
+use support::{Deadline, Setup, spawn_watched};
 
 /// The `session_started` first line of session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace.
@@ -118,18 +117,6 @@ impl Setup {
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
-}
-
-// debt: `spawn_watched` copies `approve.rs`'s, as the other binary test files
-// in this crate each do; move every copy into `fakes` together when a
-// change to one has to be made in all.
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let watchdog = Watchdog::group(child.id());
-    (child, watchdog)
 }
 
 struct Run {
