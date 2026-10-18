@@ -1156,7 +1156,6 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
     assert!(!ran.is_empty());
-    // `run` is admitted and blocked on `host.http` before the release below.
     assert!(
         held.await_requests(1, setup.deadline.left()),
         "waited until the deadline for the held command's host.http request"
