@@ -1594,6 +1594,83 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     );
 }
 
+/// A child the test kills and reaps when the test ends, so a failure
+/// before the child's exit leaves no orphan behind.
+struct ReapOnDrop(Option<std::process::Child>);
+
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A release before the child opens `block` still wakes it: the child
+/// signals on the `ready` FIFO, then waits on a second FIFO (`gate`)
+/// between its signal and its `read _ < block`, so the test's release
+/// lands before the child's `block` open whatever the scheduling. Without
+/// the held end staying open, the child's `block` open blocks with no
+/// writer and the second `ready` wait below expires.
+#[test]
+fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
+    use std::io::Write as _;
+    use std::os::unix::process::CommandExt as _;
+
+    let dir = fakes::TempDir::new("fiber-schedule-hold-release");
+    let block = dir.path().join("block.fifo");
+    let gate = dir.path().join("gate.fifo");
+    for fifo in [&block, &gate] {
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(fifo)
+                .status()
+                .unwrap()
+                .success(),
+            "mkfifo {}",
+            fifo.display()
+        );
+    }
+    // The ready reader is open before the child runs, so its signal lines
+    // are never lost and its opens never block.
+    let ready = fakes::children::Ready::new(dir.path());
+    let hold = HoldExec::hold(&block);
+    let script = format!(
+        "echo $$ > {ready}; read _ < {gate}; read _ < {block}; echo $$ > {ready}; exit 0",
+        ready = shell_quote(ready.path()),
+        gate = shell_quote(&gate),
+        block = shell_quote(&block),
+    );
+    let child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut child = ReapOnDrop(Some(child));
+    // The child reached its script, so it is at or on its way to the gate:
+    // the gate read comes before the block open, whatever the scheduling.
+    let _started = ready.wait(WAIT_FOR_TIMER);
+    hold.release();
+    // Opening read-write never blocks; the held end keeps the child's gate
+    // open from blocking, and the buffered line lets its gate read finish
+    // so it reaches the block open after the release.
+    let mut gate_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&gate)
+        .unwrap();
+    gate_hold.write_all(b"\n").unwrap();
+    let _exited = ready.wait(WAIT_FOR_TIMER);
+    assert!(
+        fakes::group_empties(child.0.as_ref().unwrap().id(), WAIT_FOR_TIMER),
+        "the released child left its group behind"
+    );
+    let status = child.0.take().unwrap().wait().unwrap();
+    assert!(status.success(), "the released child exited cleanly");
+}
+
 /// A non-timer call that finishes records no `TimerDone`. Without the
 /// timer check, a flipped `&&` would fire the hook for this command.
 #[test]
