@@ -16,8 +16,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Setup, group_alive, spawn_watched};
+use support::{
+    Deadline, KillGroup, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
+};
 
 impl Setup {
     fn new_with_fc_root() -> Self {
@@ -151,4 +154,75 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
             file.display()
         )
     );
+}
+
+#[test]
+fn a_repository_role_credential_is_ignored_with_a_notice_and_keeps_its_model() {
+    let setup = Setup::new_with_fc_root();
+    fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
+    fs::write(
+        setup.root.path().join("w/.fiber/config.json"),
+        r#"{"roles": {"fast": {"model": "fake/m", "credential": "work"}}}"#,
+    )
+    .unwrap();
+    let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
+    assert_eq!(get.code, Some(0), "{get:?}");
+    // The role's model still applies, from the repository layer.
+    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
+    assert!(get.stdout.contains(".fiber/config.json"), "{get:?}");
+    // The ignored credential raises one notice naming the key and the file.
+    let file = fs::canonicalize(setup.root.path().join("w/.fiber/config.json")).unwrap();
+    assert_eq!(
+        get.stderr,
+        format!(
+            "{}: ignored `roles.\"fast\".credential`, which a repository's role may not set.\n",
+            file.display()
+        ),
+        "{get:?}"
+    );
+    // The same notice reaches the person through the session's notice
+    // event, as `diagnostics.rs` pins for its own ignored key.
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let mut command = setup.fiber(&["ask", "hi"]);
+    command.current_dir(setup.workspace());
+    let output = run_to_exit(setup.deadline, "fiber ask", command);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the model request arrived: a passing ask really asked"
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter(|line| !is_status(line))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let notice = lines
+        .iter()
+        .find(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_key_ignored")
+        .expect("one config_key_ignored notice");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("`roles.\"fast\".credential`"), "{message}");
+    assert!(message.contains(".fiber/config.json"), "{message}");
+}
+
+#[test]
+fn a_repository_role_without_a_credential_raises_no_notice() {
+    let setup = Setup::new_with_fc_root();
+    fs::create_dir_all(setup.root.path().join("w/.fiber")).unwrap();
+    fs::write(
+        setup.root.path().join("w/.fiber/config.json"),
+        r#"{"roles": {"fast": {"model": "fake/m"}}}"#,
+    )
+    .unwrap();
+    let get = setup.run_in_workspace(&["config", "get", "roles.fast"]);
+    assert_eq!(get.code, Some(0), "{get:?}");
+    assert!(get.stdout.contains("\"fake/m\""), "{get:?}");
+    assert_eq!(get.stderr, "", "{get:?}");
 }
