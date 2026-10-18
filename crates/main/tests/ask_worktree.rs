@@ -322,15 +322,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
     let fifo = setup.root.path().join("hook.fifo");
-    let mut mkfifo = Command::new("mkfifo");
-    mkfifo
-        .arg(&fifo)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "mkfifo: {made:?}");
+    fakes::fifo(&fifo);
     let child = ask_command(
         &setup,
         &setup.workspace(),
@@ -958,15 +950,7 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
     let fifo = setup.root.path().join("hook.fifo");
-    let mut mkfifo = Command::new("mkfifo");
-    mkfifo
-        .arg(&fifo)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "mkfifo: {made:?}");
+    fakes::fifo(&fifo);
     let child = ask_command(
         &setup,
         &setup.workspace(),

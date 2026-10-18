@@ -17,8 +17,6 @@
 mod support;
 
 use std::fs;
-use std::path::Path;
-use std::process::{Command, Stdio};
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::json;
@@ -42,18 +40,6 @@ fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
-}
-
-/// Makes a FIFO at `path` for the held job to wait on.
-fn mkfifo(setup: &Setup, path: &Path) {
-    let mut command = Command::new("mkfifo");
-    command
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = support::run_to_exit(setup.deadline, "mkfifo", command);
-    assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
 }
 
 /// The held background job's release: writing a line lets its read
@@ -129,7 +115,7 @@ fn panel_setup() -> (Setup, ProviderServer, Release) {
     // the FIFO: the test holds it open, so neither open blocks, and the
     // job outlives every assertion until the test writes its release.
     let hold = workspace.join("hold");
-    mkfifo(&setup, &hold);
+    fakes::fifo(&hold);
     let waiter = workspace.join("wait.sh");
     fs::write(&waiter, "read -r _ < hold\necho done\n").unwrap();
     let release = fs::OpenOptions::new()
@@ -296,7 +282,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
     let workspace = setup.workspace();
     fs::write(workspace.join("a.txt"), "hello\n").unwrap();
     let hold = workspace.join("hold");
-    mkfifo(&setup, &hold);
+    fakes::fifo(&hold);
     let mut release = fs::OpenOptions::new()
         .read(true)
         .write(true)
