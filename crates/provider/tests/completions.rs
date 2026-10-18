@@ -1961,7 +1961,6 @@ fn usage_with_searches(searches: Option<u64>) -> Value {
     json!({"id": "gen-1", "choices": [], "usage": details})
 }
 
-#[track_caller]
 fn hosted_calls(reply: &Reply) -> Vec<&contract::provider::HostedCall> {
     reply
         .actions
@@ -2092,13 +2091,29 @@ fn reply_without_annotations_has_no_hosted_call() {
     assert_eq!(reply.text(), "hi");
 }
 
+#[test]
+fn non_citation_annotations_yield_no_hosted_call() {
+    let chunks = vec![
+        annotated_chunk(json!([
+            {"type": "file_citation", "file_citation": {"file_id": "f-1"}},
+            {"type": "other", "text": "x"},
+        ])),
+        chunk(json!({"content": "hi"}), Some("stop")),
+        usage_with_searches(None),
+    ];
+    let (reply, _) = decoded(&stream(&chunks));
+    let reply = reply.unwrap();
+    assert!(hosted_calls(&reply).is_empty());
+    assert_eq!(reply.text(), "ahi");
+}
+
 /// How long the live search may take.
 const LIVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// One live hosted search through OpenRouter, recorded as
-/// `recordings/openrouter-web-search.sse` with the `record` jig from the
-/// request Fiber builds for a model whose `web_search` is
-/// `openrouter:web_search`. It is `#[ignore]`d and panics without
+/// One live hosted search through OpenRouter. The fixture
+/// `recordings/openrouter-web-search.sse` is the probe's reply, copied from
+/// `research/web-tools/openrouter-web-search-probe-2026-10-18.json`. This test
+/// is `#[ignore]`d and panics without
 /// `FIBER_LIVE_OPENROUTER_KEY`; it never runs in CI. The call runs on a
 /// thread bounded by a channel deadline instead of hanging the test.
 #[test]

@@ -498,8 +498,8 @@ impl Decoder {
         }
         // A reply carrying search results holds one hosted call before its
         // text: the search the provider ran for it.
-        if !self.annotations.is_empty() {
-            actions.push(ReplyAction::Hosted(hosted_search(&self.annotations)));
+        if let Some(hosted) = hosted_search(&self.annotations) {
+            actions.push(ReplyAction::Hosted(hosted));
         }
         if !self.text.is_empty() {
             actions.push(ReplyAction::Text(TextCompleted {
@@ -532,12 +532,13 @@ impl Decoder {
     }
 }
 
-/// One hosted search from the reply's annotation entries. The call names
+/// One hosted search from the reply's annotation entries, or `None` when no
+/// `url_citation` URL arrived. The call names
 /// `web_search` with empty arguments, since the stream never shows the
 /// query; the completion carries the cited URLs, one per line, in the order
 /// each first arrived, duplicates dropped, with the raw entries as the
 /// `provider_item`. Only string URLs count.
-fn hosted_search(annotations: &[Value]) -> HostedCall {
+fn hosted_search(annotations: &[Value]) -> Option<HostedCall> {
     let mut urls: Vec<&str> = Vec::new();
     for entry in annotations {
         if entry.get("type").and_then(Value::as_str) != Some("url_citation") {
@@ -551,7 +552,10 @@ fn hosted_search(annotations: &[Value]) -> HostedCall {
         }
     }
     let item = Value::Array(annotations.to_vec());
-    HostedCall {
+    if urls.is_empty() {
+        return None;
+    }
+    Some(HostedCall {
         call: ToolCallRequested {
             name: "web_search".to_owned(),
             arguments: json!({}),
@@ -561,7 +565,7 @@ fn hosted_search(annotations: &[Value]) -> HostedCall {
             provider_item: Some(item.clone()),
         },
         completed: crate::hosted::completed(item, &urls),
-    }
+    })
 }
 
 /// Hosted searches the usage reports; `None` when it reports none.
