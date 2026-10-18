@@ -733,3 +733,50 @@ fn a_boundary_read_fails_closed_on_a_log_it_cannot_read_and_reads_it_once_restor
     fs::write(&log, held).unwrap();
     assert_eq!(seq_of(&dir), 1);
 }
+
+#[test]
+fn history_on_a_missing_log_is_not_found() {
+    let home = fakes::TempDir::new("log-history-first-missing");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    let error = history(&dir).unwrap_err();
+    let Error::NotFound(path) = error else {
+        panic!("a missing log has a history");
+    };
+    assert_eq!(path, dir);
+}
+
+#[test]
+fn history_with_a_first_line_with_no_newline_is_a_pointer_naming_the_missing_line() {
+    let home = fakes::TempDir::new("log-history-first-nonl");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(EVENTS),
+        started("s_aaaaaaaaaaaaaaaa", 0, None).trim_end(),
+    )
+    .unwrap();
+    let error = history(&dir).unwrap_err();
+    let Error::Pointer { path, reason } = error else {
+        panic!("a first line with no newline has a history");
+    };
+    assert_eq!(path, dir.join(EVENTS));
+    assert_eq!(reason, "the log's first line is missing");
+}
+
+#[test]
+fn history_with_a_first_line_that_is_not_an_event_is_a_pointer() {
+    let home = fakes::TempDir::new("log-history-first-event");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(EVENTS), "{\"kind\":\"session_started\"}\n").unwrap();
+    let error = history(&dir).unwrap_err();
+    let Error::Pointer { path, reason } = error else {
+        panic!("a first line that is not an event has a history");
+    };
+    assert_eq!(path, dir.join(EVENTS));
+    assert_eq!(reason, "the log's first line is not an event");
+}
