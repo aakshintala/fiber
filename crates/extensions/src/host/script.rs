@@ -324,6 +324,15 @@ impl ExecRequest {
                 "cwd".to_owned(),
                 Value::String(self.cwd.display().to_string()),
             ),
+            (
+                "env".to_owned(),
+                Value::Object(
+                    self.env
+                        .iter()
+                        .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                        .collect(),
+                ),
+            ),
         ]))
     }
 }

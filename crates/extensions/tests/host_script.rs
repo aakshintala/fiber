@@ -157,7 +157,7 @@ fiber.provider("host-script", {{ models = {{
     local response = host.http({{
       method = "GET", url = "{base}/models", headers = {{["X-Case"] = "models"}}
     }})
-    local run = host.exec("{exec_program}", {{"one"}}, {{cwd = "."}})
+    local run = host.exec("{exec_program}", {{"one"}}, {{cwd = ".", env = {{FIBER_X = "1"}}}})
     return {{{{
       id = entry_reply.status .. ":" .. entry_reply.body .. "|" ..
         response.status .. ":" .. response.body .. "|" .. run.exit_code .. ":" ..
@@ -198,7 +198,8 @@ fiber.provider("host-script", {{ models = {{
             request: json!({
                 "program": exec_program,
                 "args": ["one"],
-                "cwd": setup.workspace().join(".").display().to_string()
+                "cwd": setup.workspace().join(".").display().to_string(),
+                "env": {"FIBER_X": "1"}
             }),
             reply: Ok(ExecReply {
                 code: 7,
@@ -302,4 +303,57 @@ fn an_unscripted_http_call_fails_in_lua_and_is_reported_as_a_miss() {
     assert!(unmet[0].contains("host.http[1]"), "{}", unmet[0]);
     assert!(unmet[0].contains(&server.url()), "{}", unmet[0]);
     assert!(server.requests().is_empty(), "{:?}", server.requests());
+}
+
+#[test]
+fn a_mismatched_env_fails_the_scripted_exec() {
+    let setup = Setup::new();
+    let dir = setup.root().join("env-mismatch");
+    write(
+        &dir.join("init.lua"),
+        "fiber.command(\"run\", { timeout = 1000, run = function()\n\
+         return host.exec(\"sh\", {\"-c\", \"exit 0\"}, {env = {FIBER_X = \"2\"}})\n\
+         end })\n",
+    );
+    let script = HostScript::new(
+        Vec::new(),
+        vec![ExecEntry {
+            request: json!({
+                "program": "sh",
+                "args": ["-c", "exit 0"],
+                "env": {"FIBER_X": "1"}
+            }),
+            reply: Ok(ExecReply {
+                code: 0,
+                stdout: "ok".to_owned(),
+                stderr: String::new(),
+            }),
+        }],
+        Vec::new(),
+    );
+    let extension = Arc::new(
+        LuaExtension::new("env-mismatch", dir, setup.home(), FakeClock::new())
+            .with_host_script(Arc::clone(&script)),
+    );
+    let (result_tx, result_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(extension.command("run", ""));
+    });
+    let error = Deadline::after(WAIT)
+        .recv(&result_rx)
+        .expect("waited for mismatched scripted env to fail")
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ExtensionFailed);
+    let Error::Lua { message, .. } = error else {
+        panic!("expected the uncaught host failure to be a Lua error");
+    };
+    assert!(
+        message.contains("host.exec: the case scripts no reply for this request"),
+        "{message}"
+    );
+    let unmet = script.unmet();
+    assert_eq!(unmet.len(), 2);
+    assert!(unmet[0].contains("host.exec[1]"), "{}", unmet[0]);
+    assert!(unmet[0].contains("FIBER_X"), "{}", unmet[0]);
+    assert!(unmet[1].contains("unused"), "{}", unmet[1]);
 }
