@@ -95,6 +95,7 @@ pub(crate) struct State {
     pub(crate) log: Arc<log::Log>,
     pub(crate) diag: Arc<log::diag::Diag>,
     pub(crate) names: std::sync::Mutex<Vec<String>>,
+    pub(crate) shell_read_only: crate::settings::ShellReadOnly,
 }
 
 impl State {
@@ -114,6 +115,7 @@ impl State {
         answerable: bool,
         log: Arc<log::Log>,
         diag: Arc<log::diag::Diag>,
+        shell_read_only: crate::settings::ShellReadOnly,
     ) -> (
         Self,
         r#loop::LoadApproved,
@@ -157,6 +159,7 @@ impl State {
             log,
             diag,
             names: std::sync::Mutex::new(names),
+            shell_read_only,
         };
         (
             state,
@@ -324,6 +327,7 @@ impl State {
                 (shared.declare)(&name, Some(info));
             }
             publish();
+            crate::settings::refresh_shell_read_only(&shared.shell_read_only, &next.config);
             shared.switching.reloaded(next);
             shared.current.swap(extensions);
         });
