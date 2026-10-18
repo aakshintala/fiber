@@ -724,9 +724,12 @@ impl Run {
     /// holds the output through the last grid wait the test completes,
     /// never a snapshot taken after quit. When the terminal ends first
     /// the panic names the wait and shows the last grid, so a stall says
-    /// how far the journey got.
+    /// how far the journey got. A deadline expiry panics with the grid
+    /// the last check saw, never a fresh read, and names how much of the
+    /// deadline remained when the wait began.
     #[track_caller]
     pub(crate) fn wait_screen(&mut self, what: &str, mut done: impl FnMut(&Grid) -> bool) -> Grid {
+        let start_left = self.deadline.left();
         loop {
             let (grid, ended, snapshot_len) = {
                 let shared = self.shared.lock().unwrap();
@@ -753,8 +756,8 @@ impl Run {
             }
             if self.deadline.recv(&self.wakes).is_err() {
                 panic!(
-                    "waited until the deadline for {what}; screen:\n{}",
-                    self.screen().contents
+                    "waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
+                    grid.contents
                 );
             }
         }
@@ -1117,4 +1120,79 @@ pub(crate) fn sgr_params(bytes: &[u8]) -> Vec<Vec<u16>> {
         }
     }
     lists
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// `wait_screen` panics with the grid its last check saw, never a
+    /// fresh read, and names how much of the deadline remained when the
+    /// wait began. The child's marker is held on a pipe the test owns
+    /// until after the check, so the panic must show the checked grid;
+    /// the test uses no sleep (`docs/testing.md`, "Waits and timeouts").
+    #[test]
+    fn wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        clock.advance(fakes::deadline::WAITS);
+        assert!(
+            deadline.left().is_zero(),
+            "the wait starts with no time left"
+        );
+        // The marker stays held until after the check: the child blocks
+        // reading the pipe the test owns.
+        let mut child = Command::new("sh")
+            .args(["-c", "read line; printf marker"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut held = child.stdin.take().unwrap();
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        let before = run.screen().contents.clone();
+        assert!(
+            !before.contains("marker"),
+            "the checked grid holds no marker"
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.wait_screen("the marker", |grid| grid.contents.contains("marker"))
+        }));
+        let message = result
+            .unwrap_err()
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        let shown = message.split("screen:\n").nth(1).unwrap_or("");
+        assert_eq!(
+            shown, before,
+            "the panic shows the checked grid: {message:?}"
+        );
+        assert!(
+            !shown.contains("marker"),
+            "the held output stays out of the panic: {message:?}"
+        );
+        assert!(
+            message.contains("left when the wait began"),
+            "the panic names the remaining deadline: {message:?}"
+        );
+        // Releasing the pipe lets the child print its marker, proving
+        // the hold; the reap is bounded so a stuck child fails loudly.
+        held.write_all(b"release\n").unwrap();
+        drop(held);
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = Deadline::after(Duration::from_secs(10))
+            .recv(&finished)
+            .expect("the released child back after the release")
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("marker"),
+            "the released child prints its marker"
+        );
+    }
 }
