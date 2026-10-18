@@ -197,10 +197,10 @@ impl Loop {
     /// `jobs_pending_notified` with `reason` `unattended` is queued for its
     /// first step. The session does not end.
     pub(crate) fn check_jobs(&mut self, input: &mut crate::inbox::TurnInput) -> Result<(), Error> {
-        let running = self.running();
         for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
             self.admit_idle(delivery, input)?;
         }
+        let running = self.running();
         let model = self.model_running(running);
         if !model.is_empty() {
             self.ending.checked = true;
