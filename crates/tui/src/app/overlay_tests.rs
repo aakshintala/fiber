@@ -1109,14 +1109,20 @@ fn total_of(app: &App) -> usize {
 }
 
 #[test]
-fn session_left_and_disconnect_end_the_overlay() {
+fn session_left_keeps_and_disconnect_ends_the_overlay() {
     let mut seq = 0u64;
     let preview = turn(&mut seq, "a_m", "the preview reply");
     let mut app = folding(&preview, &preview, seq + 10);
     assert!(app.attached_screen().frozen());
     app.on_line(hub("session_left", SESSION, None));
-    assert!(matches!(app.overlay, Overlay::None));
+    // A pinned expectation this ticket changes: the pass ended
+    // without its boundary, so the preview is kept, unfrozen, with
+    // the bar still hidden, as `stream_closed` keeps it.
+    let Overlay::Kept { .. } = &app.overlay else {
+        panic!("the preview is kept");
+    };
     assert!(!app.attached_screen().frozen());
+    assert!(!app.counts_exact(), "the bar stays hidden");
     let mut app = folding(&preview, &preview, seq + 10);
     app.disconnected();
     assert!(matches!(app.overlay, Overlay::None));

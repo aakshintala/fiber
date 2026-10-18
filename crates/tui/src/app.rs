@@ -938,64 +938,18 @@ impl App {
                         {
                             self.end_overlay();
                         } else {
-                            // The pass's stream ended: the preview stays,
-                            // unfrozen, and replays skip to its last line.
-                            // `session_left` instead ends the overlay below.
-                            let last = self.preview_last();
-                            match std::mem::replace(&mut self.overlay, Overlay::None) {
-                                Overlay::Folding {
-                                    session: folding,
-                                    fold,
-                                    busy,
-                                    held,
-                                    ..
-                                } if folding == session => {
-                                    if last.is_none() {
-                                        // The tail read failed and installed no
-                                        // preview, so the pass's lines are the
-                                        // only copy: land them as the screen
-                                        // instead of dropping them with the fold.
-                                        let fresh = self.fresh_fold();
-                                        self.overlay = Overlay::Folding {
-                                            session,
-                                            fold: fresh,
-                                            busy,
-                                            held,
-                                            landing: false,
-                                        };
-                                        self.land(*fold, held);
-                                    }
-                                    self.overlay = Overlay::Kept { last };
-                                    self.attached_screen_mut().set_frozen(false);
-                                }
-                                rest @ (Overlay::None
-                                | Overlay::Shown { .. }
-                                | Overlay::Folding { .. }
-                                | Overlay::Kept { .. }
-                                | Overlay::Reading(_)) => {
-                                    self.overlay = rest;
-                                }
-                            }
+                            self.keep_pass(&session);
                         }
                     }
                     "session_left" => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
-                        match &self.overlay {
-                            Overlay::Shown { session: shown, .. } if shown == &session => {
-                                self.end_overlay();
-                            }
-                            Overlay::Folding {
-                                session: folding, ..
-                            } if folding == &session => {
-                                self.end_overlay();
-                            }
-                            Overlay::None
-                            | Overlay::Shown { .. }
-                            | Overlay::Folding { .. }
-                            | Overlay::Kept { .. }
-                            | Overlay::Reading(_) => {}
+                        if matches!(&self.overlay, Overlay::Shown { session: shown, .. } if shown == &session)
+                        {
+                            self.end_overlay();
+                        } else {
+                            self.keep_pass(&session);
                         }
                     }
                     _ => {}
@@ -1003,6 +957,48 @@ impl App {
             }
         }
         false
+    }
+
+    /// Keeps the preview when the pass's stream ends without its
+    /// boundary, through `stream_closed` or `session_left` alike: the
+    /// preview stays, unfrozen, and replays skip to its last line. With
+    /// no preview the pass's lines are the only copy, so they land as
+    /// the screen instead of dropping with the fold.
+    fn keep_pass(&mut self, session: &SessionId) {
+        let last = self.preview_last();
+        match std::mem::replace(&mut self.overlay, Overlay::None) {
+            Overlay::Folding {
+                session: folding,
+                fold,
+                busy,
+                held,
+                ..
+            } if &folding == session => {
+                if last.is_none() {
+                    // The tail read failed and installed no preview, so
+                    // the pass's lines are the only copy: land them as
+                    // the screen instead of dropping them with the fold.
+                    let fresh = self.fresh_fold();
+                    self.overlay = Overlay::Folding {
+                        session: session.clone(),
+                        fold: fresh,
+                        busy,
+                        held,
+                        landing: false,
+                    };
+                    self.land(*fold, held);
+                }
+                self.overlay = Overlay::Kept { last };
+                self.attached_screen_mut().set_frozen(false);
+            }
+            rest @ (Overlay::None
+            | Overlay::Shown { .. }
+            | Overlay::Folding { .. }
+            | Overlay::Kept { .. }
+            | Overlay::Reading(_)) => {
+                self.overlay = rest;
+            }
+        }
     }
 
     /// Shows `text` as a notice under `code`.
