@@ -23,6 +23,33 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[test]
+fn fork_task_is_the_ruled_message_with_the_unattended_paragraph() {
+    assert_eq!(
+        fork_task(&SessionId("s_parent00000001".into()), 1, "check it"),
+        "Fiber: you are a fork of session s_parent00000001, started at delegate depth 1. The conversation above is your parent's, up to the point where it called `delegate_fork`. From here you work alone, and your final message goes back to your parent. Jobs started above belong to your parent, not to you.\n\nNobody is present to answer questions in this session. Work through to the end on your own judgment, and state every assumption you made in your final reply. Ask with `ask_user` only when you cannot go on without an answer: asking ends the run, and the caller answers by resuming the session.\n\nYour task:\n\ncheck it"
+    );
+}
+
+#[test]
+fn fork_task_names_its_depth() {
+    assert!(
+        fork_task(&SessionId("s_parent".into()), 2, "check it")
+            .contains("started at delegate depth 2.")
+    );
+}
+
+#[test]
+fn fork_task_leaves_braces_in_the_prompt_alone() {
+    let text = fork_task(
+        &SessionId("s_parent".into()),
+        1,
+        "use {depth} and {unattended} and {prompt}",
+    );
+    assert!(text.ends_with("Your task:\n\nuse {depth} and {unattended} and {prompt}"));
+    assert_eq!(text.matches("Your task:").count(), 1);
+}
+
 fn requested(name: &str, arguments: Value) -> Event {
     Event::ToolCallRequested(ToolCallRequested {
         name: name.to_owned(),

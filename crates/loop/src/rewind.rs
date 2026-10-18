@@ -100,6 +100,21 @@ impl Loop {
     }
 }
 
+/// The first turn's task for a fork, with its parent's identity and depth.
+/// Workspace isolation is supplied separately; the inherited workspace adds no text.
+pub fn fork_task(parent: &contract::SessionId, depth: u32, prompt: &str) -> String {
+    fill(
+        message("fork-task"),
+        &[
+            ("parent_session_id", &parent.0),
+            ("depth", &depth.to_string()),
+            ("workspace", ""),
+            ("unattended", message("unattended")),
+            ("prompt", prompt),
+        ],
+    )
+}
+
 /// The latest `session_named` in the log in `dir`, read from the end
 /// backwards; `None` when the session never named itself or its log
 /// cannot be read.
