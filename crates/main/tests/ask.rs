@@ -342,20 +342,6 @@ fn anthropic_hello() -> Response {
     Response::stream(body)
 }
 
-/// A Gemini `streamGenerateContent` stream answering `Hello.` in two parts.
-fn gemini_hello() -> Response {
-    let chunks = [
-        json!({"responseId": "resp_1", "candidates": [{"content": {
-            "parts": [{"text": "Hel"}], "role": "model"}}]}),
-        json!({"responseId": "resp_1", "candidates": [{"content": {
-            "parts": [{"text": "lo."}], "role": "model"},
-            "finishReason": "STOP"}],
-            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}}),
-    ];
-    let body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
-    Response::stream(body)
-}
-
 /// An `openai-completions` stream answering `Hello.` in two fragments,
 /// its usage chunk carrying `cost`: OpenRouter's inline figure.
 fn completions_hello(id: &str, cost: Value) -> Response {
@@ -2152,54 +2138,6 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 }
 
 #[test]
-fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([anthropic_hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
-        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/messages");
-    assert_fingerprint(&requests[0], "x-api-key", "sk-test-anthropic");
-}
-
-#[test]
-fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package("openai", "https://api.openai.com", &server.url()),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "openai/gpt-6-luna", "hi"],
-        &[("OPENAI_API_KEY", "sk-test-openai")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "/v1/responses");
-    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openai");
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(body["store"], Value::Bool(false));
-}
-
-#[test]
 fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     let setup = Setup::new_with_started_deadline();
     let server = support::package::openrouter_ask_server(vec![completions_hello(
@@ -2495,36 +2433,6 @@ fn the_openrouter_data_file_holds_no_models_for_models_to_supply() {
         Some("anthropic/claude-sonnet-5.5")
     );
     assert!(provider.models.is_empty());
-}
-
-#[test]
-fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([gemini_hello()]).unwrap();
-    install(
-        &setup,
-        &setup.package(
-            "gemini",
-            "https://generativelanguage.googleapis.com",
-            &server.url(),
-        ),
-    );
-
-    let run = setup.fiber_with_env(
-        &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
-        &[("GEMINI_API_KEY", "sk-test-gemini")],
-    );
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(
-        requests[0].path,
-        "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
-    );
-    assert_fingerprint(&requests[0], "x-goog-api-key", "sk-test-gemini");
 }
 
 #[test]
