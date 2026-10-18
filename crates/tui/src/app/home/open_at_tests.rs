@@ -517,6 +517,12 @@ fn an_open_sends_summary_and_no_full() {
 #[test]
 fn an_open_with_summary_expected_sends_no_subscribe() {
     let mut app = home_at(OpenAt::Home);
+    let subscribe = app.subscribe(&id("s_aaaaaaaaaaaaaaaa"), Level::Summary);
+    let subscribe: Value = serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
+    let ack = subscribe["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
     let lines =
         commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false));
     assert_eq!(lines.len(), 1);
@@ -751,6 +757,39 @@ fn an_open_sends_commands_only_after_the_subscribe_ack() {
             .is_empty(),
         "a refused subscribe sends no commands"
     );
+}
+
+#[test]
+fn an_open_waits_for_an_existing_summary_subscribe() {
+    for accepted in [true, false] {
+        let mut app = home_at(OpenAt::Home);
+        let session = id("s_aaaaaaaaaaaaaaaa");
+        let subscribe = app.subscribe(&session, Level::Summary);
+        let subscribe: Value =
+            serde_json::from_str(&subscribe).unwrap_or_else(|err| panic!("{err}"));
+        let ack = subscribe["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("summary id"));
+        let lines = app.open_session(session.clone(), Some(Level::Summary), None, false);
+        assert!(lines.is_empty(), "commands waits for acceptance: {lines:?}");
+        assert!(app.take_raise().is_none());
+        assert!(app.gated(&session));
+        let answer = if accepted {
+            session_accepted("s_aaaaaaaaaaaaaaaa", ack)
+        } else {
+            refused(ack, "held by another process")
+        };
+        let sent = commands(app.on_line(answer));
+        if accepted {
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0]["command"], "commands");
+            assert_eq!(sent[0]["session_id"], "s_aaaaaaaaaaaaaaaa");
+        } else {
+            assert!(sent.is_empty(), "a refused subscribe sends no commands");
+            assert!(app.on_home());
+            assert!(app.take_raise().is_none());
+        }
+    }
 }
 
 #[test]

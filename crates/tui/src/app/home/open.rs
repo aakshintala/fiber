@@ -55,11 +55,13 @@ impl Subscriptions {
 
     /// Opens the gate for `session`: the first stage's acknowledgement
     /// is `ack` when a first-stage subscribe went out, and `None` when
-    /// the connection already holds `summary`, when the raise is due at
-    /// once. `held` keeps the screen's rows: the tail read is skipped
+    /// the connection already holds accepted `summary`, when the raise
+    /// is due at once. An in-flight `summary` supplies its existing id.
+    /// `held` keeps the screen's rows: the tail read is skipped
     /// and the raise goes out after the first frame draws, once the
     /// preview is up. Until the raise's acknowledgement the gate holds.
     pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
+        let ack = ack.or_else(|| self.levels.pending_summary(&session).map(str::to_owned));
         self.opening = Some(match ack {
             Some(ack) => Opening::Summary { session, ack, held },
             None => Opening::Due { session, held },

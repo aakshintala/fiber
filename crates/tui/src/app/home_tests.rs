@@ -1005,11 +1005,19 @@ fn opening_a_full_session_sends_summary_then_full() {
     // Home during the open, before any answer: the row is not live, so no
     // lowering goes out.
     assert_eq!(enter_text(&mut app, "/home"), Effect::None);
-    // The `summary` is already asked for, so only `commands` goes out;
-    // the `full` raise follows the first frame.
+    // The earlier summary is still in flight: commands waits for its
+    // acceptance, and a refusal must send no commands.
     let lines = open_first(&mut app);
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "commands");
+    assert!(lines.is_empty());
+    assert!(app.take_raise().is_none());
+    let ack = first[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("summary id"));
+    let sent = app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+    assert_eq!(sent.len(), 1);
+    let commands: Value = serde_json::from_str(&sent[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(commands["command"], "commands");
+    assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
     let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(raise["command"], "subscribe");
@@ -1030,7 +1038,21 @@ fn a_click_on_a_row_opens_it() {
     ));
     let key = keys(&app)[0];
     match app.on_click(crate::mouse::TargetId::Home(Spot::Entry(key))) {
-        Effect::Send(lines) => assert_eq!(lines.len(), 2),
+        Effect::Send(lines) => {
+            assert_eq!(lines.len(), 1, "commands waits for subscribe acceptance");
+            let subscribe: Value =
+                serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+            assert_eq!(subscribe["command"], "subscribe");
+            let ack = subscribe["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("subscribe id"));
+            let sent = app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+            assert_eq!(sent.len(), 1);
+            let commands: Value =
+                serde_json::from_str(&sent[0]).unwrap_or_else(|err| panic!("{err}"));
+            assert_eq!(commands["command"], "commands");
+            assert_eq!(commands["session_id"], "s_aaaaaaaaaaaaaaaa");
+        }
         Effect::None
         | Effect::Quit
         | Effect::ListFiles
