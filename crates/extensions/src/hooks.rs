@@ -630,6 +630,13 @@ impl SessionExtensions {
         }
     }
 
+    /// Hands the session's model to every extension's `host.model`.
+    pub fn model_to(&self, model: Arc<dyn contract::model::HostModel>) {
+        for extension in &self.lua {
+            extension.set_model(Arc::clone(&model));
+        }
+    }
+
     /// Whether the session loaded any extension, even one without hooks.
     pub fn has_extensions(&self) -> bool {
         !self.loaded.is_empty()

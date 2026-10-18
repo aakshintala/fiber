@@ -6,14 +6,17 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::GenerationId;
 use contract::SessionId;
 use contract::commands::Name;
+use contract::events::UsageRecorded;
 use contract::events::{
     Answer, CallStatus, Control, ExtensionExec, ExtensionLog, Interaction, InteractionRequested,
     InteractionResolved, NamedBy, ResolvedBy, ShellCommand,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::shapes::Process;
+use contract::shapes::Tokens;
 use contract::shapes::Worktree;
 use contract::{ErrorCode, RequestId, TurnId};
 use log::Log;
@@ -415,6 +418,51 @@ fn an_extension_log_mid_turn_is_live_ephemeral_and_diagnostic_and_queues_nothing
     );
 }
 
+fn usage(generation: &str) -> UsageRecorded {
+    UsageRecorded {
+        generation_id: GenerationId(generation.to_owned()),
+        model: "scripted/s.json".to_owned(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 3,
+        },
+        input_bytes: 100,
+        input_media: None,
+        web_searches: None,
+        cost: Some(0.01),
+        subscription: None,
+        extension: Some("fiber.test/notes".to_owned()),
+        origin_session_id: None,
+        reviewer: None,
+    }
+}
+
+/// An extension's `host.model` usage line is written once at the idle drain
+/// and starts no turn.
+#[test]
+fn an_extension_usage_idle_is_written_once_and_starts_no_turn() {
+    let (mut looped, _log, mut watched, _home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    looped
+        .admit_idle(Delivery::ExtensionUsage(usage("g_usage")), &mut input)
+        .unwrap();
+    assert!(
+        input.pieces.is_empty(),
+        "extension usage starts no turn idle"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("extension usage arrives in time")
+        .expect("the log outlives the turn")
+        .expect("the log ended before extension usage");
+    assert_eq!(line.kind, "usage_recorded");
+    assert!(line.turn_id.is_none(), "extension usage carries no turn");
+    assert_eq!(line.payload["generation_id"], "g_usage");
+    assert_eq!(line.payload["extension"], "fiber.test/notes");
+}
+
 fn asked(id: &str) -> InteractionRequested {
     InteractionRequested {
         request_id: RequestId(id.into()),
@@ -680,6 +728,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::ExtensionExec(_)
             | Delivery::InnerCall(_)
             | Delivery::ExtensionLog(_)
+            | Delivery::ExtensionUsage(_)
             | Delivery::Interaction(_)
             | Delivery::Resolved(..)
             | Delivery::Shell(..)

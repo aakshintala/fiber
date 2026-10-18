@@ -13,16 +13,25 @@
 pub(super) use crate::test_support::install_extension;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use config::Config;
 use contract::commands::ModelArgs;
+use contract::events::{CacheLifetime, TextCompleted};
+use contract::provider::{
+    CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
+};
+use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
-use super::{Credentials, Door, Loader, Switching, hosted_stands, prepare};
+use super::{Connector, Credentials, Door, Loader, Reach, Switching, hosted_stands, prepare};
 use fakes::Deadline;
 
 /// The deadline of each preparation: one may start a Lua provider or run a
@@ -2259,4 +2268,231 @@ fn without_a_reviewer_the_switch_stands_with_no_factories() {
     assert_eq!(failure.message, r#loop::NO_MODEL_MESSAGE);
     assert!(made.observe.is_none());
     assert!(made.reviewer_observe.is_none());
+}
+
+/// A provider that answers with the key it was built with, counting its
+/// sends: the recording `Connector` hands one to every reach.
+struct KeyProvider {
+    key: String,
+    sends: AtomicUsize,
+}
+
+impl Provider for KeyProvider {
+    fn wire_tools(&self, _tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        Vec::new()
+    }
+
+    fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
+        self.sends.fetch_add(1, Ordering::SeqCst);
+        Box::new(KeyCall {
+            key: self.key.clone(),
+        })
+    }
+}
+
+/// One keyed call: it answers with the key at once and ignores `cancel`.
+struct KeyCall {
+    key: String,
+}
+
+impl ModelCall for KeyCall {
+    fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        Ok(Reply {
+            actions: vec![ReplyAction::Text(TextCompleted {
+                text: self.key.clone(),
+                provider_item: None,
+            })],
+            finish: Finish::Completed,
+            generation_id: None,
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            web_searches: None,
+            cost: None,
+            input_size: InputSize {
+                bytes: 0,
+                media: false,
+            },
+        })
+    }
+
+    fn cancel(&self) {}
+}
+
+/// A `Connector` recording every `(reference, key)` it connected, building
+/// a `KeyProvider` per reach: `reacher`'s fake in the re-point tests.
+struct RecordedConnect {
+    seen: Mutex<Vec<(String, Option<String>)>>,
+}
+
+impl RecordedConnect {
+    fn connector(self: &Arc<Self>) -> Connector {
+        let seen = Arc::clone(self);
+        Arc::new(move |model, key, _signer, _lua, _here| {
+            seen.seen.lock().unwrap().push((
+                model.reference(),
+                key.as_ref().map(|secret| secret.expose().to_owned()),
+            ));
+            let key = key
+                .as_ref()
+                .map(|secret| secret.expose().to_owned())
+                .unwrap_or_default();
+            Ok(Arc::new(KeyProvider {
+                key,
+                sends: AtomicUsize::new(0),
+            }) as Arc<dyn Provider>)
+        })
+    }
+
+    fn keys(&self) -> Vec<(String, Option<String>)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// A request naming no conversation, sent only to a fake provider that
+/// answers with its key.
+fn probe() -> ModelRequest {
+    ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "none".to_owned(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: "probe".to_owned(),
+        conversation: Vec::new(),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: PathBuf::new(),
+    }
+}
+
+/// A reach that connects, failing the test with the failure it got instead.
+#[track_caller]
+fn reached(reach: &Reach, reference: &str) -> super::Reached {
+    match reach(reference) {
+        Ok(reached) => reached,
+        Err(failure) => panic!("the reach for `{reference}` failed: {failure:?}"),
+    }
+}
+
+/// A credential switch moves the next `host.model` reach to the new key,
+/// but a call already in flight keeps the provider and key it started
+/// with: `repoint` runs on apply only, never in `prepare`'s publish.
+#[test]
+fn host_model_uses_the_new_key_after_a_credential_switch() {
+    let fixture = fixture("fiber-switch-host-model-credential");
+    config::store_credential(
+        &fixture.home,
+        "fake",
+        "work",
+        &config::Secret::new("k2".into()),
+    )
+    .unwrap();
+    let switching = switching(&fixture, &[]);
+    let recorded = Arc::new(RecordedConnect {
+        seen: Mutex::new(Vec::new()),
+    });
+    let reach = switching.reacher(recorded.connector());
+    // The session starts on `fake` under `default` with key `k1`.
+    let held = reached(&reach, "fake/n");
+    assert_eq!(
+        recorded.keys(),
+        vec![("fake/n".to_owned(), Some("k1".to_owned()))]
+    );
+    // `prepare` already published `work` to the selected labels, but the
+    // reach must not move until the switch applies: a mutant reading the
+    // selected label fails this assertion.
+    let mut made = prepared_with(&switching, &args("fake/n"), Some("work"), None);
+    assert_eq!(selected(&switching, "fake").as_deref(), Some("work"));
+    let _before = reached(&reach, "fake/n");
+    assert_eq!(
+        recorded.keys().last(),
+        Some(&("fake/n".to_owned(), Some("k1".to_owned()))),
+        "a reach before apply keeps the old key"
+    );
+    (made.applied.take().expect("the switch carries its apply"))();
+    let _moved = reached(&reach, "fake/n");
+    assert_eq!(
+        recorded.keys().last(),
+        Some(&("fake/n".to_owned(), Some("k2".to_owned()))),
+        "a reach after apply reads the new key"
+    );
+    // The call in flight keeps the provider and key it started with.
+    let mut dropped = |_: Delta| {};
+    let reply = held
+        .provider
+        .call(&probe())
+        .run(&mut dropped)
+        .expect("the held call answers");
+    assert_eq!(reply.text(), "k1");
+    // A `prepare` that fails moves nothing: `work` stays the label.
+    let rejection = rejected_with(&switching, &args("fake/n"), Some("nope"), None);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
+    let _after = reached(&reach, "fake/n");
+    assert_eq!(
+        recorded.keys().last(),
+        Some(&("fake/n".to_owned(), Some("k2".to_owned()))),
+        "a failed prepare moves nothing"
+    );
+}
+
+/// A `/model` switch to another provider leaves the original provider's
+/// entry alone: `host.model` naming the original model still routes there,
+/// with its key and declared cost. An unknown reference keeps its own
+/// code, and a failing `connect` is `model_unconfigured`.
+#[test]
+fn host_model_still_reaches_the_first_model_after_a_model_switch() {
+    let fixture = fixture("fiber-switch-host-model-route");
+    let switching = switching(&fixture, &[]);
+    let recorded = Arc::new(RecordedConnect {
+        seen: Mutex::new(Vec::new()),
+    });
+    let reach = switching.reacher(recorded.connector());
+    let first = reached(&reach, "fake/n");
+    assert_eq!(first.cost, None, "the fixture declares no prices");
+    assert!(!first.subscription);
+    let mut made = prepared(&switching, &args("claude/w"), None);
+    (made.applied.take().expect("the switch carries its apply"))();
+    let again = reached(&reach, "fake/n");
+    assert_eq!(
+        recorded.keys().last(),
+        Some(&("fake/n".to_owned(), Some("k1".to_owned()))),
+        "fake keeps its key after the switch to claude"
+    );
+    assert_eq!(again.cost, None);
+    assert!(!again.subscription);
+    let _other = reached(&reach, "claude/w");
+    assert_eq!(
+        recorded.keys().last(),
+        Some(&("claude/w".to_owned(), Some("k1".to_owned()))),
+        "claude keeps its own key"
+    );
+    let unknown = match reach("fake/x") {
+        Ok(_) => panic!("an unknown model fails"),
+        Err(failure) => failure,
+    };
+    assert_eq!(unknown.code, ErrorCode::NoModel);
+    let missing = match reach("nothing/x") {
+        Ok(_) => panic!("an uninstalled provider fails"),
+        Err(failure) => failure,
+    };
+    assert_eq!(missing.code, ErrorCode::ExtensionMissing);
+    let failing: Connector = Arc::new(|_, _, _, _, _| {
+        Err(Failure {
+            code: ErrorCode::QuotaExceeded,
+            message: "the connector failed".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        })
+    });
+    let failure = match switching.reacher(failing)("fake/n") {
+        Ok(_) => panic!("a failing connect fails"),
+        Err(failure) => failure,
+    };
+    assert_eq!(failure.code, ErrorCode::ModelUnconfigured);
+    assert_eq!(failure.message, "the connector failed");
 }

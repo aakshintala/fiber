@@ -302,6 +302,9 @@ pub(crate) struct Shared {
     pub(super) cancelled: HashSet<u64>,
     /// Admitted `host.exec` runs by call id, until each group is empty or killed and drained.
     pub(super) execs: HashMap<u64, super::tool::ExecAdmit>,
+    /// The `host.model` cancel of each call with one in flight, by call id.
+    /// Ended when the callback ends, the call is cancelled, or the hub stops.
+    pub(super) models: HashMap<u64, Arc<super::host_calls::ModelCancel>>,
     /// The admitted command whose inner call is running, from `taken` to
     /// the synchronous answer or drop. Checked only under the hub lock.
     pub(super) serving: Option<u64>,
@@ -697,6 +700,7 @@ impl Shared {
     /// Stops the extension with `reason`. The replies no thread will take are
     /// dropped, which releases a credential lock in one. Admitted exec runs
     /// stop without the Lua thread: their sender's drop reaches the run.
+    /// Every in-flight `host.model` call's cancel is set, as on the seal.
     /// Every held ask is declined by `fiber` in the same critical section;
     /// returns what could not be sent, for the caller to drop afterwards.
     pub(super) fn stop(&mut self, reason: StopReason) -> Vec<Delivery> {
@@ -704,6 +708,7 @@ impl Shared {
         self.abandon = None;
         self.replies.clear();
         self.execs.values_mut().for_each(|admit| admit.stop_take());
+        self.models.values().for_each(|cancel| cancel.end());
         // stop_declines_every_held_ask: one `Resolved` per held ask.
         let held: Vec<RequestId> = self.asks.keys().cloned().collect();
         let mut unsent = Vec::new();
@@ -713,11 +718,13 @@ impl Shared {
         unsent
     }
 
-    /// Drops the call `id`: its caller has stopped waiting.
+    /// Drops the call `id`: its caller has stopped waiting. An in-flight
+    /// `host.model` call's cancel is set: its callback ended.
     fn forget(&mut self, id: u64) {
         self.calls.remove(&id);
         self.cancelled.remove(&id);
         self.queue.retain(|job| job.id != id);
+        self.end_model(id);
     }
 }
 
