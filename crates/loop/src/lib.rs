@@ -106,7 +106,7 @@ pub use reviewer::{
     BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed, summary_skips,
 };
 pub use rewind::{
-    Continuation, Rewound, fork_task, latest_name, rewind_note, rewind_note_with_jobs,
+    Continuation, Rewound, fork_task, latest_name, rewind_note, rewind_note_with_jobs, rewound_from,
 };
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
