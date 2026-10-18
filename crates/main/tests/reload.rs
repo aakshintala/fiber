@@ -870,7 +870,7 @@ fn reload_applies_a_changed_shell_read_only_list() {
 
     let dir = session.dir();
     let snapshots = snapshot_session_files(&dir);
-    let (stream, stderr) = session.finish();
+    let (_, stderr) = session.finish();
     let seen = bodies(&server);
     assert_eq!(seen.len(), 4, "no reviewer request in either turn");
     assert_no_reload_marker("stderr", stderr.as_bytes());
@@ -880,5 +880,4 @@ fn reload_applies_a_changed_shell_read_only_list() {
     for (label, bytes) in &snapshots {
         assert_no_reload_marker(label, bytes);
     }
-    let _ = stream;
 }

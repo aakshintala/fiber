@@ -239,11 +239,17 @@ fn refresh_recovers_a_poisoned_lock() {
         vec!["-r".to_owned()],
     )]));
     let victim = handle.clone();
-    let poisoned = std::thread::spawn(move || {
-        let _guard = victim.lock().unwrap();
-        panic!("poison the shell.read_only lock");
-    })
-    .join();
+    let poisoned = fakes::within(
+        "shell.read_only lock poisoned",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            std::thread::spawn(move || {
+                let _guard = victim.lock().unwrap();
+                panic!("poison the shell.read_only lock");
+            })
+            .join()
+        },
+    );
     assert!(poisoned.is_err(), "the lock was not poisoned");
     rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
     refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
