@@ -18,7 +18,7 @@ use contract::shapes::Failure;
 use doors::failure;
 use rustix::process::{Pid, Signal};
 use support::clock::Parker;
-use support::group::{GROUP_POLL, refused};
+use support::group::GROUP_POLL;
 
 /// Why a read ends once shutdown has started.
 const CLOSING: &str = "The session is shutting down.";
@@ -190,11 +190,6 @@ impl State {
     /// Whether a listed group still holds a member: only SRCH retires it.
     /// An accepted probe, PERM and every other errno keep it pending.
     fn group_alive(&mut self, group: u32) -> bool {
-        // An id of 1 or less is never a credential group's, and one past
-        // what a pid holds cannot name one: refused before any probe.
-        if refused(group) || i32::try_from(group).is_err() {
-            return false;
-        }
         if !signallable(group) || pid(group).is_none() {
             return false;
         }
@@ -209,11 +204,6 @@ impl State {
     /// proves delivery was accepted, never that the group is empty: the
     /// next probe decides that.
     fn kill_listed(&mut self, group: u32) {
-        // An id of 1 or less is never a credential group's, and one past
-        // what a pid holds cannot name one: refused before any send.
-        if refused(group) || i32::try_from(group).is_err() {
-            return;
-        }
         if !signallable(group) || pid(group).is_none() {
             return;
         }
