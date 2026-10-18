@@ -35,6 +35,16 @@ use support::{
 };
 
 const FORK: &str = "s_fork";
+const FORK_TURN: &[&str] = &[
+    "session_started",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
 
 fn task() -> String {
     fork_task(&SessionId("s_test".into()), 1, "check it")
@@ -317,6 +327,7 @@ fn a_forks_first_request_is_the_parents_through_its_history_then_its_first_turn(
     );
     assert_eq!(first.tools, vec![own_definition]);
     let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), FORK_TURN);
     let input = &lines
         .iter()
         .find(|line| line.kind == "turn_started")
@@ -485,6 +496,7 @@ fn a_before_message_replacement_replaces_the_fork_task() {
     assert_eq!(first.conversation.len(), k + 1);
     assert_eq!(user(&first.conversation[k]), "replaced task");
     let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), FORK_TURN);
     let input = &lines
         .iter()
         .find(|line| line.kind == "turn_started")
@@ -585,6 +597,7 @@ fn a_job_the_parent_left_running_is_no_orphan_in_the_fork() {
     assert_eq!(kinds(&log::read(&dir).unwrap()), ["session_started"]);
     let _b = turn(b, &tx, &task());
     let lines = log::read(&dir).unwrap();
+    assert_eq!(kinds(&lines), FORK_TURN);
     assert!(!lines.iter().any(|line| line.kind == "job_completed"));
     assert!(!format!("{:?}", provider.requests()[0].conversation).contains("j_orphan"));
     assert_eq!(provider.requests().len(), 1);
@@ -689,6 +702,27 @@ fn a_fork_after_a_reload_sends_the_reloaded_tools_and_runs_one() {
         );
         assert_eq!(first.tools, vec![own_definition]);
         let lines = log::read(&dir).unwrap();
+        assert_eq!(
+            kinds(&lines),
+            [
+                "session_started",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "tool_call_started",
+                "tool_call_completed",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+            ]
+        );
         let completion = lines
             .iter()
             .find(|line| line.kind == "tool_call_completed")
