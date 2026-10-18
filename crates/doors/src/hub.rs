@@ -693,14 +693,7 @@ fn finish_connect(
     ) {
         Ok((stream, line)) => {
             stream.set_nonblocking(false).map_err(Poll::Accepted)?;
-            // macOS refuses the option once the peer has closed, while its
-            // buffered bytes stay readable and a read of the closed socket
-            // does not block, so the refusal is ignored.
-            match stream.set_read_timeout(None) {
-                Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-                other => other,
-            }
-            .map_err(Poll::Accepted)?;
+            set_read_timeout(&stream, None).map_err(Poll::Accepted)?;
             Ok((stream, line))
         }
         Err(Poll::Race) => Err(Poll::Race),
@@ -855,13 +848,7 @@ fn read_hello(
         &mut || {},
     )?;
     stream.set_nonblocking(false).map_err(Poll::Failed)?;
-    // As above: macOS refuses the option once the peer has closed, while
-    // its buffered bytes stay readable.
-    match stream.set_read_timeout(None) {
-        Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
-        other => other,
-    }
-    .map_err(Poll::Failed)?;
+    set_read_timeout(&stream, None).map_err(Poll::Failed)?;
     Ok((stream, hello))
 }
 
