@@ -36,7 +36,7 @@ use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Cancel, Effects, EffectsError, Output, Settle, Tool};
 use contract::{
     ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId, TurnId,
 };
@@ -312,6 +312,50 @@ impl Tool for Sends {
             content: vec![ContentPart::Text {
                 text: "ok\n".into(),
             }],
+            ..Output::default()
+        }
+    }
+}
+
+/// A tool whose result settles a job's end, as `jobs wait` does when it
+/// claims one: the taken records are written under the call before its
+/// completion.
+struct Settles {
+    taken: Vec<Taken>,
+}
+
+impl Tool for Settles {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "settles".into(),
+            description: "Settles a claimed job end.".into(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        let taken = self.taken.clone();
+        Output {
+            content: vec![ContentPart::Text {
+                text: "claimed\n".into(),
+            }],
+            settle: Some(Settle(Arc::new(move || taken.clone()))),
             ..Output::default()
         }
     }
@@ -3929,6 +3973,50 @@ fn a_redacted_ahead_completion_is_logged_redacted() {
 }
 
 #[test]
+fn a_claimed_end_is_logged_as_the_completion_hook_left_it() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
+    let mut end = failed(JOB);
+    end.output_tail = Some("token TOKEN-1234 here\n".into());
+    let taken = vec![Taken {
+        record: JobRecord::Completed(end),
+        action: None,
+    }];
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken })],
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, JOB, Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    // The claim's end ran through the completion hook before it was
+    // logged: the hook saw the raw tail, and the call's own dispatch
+    // followed it.
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::Completion));
+    assert!(calls[0].content.contains("TOKEN-1234"));
+    assert_eq!(calls[1].delivery, None);
+    let completed = world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the claimed end is logged");
+    assert_eq!(
+        completed.payload["notice"],
+        format!(
+            "Fiber: background job {JOB} ended: failed.\nExit code 1.\nLast output:\ntoken [redacted] here"
+        )
+    );
+    assert!(completed.payload.get("output_tail").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["redactor"]));
+    let raw = std::fs::read(world.dir.join("events.jsonl")).unwrap();
+    assert!(!raw.windows(10).any(|window| window == b"TOKEN-1234"));
+}
+
+#[test]
 fn an_unchanged_answer_keeps_the_completed_as_built() {
     let hooks = Arc::new(RecordingHooks::default());
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
@@ -4798,7 +4886,7 @@ fn a_symlink_at_the_output_path_is_replaced_itself_leaving_the_target() {
 
 #[test]
 #[cfg(unix)]
-fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
+fn a_path_swapped_for_a_link_before_open_is_refused() {
     let hooks = Arc::new(RecordingHooks::default());
     hooks.answer_with(|seen| changed(&seen.content.replace("TOKEN-1234", "[redacted]")));
     hooks.set_chain(&[("redactor", true)]);
@@ -4818,8 +4906,8 @@ fn a_path_swapped_for_a_link_between_stat_and_open_is_replaced_itself() {
             std::os::unix::fs::symlink(&target, &out).unwrap();
         })
         .unwrap();
-    // The identity check failed the read: no hook ran, and the blocking
-    // chain withholds the path itself in the probe's place.
+    // The no-follow open refused the link: no hook ran on it, and the
+    // blocking chain withholds the path itself in the probe's place.
     let calls = hooks.calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
@@ -4878,6 +4966,47 @@ fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     write_started_at(&mut world, JOB, Some("shell"), OUT);
     std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
     let _socket = std::os::unix::net::UnixListener::bind(world.dir.join(OUT)).unwrap();
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let calls = hooks.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
+    assert_eq!(calls[0].content, "");
+    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    assert!(
+        std::fs::symlink_metadata(world.dir.join(OUT))
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(
+        output_bytes(&world, OUT),
+        format!("{}\n", withheld_line()).into_bytes()
+    );
+}
+
+/// `path` as a FIFO, as a swapped-in job output.
+#[cfg(unix)]
+fn mkfifo(path: &std::path::Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success(), "mkfifo {path:?} exited {status}");
+}
+
+#[test]
+#[cfg(unix)]
+fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.set_chain(&[("redactor", true)]);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
+        .hooked(Arc::clone(&hooks));
+    write_started_at(&mut world, JOB, Some("shell"), OUT);
+    std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
+    mkfifo(&world.dir.join(OUT));
+    // The non-blocking open refuses to wait for a writer: the turn ends
+    // at the deadline below instead of hanging on the FIFO.
     world.send(held(JOB));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let calls = hooks.calls();

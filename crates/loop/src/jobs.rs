@@ -379,8 +379,9 @@ impl Loop {
     ) -> Result<(), Error> {
         let (ahead, completed, delegate) =
             self.deliver_end(Some(turn), ahead, completed, delegate)?;
+        // Already hooked above: the raw write, so the hooks run once.
         for taken in ahead {
-            self.write_taken(taken, Some(turn), None)?;
+            self.write_taken_raw(taken, Some(turn), None)?;
         }
         if let Some(finished) = delegate {
             let event = super::calls::job_event(&self.log, JobRecord::DelegateFinished(finished));

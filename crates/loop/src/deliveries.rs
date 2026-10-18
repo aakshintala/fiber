@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::io::Read as _;
-use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use contract::JobId;
@@ -538,21 +537,41 @@ pub(crate) enum Unreadable {
 /// tell a file just over the bound from one exactly at it.
 const OUTPUT_LIMIT: u64 = 1_048_576;
 
-/// Reads at most [`OUTPUT_LIMIT`] + 1 bytes of the job's output file,
-/// without following a link at `path`. `between` runs between the stat
-/// and the open; it is empty in production and the pause point tests use
-/// to change the file between the two.
+/// Reads at most [`OUTPUT_LIMIT`] + 1 bytes of the job's output file.
+/// The open follows no link and never blocks on a FIFO
+/// (`OFlags::NOFOLLOW | OFlags::NONBLOCK`); the `fstat` below covers the
+/// descriptor actually opened, so a path swapped for a link or a FIFO
+/// before the open changes nothing about what is read. `between` runs
+/// before the open; it is empty in production and the pause point tests
+/// use to change the file first.
 pub(crate) fn read_output(path: &Path, between: impl FnOnce()) -> Result<OutputRead, Unreadable> {
-    let stat = std::fs::symlink_metadata(path).map_err(|_| Unreadable::Io)?;
-    if !stat.file_type().is_file() {
-        return Err(Unreadable::NotRegular);
-    }
     between();
-    let file = std::fs::File::open(path).map_err(|_| Unreadable::Io)?;
-    let opened = file.metadata().map_err(|_| Unreadable::Io)?;
-    if !opened.file_type().is_file() || opened.dev() != stat.dev() || opened.ino() != stat.ino() {
+    // No `symlink_metadata` first: the open itself refuses a link, and
+    // `NONBLOCK` keeps a FIFO from blocking it. The `fstat` covers the
+    // descriptor actually opened, not the path.
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            .union(rustix::fs::OFlags::NOFOLLOW)
+            .union(rustix::fs::OFlags::NONBLOCK)
+            .union(rustix::fs::OFlags::CLOEXEC),
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| {
+        // A link refuses with `LOOP`, a socket with `NXIO`: neither is
+        // a regular file, without ever following or blocking on the
+        // path. Anything else is a read failure (missing, unreadable).
+        if error == rustix::io::Errno::LOOP || error == rustix::io::Errno::NXIO {
+            Unreadable::NotRegular
+        } else {
+            Unreadable::Io
+        }
+    })?;
+    let opened = rustix::fs::fstat(&fd).map_err(|_| Unreadable::Io)?;
+    if rustix::fs::FileType::from_raw_mode(opened.st_mode) != rustix::fs::FileType::RegularFile {
         return Err(Unreadable::NotRegular);
     }
+    let file = std::fs::File::from(fd);
     let mut capped = file.take(OUTPUT_LIMIT + 1);
     let mut bytes = Vec::new();
     capped.read_to_end(&mut bytes).map_err(|_| Unreadable::Io)?;
