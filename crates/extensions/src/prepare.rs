@@ -44,6 +44,10 @@ pub fn platform() -> String {
 /// still work, and is stopped at [`INSTALL_STEP_DEADLINE`] on `clock`.
 pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Result<(), Error> {
     if let Some(binary) = manifest.binaries.get(&platform()) {
+        let file = binary_name(&manifest.name).ok_or_else(|| Error::Download {
+            name: manifest.name.clone(),
+            why: format!("`{}` names no file", manifest.name),
+        })?;
         let bytes = download(&manifest.name, &binary.url)?;
         let got = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
         if !got.eq_ignore_ascii_case(binary.sha256.trim()) {
@@ -52,10 +56,6 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest, clock: &dyn Clock) -> Res
                 url: binary.url.clone(),
             });
         }
-        let file = binary_name(&binary.url).ok_or_else(|| Error::Download {
-            name: manifest.name.clone(),
-            why: format!("`{}` names no file", binary.url),
-        })?;
         let out = dir.join("bin");
         let path = out.join(file);
         let write = fs::create_dir_all(&out).and_then(|()| {
@@ -142,11 +142,11 @@ fn run_step(
     }
 }
 
-/// The file name a URL ends in, without its query.
-fn binary_name(url: &str) -> Option<&str> {
-    let path = url.split(['?', '#']).next()?;
-    let name = path.rsplit('/').next()?;
-    (!name.is_empty() && name != "." && name != "..").then_some(name)
+/// The file name the manifest `name` installs its binary under: the segment
+/// after the last `/` (`docs/extensions.md`, "What a package holds").
+fn binary_name(name: &str) -> Option<&str> {
+    let segment = name.rsplit('/').next()?;
+    (!segment.is_empty() && segment != "." && segment != "..").then_some(segment)
 }
 
 /// Downloads `url` with the production limits and the proxy the environment
