@@ -1,9 +1,9 @@
 //! Validates hub answers before the configuration views consume them.
 
 use crate::configure::{
-    ConfigureError, Layer, LoginKind, LoginTarget, ReviewerModels, Revoked, RuleRow, RulesSection,
-    Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches,
-    WriteScope,
+    ConfigureError, FileOutcome, FileSaved, Layer, LoginKind, LoginTarget, NotesFile, NotesSaved,
+    ReviewerModels, ReviewerNotes, Revoked, RuleRow, RulesSection, Saved, SettingRow, Shown,
+    SkillsDisabled, Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;
@@ -213,6 +213,66 @@ pub(super) fn tools(value: &Value) -> Option<Vec<ToolSwitches>> {
         })
         .collect()
 }
+/// Both person layers' notes: each layer names its file with its own
+/// text and version. A layer missing any of the three is refused.
+pub(super) fn notes(value: &Value) -> Option<ReviewerNotes> {
+    Some(ReviewerNotes {
+        global: notes_file(value.get("global")?)?,
+        project: notes_file(value.get("project")?)?,
+    })
+}
+
+/// One notes layer's file, text and version.
+fn notes_file(value: &Value) -> Option<NotesFile> {
+    Some(NotesFile {
+        file: read!(value, "file")?,
+        text: read!(value, "text")?,
+        version: read!(value, "version")?,
+    })
+}
+
+/// A notes save: `stale` writes nothing, `written` carries one entry per
+/// sent layer. An entry that was not saved without an error explains
+/// nothing, so it is refused.
+pub(super) fn notes_saved(value: &Value) -> Option<NotesSaved> {
+    match value.get("saved")?.as_str()? {
+        "stale" => Some(NotesSaved::Stale),
+        "written" => Some(NotesSaved::Written(
+            value
+                .get("files")?
+                .as_array()?
+                .iter()
+                .map(file_saved)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        _ => None,
+    }
+}
+
+/// One sent file's outcome: `saved` true without an error wrote cleanly,
+/// `saved` true with an error wrote with the rename already in place, and
+/// `saved` false needs its error.
+fn file_saved(value: &Value) -> Option<FileSaved> {
+    let saved: bool = read!(value, "saved")?;
+    let error: Option<ConfigureError> = match value.get("error") {
+        None => None,
+        Some(error) => Some(ConfigureError {
+            code: read!(error, "code")?,
+            message: read!(error, "message")?,
+        }),
+    };
+    let outcome = match (saved, error) {
+        (true, None) => FileOutcome::Saved,
+        (true, Some(error)) => FileOutcome::SavedUnsynced(error),
+        (false, Some(error)) => FileOutcome::NotSaved(error),
+        (false, None) => return None,
+    };
+    Some(FileSaved {
+        file: read!(value, "file")?,
+        outcome,
+    })
+}
+
 pub(super) fn disabled(value: &Value) -> Option<SkillsDisabled> {
     Some(SkillsDisabled {
         project: read!(value, "project")?,

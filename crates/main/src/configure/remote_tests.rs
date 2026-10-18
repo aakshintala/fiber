@@ -139,6 +139,43 @@ fn remote_operations_round_trip_their_wire_shapes() {
         result(&seam, "skill_text", json!({"path":skill})),
         json!({"text":"skill body"})
     );
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    assert_eq!(notes["global"]["file"], json!(home.join("config.json")));
+    assert_eq!(notes["global"]["text"], "");
+    assert_eq!(notes["project"]["text"], "");
+    assert_eq!(notes["project"]["text"], "");
+    write(
+        &home.join("config.json"),
+        r#"{"reviewer":{"context":"Our org is acme."}}"#,
+    );
+    let notes = result(&seam, "reviewer_notes", json!({"workspace":workspace}));
+    assert_eq!(notes["global"]["text"], "Our org is acme.");
+    let global = notes["global"]["version"].as_str().unwrap().to_owned();
+    let project = notes["project"]["version"].as_str().unwrap().to_owned();
+    assert_ne!(global, "absent");
+    assert_eq!(
+        result(
+            &seam,
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":global,"text":"new global"}})
+        ),
+        json!({"saved":"written","files":[{"file":home.join("config.json"),"saved":true}]})
+    );
+    assert!(
+        fs::read_to_string(home.join("config.json"))
+            .unwrap()
+            .contains("new global")
+    );
+    let before = fs::read(home.join("config.json")).unwrap();
+    assert_eq!(
+        result(
+            &seam,
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":global,"text":"lost"},"project":{"version":project,"text":"new project"}})
+        ),
+        json!({"saved":"stale"})
+    );
+    assert_eq!(fs::read(home.join("config.json")).unwrap(), before);
 }
 
 #[test]
@@ -212,6 +249,8 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         ),
         ("reviewer_models", json!({"name":"acme"})),
         ("set_reviewer", json!({"name":"acme","id":"m"})),
+        ("reviewer_notes", json!({"workspace":workspace})),
+        ("save_reviewer_notes", json!({"workspace":workspace})),
         ("tool_switches", json!({"workspace":workspace})),
         (
             "switch_tool",
@@ -261,6 +300,82 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
             );
         }
     }
+    for (operation, args) in [
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":"v","text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"project":{"version":"v","text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":"v","text":"t"},"project":{"version":"v","text":"t"}}),
+        ),
+    ] {
+        // Each layer is optional, so every subset of them is a save.
+        let mut extra = args.clone();
+        extra["extra"] = json!(true);
+        assert_eq!(
+            call(&seam, operation, extra).unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{operation}: extra"
+        );
+        assert!(call(&seam, operation, args).unwrap().is_some());
+    }
+    for (operation, args) in [
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":null}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":[]}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":"v"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":null,"text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":"v","text":7}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"project":"t"}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"project":{"version":"v"}}),
+        ),
+    ] {
+        // An explicit null, a layer of the wrong shape and a layer
+        // missing its version are no save at all, and write nothing.
+        let before = fs::read(dirs.home().join("config.json")).ok();
+        assert_eq!(
+            call(&seam, operation, args.clone()).unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{args}"
+        );
+        assert_eq!(
+            fs::read(dirs.home().join("config.json")).ok(),
+            before,
+            "{args}"
+        );
+    }
     for operation in ["unknown", "themes", "theme", "save_keys", "LoginShow"] {
         assert_eq!(
             call(&seam, operation, json!({})).unwrap_err().code,
@@ -283,6 +398,26 @@ fn remote_operations_reject_unknown_extra_missing_null_and_bad_types() {
         (
             "revoke",
             json!({"workspace":workspace,"scope":"everywhere","line":0,"text":"x"}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":"v"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":{"version":null,"text":"t"}}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"global":null}),
+        ),
+        (
+            "save_reviewer_notes",
+            json!({"workspace":workspace,"project":"t"}),
         ),
     ] {
         assert_eq!(
@@ -1056,6 +1191,8 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "reviewer_models",
             "models",
             "set_reviewer",
+            "reviewer_notes",
+            "save_reviewer_notes",
             "tool_switches",
             "switch_tool",
             "skills_disabled",

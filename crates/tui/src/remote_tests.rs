@@ -148,6 +148,53 @@ fn each_configure_operation_uses_the_hub_wire_shape() {
         |r| r.set_reviewer("a", "m"),
     )
     .unwrap();
+    let read = hub.call(
+        "reviewer_notes",
+        json!({"workspace":w}),
+        json!({"global":{"file":"/hub/config.json","text":"global notes","version":"v1"},"project":{"file":"/hub/projects/p/config.json","text":"","version":"absent"}}),
+        move |r| r.reviewer_notes(w),
+    ).unwrap();
+    assert_eq!(read.global.text, "global notes");
+    assert_eq!(read.global.version, "v1");
+    assert_eq!(read.project.text, "");
+    assert_eq!(read.project.version, "absent");
+    let write = crate::configure::NotesWrite {
+        version: "v1".into(),
+        text: "new global".into(),
+    };
+    let saved = hub
+        .call(
+            "save_reviewer_notes",
+            json!({"workspace":w,"global":{"version":"v1","text":"new global"}}),
+            json!({"saved":"written","files":[{"file":"/hub/config.json","saved":true}]}),
+            move |r| r.save_reviewer_notes(w, Some(write), None),
+        )
+        .unwrap();
+    assert_eq!(
+        saved,
+        crate::configure::NotesSaved::Written(vec![crate::configure::FileSaved {
+            file: "/hub/config.json".into(),
+            outcome: crate::configure::FileOutcome::Saved,
+        }])
+    );
+    let stale = hub
+        .call(
+            "save_reviewer_notes",
+            json!({"workspace":w,"project":{"version":"old","text":"new project"}}),
+            json!({"saved":"stale"}),
+            move |r| {
+                r.save_reviewer_notes(
+                    w,
+                    None,
+                    Some(crate::configure::NotesWrite {
+                        version: "old".into(),
+                        text: "new project".into(),
+                    }),
+                )
+            },
+        )
+        .unwrap();
+    assert_eq!(stale, crate::configure::NotesSaved::Stale);
     assert!(
         hub.call(
             "tool_switches",

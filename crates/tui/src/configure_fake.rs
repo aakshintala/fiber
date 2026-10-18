@@ -12,10 +12,28 @@ use contract::clock::Clock;
 
 use crate::ThemeSetting;
 use crate::configure::{
-    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget,
-    ReviewerModels, Revoked, RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled,
-    Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    BrowserLogin, Configure, ConfigureError, KeyEdit, Layer, LoginShow, LoginTarget, NotesFile,
+    NotesSaved, NotesWrite, ReviewerModels, ReviewerNotes, Revoked, RulesScope, RulesSection,
+    Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists,
+    ToolSwitches, WriteScope,
 };
+
+/// One notes save the view asked for: the workspace and each sent layer.
+pub(crate) type NotesSave = (PathBuf, Option<NotesWrite>, Option<NotesWrite>);
+
+/// The hub's notes answer for a workspace with no test answer set: both
+/// layers empty, each file named with an `absent` version.
+pub(crate) fn empty_notes() -> ReviewerNotes {
+    let layer = |layer: Layer| NotesFile {
+        file: file(layer),
+        text: String::new(),
+        version: "absent".to_owned(),
+    };
+    ReviewerNotes {
+        global: layer(Layer::Global),
+        project: layer(Layer::Project),
+    }
+}
 
 /// A browser login for the views' tests: `run` blocks until the answer
 /// sender answers, and `cancel` records once per call. The sender lives
@@ -150,6 +168,14 @@ pub(crate) struct Fake {
     pub(crate) reviewer_saves: Mutex<Vec<(String, String)>>,
     /// What reviewer saves answer.
     pub(crate) reviewer_saved: Mutex<Result<(), ConfigureError>>,
+    /// What `reviewer_notes` answers.
+    pub(crate) notes: Mutex<Result<ReviewerNotes, ConfigureError>>,
+    /// Every workspace `reviewer_notes` was asked about, in order.
+    pub(crate) notes_reads: Mutex<Vec<PathBuf>>,
+    /// Every notes save asked for, in order.
+    pub(crate) notes_saves: Mutex<Vec<NotesSave>>,
+    /// What notes saves answer.
+    pub(crate) notes_saved: Mutex<Result<NotesSaved, ConfigureError>>,
 }
 
 impl Fake {
@@ -202,6 +228,10 @@ impl Fake {
             })),
             reviewer_saves: Mutex::new(Vec::new()),
             reviewer_saved: Mutex::new(Ok(())),
+            notes: Mutex::new(Ok(empty_notes())),
+            notes_reads: Mutex::new(Vec::new()),
+            notes_saves: Mutex::new(Vec::new()),
+            notes_saved: Mutex::new(Ok(NotesSaved::Written(Vec::new()))),
         }
     }
 
@@ -262,6 +292,14 @@ impl Fake {
             gates.push(rx);
         }
         tx
+    }
+
+    /// The notes saves asked for so far, in order.
+    pub(crate) fn notes_saves(&self) -> Vec<NotesSave> {
+        self.notes_saves
+            .lock()
+            .map(|saves| saves.clone())
+            .unwrap_or_default()
     }
 
     /// The reviewer saves asked for so far, in order: provider and id.
@@ -513,6 +551,41 @@ impl Configure for Fake {
                 })
             },
             |answer| answer.clone(),
+        )
+    }
+
+    fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError> {
+        if let Ok(mut reads) = self.notes_reads.lock() {
+            reads.push(workspace.to_path_buf());
+        }
+        self.notes.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |notes| notes.clone(),
+        )
+    }
+
+    fn save_reviewer_notes(
+        &self,
+        workspace: &Path,
+        global: Option<NotesWrite>,
+        project: Option<NotesWrite>,
+    ) -> Result<NotesSaved, ConfigureError> {
+        if let Ok(mut saves) = self.notes_saves.lock() {
+            saves.push((workspace.to_path_buf(), global.clone(), project.clone()));
+        }
+        self.notes_saved.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |saved| saved.clone(),
         )
     }
 

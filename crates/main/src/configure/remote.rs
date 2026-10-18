@@ -94,6 +94,55 @@ impl<'a> Args<'a> {
     }
 }
 
+/// One sent notes layer from the request: absent reads as not sent, and
+/// a present layer names its `version` with its `text`. A layer of the
+/// wrong shape, or missing its version, is not a save at all.
+fn layer_write(args: &Map<String, Value>, name: &str) -> Result<Option<tui::NotesWrite>, Failure> {
+    match args.get(name) {
+        None => Ok(None),
+        Some(value) => {
+            let layer = value.as_object().ok_or_else(invalid)?;
+            let string = |key: &str| layer.get(key).and_then(Value::as_str).ok_or_else(invalid);
+            Ok(Some(tui::NotesWrite {
+                version: string("version")?.to_owned(),
+                text: string("text")?.to_owned(),
+            }))
+        }
+    }
+}
+
+/// One notes layer's file, text and version for the wire.
+fn notes_file(file: tui::NotesFile) -> Value {
+    json!({"file":file.file,"text":file.text,"version":file.version})
+}
+
+/// A notes save for the wire: `stale` writes nothing, `written` carries
+/// one entry per sent layer, global first. An unsynced file is written
+/// with its error; any other failure is not written, with why.
+fn notes_saved(saved: tui::NotesSaved) -> Value {
+    match saved {
+        tui::NotesSaved::Stale => json!({"saved":"stale"}),
+        tui::NotesSaved::Written(files) => {
+            json!({"saved":"written","files":files.into_iter().map(|saved| {
+            let mut entry = Map::from_iter([("file".to_owned(), json!(saved.file))]);
+            let (written, error) = match saved.outcome {
+                tui::FileOutcome::Saved => (true, None),
+                tui::FileOutcome::SavedUnsynced(error) => (true, Some(error)),
+                tui::FileOutcome::NotSaved(error) => (false, Some(error)),
+            };
+            drop(entry.insert("saved".to_owned(), json!(written)));
+            if let Some(error) = error {
+                drop(entry.insert(
+                    "error".to_owned(),
+                    json!({"code":error.code,"message":error.message}),
+                ));
+            }
+            Value::Object(entry)
+        }).collect::<Vec<_>>()})
+        }
+    }
+}
+
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Global => "global",
@@ -362,6 +411,22 @@ impl hub::Machine for Seam {
                 self.set_reviewer(a.string("name")?, a.string("id")?)
                     .map_err(from_view)?;
                 return Ok(None);
+            }
+            "reviewer_notes" => {
+                a.shape(&["workspace"], &[])?;
+                let notes = self.reviewer_notes(a.workspace()?).map_err(from_view)?;
+                json!({"global":notes_file(notes.global),"project":notes_file(notes.project)})
+            }
+            "save_reviewer_notes" => {
+                a.shape(&["workspace"], &["global", "project"])?;
+                let saved = self
+                    .save_reviewer_notes(
+                        a.workspace()?,
+                        layer_write(args, "global")?,
+                        layer_write(args, "project")?,
+                    )
+                    .map_err(from_view)?;
+                return Ok(Some(notes_saved(saved)));
             }
             "tool_switches" => {
                 a.shape(&["workspace"], &[])?;
