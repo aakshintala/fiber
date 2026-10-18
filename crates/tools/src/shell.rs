@@ -223,33 +223,33 @@ impl Tool for Shell {
                         "description": "The command to run."
                     },
                     "workdir": {
-                        "type": "string",
+                        "type": ["string", "null"],
                         "description": "Where to run it. A relative path is resolved against the workspace."
                     },
                     "timeout_ms": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "minimum": 0,
                         "description": "How long the command may run, in milliseconds. The default is 600000."
                     },
                     "run_in_background": {
-                        "type": "boolean",
+                        "type": ["boolean", "null"],
                         "description": "Start the command as a job and return its receipt at once."
                     },
                     "tty": {
-                        "type": "boolean",
+                        "type": ["boolean", "null"],
                         "description": "Run the command in a pseudo-terminal, as a job, and return its receipt with the first 250 ms of output. Type into it with `jobs` `write`."
                     },
                     "monitor": {
-                        "type": "boolean",
+                        "type": ["boolean", "null"],
                         "description": "Start the command as a monitor: a job whose standard output lines reach you in batches. Standard error goes to its own file."
                     },
                     "deadline_ms": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "minimum": 0,
                         "description": "A monitor's deadline, in milliseconds. The default is 300000; the most is 1800000, or 600000 in a non-interactive run."
                     }
                 },
-                "required": ["command"],
+                "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "deadline_ms"],
                 "additionalProperties": false
             }),
             deferred: false, hosted: None,
@@ -403,12 +403,9 @@ struct Args {
     workdir: Option<String>,
     timeout_ms: Option<u64>,
     deadline_ms: Option<u64>,
-    #[serde(default)]
-    run_in_background: bool,
-    #[serde(default)]
-    tty: bool,
-    #[serde(default)]
-    monitor: bool,
+    run_in_background: Option<bool>,
+    tty: Option<bool>,
+    monitor: Option<bool>,
 }
 
 struct Parsed {
@@ -478,9 +475,9 @@ fn parse(
     let workdir = workdir(args.workdir.as_deref(), workspace)?;
     let given_timeout = args.timeout_ms;
     let given_deadline = args.deadline_ms;
-    let run_in_background = args.run_in_background;
-    let tty = args.tty;
-    let monitor = args.monitor;
+    let run_in_background = args.run_in_background.unwrap_or(false);
+    let tty = args.tty.unwrap_or(false);
+    let monitor = args.monitor.unwrap_or(false);
     let mode = match (monitor, tty, run_in_background) {
         (true, false, false) => Mode::Monitor,
         (true, _, _) => return Err(MONITOR_ALONE.to_owned()),

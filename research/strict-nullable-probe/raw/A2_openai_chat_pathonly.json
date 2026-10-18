@@ -1,0 +1,60 @@
+{
+ "url": "https://api.openai.com/v1/chat/completions",
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Call the read tool with path 'a.txt'."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Read a file.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "offset": {
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "note": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "all": {
+        "type": [
+         "boolean",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "path",
+       "offset",
+       "note",
+       "all"
+      ],
+      "additionalProperties": false
+     },
+     "strict": true
+    }
+   }
+  ],
+  "tool_choice": "required",
+  "reasoning_effort": "none"
+ },
+ "status": 200,
+ "elapsed_s": 2.19,
+ "body": "{\n  \"id\": \"chatcmpl-EaRIpxkkrkFRM6fR2swLGo8k27Mzn\",\n  \"object\": \"chat.completion\",\n  \"created\": 1792353467,\n  \"model\": \"gpt-6-luna\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\": \"assistant\",\n        \"content\": null,\n        \"tool_calls\": [\n          {\n            \"id\": \"call_QUIGsOnLIXjEx0tukZulhAP4\",\n            \"type\": \"function\",\n            \"function\": {\n              \"name\": \"read\",\n              \"arguments\": \"{\\\"path\\\":\\\"a.txt\\\",\\\"offset\\\":null,\\\"note\\\":null,\\\"all\\\":null}\"\n            }\n          }\n        ],\n        \"refusal\": null,\n        \"annotations\": []\n      },\n      \"finish_reason\": \"tool_calls\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 149,\n    \"completion_tokens\": 29,\n    \"total_tokens\": 178,\n    \"prompt_tokens_details\": {\n      \"cached_tokens\": 0,\n      \"cache_write_tokens\": 0,\n      \"audio_tokens\": 0\n    },\n    \"completion_tokens_details\": {\n      \"reasoning_tokens\": 0,\n      \"audio_tokens\": 0,\n      \"accepted_prediction_tokens\": 0,\n      \"rejected_prediction_tokens\": 0\n    }\n  },\n  \"service_tier\": \"default\",\n  \"system_fingerprint\": null\n}\n"
+}

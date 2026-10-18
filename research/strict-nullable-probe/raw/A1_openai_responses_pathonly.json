@@ -1,0 +1,52 @@
+{
+ "url": "https://api.openai.com/v1/responses",
+ "request": {
+  "model": "gpt-6-luna",
+  "input": "Call the read tool with path 'a.txt'.",
+  "tools": [
+   {
+    "type": "function",
+    "name": "read",
+    "description": "Read a file.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      },
+      "offset": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "note": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "all": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "path",
+      "offset",
+      "note",
+      "all"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  ],
+  "tool_choice": "required"
+ },
+ "status": 200,
+ "elapsed_s": 2.5,
+ "body": "{\n  \"id\": \"resp_0432132de86f885f006ad524b875f887d0861f7f3ce2ad8adf\",\n  \"object\": \"response\",\n  \"created_at\": 1792353464,\n  \"status\": \"completed\",\n  \"access_programs\": null,\n  \"background\": false,\n  \"billing\": {\n    \"payer\": \"developer\"\n  },\n  \"completed_at\": 1792353465,\n  \"error\": null,\n  \"frequency_penalty\": 0.0,\n  \"incomplete_details\": null,\n  \"instructions\": null,\n  \"max_output_tokens\": null,\n  \"max_tool_calls\": null,\n  \"model\": \"gpt-6-luna\",\n  \"moderation\": null,\n  \"output\": [\n    {\n      \"id\": \"fc_0432132de86f885f006ad524b976c887d0a91be28301ad7149\",\n      \"type\": \"function_call\",\n      \"status\": \"completed\",\n      \"arguments\": \"{\\\"path\\\":\\\"a.txt\\\",\\\"offset\\\":null,\\\"note\\\":null,\\\"all\\\":null}\",\n      \"call_id\": \"call_vQ1D9sCQqYCg163QJI7aHnny\",\n      \"name\": \"read\"\n    }\n  ],\n  \"parallel_tool_calls\": true,\n  \"presence_penalty\": 0.0,\n  \"previous_response_id\": null,\n  \"prompt_cache_key\": null,\n  \"prompt_cache_retention\": \"24h\",\n  \"reasoning\": {\n    \"context\": \"all_turns\",\n    \"effort\": \"medium\",\n    \"mode\": \"standard\",\n    \"summary\": null\n  },\n  \"safety_identifier\": null,\n  \"service_tier\": \"default\",\n  \"store\": true,\n  \"temperature\": 1.0,\n  \"text\": {\n    \"format\": {\n      \"type\": \"text\"\n    },\n    \"verbosity\": \"medium\"\n  },\n  \"tool_choice\": \"required\",\n  \"tool_usage\": {\n    \"image_gen\": {\n      \"input_tokens\": 0,\n      \"input_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"output_tokens\": 0,\n      \"output_tokens_details\": {\n        \"image_tokens\": 0,\n        \"text_tokens\": 0\n      },\n      \"total_tokens\": 0\n    },\n    \"web_search\": {\n      \"num_requests\": 0\n    }\n  },\n  \"tools\": [\n    {\n      \"type\": \"function\",\n      \"description\": \"Read a file.\",\n      \"name\": \"read\",\n      \"output_schema\": null,\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"path\": {\n            \"type\": \"string\"\n          },\n          \"offset\": {\n            \"type\": [\n              \"integer\",\n              \"null\"\n            ]\n          },\n          \"note\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ]\n          },\n          \"all\": {\n            \"type\": [\n              \"boolean\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"path\",\n          \"offset\",\n          \"note\",\n          \"all\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"strict\": true\n    }\n  ],\n  \"top_logprobs\": 0,\n  \"top_p\": 0.98,\n  \"truncation\": \"disabled\",\n  \"usage\": {\n    \"input_tokens\": 67,\n    \"input_tokens_details\": {\n      \"cache_write_tokens\": 0,\n      \"cached_tokens\": 0\n    },\n    \"output_tokens\": 30,\n    \"output_tokens_details\": {\n      \"reasoning_tokens\": 0\n    },\n    \"total_tokens\": 97\n  },\n  \"user\": null,\n  \"metadata\": {}\n}"
+}
