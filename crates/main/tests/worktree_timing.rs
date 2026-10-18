@@ -23,15 +23,7 @@ use std::process::{Command, Stdio};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, Setup, is_status, run_to_exit, write_json};
-
-fn stream(events: &[Value]) -> fakes::Response {
-    support::stream(events)
-}
-
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    support::function_call(call_id, name, arguments)
-}
+use support::{Deadline, Setup, function_call, git, is_status, run_to_exit, stream, write_json};
 
 /// An `openai-responses` stream that calls `write` on the relative path.
 fn write_call(path: &str, content: &str) -> fakes::Response {
@@ -58,23 +50,6 @@ fn ask_command(setup: &Setup, cwd: &Path, args: &[&str]) -> Command {
         .stderr(Stdio::piped())
         .process_group(0);
     command
-}
-
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = run_to_exit(deadline, &format!("git {args:?}"), command);
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 fn init_repo(deadline: Deadline, dir: &Path) {

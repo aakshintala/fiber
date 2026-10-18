@@ -184,3 +184,71 @@ fn rules_tools_targets_stores_and_reviewer_answers() {
     assert!(tools(&json!({"groups":[{"group":{},"project":{},"everywhere":{}}]})).is_none());
     assert!(targets(&json!({"targets":[{"name":"a","kind":"unknown"}]})).is_none());
 }
+
+#[test]
+fn notes_answers_carry_each_layers_file_text_and_version() {
+    let parsed = notes(&json!({"global":{"file":"/hub/config.json","text":"global notes","version":"abc123"},"project":{"file":"/hub/projects/p/config.json","text":"","version":"absent"}})).unwrap();
+    assert_eq!(parsed.global.file, PathBuf::from("/hub/config.json"));
+    assert_eq!(parsed.global.text, "global notes");
+    assert_eq!(parsed.global.version, "abc123");
+    assert_eq!(
+        parsed.project.file,
+        PathBuf::from("/hub/projects/p/config.json")
+    );
+    assert_eq!(parsed.project.text, "");
+    assert_eq!(parsed.project.version, "absent");
+    // A layer missing its version is refused, wherever it is missing.
+    for missing in ["file", "text", "version"] {
+        for layer in ["global", "project"] {
+            let mut broken = json!({"global":{"file":"/g","text":"t","version":"v"},"project":{"file":"/p","text":"t","version":"v"}});
+            broken[layer][missing] = Value::Null;
+            assert!(notes(&broken).is_none(), "{layer} without {missing}");
+        }
+    }
+    assert!(notes(&json!({})).is_none());
+}
+
+#[test]
+fn notes_saves_carry_each_sent_files_outcome_or_stale() {
+    let error = |code: &str| json!({"code":code,"message":"nope"});
+    let parsed = notes_saved(&json!({"saved":"written","files":[
+        {"file":"/hub/config.json","saved":true},
+        {"file":"/hub/projects/p/config.json","saved":true,"error":error("io_failed")},
+        {"file":"/hub/other.json","saved":false,"error":error("usage")}
+    ]}))
+    .unwrap();
+    let [first, second, third] = match parsed {
+        NotesSaved::Written(files) => files.try_into().ok().unwrap(),
+        NotesSaved::Stale => panic!("a written save reads written"),
+    };
+    assert_eq!(first.file, PathBuf::from("/hub/config.json"));
+    assert_eq!(first.outcome, FileOutcome::Saved);
+    assert_eq!(
+        second.outcome,
+        FileOutcome::SavedUnsynced(ConfigureError {
+            code: ErrorCode::IoFailed,
+            message: "nope".into()
+        })
+    );
+    assert_eq!(
+        third.outcome,
+        FileOutcome::NotSaved(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "nope".into()
+        })
+    );
+    assert_eq!(
+        notes_saved(&json!({"saved":"stale"})),
+        Some(NotesSaved::Stale)
+    );
+    for bad in [
+        json!({"saved":"other"}),
+        json!({"saved":"written"}),
+        json!({"saved":"written","files":[{"file":"/hub/config.json","saved":false}]}),
+        json!({"saved":"written","files":[{"file":"/hub/config.json","saved":"yes"}]}),
+        json!({"saved":"written","files":[{"saved":true}]}),
+        json!({"saved":"written","files":[{"file":"/hub/config.json","saved":true,"error":{}}]}),
+    ] {
+        assert!(notes_saved(&bad).is_none(), "malformed {bad}");
+    }
+}

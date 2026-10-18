@@ -16,11 +16,16 @@ pub mod clock;
 /// (`docs/testing.md`, "Running tests").
 pub mod group;
 
+/// A new id from random bytes, such as a session's or a command's.
+pub mod id;
+
 /// The stoppable read: a socket reader that a `Stop` ends on demand.
 pub mod stoppable;
 
 /// Text on one line: control characters as spaces.
 pub mod text;
+
+pub use id::mint;
 
 /// Locks `mutex`, returning the guard even when another thread panicked
 /// while holding it: a poisoned lock still guards live state.

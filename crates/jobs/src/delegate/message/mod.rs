@@ -12,13 +12,14 @@ use contract::events::{Event, Progress};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{ActionId, ErrorCode, SessionId};
+use contract::{ActionId, ErrorCode, JobId, SessionId};
 use serde_json::{Map, Value, json};
 use support::clock::Parker;
 
 use super::run::{Launch, Watch, mint_command_id};
+use crate::error::JobsError;
 use crate::registry::Registry;
-use crate::registry::runs::{Target, Waited, failed};
+use crate::registry::runs::{Target, Waited};
 
 pub(crate) mod resume;
 
@@ -143,7 +144,8 @@ impl Tool for DelegateMessage {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        super::check_pair(arguments, "id", "message").map_err(EffectsError::Arguments)?;
+        super::check_pair(arguments, "id", "message")
+            .map_err(|error| EffectsError::Arguments(error.to_string()))?;
         Ok(Effects {
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -186,19 +188,16 @@ impl DelegateMessage {
         cancel: &dyn Cancel,
         emit: &dyn Emit,
     ) -> Output {
-        if let Some(output) = super::depth_refusal(self.depth, "delegate_message") {
-            return output;
+        if let Some(error) = super::depth_refusal(self.depth, "delegate_message") {
+            return error.output(false);
         }
         let (id, message) = match super::check_pair(arguments, "id", "message") {
             Ok(pair) => pair,
-            Err(message) => return fail(ErrorCode::InvalidArguments, message),
+            Err(error) => return error.output(true),
         };
         // Before any lookup: nothing is steered, resumed or written.
         if message.trim().is_empty() {
-            return fail(
-                ErrorCode::InvalidArguments,
-                "`message` must not be empty.".into(),
-            );
+            return JobsError::MessageEmpty.output(true);
         }
         // One command id per call, on every connection the call opens.
         let command = mint_command_id();
@@ -223,14 +222,16 @@ impl DelegateMessage {
                 Some(pair) => pair,
                 None => match self.registry.target(&id) {
                     Target::Unknown => {
-                        let message = super::super::tool::unknown_message(&id);
-                        return fail(ErrorCode::InvalidArguments, message);
+                        return JobsError::UnknownJob {
+                            id: JobId(id.clone()),
+                        }
+                        .output(true);
                     }
                     Target::NotDelegate => {
-                        return fail(
-                            ErrorCode::InvalidArguments,
-                            format!("Job `{id}` is not a delegate."),
-                        );
+                        return JobsError::NotDelegate {
+                            id: JobId(id.clone()),
+                        }
+                        .output(true);
                     }
                     Target::Live(session, run) => (session, run),
                     Target::Ended => {
@@ -478,12 +479,12 @@ impl DelegateMessage {
             // The gate was just cleared above, so the resume starts with
             // no committed send; the gate decision stays here.
             Waited::Ended => self.resume_now(id, message, action, cancel),
-            Waited::Timeout => Attempt::Done(fail(
-                ErrorCode::Closing,
-                format!(
-                    "Delegate {id} is finishing its run and did not take the message; send it again once it has finished."
-                ),
-            )),
+            Waited::Timeout => Attempt::Done(
+                JobsError::SteerClosing {
+                    id: JobId(id.to_owned()),
+                }
+                .output(true),
+            ),
             Waited::Cancelled => Attempt::Done(self.cancelled(id, gate)),
         }
     }
@@ -510,10 +511,13 @@ impl DelegateMessage {
         match failure.code {
             ErrorCode::Closing => self.closing(id, message, run, action, gate, cancel),
             ErrorCode::DuplicateCommand => Attempt::Done(lost(id)),
-            ErrorCode::MessageRefused | ErrorCode::HookFailed => Attempt::Done(fail(
-                failure.code,
-                format!("Delegate {id} refused the message: {}", failure.message),
-            )),
+            ErrorCode::MessageRefused | ErrorCode::HookFailed => Attempt::Done(
+                JobsError::SteerRefused {
+                    id: JobId(id.to_owned()),
+                    failure,
+                }
+                .output(true),
+            ),
             ErrorCode::AmbiguousMatch
             | ErrorCode::AuthenticationFailed
             | ErrorCode::Blocked
@@ -611,14 +615,14 @@ impl DelegateMessage {
             | ErrorCode::Usage
             | ErrorCode::VersionConflict
             | ErrorCode::WebSearchUnavailable
-            | ErrorCode::Other(_) => Attempt::Done(fail(
-                ErrorCode::ToolError,
-                format!(
-                    "Delegate {id} refused the message ({}): {}",
-                    code_name(&failure.code),
-                    failure.message
-                ),
-            )),
+            | ErrorCode::Other(_) => Attempt::Done(
+                JobsError::SteerRefusedOther {
+                    id: JobId(id.to_owned()),
+                    delegate_code: code_name(&failure.code),
+                    message: failure.message.clone(),
+                }
+                .output(true),
+            ),
         }
     }
 
@@ -639,10 +643,12 @@ impl DelegateMessage {
     }
 }
 
-/// A failed tool call: the model reads `content`, the caller matches on
-/// the error's message.
-fn fail(code: ErrorCode, message: String) -> Output {
-    failed(code, format!("{message}\n"), message)
+/// A copy reached the delegate's run, but its answer was lost.
+fn lost(id: &str) -> Output {
+    JobsError::AnswerLost {
+        id: JobId(id.to_owned()),
+    }
+    .output(true)
 }
 
 /// The call's answer when it failed nothing: plain text.
@@ -653,24 +659,12 @@ fn text_only(text: String) -> Output {
     }
 }
 
-/// A copy reached the delegate's run, but its answer was lost.
-fn lost(id: &str) -> Output {
-    fail(
-        ErrorCode::Indeterminate,
-        format!(
-            "Delegate {id} received the message, but its answer was lost; it joins the delegate's turn unless the delegate refused it."
-        ),
-    )
-}
-
 /// A copy may have joined a run that has since ended.
 fn unanswered(id: &str) -> Output {
-    fail(
-        ErrorCode::Indeterminate,
-        format!(
-            "Delegate {id} ended before answering; the message may have joined its last turn. Send it again to resume the delegate."
-        ),
-    )
+    JobsError::Unanswered {
+        id: JobId(id.to_owned()),
+    }
+    .output(true)
 }
 
 /// Nothing reached any run: the call was cancelled first.

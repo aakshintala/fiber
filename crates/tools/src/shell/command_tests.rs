@@ -1237,7 +1237,12 @@ fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
         "waited {JOB_DEADLINE:?} for the job to park for the held delta"
     );
     assert_eq!(job.deltas.text(), "one");
-    job.clock.advance(Duration::from_millis(100));
+    job.clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(JOB_DEADLINE),
+    );
     assert!(
         job.deltas.wait_for_text("onetwo", JOB_DEADLINE),
         "waited {JOB_DEADLINE:?} for the held delta after the interval"

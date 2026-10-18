@@ -208,18 +208,18 @@ fn a_handoff_keeps_the_live_state_for_its_session_start() {
         &client,
         r#"{"id":"prompt","command":"prompt","args":{"content":[{"type":"text","text":"hello"}]}}"#,
     );
-    extension_harness::until(&client, "first turn completed", |line| {
+    extension_harness::until_session(&client, "first turn completed", |line| {
         line["kind"] == "turn_completed"
     });
     extension_harness::send(&client, r#"{"id":"handoff","command":"handoff","args":{}}"#);
-    extension_harness::until(&client, "handoff completed", |line| {
+    extension_harness::until_session(&client, "handoff completed", |line| {
         line["kind"] == "handoff_completed"
     });
-    extension_harness::until(&client, "handoff turn completed", |line| {
+    extension_harness::until_session(&client, "handoff turn completed", |line| {
         line["kind"] == "turn_completed"
     });
     extension_harness::send(&client, r#"{"id":"close","command":"close","args":{}}"#);
-    extension_harness::until_close(&client);
+    extension_harness::until_session_close(&client);
     let (status, _, stderr) = running.wait();
     assert!(status.success(), "{stderr}");
     assert_eq!(seen(&setup, &id), 9);

@@ -87,7 +87,7 @@ fn an_idle_commands_host_tool_is_turnless_and_never_contacts_the_provider() {
         &client,
         r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
     );
-    let seen = until(&client, "command tool status", |line| {
+    let seen = until_session(&client, "command tool status", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/peek"
     });
     assert_eq!(seen.last().unwrap()["payload"]["status"], "completed:1");
@@ -105,7 +105,7 @@ fn an_idle_commands_host_tool_is_turnless_and_never_contacts_the_provider() {
     assert_eq!(action[2]["payload"]["status"], "completed");
     assert!(server.requests().is_empty());
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -161,7 +161,7 @@ fn a_commands_own_before_hook_fails_but_other_hooks_and_later_model_calls_run() 
         &client,
         r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
     );
-    let seen = until(&client, "before hook failure status", |line| {
+    let seen = until_session(&client, "before hook failure status", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/guard"
     });
     assert_eq!(
@@ -192,7 +192,7 @@ fn a_commands_own_before_hook_fails_but_other_hooks_and_later_model_calls_run() 
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"read it"}]}}"#,
     );
-    let done = until(&client, "later model turn", |line| {
+    let done = until_session(&client, "later model turn", |line| {
         line["kind"] == "turn_completed"
     });
     assert_eq!(
@@ -208,7 +208,7 @@ fn a_commands_own_before_hook_fails_but_other_hooks_and_later_model_calls_run() 
     assert!(model_results[0].get("turn_id").is_some());
     assert_eq!(server.requests().len(), 2);
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -246,7 +246,7 @@ fn a_commands_own_sanitize_after_hook_fails_without_leaking_the_output() {
         &client,
         r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
     );
-    let seen = until(&client, "after hook failure status", |line| {
+    let seen = until_session(&client, "after hook failure status", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/guard"
     });
     assert!(
@@ -282,7 +282,7 @@ fn a_commands_own_sanitize_after_hook_fails_without_leaking_the_output() {
     // Check while live too: closing an idle session need not retain its directory.
     assert!(!support::on_disk(&sessions_dir).contains(secret));
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -319,7 +319,7 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until(&client, "the commands answer", |line| {
+    let lines = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = lines.last().unwrap()["payload"]["result"].clone();
@@ -333,7 +333,7 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
         "{result}"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -357,12 +357,12 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"sync-now","text":"3/10"}}"#,
     );
-    let accepted = until(&client, "command_accepted", |line| {
+    let accepted = until_session(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
     assert!(accepted.last().unwrap()["payload"].get("result").is_none());
     // Its `host.status` reaches the client as `extension_ui`...
-    let ui = until(&client, "extension_ui", |line| {
+    let ui = until_session(&client, "extension_ui", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
     });
     assert_eq!(ui.last().unwrap()["payload"]["status"], "synced 3/10");
@@ -371,7 +371,7 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"sync-now","text":"3/10"}}"#,
     );
-    let duplicate = until(&client, "duplicate_command", |line| {
+    let duplicate = until_session(&client, "duplicate_command", |line| {
         line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_1"
     });
     assert_eq!(
@@ -383,7 +383,7 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
         &client,
         r#"{"id":"c_2","command":"command","args":{"name":"nope"}}"#,
     );
-    let unknown = until(&client, "unknown_command", |line| {
+    let unknown = until_session(&client, "unknown_command", |line| {
         line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_2"
     });
     assert_eq!(
@@ -396,12 +396,12 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
         &late,
         r#"{"id":"c_late","command":"subscribe","args":{"level":"full"}}"#,
     );
-    let seeded = until(&late, "the seeded status", |line| {
+    let seeded = until_session(&late, "the seeded status", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
     });
     assert_eq!(seeded.last().unwrap()["payload"]["status"], "synced 3/10");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     drop(late);
     let (status, _out, stderr) = running.wait();
@@ -433,7 +433,7 @@ fn command_runs_during_a_turn() {
     );
     // Admitted at once even while the turn runs: the last line before this
     // returns is the command's own acceptance.
-    let accepted = until(&client, "command_accepted", |line| {
+    let accepted = until_session(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
     assert_eq!(
@@ -441,12 +441,12 @@ fn command_runs_during_a_turn() {
         "c_1",
         "{accepted:?}"
     );
-    let ui = until(&client, "extension_ui", |line| {
+    let ui = until_session(&client, "extension_ui", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
     });
     assert_eq!(ui.last().unwrap()["payload"]["status"], "synced turn");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -500,7 +500,7 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until(&client, "the commands answer", |line| {
+    let lines = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = lines.last().unwrap()["payload"]["result"].clone();
@@ -513,7 +513,7 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
         "{result}"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -537,7 +537,7 @@ fn extensions_loaded_in_the_log_carries_each_replaces() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    until(&client, "command_accepted", |line| {
+    until_session(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sub"
     });
     // Read before close: a never-prompted session's directory is deleted
@@ -546,7 +546,7 @@ fn extensions_loaded_in_the_log_carries_each_replaces() {
     let text = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
     let log = support::complete_lines(&text);
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -604,7 +604,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"slow"}}"#,
     );
-    until(&client, "command_accepted", |line| {
+    until_session(&client, "command_accepted", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
     });
     // The close goes only once `host.http` is held, so the command is
@@ -614,7 +614,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
         "waited until the deadline for host.http to reach the held server"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -662,7 +662,7 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"start"}}"#,
     );
-    let lines = until(&client, "the extension-driven turn", |line| {
+    let lines = until_session(&client, "the extension-driven turn", |line| {
         line["kind"] == "turn_started"
     });
     assert!(
@@ -689,11 +689,11 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
     );
     // Close only after the turn completes: a close sent while the turn
     // streams is admitted either side of `turn_completed`.
-    let done = until(&client, "turn_completed", |line| {
+    let done = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     let stream = [lines.clone(), done.clone(), tail.clone()].concat();
     // The complete ordered kinds: the extension command is admitted, then
     // its driven prompt runs its turn, then the close is admitted.
@@ -788,7 +788,7 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
     );
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = until_session(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request_id = asked.last().unwrap()["payload"]["request_id"]
@@ -800,7 +800,7 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         &client,
         r#"{"id":"c_1","command":"command","args":{"name":"nudge"}}"#,
     );
-    let queued = until(&client, "the steer queued", |line| {
+    let queued = until_session(&client, "the steer queued", |line| {
         line["kind"] == "steering_queue"
             && line["payload"]["messages"]
                 .as_array()
@@ -820,7 +820,7 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
         ),
     );
-    let applied = until(&client, "steering_applied", |line| {
+    let applied = until_session(&client, "steering_applied", |line| {
         line["kind"] == "steering_applied"
     });
     // The applied message carries `source: extension`, the extension's name
@@ -835,11 +835,11 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
         "{line}"
     );
     assert_eq!(line["payload"]["content"][0]["text"], "use the other file");
-    let done = until(&client, "turn_completed", |line| {
+    let done = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     let stream = [
         asked.clone(),
         queued.clone(),
@@ -971,7 +971,7 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
     );
-    let asked = until(&client, "permission_requested", |line| {
+    let asked = until_session(&client, "permission_requested", |line| {
         line["kind"] == "permission_requested"
     });
     let request_id = asked.last().unwrap()["payload"]["request_id"]
@@ -986,7 +986,7 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
             r#"{{"id":"c_1","command":"command","args":{{"name":"sneaky","text":"{request_id}"}}}}"#
         ),
     );
-    let refused = until(&client, "the refusal status", |line| {
+    let refused = until_session(&client, "the refusal status", |line| {
         line["kind"] == "extension_ui"
             && line["payload"]["extension"] == "fiber.test/worker"
             && line["payload"]["status"] == "invalid_arguments"
@@ -1023,7 +1023,7 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
             r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
         ),
     );
-    let done = until(&client, "turn_completed", |line| {
+    let done = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert!(
@@ -1032,7 +1032,7 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
         "the allowed call ran after the client's reply: {done:?}"
     );
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let tail = until_close(&client);
+    let tail = until_session_close(&client);
     let stream = [asked.clone(), refused.clone(), done.clone(), tail.clone()].concat();
     // The complete ordered kinds: the prompt's turn pauses on the approval,
     // the extension's reply is refused, the client's reply resolves it, the
@@ -1138,7 +1138,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until(&client, "the commands answer", |line| {
+    let lines = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
     });
     let result = lines.last().unwrap()["payload"]["result"].clone();
@@ -1154,7 +1154,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         &client,
         r#"{"id":"c_run","command":"command","args":{"name":"sync-now","text":"x"}}"#,
     );
-    let ran = until(&client, "the command answer", |line| {
+    let ran = until_session(&client, "the command answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
     assert!(!ran.is_empty());
@@ -1164,12 +1164,12 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     bounded(setup.deadline, "release the held command", move || {
         std::fs::write(&fifo, b"").unwrap();
     });
-    let status = until(&client, "the held command's status", |line| {
+    let status = until_session(&client, "the held command's status", |line| {
         line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/worker"
     });
     assert_eq!(status.last().unwrap()["payload"]["status"], "synced x");
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");

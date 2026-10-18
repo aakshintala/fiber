@@ -215,7 +215,7 @@ fn a_ps_that_closes_its_output_and_hangs_is_killed_at_the_bound() {
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the listing returned before its bound"
     );
-    clock.advance(PS_BOUND);
+    clock.advance_when_parked(Some(bound), None, PS_BOUND, &Deadline::after(DEADLINE));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&rx)
@@ -240,7 +240,7 @@ fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the listing returned before its bound"
     );
-    clock.advance(PS_BOUND);
+    clock.advance_when_parked(Some(bound), None, PS_BOUND, &Deadline::after(DEADLINE));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&rx)

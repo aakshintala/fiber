@@ -20,7 +20,7 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use extension_harness::{Socket, send, until, until_close};
+use extension_harness::{Socket, send, until_session, until_session_close};
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
@@ -225,13 +225,16 @@ impl Setup {
 }
 
 /// One socket line, such as the subscribe acknowledgement: the first line
-/// [`until`] takes within the test's deadline.
+/// [`until_session`] takes within the test's deadline.
 fn recv(client: &Socket, what: &str) -> Value {
-    until(client, what, |_| true).into_iter().next().unwrap()
+    until_session(client, what, |_| true)
+        .into_iter()
+        .next()
+        .unwrap()
 }
 
 fn answer(client: &Socket, id: &str) -> Value {
-    until(client, "the answer", |line| {
+    until_session(client, "the answer", |line| {
         line["payload"].get("command_id") == Some(&json!(id))
     })
     .into_iter()
@@ -279,13 +282,13 @@ fn an_invalid_pasted_image_is_refused_with_no_picture_run() {
         &client,
         r#"{"id":"c_2","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    until(&client, "turn_completed", |line| {
+    until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert_eq!(server.requests().len(), 1, "the text turn really ran");
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -622,7 +625,7 @@ fn at_debug_a_pasted_image_writes_one_picture_run() {
         &client,
         &image_prompt("c_prompt", "describe this", PIXEL_BASE64),
     );
-    let rest = until(&client, "turn_completed", |line| {
+    let rest = until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     let turn_started = rest
@@ -647,7 +650,7 @@ fn at_debug_a_pasted_image_writes_one_picture_run() {
     );
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
@@ -726,13 +729,13 @@ fn at_debug_a_decoded_unreadable_paste_enters_process_once() {
         &client,
         r#"{"id":"c_2","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    until(&client, "turn_completed", |line| {
+    until_session(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
     assert_eq!(server.requests().len(), 1, "the text turn really ran");
 
     send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let _tail = until_close(&client);
+    let _tail = until_session_close(&client);
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");

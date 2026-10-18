@@ -141,7 +141,13 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
             .error
             .unwrap();
         assert_eq!(error.code, ErrorCode::InvalidArguments);
-        assert_eq!(error.message, crate::tool::unknown_message("j_ext"));
+        assert_eq!(
+            error.message,
+            crate::JobsError::UnknownJob {
+                id: contract::JobId("j_ext".into()),
+            }
+            .to_string()
+        );
     };
     assert_refused();
     finish.report(ended_ok("j_ext"), None);

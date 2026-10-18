@@ -1370,7 +1370,12 @@ tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
 When a window crosses `quota.notice_at` percent used (default 80), one line
 naming the provider, the credential label, the window and its reset time goes into the model's next
 turn input. It fires once per crossing, and again for that window only after
-it resets. The notice is the durable event `quota_noticed`
+it resets (its reset time has passed, or a later reading is below `quota.notice_at`).
+A credit with a positive limit counts as the window `credit`, at
+`100 × (limit − remaining) / limit` percent used. It has no reset time, so it
+fires again only after a reading below `quota.notice_at`. The line leaves out
+the reset time when there is none: for a credit, and for a window whose
+provider reports no reset time. The notice is the durable event `quota_noticed`
 (`docs/events.md`, "Usage and notices"). An OpenRouter key without a limit reports no quota, so it never gives a notice.
 
 ### Fetching

@@ -565,11 +565,12 @@ fn servers_stop_at_once() {
         servers.stop();
         done.send(()).expect("collected");
     });
-    assert!(
-        setups[0].fake.await_parked_count(grace, 2, WITHIN),
-        "both stops wait on the grace at once"
+    setups[0].fake.advance_when_parked_threads(
+        Some(grace),
+        2,
+        Duration::from_millis(800),
+        &Deadline::after(WITHIN),
     );
-    setups[0].fake.advance(Duration::from_millis(800));
     Deadline::after(WITHIN)
         .recv(&stopped)
         .unwrap_or_else(|_| panic!("the stop returned within {WITHIN:?}"));

@@ -814,6 +814,7 @@ impl Driver {
                 | Event::RepositoryCodeOffered(_)
                 | Event::RepositoryCodeResolved(_)
                 | Event::QuotaNoticed(_)
+                | Event::QuotaRearmed(_)
                 | Event::RetryScheduled(_)
                 | Event::Notice(_)
                 | Event::PreambleBuilt(_)

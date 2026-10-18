@@ -576,8 +576,9 @@ fn an_extension_tool_with_json_content_shows_it_indented() {
     assert_eq!(finished.status.code(), Some(0));
 }
 
-/// Runs `git` in `dir`, panicking on failure.
-fn git(dir: &std::path::Path, args: &[&str]) {
+/// Runs `git` in `dir` directly, with no deadline and no process group,
+/// panicking on failure.
+fn git_without_deadline(dir: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -590,12 +591,12 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 fn the_changed_files_view_draws_a_gutter_and_reverse_video_words() {
     let setup = Setup::new();
     let workspace = setup.workspace();
-    git(&workspace, &["init"]);
-    git(&workspace, &["config", "user.email", "test@fiber.dev"]);
-    git(&workspace, &["config", "user.name", "fiber test"]);
+    git_without_deadline(&workspace, &["init"]);
+    git_without_deadline(&workspace, &["config", "user.email", "test@fiber.dev"]);
+    git_without_deadline(&workspace, &["config", "user.name", "fiber test"]);
     fs::write(workspace.join("f.txt"), "call foo(a);\n").unwrap();
-    git(&workspace, &["add", "f.txt"]);
-    git(&workspace, &["commit", "-m", "add f"]);
+    git_without_deadline(&workspace, &["add", "f.txt"]);
+    git_without_deadline(&workspace, &["commit", "-m", "add f"]);
     script(
         &setup,
         json!([

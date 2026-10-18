@@ -163,7 +163,7 @@ impl KnownHosts {
             Event::RepositoryCodeOffered(_) => {}
             Event::RepositoryCodeResolved(_) => {}
             Event::UsageRecorded(_) => {}
-            Event::QuotaNoticed(_) => {}
+            Event::QuotaNoticed(_) | Event::QuotaRearmed(_) => {}
             Event::RetryScheduled(_) => {}
             Event::Notice(_) => {}
             Event::PreambleBuilt(_) => {}

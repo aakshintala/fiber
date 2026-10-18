@@ -225,9 +225,7 @@ impl Shared {
 
 /// A new ask's id: `r_` plus 16 hex digits, as the loop's `mint` does.
 pub(super) fn mint() -> RequestId {
-    use std::collections::hash_map::RandomState;
-    use std::hash::BuildHasher;
-    RequestId(format!("r_{:016x}", RandomState::new().hash_one(())))
+    RequestId(support::mint("r_"))
 }
 
 /// An ack that answers nothing: a `fiber` decline resumes no call.

@@ -208,7 +208,10 @@ pub fn render_reviewed(
         | Event::InteractionRequested(_)
         | Event::InteractionResolved(_) => {}
         Event::RepositoryCodeOffered(_) | Event::RepositoryCodeResolved(_) => {}
-        Event::UsageRecorded(_) | Event::QuotaNoticed(_) | Event::RetryScheduled(_) => {}
+        Event::UsageRecorded(_)
+        | Event::QuotaNoticed(_)
+        | Event::QuotaRearmed(_)
+        | Event::RetryScheduled(_) => {}
         Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
         Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
         Event::SkillsChanged(_) | Event::SkillsResent(_) => {}

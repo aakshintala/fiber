@@ -4,11 +4,11 @@
 //! and nothing but `events.jsonl` and `artifacts/`.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 
-use crate::{ARTIFACTS, EVENTS, Error, io_at, read::complete_len};
+use crate::{ARTIFACTS, EVENTS, Error, io_at, open_log, read::complete_len};
 
 /// Copies the session in `dir` into `target`: its complete log lines as
 /// `events.jsonl` and its `artifacts/` tree. `target` itself is created
@@ -17,13 +17,9 @@ use crate::{ARTIFACTS, EVENTS, Error, io_at, read::complete_len};
 /// leaves a half-written directory behind.
 pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
     let source = dir.join(EVENTS);
-    let bytes = fs::read(&source).map_err(|e| {
-        if e.kind() == io::ErrorKind::NotFound {
-            Error::NotFound(dir.to_owned())
-        } else {
-            io_at(&source)(e)
-        }
-    })?;
+    let mut log = open_log(dir)?;
+    let mut bytes = Vec::new();
+    log.read_to_end(&mut bytes).map_err(io_at(&source))?;
     let complete = complete_len(&bytes);
     if let Some(parent) = target.parent()
         && !parent.as_os_str().is_empty()

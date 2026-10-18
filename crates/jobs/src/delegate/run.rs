@@ -5,8 +5,6 @@
 //! spawn and the record are done. The runner's only answer is the end it
 //! reports to the registry once the child is reaped.
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
@@ -655,7 +653,7 @@ pub(crate) fn deadline_due(deadline: Option<Instant>, now: Instant) -> bool {
 /// once. A call mints one id and sends that same id on every connection
 /// it opens.
 pub(crate) fn mint_command_id() -> String {
-    format!("c_{:016x}", RandomState::new().hash_one(()))
+    support::mint("c_")
 }
 
 /// Mints the delegate's session id: `s_` and 16 lowercase hex digits, drawn
@@ -663,7 +661,7 @@ pub(crate) fn mint_command_id() -> String {
 /// [`crate::registry::mint_job_id`]; the two must differ in prefix, so a
 /// log line never names one where the other belongs.
 pub(crate) fn mint_session_id() -> SessionId {
-    SessionId(format!("s_{:016x}", RandomState::new().hash_one(())))
+    SessionId(support::mint("s_"))
 }
 
 /// Whether the watch callback stats the log now: the first envelope

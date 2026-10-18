@@ -1,7 +1,5 @@
 //! Per-call temporary grep metadata and its strict reader.
 
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -15,10 +13,7 @@ pub(super) struct MatchDir {
 
 impl MatchDir {
     pub(super) fn create() -> Option<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "fiber-grep-{:016x}",
-            RandomState::new().hash_one(())
-        ));
+        let path = std::env::temp_dir().join(support::mint("fiber-grep-"));
         std::fs::DirBuilder::new().mode(0o700).create(&path).ok()?;
         Some(Self { path })
     }

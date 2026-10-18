@@ -29,13 +29,14 @@ mod usage;
 mod weak_emit;
 mod write;
 
+use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
 pub use artifact::{Refusal, check_artifact_path, open_artifact};
-pub use dependents::dependents;
+pub use dependents::{Children, dependents};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use name::session_name;
@@ -169,6 +170,20 @@ fn io_at(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
         path: path.to_owned(),
         source,
     }
+}
+
+/// Opens the log in the session directory `dir`: the one open every other
+/// reader goes through. A missing log is [`Error::NotFound`] naming the
+/// session directory; any other failure is [`Error::Io`] naming the log.
+pub(crate) fn open_log(dir: &Path) -> Result<File, Error> {
+    let path = dir.join(EVENTS);
+    File::open(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            Error::NotFound(dir.to_owned())
+        } else {
+            io_at(&path)(error)
+        }
+    })
 }
 
 /// The session directory of `id` in `sessions`.
