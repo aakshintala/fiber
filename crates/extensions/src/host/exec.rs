@@ -184,21 +184,24 @@ pub(crate) fn resolve_in_package(program: &str, package: &Path) -> Result<String
         if depth <= package_len {
             continue;
         }
-        match std::fs::symlink_metadata(&prefix) {
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => break,
-            Err(_) => return Err(refused()),
-            Ok(meta) => {
-                if meta.file_type().is_symlink() {
-                    // A dangling target cannot be shown inside, and neither
-                    // can a loop: any failure to resolve is a refusal.
-                    let escapes = match prefix.canonicalize() {
-                        Ok(target) => !target.starts_with(package),
-                        Err(_) => true,
-                    };
-                    if escapes {
-                        return Err(refused());
-                    }
-                }
+        // Only the missing tail ends the walk: the ancestor check above
+        // already refused every other failure (a loop, a permission
+        // error, a path through a file), so any error here is the tail
+        // not existing yet. Any other filesystem failure below the
+        // package would have failed that check first, absent a
+        // concurrent change to the directory.
+        let Ok(meta) = std::fs::symlink_metadata(&prefix) else {
+            break;
+        };
+        if meta.file_type().is_symlink() {
+            // A dangling target cannot be shown inside, and neither
+            // can a loop: any failure to resolve is a refusal.
+            let escapes = match prefix.canonicalize() {
+                Ok(target) => !target.starts_with(package),
+                Err(_) => true,
+            };
+            if escapes {
+                return Err(refused());
             }
         }
     }

@@ -1323,6 +1323,42 @@ fn resolve_in_package_a_dot_dot_that_stays_inside_resolves() {
 }
 
 #[test]
+fn resolve_in_package_a_dot_dot_that_pops_past_the_package_is_refused_even_when_it_reenters() {
+    let (_guard, package) = package("fiber-resolve-reentry");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(package.join("bin").join("ok"), "x").unwrap();
+    // The second `..` pops past the package, which is a refusal even
+    // though the path re-enters it and exists: the fold never climbs
+    // back in. A fold that miscounted its depth would resolve this.
+    let base = package.file_name().unwrap().to_str().unwrap().to_owned();
+    let program = format!("a/../../{base}/bin/ok");
+    let err = resolve_in_package(&program, &package).unwrap_err();
+    assert!(
+        err.contains(program.as_str()),
+        "the refusal names the path: {err}"
+    );
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_nul_byte_is_refused() {
+    let (_guard, package) = package("fiber-resolve-nul");
+    // A NUL byte can never name a runnable program: canonicalizing it
+    // fails with an error other than `NotFound`, which is a refusal,
+    // never a pass. A check that popped past every error would resolve it.
+    let program = "bin/\0tool";
+    let err = resolve_in_package(program, &package).unwrap_err();
+    assert!(err.contains(program), "the refusal names the path: {err}");
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
 fn resolve_in_package_a_symlink_out_of_the_package_is_refused() {
     use std::os::unix::fs::symlink;
     let (_outer, outer) = package("fiber-resolve-link-outer");
