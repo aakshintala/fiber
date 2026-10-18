@@ -236,7 +236,7 @@ impl Tool for Shell {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
         match parse(arguments, &self.workspace, self.max_deadline_ms) {
-            Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir)),
+            Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir, &[])),
             Err(_) => Ok(classify::executes(None, None)),
         }
     }
