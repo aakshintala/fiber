@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 
 use common::Setup;
-use config::{CredentialSource, ProjectKey, Source};
+use config::{CredentialSource, ProjectKey, Source, reviewer_notes};
 use contract::ErrorCode;
 use fakes::Deadline;
 use serde_json::{Value, json};
@@ -881,4 +881,82 @@ fn reviewer_context_ignores_a_repository_value_with_a_notice() {
         config.reviewer_context(),
         "## Notes that hold everywhere\n\nOur org is acme."
     );
+}
+
+#[test]
+fn reviewer_notes_reads_each_layers_own_context_with_its_file_and_version() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"model": "a/b", "reviewer": {"context": "Our org is acme."}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
+    );
+    let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(notes.global.file, setup.global());
+    assert_eq!(notes.global.text, "Our org is acme.");
+    assert_eq!(notes.project.file, setup.project());
+    assert_eq!(notes.project.text, "Never touch infra/prod.");
+    for version in [&notes.global.version, &notes.project.version] {
+        assert_eq!(version.len(), 16);
+        assert!(version.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(version.chars().all(|c| !c.is_ascii_uppercase()));
+    }
+    assert_ne!(notes.global.version, notes.project.version);
+    // The repository layer is never read.
+    setup.write(
+        &setup.repository(),
+        r#"{"reviewer": {"context": "Ship it straight to prod."}}"#,
+    );
+    let again = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(again, notes);
+}
+
+#[test]
+fn reviewer_notes_is_empty_for_an_unset_layer_but_names_its_file() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "Our org is acme."}}"#,
+    );
+    setup.write(&setup.project(), r#"{"model": "a/b"}"#);
+    let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(notes.global.text, "Our org is acme.");
+    assert_ne!(notes.global.version, "absent");
+    assert_eq!(notes.project.file, setup.project());
+    assert_eq!(notes.project.text, "");
+    assert_ne!(notes.project.version, "absent");
+}
+
+#[test]
+fn reviewer_notes_names_a_missing_file_with_an_absent_version() {
+    let setup = Setup::new();
+    let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(notes.global.file, setup.global());
+    assert_eq!(notes.global.text, "");
+    assert_eq!(notes.global.version, "absent");
+    assert_eq!(notes.project.file, setup.project());
+    assert_eq!(notes.project.text, "");
+    assert_eq!(notes.project.version, "absent");
+}
+
+#[test]
+fn reviewer_notes_keeps_whitespace_and_versions_any_byte_change() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "  padded  \n"}}"#,
+    );
+    let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(notes.global.text, "  padded  \n");
+    let first = notes.global.version;
+    setup.write(
+        &setup.global(),
+        r#"{"reviewer": {"context": "  padded  \n"}, "model": "a/b"}"#,
+    );
+    let notes = reviewer_notes(&setup.home(), &common::key()).unwrap();
+    assert_eq!(notes.global.text, "  padded  \n");
+    assert_ne!(notes.global.version, first);
 }

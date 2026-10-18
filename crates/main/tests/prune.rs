@@ -355,9 +355,10 @@ fn git_command() -> Command {
 }
 
 /// Runs `git` with `args` in `dir`, as the worktree tests do, under the
-/// test's [`Deadline`].
+/// test's [`Deadline`]: the failure names `dir`, and there is no output
+/// to return.
 #[track_caller]
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
+fn git_in_dir(deadline: Deadline, dir: &Path, args: &[&str]) {
     let mut command = git_command();
     command
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
@@ -379,15 +380,15 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
 #[track_caller]
 fn repo(setup: &Setup) {
     let workspace = setup.workspace();
-    git(setup.deadline, &workspace, &["init", "--quiet"]);
+    git_in_dir(setup.deadline, &workspace, &["init", "--quiet"]);
     fs::write(workspace.join("file.txt"), "x").unwrap();
     fs::write(
         workspace.join(".gitignore"),
         "target/\n.env\nlocal.secret\n",
     )
     .unwrap();
-    git(setup.deadline, &workspace, &["add", "."]);
-    git(
+    git_in_dir(setup.deadline, &workspace, &["add", "."]);
+    git_in_dir(
         setup.deadline,
         &workspace,
         &["commit", "--quiet", "-m", "first"],
@@ -402,7 +403,7 @@ fn kept(setup: &Setup, id: &str) -> PathBuf {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let branch = format!("fiber/{id}");
     let target = path.to_string_lossy().into_owned();
-    git(
+    git_in_dir(
         setup.deadline,
         setup.workspace().as_path(),
         &["worktree", "add", "-b", &branch, &target],
@@ -511,8 +512,8 @@ fn a_unique_commit_worktree_is_skipped_naming_it() {
     repo(&setup);
     let wt = kept(&setup, "s_00000000000000e4");
     fs::write(wt.join("more.txt"), "y").unwrap();
-    git(setup.deadline, &wt, &["add", "."]);
-    git(setup.deadline, &wt, &["commit", "--quiet", "-m", "second"]);
+    git_in_dir(setup.deadline, &wt, &["add", "."]);
+    git_in_dir(setup.deadline, &wt, &["commit", "--quiet", "-m", "second"]);
     let output = prune(&setup, &["--yes"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = text(&output.stdout);
@@ -588,14 +589,14 @@ fn declare_hook(dir: &Path, script: &str) {
 #[track_caller]
 fn linked(setup: &Setup, branch: &str, name: &str, script: &str) -> PathBuf {
     let path = setup.root.path().join(name);
-    git(
+    git_in_dir(
         setup.deadline,
         &setup.workspace(),
         &["worktree", "add", "-b", branch, path.to_str().unwrap()],
     );
     declare_hook(&path, script);
-    git(setup.deadline, &path, &["add", "."]);
-    git(setup.deadline, &path, &["commit", "--quiet", "-m", branch]);
+    git_in_dir(setup.deadline, &path, &["add", "."]);
+    git_in_dir(setup.deadline, &path, &["commit", "--quiet", "-m", branch]);
     fs::canonicalize(&path).unwrap()
 }
 
@@ -663,8 +664,8 @@ fn copies(setup: &Setup) -> Vec<String> {
 fn approved_repo(setup: &Setup) -> (String, String, String) {
     repo(setup);
     declare_hook(&setup.workspace(), "main\n");
-    git(setup.deadline, &setup.workspace(), &["add", "."]);
-    git(
+    git_in_dir(setup.deadline, &setup.workspace(), &["add", "."]);
+    git_in_dir(
         setup.deadline,
         &setup.workspace(),
         &["commit", "--quiet", "-m", "hook"],
@@ -691,7 +692,7 @@ fn prune_removes_pinned_copies_no_worktree_matches() {
     let (main, _, b) = approved_repo(&setup);
     let hash_b = approval(&setup, &b);
     let hash_main = approval(&setup, &main);
-    git(
+    git_in_dir(
         setup.deadline,
         &setup.workspace(),
         &[
@@ -771,7 +772,7 @@ fn prune_keeps_a_held_pinned_copy() {
     let ready = setup.home().join("pinned").join(format!("{hash_a}.ready"));
     let hold = File::options().read(true).write(true).open(&ready).unwrap();
     hold.lock_shared().unwrap();
-    git(
+    git_in_dir(
         setup.deadline,
         &setup.workspace(),
         &[

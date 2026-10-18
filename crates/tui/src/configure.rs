@@ -165,6 +165,68 @@ pub struct ReviewerModels {
     pub notices: Vec<String>,
 }
 
+/// One notes layer's file with its own `reviewer.context` text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotesFile {
+    /// The layer's file, named whether or not it exists.
+    pub file: PathBuf,
+    /// The layer's own `reviewer.context`, empty when unset or when the
+    /// file is missing; whitespace is kept as is.
+    pub text: String,
+    /// 16 lowercase hex digits of the file's bytes, or `absent` when the
+    /// file does not exist.
+    pub version: String,
+}
+
+/// Both person layers' notes files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerNotes {
+    /// Fiber home's `config.json` notes.
+    pub global: NotesFile,
+    /// The project's `config.json` notes.
+    pub project: NotesFile,
+}
+
+/// One sent notes layer: the version its read saw, and the text to store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotesWrite {
+    /// The version [`Configure::reviewer_notes`] read.
+    pub version: String,
+    /// The `reviewer.context` to store.
+    pub text: String,
+}
+
+/// What a notes save did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotesSaved {
+    /// A sent version no longer matched: nothing was written.
+    Stale,
+    /// Every sent layer's outcome, global first.
+    Written(Vec<FileSaved>),
+}
+
+/// One sent file's outcome: three states, so "not saved, no error"
+/// cannot be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSaved {
+    /// The layer's file.
+    pub file: PathBuf,
+    /// Whether it was written, and any error.
+    pub outcome: FileOutcome,
+}
+
+/// Whether one notes file was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOutcome {
+    /// The file holds the new notes.
+    Saved,
+    /// The rename landed but syncing the directory failed, so the new
+    /// notes are in place with an error.
+    SavedUnsynced(ConfigureError),
+    /// The file is byte for byte as before, with why.
+    NotSaved(ConfigureError),
+}
+
 /// What a revoke did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Revoked {
@@ -348,6 +410,20 @@ pub trait Configure: Send + Sync {
     /// Saves `id` as provider `name`'s reviewer, exactly as listed: one
     /// main-owned global write. Save errors name the key.
     fn set_reviewer(&self, name: &str, id: &str) -> Result<(), ConfigureError>;
+
+    /// Both person layers' notes for `workspace`'s project, each with its
+    /// file, its own `reviewer.context` and its version.
+    fn reviewer_notes(&self, workspace: &Path) -> Result<ReviewerNotes, ConfigureError>;
+
+    /// Saves the sent layers' notes, global first then project: `stale`
+    /// writes nothing, `written` carries one entry per sent layer. A
+    /// layer not sent is not written and has no entry.
+    fn save_reviewer_notes(
+        &self,
+        workspace: &Path,
+        global: Option<NotesWrite>,
+        project: Option<NotesWrite>,
+    ) -> Result<NotesSaved, ConfigureError>;
 
     // The `tui.theme` row.
 

@@ -770,7 +770,9 @@ fn a_blocking_before_tool_failure_fails_the_call_hook_failed_and_never_starts() 
 
 #[test]
 fn a_rewrite_survives_a_resume_while_its_approval_is_pending() {
-    use extension_harness::{kinds as session_kinds, send as session_send, until as session_until};
+    use extension_harness::{
+        kinds as session_kinds, send as session_send, until_session as session_until,
+    };
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
@@ -1130,7 +1132,7 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
 
 #[test]
 fn a_refused_steer_and_prompt_over_the_socket_are_rejected_message_refused() {
-    use extension_harness::{send as session_send, until as session_until};
+    use extension_harness::{send as session_send, until_session as session_until};
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -1199,7 +1201,7 @@ fn a_refused_steer_and_prompt_over_the_socket_are_rejected_message_refused() {
 
 #[test]
 fn a_redacted_socket_prompt_joins_the_history_redacted() {
-    use extension_harness::{send as session_send, until as session_until};
+    use extension_harness::{send as session_send, until_session as session_until};
     use support::session_dir;
 
     let setup = Setup::new_with_fm_root();

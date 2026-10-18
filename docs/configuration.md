@@ -525,6 +525,10 @@ major version it was written for; Fiber loads it only when that is Fiber's own
 a process extension, and `exit_timeout_ms` has no default. Its `program` follows the same rule as a Lua `host.exec` program: a path containing `/` that is not absolute resolves against the package directory and must stay inside it, a bare name resolves on `PATH`, and an absolute path is used as written. A Lua extension's
 entry script is `init.lua` at the top of its directory; its provider's Lua is
 `providers/<name>.lua`. Each `providers` key must be one filename, not a path.
+A TUI extension's entry script is `tui/init.lua`. Its manifest declares
+`tui.session_versions`, the session-half version range the TUI extension
+works with (`docs/extensions.md`, "Client halves"); an install reads the
+range without running Lua.
 `memory_mib` raises a
 Lua extension's memory cap, in MiB, above the default of 1
 (`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `replaces`

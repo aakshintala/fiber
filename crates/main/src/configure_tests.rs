@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tui::{Configure, Layer, Shown, WriteScope};
 
@@ -556,4 +557,98 @@ fn save_keys_refuses_a_keys_that_is_no_object_leaving_the_file() {
         fs::read_to_string(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
         text
     );
+}
+
+#[test]
+fn reviewer_notes_reads_each_layers_own_context_with_its_version() {
+    use tui::Configure;
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"reviewer": {"context": "Our org is acme."}}"#,
+    );
+    write(
+        &dirs.project_file(&workspace),
+        r#"{"reviewer": {"context": "Never touch infra/prod."}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    let notes = seam
+        .reviewer_notes(&workspace)
+        .unwrap_or_else(|e| panic!("read: {e}"));
+    assert_eq!(notes.global.file, dirs.home().join("config.json"));
+    assert_eq!(notes.global.text, "Our org is acme.");
+    assert_eq!(notes.project.file, dirs.project_file(&workspace));
+    assert_eq!(notes.project.text, "Never touch infra/prod.");
+    assert_ne!(notes.global.version, "absent");
+    assert_ne!(notes.project.version, "absent");
+    assert_ne!(notes.global.version, notes.project.version);
+}
+
+#[test]
+fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
+    fakes::within("seam notes save", Duration::from_secs(10), || {
+        use tui::{Configure, FileOutcome, NotesSaved, NotesWrite};
+        let dirs = Dirs::new();
+        let workspace = dirs.workspace("one");
+        write(
+            &dirs.home().join("config.json"),
+            r#"{"model": "a/b", "reviewer": {"context": "old global"}}"#,
+        );
+        write(
+            &dirs.project_file(&workspace),
+            r#"{"reviewer": {"context": "old project"}}"#,
+        );
+        let seam = Seam::new(dirs.home());
+        let read = seam
+            .reviewer_notes(&workspace)
+            .unwrap_or_else(|e| panic!("read: {e}"));
+        let write = |version: &str, text: &str| {
+            Some(NotesWrite {
+                version: version.to_owned(),
+                text: text.to_owned(),
+            })
+        };
+        let saved = seam
+            .save_reviewer_notes(
+                &workspace,
+                write(&read.global.version, "new global"),
+                write(&read.project.version, "new project"),
+            )
+            .unwrap_or_else(|e| panic!("save: {e}"));
+        let NotesSaved::Written(files) = saved else {
+            panic!("a current save writes");
+        };
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].file, dirs.home().join("config.json"));
+        assert_eq!(files[0].outcome, FileOutcome::Saved);
+        assert_eq!(files[1].file, dirs.project_file(&workspace));
+        assert_eq!(files[1].outcome, FileOutcome::Saved);
+        assert!(
+            fs::read_to_string(dirs.home().join("config.json"))
+                .unwrap_or_else(|e| panic!("read: {e}"))
+                .contains("new global")
+        );
+        // The old global version no longer matches: nothing is written.
+        let before = (
+            fs::read(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+            fs::read(dirs.project_file(&workspace)).unwrap_or_else(|e| panic!("read: {e}")),
+        );
+        let saved = seam
+            .save_reviewer_notes(
+                &workspace,
+                write(&read.global.version, "lost global"),
+                write(&read.project.version, "lost project"),
+            )
+            .unwrap_or_else(|e| panic!("save: {e}"));
+        assert_eq!(saved, NotesSaved::Stale);
+        assert_eq!(
+            fs::read(dirs.home().join("config.json")).unwrap_or_else(|e| panic!("read: {e}")),
+            before.0
+        );
+        assert_eq!(
+            fs::read(dirs.project_file(&workspace)).unwrap_or_else(|e| panic!("read: {e}")),
+            before.1
+        );
+    });
 }
