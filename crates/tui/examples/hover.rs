@@ -119,14 +119,14 @@ fn median(
     measure: impl Fn() -> Result<(u16, Vec<usize>), String>,
 ) -> Result<(Duration, (u16, Vec<usize>)), String> {
     let mut times = Vec::with_capacity(RUNS);
-    let mut rowed: (u16, Vec<usize>) = (0, Vec::new());
+    let mut measured: (u16, Vec<usize>) = (0, Vec::new());
     for _ in 0..RUNS {
         let (time, written) = timed(&measure);
-        rowed = written?;
+        measured = written?;
         times.push(time);
     }
     times.sort();
-    Ok((times.get(RUNS / 2).copied().unwrap_or_default(), rowed))
+    Ok((times.get(RUNS / 2).copied().unwrap_or_default(), measured))
 }
 
 /// The wall time of one call of `measure`, and its result.

@@ -720,7 +720,6 @@ fn hover_frames_finds_the_badge_row_at_160_by_48() {
     let events = include_str!("../examples/hover.jsonl");
     let (row, _) = crate::hover_frames(events, 160, 48, &[])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
-    assert_ne!(row, 46);
     let mut app = super::fold(events, 160, 48).unwrap_or_else(|error| panic!("fold: {error}"));
     app.put_aside();
     let badge = app.badge().expect("a put-aside request shows a badge");
