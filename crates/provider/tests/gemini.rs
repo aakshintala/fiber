@@ -2763,3 +2763,25 @@ fn grounding_goes_on_the_last_hosted_result_only() {
     }
     assert_eq!(pair.completed.details, Some(grounding));
 }
+
+#[test]
+fn a_required_nullable_property_uses_strict_mode() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = vec![ToolDefinition {
+        input_schema: json!({
+            "type": "object",
+            "properties": {"offset": {"type": ["integer", "null"]}},
+            "required": ["offset"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    }];
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["toolConfig"],
+        json!({"functionCallingConfig": {"mode": "VALIDATED"}})
+    );
+}
