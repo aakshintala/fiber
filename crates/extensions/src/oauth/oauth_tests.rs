@@ -115,8 +115,7 @@ fn the_system_browser_shows_device_instructions_to_its_sink() {
 fn the_system_browser_starts_its_program_with_the_url() {
     let dir = fakes::TempDir::new("fiber-browser");
     let fifo = dir.path().join("seen");
-    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
-    assert!(made.success());
+    fakes::fifo(&fifo);
     let body = format!("printf '%s' \"$1\" > '{}'\n", fifo.display());
     let script = fakes::script(dir.path(), "browser", &body);
     let (tx, rx) = mpsc::channel();

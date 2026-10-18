@@ -79,8 +79,7 @@ fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Resul
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     let path = dir.join("hold.lua");
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    fakes::fifo(&path);
     let (tx, rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     std::thread::spawn(move || {
