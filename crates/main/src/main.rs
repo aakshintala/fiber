@@ -10,7 +10,6 @@ mod clock;
 mod completion;
 mod configure;
 mod connect;
-mod crash;
 mod credential;
 mod delegates;
 mod handoff;
@@ -97,9 +96,12 @@ fn run() -> i32 {
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     // First: every process writes one crash report and aborts on a panic
     // (`docs/code-quality.md`, "What a panic leaves").
-    crash::install(
-        std::env::var_os("FIBER_HOME"),
-        std::env::var_os("HOME"),
+    log::crash::install(
+        Box::new(|| {
+            config::fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME"))
+                .map_err(|e| e.to_string())
+        }),
+        tui::restore,
         Arc::clone(&clock),
     );
     match cli::parse() {
@@ -815,7 +817,7 @@ fn terminal(
         tty,
         launch,
         connect,
-        Box::new(crash::attach),
+        Box::new(log::crash::attach),
         Arc::clone(&clock),
     ) {
         Ok(code) => code,

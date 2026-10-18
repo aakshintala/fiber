@@ -79,7 +79,7 @@ pub(crate) fn resume(
         Ok(id) => id,
         Err(e) => return crate::fail(crate::failed(e.code(), e)),
     };
-    crate::crash::attach(&id);
+    log::crash::attach(&id);
     crate::terminal(
         fiber,
         tui::OpenAt::Session(id, credential),
@@ -115,7 +115,7 @@ pub(crate) fn continue_latest(fiber: Result<PathBuf, String>) -> i32 {
         Ok(id) => id,
         Err(e) => return crate::fail(e),
     };
-    crate::crash::attach(&id);
+    log::crash::attach(&id);
     crate::terminal(fiber, tui::OpenAt::Session(id, None), None, Vec::new())
 }
 

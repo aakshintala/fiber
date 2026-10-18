@@ -17,8 +17,8 @@ use log::Log;
 use r#loop::Loop;
 
 use crate::{
-    Parts, ask_failed, ask_permissions, cli, crash, failed, finish, late_emit, mcp_servers,
-    parts_with, run_turn, session_extensions, shutdown,
+    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers, parts_with,
+    run_turn, session_extensions, shutdown,
 };
 
 thread_local! {
@@ -315,7 +315,7 @@ pub(crate) fn run_new(
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
         }
     };
-    crash::attach(&id);
+    log::crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
     // names it.

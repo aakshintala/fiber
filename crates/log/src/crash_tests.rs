@@ -7,7 +7,7 @@ use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::ExitStatusExt as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
@@ -85,9 +85,17 @@ fn child_home() -> std::ffi::OsString {
     std::env::var_os(HOME).unwrap()
 }
 
+/// The child's `restore`: the test binary never sets a terminal up, so a
+/// no-op keeps the child's stderr to the report alone.
+fn no_restore() {}
+
 /// A hook with a temp Fiber home and a clock pinned at [`MS`].
 fn child_hook() {
-    install(Some(child_home()), None, fakes::clock::FakeClock::new());
+    install(
+        Box::new(|| Ok(PathBuf::from(child_home()))),
+        no_restore,
+        fakes::clock::FakeClock::new(),
+    );
 }
 
 /// SIGABRT is 6 on unix: the hook always ends in `abort()`, whether or not
@@ -129,6 +137,42 @@ fn file_name_uses_the_session_id_or_the_process_id() {
 fn message_is_the_payload_or_box_dyn_any() {
     assert_eq!(message_of(|| panic!("boom")), "boom");
     assert_eq!(message_of(|| std::panic::panic_any(7_u32)), "Box<dyn Any>");
+}
+
+#[test]
+fn restore_runs_before_the_report_on_stderr() {
+    /// The child's `restore` for the ordering test: one marker line on
+    /// stderr, before the hook builds and writes the report.
+    fn mark_restored() {
+        std::io::stderr().write_all(b"restore-marker\n").unwrap();
+    }
+    if is_child("restore_first") {
+        install(
+            Box::new(|| Ok(PathBuf::from(child_home()))),
+            mark_restored,
+            fakes::clock::FakeClock::new(),
+        );
+        attach(&contract::SessionId("s_test".to_owned()));
+        panic!("boom");
+    }
+    let root = fakes::TempDir::new("fiber-crash");
+    let home = root.path().join("home");
+    let output = rerun(
+        "restore_runs_before_the_report_on_stderr",
+        "restore_first",
+        &home,
+    );
+    assert_aborted(&output);
+    // The terminal is restored first: the marker comes before the report.
+    let err = stderr_of(&output);
+    let marked = err.find("restore-marker\n").unwrap();
+    let reported = err.find("panicked at").unwrap();
+    assert!(marked < reported, "restore runs first: {err}");
+    // The report itself still lands in the crash file.
+    let path = home.join("crashes/s_test-1700000000000.txt");
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(contents.contains("boom"), "{contents}");
+    assert!(contents.contains("stack backtrace:"), "{contents}");
 }
 
 #[test]
@@ -207,7 +251,7 @@ fn a_panic_with_no_session_names_its_file_by_process_id() {
     let path = home.join(format!("crashes/{pid}-1700000000000.txt"));
     let contents = std::fs::read_to_string(&path).unwrap();
     assert!(
-        contents.contains("panicked at crates/main/src/crash_tests.rs:"),
+        contents.contains("panicked at crates/log/src/crash_tests.rs:"),
         "{contents}"
     );
     assert!(contents.contains("boom"), "{contents}");
@@ -292,12 +336,14 @@ fn a_panic_with_crashes_blocked_writes_no_file_and_aborts() {
 }
 
 #[test]
-fn a_panic_with_a_relative_home_writes_no_file_and_aborts() {
-    if is_child("relative") {
-        // `config::fiber_home` refuses a relative `FIBER_HOME`.
+fn a_panic_with_a_failing_resolver_writes_no_file_and_aborts() {
+    if is_child("resolver") {
+        // The resolver refuses, as `config::fiber_home` refuses a
+        // relative `FIBER_HOME`: the hook writes no file, whatever the
+        // reason.
         install(
-            Some("fiber-crash-relative-home".into()),
-            None,
+            Box::new(|| Err("FIBER_HOME must be an absolute path.".to_owned())),
+            no_restore,
             fakes::clock::FakeClock::new(),
         );
         let unnamed = std::thread::spawn(|| {
@@ -310,8 +356,8 @@ fn a_panic_with_a_relative_home_writes_no_file_and_aborts() {
     }
     let root = fakes::TempDir::new("fiber-crash");
     let output = rerun(
-        "a_panic_with_a_relative_home_writes_no_file_and_aborts",
-        "relative",
+        "a_panic_with_a_failing_resolver_writes_no_file_and_aborts",
+        "resolver",
         root.path(),
     );
     assert_aborted(&output);
@@ -319,7 +365,10 @@ fn a_panic_with_a_relative_home_writes_no_file_and_aborts() {
     assert!(err.contains("thread '<unnamed>' panicked at"), "{err}");
     assert!(err.contains("boom"), "{err}");
     assert!(err.contains("fiber: no crash report was written:"), "{err}");
-    assert!(!Path::new("fiber-crash-relative-home").exists());
+    assert!(
+        err.contains("FIBER_HOME must be an absolute path."),
+        "{err}"
+    );
 }
 
 #[test]
