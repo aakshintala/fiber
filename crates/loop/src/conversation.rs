@@ -9,7 +9,7 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
-    InstructionSent, Outcome, ShellCommand, ToolCallCompleted, ToolCallRequested,
+    InstructionSent, Outcome, ShellCommand, SkillLoad, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input, PdfRef};
 use contract::shapes::ContentPart;
@@ -124,7 +124,7 @@ fn rebuild_with_cut(
             if index >= cut {
                 if let Event::HandoffCompleted(done) = &mut event {
                     done.outcome = Outcome::Failed;
-                } else if matches!(event, Event::OpeningMessage(_)) {
+                } else if matches!(event, Event::OpeningMessage(_) | Event::SkillsResent(_)) {
                     continue;
                 }
             }
@@ -585,7 +585,23 @@ pub(crate) fn render(
         // first message (`docs/system-prompt.md`, "Recording").
         // It sits at index 0 of the context it opens: after a handoff the
         // carried input and the note are already there.
+        // The skills the handoff armed are sent by their own event, before
+        // this opening: the opening clears any arming the event did not
+        // take, so nothing is sent twice.
+        Event::SkillsResent(resent) => {
+            carry.resend.clear();
+            for sent in &resent.skills {
+                conversation.push(Input::User {
+                    text: format!("{}\n\n{}", sent.path, sent.content),
+                 images: Vec::new(),});
+                carry.loaded(SkillLoad {
+                    name: sent.name.clone(),
+                    path: sent.path.clone(),
+                });
+            }
+        }
         Event::OpeningMessage(message) => {
+            carry.resend.clear();
             conversation.insert(
                 0,
                 Input::User {
@@ -714,7 +730,6 @@ pub(crate) fn render(
         | Event::Notice(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
-        | Event::SkillsResent(_)
         | Event::ReviewerKept(_)
         | Event::McpServerFailed(_)
         | Event::McpServerReady(_)
@@ -738,7 +753,7 @@ pub(crate) fn render(
 
 /// Records inner requests before filtering their later lines. Unknown
 /// completions still render: a resume window can begin after a request.
-fn inner_action(event: &Event, action: Option<&ActionId>, carry: &mut Carry) -> bool {
+pub(crate) fn inner_action(event: &Event, action: Option<&ActionId>, carry: &mut Carry) -> bool {
     if let Event::ToolCallRequested(call) = event
         && call.ran_by.is_some()
     {
@@ -747,7 +762,7 @@ fn inner_action(event: &Event, action: Option<&ActionId>, carry: &mut Carry) -> 
         }
         return true;
     }
-    action.is_some_and(|action| carry.inner.contains(action))
+    action.is_some_and(|action| carry.is_inner(action))
 }
 
 /// The tool result `completed` renders for `action`.
@@ -761,14 +776,28 @@ fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
     }
 }
 
+/// What counts as a load: a call Fiber ran to completion, whichever tool
+/// wrote it (`docs/tools.md`, "What a result carries"). A failed, denied
+/// or cancelled call's `control` is ignored, and a provider-run record
+/// never counts: the live path renders it as a raw block and ignores its
+/// `control`.
+pub(crate) fn admitted(
+    status: CallStatus,
+    provider_run: bool,
+    control: Option<&Control>,
+) -> Option<&Control> {
+    (!provider_run && status == CallStatus::Completed).then_some(control)?
+}
+
 /// A completed call's `control`; a failed or denied call's is ignored. The
 /// loop acts on the fields, never on the tool that set them (`docs/tools.md`,
 /// "What a result carries").
 fn controlled(completed: &ToolCallCompleted) -> Option<&Control> {
-    completed
-        .control
-        .as_ref()
-        .filter(|_| completed.status == CallStatus::Completed)
+    admitted(
+        completed.status,
+        completed.provider_item.is_some(),
+        completed.control.as_ref(),
+    )
 }
 
 /// What an `instruction_file` line appends to the conversation, if
