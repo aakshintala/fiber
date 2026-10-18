@@ -68,6 +68,25 @@ fn tint(grid: &Grid, name: &str) -> Colour {
         .bg
 }
 
+/// The header row of the second project ("v", the sibling workspace):
+/// the group name is the workspace's last segment, so its header starts
+/// with `"  v +"`.
+fn plus_row(grid: &Grid) -> usize {
+    grid.rows
+        .iter()
+        .position(|row| row.starts_with("  v +"))
+        .unwrap_or_else(|| panic!("a second project header:\n{}", grid.contents))
+}
+
+/// The bg of the "+" cell on the second project's header row: focus
+/// lifts that one cell, so its bg tells the "+" stop from a card.
+fn plus_bg(grid: &Grid) -> Colour {
+    let row = plus_row(grid);
+    let found = grid.rows[row].chars().position(|cell| cell == '+').unwrap();
+    grid.cell(u16::try_from(found).unwrap(), u16::try_from(row).unwrap())
+        .bg
+}
+
 /// Whether the rail draws: a row starts with its project header.
 fn rail_drawn(grid: &Grid) -> bool {
     grid.rows.iter().any(|row| row.starts_with(RAIL_HEADER))
@@ -167,10 +186,21 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
 
     // ← focuses the on-screen card: the hint shows and its bg lifts.
     run.write(b"\x1b[D");
-    run.wait_screen("the hint and the lifted first card", |grid| {
+    let grid = run.wait_screen("the hint and the lifted first card", |grid| {
         grid.contents.contains(HINT_MIDDLE)
             && tint(grid, "first live") == lifted(&raised)
             && tint(grid, "second live") == flat
+    });
+    let plus_flat = plus_bg(&grid);
+
+    // ↓ moves the lift to the next group's "+" stop: the hint stays,
+    // neither card lifts, and the "+" cell lifts.
+    run.write(b"\x1b[B");
+    run.wait_screen("the lifted second plus", |grid| {
+        grid.contents.contains(HINT_MIDDLE)
+            && tint(grid, "first live") == raised
+            && tint(grid, "second live") == flat
+              && plus_bg(grid) != plus_flat
     });
 
     // ↓ moves the lift to the second card.
