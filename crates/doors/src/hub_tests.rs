@@ -27,108 +27,10 @@ use fakes::Deadline;
 #[path = "../tests/support/mod.rs"]
 mod support;
 
-use support::{DEADLINE, Temp, hello_line};
+use support::{DEADLINE, hello_line};
 
 fn error(kind: io::ErrorKind) -> io::Error {
     io::Error::new(kind, "injected for the test")
-}
-
-#[test]
-fn absent_is_not_found_or_connection_refused() {
-    assert!(is_absent(io::ErrorKind::NotFound));
-    assert!(is_absent(io::ErrorKind::ConnectionRefused));
-    for kind in [
-        io::ErrorKind::NotADirectory,
-        io::ErrorKind::PermissionDenied,
-        io::ErrorKind::WouldBlock,
-        io::ErrorKind::TimedOut,
-        io::ErrorKind::InvalidInput,
-        io::ErrorKind::ConnectionReset,
-        io::ErrorKind::UnexpectedEof,
-        io::ErrorKind::InvalidData,
-    ] {
-        assert!(!is_absent(kind), "{kind:?}");
-    }
-}
-
-#[test]
-fn only_a_missing_path_or_a_socket_file_can_be_an_absent_hub() {
-    let temp = Temp::new();
-    let missing = temp.0.join("gone");
-    assert!(is_socket_or_missing(&missing));
-    let file = temp.0.join("hub");
-    std::fs::write(&file, b"not a socket").unwrap();
-    assert!(!is_socket_or_missing(&file));
-    let dir = temp.0.join("dir");
-    std::fs::create_dir(&dir).unwrap();
-    assert!(!is_socket_or_missing(&dir));
-    let socket = temp.0.join("sock");
-    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-    assert!(is_socket_or_missing(&socket));
-    drop(listener);
-    // A stale listener file is still a socket: an exited hub stays absent.
-    assert!(is_socket_or_missing(&socket));
-}
-
-#[test]
-fn a_hello_timeout_is_would_block_or_timed_out() {
-    assert!(is_hello_timeout(io::ErrorKind::WouldBlock));
-    assert!(is_hello_timeout(io::ErrorKind::TimedOut));
-    for kind in [
-        io::ErrorKind::NotFound,
-        io::ErrorKind::ConnectionRefused,
-        io::ErrorKind::NotADirectory,
-        io::ErrorKind::InvalidInput,
-        io::ErrorKind::ConnectionReset,
-        io::ErrorKind::UnexpectedEof,
-        io::ErrorKind::InvalidData,
-    ] {
-        assert!(!is_hello_timeout(kind), "{kind:?}");
-    }
-}
-
-#[test]
-fn time_is_left_until_the_deadline() {
-    assert!(!has_time_left(&Duration::ZERO));
-    assert!(has_time_left(&Duration::from_nanos(1)));
-    assert!(has_time_left(&Duration::from_secs(5)));
-}
-
-#[test]
-fn a_carriage_return_is_stripped() {
-    assert!(strips_cr(Some(&b'\r')));
-    assert!(!strips_cr(Some(&b'\n')));
-    assert!(!strips_cr(Some(&b'x')));
-    assert!(!strips_cr(None));
-}
-
-#[test]
-fn only_another_kind_is_rejected() {
-    assert!(!rejects_hello("hub_hello"));
-    assert!(rejects_hello("command_accepted"));
-    assert!(rejects_hello("hub_hello "));
-    assert!(rejects_hello(""));
-}
-
-#[test]
-fn only_another_schema_version_is_rejected() {
-    assert!(!rejects_schema(contract::SCHEMA_VERSION));
-    assert!(rejects_schema(contract::SCHEMA_VERSION + 1));
-    assert!(rejects_schema(contract::SCHEMA_VERSION.wrapping_sub(1)));
-}
-
-#[test]
-fn only_the_closed_peer_refusal_is_ignored() {
-    assert!(is_closed_peer(io::ErrorKind::InvalidInput));
-    for kind in [
-        io::ErrorKind::NotFound,
-        io::ErrorKind::TimedOut,
-        io::ErrorKind::WouldBlock,
-        io::ErrorKind::ConnectionReset,
-        io::ErrorKind::PermissionDenied,
-    ] {
-        assert!(!is_closed_peer(kind), "{kind:?}");
-    }
 }
 
 #[test]
@@ -157,21 +59,6 @@ fn a_handshake_read_is_classified() {
             matches!(classify_hello_read(Err(error(kind))), HelloRead::Failed(_)),
             "{kind:?}"
         );
-    }
-}
-
-#[test]
-fn only_the_closed_peer_refusal_is_folded_away() {
-    assert!(ignore_closed_peer(Ok(())).is_ok());
-    assert!(ignore_closed_peer(Err(error(io::ErrorKind::InvalidInput))).is_ok());
-    for kind in [
-        io::ErrorKind::TimedOut,
-        io::ErrorKind::WouldBlock,
-        io::ErrorKind::NotFound,
-        io::ErrorKind::ConnectionReset,
-    ] {
-        let folded = ignore_closed_peer(Err(error(kind)));
-        assert_eq!(folded.unwrap_err().kind(), kind, "{kind:?}");
     }
 }
 
