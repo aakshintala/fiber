@@ -682,7 +682,7 @@ fn history(
             let end = args.to_seq.map_or(count - 1, |to| to.0.min(count - 1));
             let back = u64::try_from(HISTORY - 1).map_or(end, |back| back.min(end));
             let start = end - back;
-            let max = usize::try_from(end - start + 1).map_or(HISTORY, |span| span.min(HISTORY));
+            let max = usize::try_from(back).map_or(HISTORY, |back| back + 1);
             (start, max, end)
         }
     };
