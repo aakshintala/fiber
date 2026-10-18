@@ -213,9 +213,7 @@ fn a_send_leaves_clients_and_the_status_count_unchanged() {
             support::send(&full, r#"{"id":"c_probe","command":"nope"}"#);
             let probed = support::until(&full, |line| support::command_id(line) == Some("c_probe"));
             assert!(
-                probed
-                    .iter()
-                    .all(|line| support::kind(line) != "clients"),
+                probed.iter().all(|line| support::kind(line) != "clients"),
                 "the send emits no clients line: {probed:?}"
             );
             delivered(&answered);

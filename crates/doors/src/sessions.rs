@@ -305,14 +305,18 @@ impl Sessions for SessionSockets {
             path: path.clone(),
             message: e.to_string(),
         })?;
-        wake_read.set_nonblocking(true).map_err(|e| MessageError::Io {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
-        wake_write.set_nonblocking(true).map_err(|e| MessageError::Io {
-            path: path.clone(),
-            message: e.to_string(),
-        })?;
+        wake_read
+            .set_nonblocking(true)
+            .map_err(|e| MessageError::Io {
+                path: path.clone(),
+                message: e.to_string(),
+            })?;
+        wake_write
+            .set_nonblocking(true)
+            .map_err(|e| MessageError::Io {
+                path: path.clone(),
+                message: e.to_string(),
+            })?;
         let waker: Arc<dyn Wake> = Arc::new(Waker(wake_write));
         self.clock.subscribe(Arc::downgrade(&waker));
         cancel.subscribe(Arc::downgrade(&waker));

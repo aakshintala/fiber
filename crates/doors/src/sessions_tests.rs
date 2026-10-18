@@ -769,12 +769,7 @@ fn send_message(
     let (tx, rx) = mpsc::channel();
     let (to, from) = (to.to_owned(), from.to_owned());
     thread::spawn(move || {
-        let result = client.message(
-            &SessionId(to),
-            &SessionId(from),
-            &text,
-            cancel.as_ref(),
-        );
+        let result = client.message(&SessionId(to), &SessionId(from), &text, cancel.as_ref());
         tx.send(result).unwrap();
     });
     rx
@@ -822,7 +817,10 @@ fn read_exchange(stream: &UnixStream) -> (Exchange, BufReader<UnixStream>) {
     assert!(sub.starts_with("c_"), "subscribe id mints c_: {sub}");
     assert!(msg.starts_with("c_"), "message id mints c_: {msg}");
     assert_ne!(sub, msg, "each command uses a fresh id");
-    let from = second["args"]["from_session_id"].as_str().unwrap().to_owned();
+    let from = second["args"]["from_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let text = second["args"]["text"].as_str().unwrap().to_owned();
     assert_eq!(from, FROM);
     (Exchange { sub, msg, text }, reader)
@@ -850,13 +848,15 @@ fn message_delivers_past_noise_and_closes_at_once() {
     assert_eq!(exchange.text, "the parser is fixed");
     writeln!(stream, "{}", accepted(&exchange.sub)).unwrap();
     writeln!(stream, "{}", summary(&status("ready"))).unwrap();
-    writeln!(stream, "{}", serde_json::json!({"kind":"extensions_loaded", "payload":{}})).unwrap();
+    writeln!(
+        stream,
+        "{}",
+        serde_json::json!({"kind":"extensions_loaded", "payload":{}})
+    )
+    .unwrap();
     writeln!(stream, "not JSON").unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
-    assert_eq!(
-        deadline.recv_or_fail(&result, "message delivered"),
-        Ok(())
-    );
+    assert_eq!(deadline.recv_or_fail(&result, "message delivered"), Ok(()));
     assert_closed(&stream, &deadline);
 }
 
@@ -879,7 +879,10 @@ fn message_rejections_pass_through_unchanged() {
         let answer = deadline.recv_or_fail(&result, "rejection passes through");
         match answer {
             Err(MessageError::Rejected(failure)) => {
-                assert_eq!(failure.code, serde_json::from_value::<contract::ErrorCode>(serde_json::json!(code)).unwrap());
+                assert_eq!(
+                    failure.code,
+                    serde_json::from_value::<contract::ErrorCode>(serde_json::json!(code)).unwrap()
+                );
                 assert_eq!(failure.message, message);
             }
             other => panic!("a {code} rejection passes through unchanged: {other:?}"),
@@ -899,12 +902,14 @@ fn a_rejected_subscribe_then_an_accepted_message_is_delivered() {
     // The parent-bound socket of a delegate on another harness accepts only
     // `message`, so a subscribe rejection before the message answer is
     // skipped, not reported.
-    writeln!(stream, "{}", rejected(&exchange.sub, "not_subscribed", "summary only")).unwrap();
+    writeln!(
+        stream,
+        "{}",
+        rejected(&exchange.sub, "not_subscribed", "summary only")
+    )
+    .unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
-    assert_eq!(
-        deadline.recv_or_fail(&result, "message delivered"),
-        Ok(())
-    );
+    assert_eq!(deadline.recv_or_fail(&result, "message delivered"), Ok(()));
     assert_closed(&stream, &deadline);
 }
 
@@ -1079,10 +1084,7 @@ fn a_mibibyte_of_text_arrives_whole() {
     let msg = second["id"].as_str().unwrap().to_owned();
     let mut stream = stream;
     writeln!(stream, "{}", accepted(&msg)).unwrap();
-    assert_eq!(
-        deadline.recv_or_fail(&result, "mebibyte delivered"),
-        Ok(())
-    );
+    assert_eq!(deadline.recv_or_fail(&result, "mebibyte delivered"), Ok(()));
     assert_closed(&stream, &deadline);
 }
 
@@ -1139,10 +1141,7 @@ fn the_sender_checks_no_schema_version() {
     ack["schema_version"] = serde_json::json!(contract::SCHEMA_VERSION + 1);
     writeln!(stream, "{ack}").unwrap();
     writeln!(stream, "{}", accepted(&exchange.msg)).unwrap();
-    assert_eq!(
-        deadline.recv_or_fail(&result, "version unchecked"),
-        Ok(())
-    );
+    assert_eq!(deadline.recv_or_fail(&result, "version unchecked"), Ok(()));
     assert_closed(&stream, &deadline);
 }
 

@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use crate::SessionId;
-use crate::shapes::Failure;
 use crate::events::SessionStatus;
+use crate::shapes::Failure;
 use crate::tool::Cancel;
 
 /// A running session whose socket accepted a connection.
