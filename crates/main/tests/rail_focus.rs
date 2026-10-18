@@ -200,7 +200,7 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
         grid.contents.contains(HINT_MIDDLE)
             && tint(grid, "first live") == raised
             && tint(grid, "second live") == flat
-              && plus_bg(grid) != plus_flat
+            && plus_bg(grid) != plus_flat
     });
 
     // ↓ moves the lift to the second card.
