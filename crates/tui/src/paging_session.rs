@@ -102,7 +102,11 @@ impl Log {
                 Some(&message),
                 &serde_json::json!({"outcome": "completed"}),
             );
-            self.line("tool_call_started", Some(&call), &empty);
+            self.line(
+                "tool_call_started",
+                Some(&call),
+                &serde_json::json!({"effects": [], "reversible": false}),
+            );
             self.line(
                 "tool_call_completed",
                 Some(&call),
@@ -128,7 +132,7 @@ pub fn paging_session(scale: usize) -> String {
     log.line(
         "session_started",
         None,
-        &serde_json::json!({"workspace": "~/work/fiber"}),
+        &serde_json::json!({"workspace": "~/work/fiber", "variables": {"path": "/usr/bin:/bin", "names": [], "source": "inherited"}}),
     );
     log.line(
         "fiber_started",
@@ -188,10 +192,14 @@ pub fn paging_session(scale: usize) -> String {
             log.line(
                 "usage_recorded",
                 Some(&message),
-                &serde_json::json!({"input_tokens": 1200, "output_tokens": 300}),
+                &serde_json::json!({"generation_id": "fiber-paging-0001", "model": "test/paging-model", "tokens": {"input": 1200, "cache_read": 0, "cache_write": {}, "output": 300}, "input_bytes": 4096, "cost": null}),
             );
             for (call, id) in ids.iter().enumerate() {
-                log.line("tool_call_started", Some(id), &empty);
+                log.line(
+                    "tool_call_started",
+                    Some(id),
+                    &serde_json::json!({"effects": [], "reversible": false}),
+                );
                 let output = words(
                     OUTPUT
                         .get((step + call) % OUTPUT.len())
