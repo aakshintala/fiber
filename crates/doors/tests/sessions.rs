@@ -120,3 +120,183 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
         Deadline::after(fakes::deadline::WAITS).recv_or_fail(&finished, "session closed");
     }
 }
+
+use contract::ErrorCode;
+use contract::inbox::Delivery;
+use fakes::Client;
+use std::sync::mpsc::Receiver;
+
+fn served() -> support::Opened {
+    support::Opened::open(vec![])
+}
+
+fn message_on(
+    home: &std::path::Path,
+    clock: &Arc<FakeClock>,
+    to: &contract::SessionId,
+    from: &contract::SessionId,
+    text: &str,
+) -> Receiver<Result<(), contract::sessions::MessageError>> {
+    let client = SessionSockets::new(home, clock.clone());
+    let (to, from, text) = (to.clone(), from.clone(), text.to_owned());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(client.message(&to, &from, &text, &CancelToken::new()))
+            .unwrap();
+    });
+    rx
+}
+
+fn delivered(rx: &Receiver<Result<(), contract::sessions::MessageError>>) {
+    Deadline::after(fakes::deadline::WAITS)
+        .recv(rx)
+        .expect("the message answered")
+        .expect("the message delivered");
+}
+
+#[test]
+fn a_served_session_takes_the_message_into_its_inbox() {
+    let opened = served();
+    let from = contract::SessionId(mint("s_"));
+    let answered = message_on(
+        &opened.home,
+        &opened.clock,
+        &opened.id,
+        &from,
+        "the parser is fixed",
+    );
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let Delivery::Message(message) = Deadline::after(fakes::deadline::WAITS)
+                .recv(&inbox)
+                .expect("the message is delivered")
+            else {
+                panic!("a session message is delivered");
+            };
+            assert_eq!(message.from_session_id, from);
+            assert_eq!(message.text, "the parser is fixed");
+            delivered(&answered);
+            Ok(())
+        })
+        .unwrap();
+    support::close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_send_leaves_clients_and_the_status_count_unchanged() {
+    let opened = served();
+    let socket = opened.socket.clone();
+    let from = contract::SessionId(mint("s_"));
+    let target = opened.id.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let full = Client::connect(&socket).unwrap();
+            support::subscribe(&full, "c_full", "full");
+            // One full connection: the first `clients` line says 1.
+            let attached = support::until(&full, |line| support::kind(line) == "clients");
+            assert!(
+                attached.iter().any(|line| line["payload"]["count"] == 1),
+                "one full connection counts: {attached:?}"
+            );
+            let answered = message_on(
+                &opened.home,
+                &opened.clock,
+                &target,
+                &from,
+                "the parser is fixed",
+            );
+            // A probe command's answer bounds the wait: nothing between the
+            // send and the answer is a `clients` line, so the send is never
+            // counted in `clients`, and the last status still says 1.
+            support::send(&full, r#"{"id":"c_probe","command":"nope"}"#);
+            let probed = support::until(&full, |line| support::command_id(line) == Some("c_probe"));
+            assert!(
+                probed
+                    .iter()
+                    .all(|line| support::kind(line) != "clients"),
+                "the send emits no clients line: {probed:?}"
+            );
+            delivered(&answered);
+            // The inbox holds the message; the loop is this closure, so it
+            // is taken and dropped here.
+            let Delivery::Message(_) = Deadline::after(fakes::deadline::WAITS)
+                .recv(&inbox)
+                .expect("the message is delivered")
+            else {
+                panic!("a session message is delivered");
+            };
+            Ok(())
+        })
+        .unwrap();
+    support::close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_send_after_close_is_rejected_closing() {
+    let opened = served();
+    let socket = opened.socket.clone();
+    let from = contract::SessionId(mint("s_"));
+    let target = opened.id.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let closer = Client::connect(&socket).unwrap();
+            support::subscribe(&closer, "c_sum", "summary");
+            support::send(&closer, r#"{"id":"c_close","command":"close"}"#);
+            // The close is answered only once the inbox takes it, so the
+            // take proves `mark_closed` ran before the send below.
+            let Delivery::Close(_) = Deadline::after(fakes::deadline::WAITS)
+                .recv(&inbox)
+                .expect("the close is delivered")
+            else {
+                panic!("a close is delivered");
+            };
+            let answered = message_on(&opened.home, &opened.clock, &target, &from, "too late");
+            match Deadline::after(fakes::deadline::WAITS)
+                .recv(&answered)
+                .expect("the send answered")
+            {
+                Err(contract::sessions::MessageError::Rejected(failure)) => {
+                    assert_eq!(failure.code, ErrorCode::Closing);
+                    assert_eq!(
+                        failure.message,
+                        "The session is closing and takes no session message."
+                    );
+                }
+                other => panic!("a send after close is rejected closing: {other:?}"),
+            }
+            Ok(())
+        })
+        .unwrap();
+    support::close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_fiber_ask_session_is_closing_from_its_start() {
+    let opened = served();
+    let from = contract::SessionId(mint("s_"));
+    let target = opened.id.clone();
+    opened
+        .session
+        .ask("hi".to_owned(), Arc::new(|| false), |_inbox| {
+            let answered = message_on(&opened.home, &opened.clock, &target, &from, "too late");
+            match Deadline::after(fakes::deadline::WAITS)
+                .recv(&answered)
+                .expect("the send answered")
+            {
+                Err(contract::sessions::MessageError::Rejected(failure)) => {
+                    assert_eq!(failure.code, ErrorCode::Closing);
+                    assert_eq!(
+                        failure.message,
+                        "The session is closing and takes no session message."
+                    );
+                }
+                other => panic!("a send to a fiber ask target is rejected closing: {other:?}"),
+            }
+            Ok(())
+        })
+        .unwrap();
+    support::close_within(opened.session, opened.log);
+}

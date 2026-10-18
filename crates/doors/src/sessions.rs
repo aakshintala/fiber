@@ -1,6 +1,8 @@
-//! Running-session discovery over summary subscriptions (`docs/tools.md`,
-//! "Messaging other sessions"). One poll loop owns every connection and
-//! closes it on an answer, cancellation or the shared deadline.
+//! Running-session discovery over summary subscriptions and one session
+//! message over a summary subscription (`docs/tools.md`, "Messaging other
+//! sessions"). One poll loop owns every connection and closes it on an
+//! answer, cancellation or the shared deadline; a message uses one
+//! connection closed straight after its answer.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -11,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
-use contract::sessions::{ListError, Running, Sessions};
+use contract::sessions::{ListError, MessageError, Running, Sessions};
 use contract::tool::Cancel;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use serde_json::Value;
@@ -247,6 +249,153 @@ impl Sessions for SessionSockets {
     fn list(&self, cancel: &dyn Cancel) -> Result<Vec<Running>, ListError> {
         let start = self.clock.now();
         self.list_until(start + LIST_DEADLINE.saturating_sub(CLEANUP_MARGIN), cancel)
+    }
+
+    fn message(
+        &self,
+        to: &SessionId,
+        from: &SessionId,
+        text: &str,
+        cancel: &dyn Cancel,
+    ) -> Result<(), MessageError> {
+        // The id is checked before any path is joined or socket opened;
+        // a failing id touches nothing and is unreachable.
+        if !valid_id(&to.0) {
+            return Err(MessageError::Unreachable);
+        }
+        if cancel.is_cancelled() {
+            return Err(MessageError::Cancelled);
+        }
+        let path = self.run.join(&to.0);
+        let fd = crate::hub::nonblocking_socket().map_err(|e| MessageError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        let Ok(address) = rustix::net::SocketAddrUnix::new(&path) else {
+            return Err(MessageError::Unreachable);
+        };
+        // A refused connect, a stale socket or a full backlog means no
+        // running session has this id; the socket is dropped here.
+        if rustix::net::connect(&fd, &address).is_err() {
+            return Err(MessageError::Unreachable);
+        }
+        let mut stream = UnixStream::from(fd);
+        let subscribe = crate::mint("c_");
+        let command = crate::mint("c_");
+        let mut out = Vec::new();
+        out.extend_from_slice(
+            &serde_json::to_vec(&serde_json::json!({
+                "id": subscribe,
+                "command": "subscribe",
+                "args": {"level": "summary"},
+            }))
+            .map_err(|_| MessageError::Unreachable)?,
+        );
+        out.push(b'\n');
+        out.extend_from_slice(
+            &serde_json::to_vec(&serde_json::json!({
+                "id": command,
+                "command": "message",
+                "args": {"from_session_id": &from.0, "text": text},
+            }))
+            .map_err(|_| MessageError::Unreachable)?,
+        );
+        out.push(b'\n');
+        let (mut wake_read, wake_write) = UnixStream::pair().map_err(|e| MessageError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        wake_read.set_nonblocking(true).map_err(|e| MessageError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        wake_write.set_nonblocking(true).map_err(|e| MessageError::Io {
+            path: path.clone(),
+            message: e.to_string(),
+        })?;
+        let waker: Arc<dyn Wake> = Arc::new(Waker(wake_write));
+        self.clock.subscribe(Arc::downgrade(&waker));
+        cancel.subscribe(Arc::downgrade(&waker));
+        let mut written = 0;
+        let mut buffer = Vec::new();
+        loop {
+            if cancel.is_cancelled() {
+                return Err(MessageError::Cancelled);
+            }
+            let mut fds = Vec::new();
+            {
+                let mut flags = PollFlags::IN.union(PollFlags::HUP).union(PollFlags::ERR);
+                if written < out.len() {
+                    flags = flags.union(PollFlags::OUT);
+                }
+                fds.push(PollFd::new(&stream, flags));
+            }
+            fds.push(PollFd::new(&wake_read, PollFlags::IN));
+            let mut poll_error: Option<io::Error> = None;
+            self.clock.wait_until(None, &mut |bound| {
+                let timeout = match bound.map(Timespec::try_from).transpose() {
+                    Ok(timeout) => timeout,
+                    Err(e) => {
+                        poll_error = Some(io::Error::other(e));
+                        return;
+                    }
+                };
+                if let Err(e) = poll(&mut fds, timeout.as_ref()) {
+                    poll_error = Some(io::Error::from(e));
+                }
+            });
+            if poll_error.is_some() {
+                return Err(MessageError::Unreachable);
+            }
+            let mut wake_bytes = [0; 256];
+            match wake_read.read(&mut wake_bytes) {
+                Ok(_) | Err(_) => {}
+            }
+            if cancel.is_cancelled() {
+                return Err(MessageError::Cancelled);
+            }
+            // The message line is written whole, polling for writability
+            // between partial writes, never one write_all that a full
+            // send buffer turns into WouldBlock.
+            while written < out.len() {
+                match stream.write(out.get(written..).unwrap_or_default()) {
+                    Ok(0) => return Err(MessageError::Unreachable),
+                    Ok(n) => written += n,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(_) => return Err(MessageError::Unreachable),
+                }
+            }
+            let mut chunk = [0; READ_CHUNK];
+            match stream.read(&mut chunk) {
+                Ok(0) => return Err(MessageError::Unreachable),
+                Ok(n) => buffer.extend_from_slice(chunk.get(..n).unwrap_or_default()),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(_) => return Err(MessageError::Unreachable),
+            }
+            // A line longer than MAX_LINE before the answer ends the
+            // connection as unreachable.
+            while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
+                if end > MAX_LINE {
+                    return Err(MessageError::Unreachable);
+                }
+                let line: Vec<_> = buffer.drain(..=end).collect();
+                let Ok(line) = serde_json::from_slice::<Value>(&line) else {
+                    continue;
+                };
+                // Only the answer to this call's own command matters: the
+                // subscribe ack and every status, extensions or other line
+                // before it are skipped, as is a rejection for another id.
+                if crate::attach::is_answer(&line, "command_accepted", &command) {
+                    return Ok(());
+                }
+                if crate::attach::is_answer(&line, "command_rejected", &command) {
+                    return Err(MessageError::Rejected(crate::attach::rejection(&line)));
+                }
+            }
+            if buffer.len() > MAX_LINE {
+                return Err(MessageError::Unreachable);
+            }
+        }
     }
 }
 
