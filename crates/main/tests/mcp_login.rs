@@ -21,14 +21,14 @@ use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, function_call, hello, is_status, read_kinds, spawn_watched, stream,
+    Deadline, KillGroup, StdoutRun, function_call, hello, read_kinds, spawn_watched, stream,
 };
 
 struct Setup {
@@ -153,53 +153,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        StdoutRun::new(output)
-    }
-}
-
-/// One finished run that keeps stdout's text: the login tests pin the text
-/// output, while the ask tests read parsed lines. Shared behaviour
-/// (`kinds`, `first`) comes from the inner run; the [`Debug`] impl keeps
-/// failure output.
-struct StdoutRun {
-    run: support::Run,
-    stdout: String,
-}
-
-impl std::ops::Deref for StdoutRun {
-    type Target = support::Run;
-
-    fn deref(&self) -> &Self::Target {
-        &self.run
-    }
-}
-
-impl std::fmt::Debug for StdoutRun {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StdoutRun")
-            .field("code", &self.code)
-            .field("stdout", &self.stdout)
-            .field("stderr", &self.stderr)
-            .field("lines", &self.lines)
-            .finish()
-    }
-}
-
-impl StdoutRun {
-    fn new(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        Self {
-            run: support::Run {
-                code: output.status.code(),
-                lines: stdout
-                    .lines()
-                    .filter(|l| !is_status(l))
-                    .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-                    .collect(),
-                stderr: String::from_utf8(output.stderr).unwrap(),
-            },
-            stdout,
-        }
+        StdoutRun::from(output)
     }
 }
 

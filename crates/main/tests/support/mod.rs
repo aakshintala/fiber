@@ -342,6 +342,7 @@ impl Setup {
 /// A finished `fiber` run whose stdout is one JSON line per line: every
 /// binary-level `ask` test reads the same shape, so the event kinds and
 /// the session id are shared here (`docs/testing.md`, "Levels").
+#[derive(Debug)]
 pub(crate) struct Run {
     pub(crate) code: Option<i32>,
     pub(crate) lines: Vec<Value>,
@@ -375,6 +376,44 @@ impl Run {
     }
 }
 
+/// A finished `fiber` run that keeps stdout's text alongside its parsed
+/// lines: every binary-level test that pins stdout text while reading
+/// parsed events shares this shape (`docs/testing.md`, "Levels").
+/// `session_status` lines are dropped; file-specific readers live in local
+/// `impl` blocks.
+#[derive(Debug)]
+pub(crate) struct StdoutRun {
+    pub(crate) run: Run,
+    pub(crate) stdout: String,
+}
+
+impl std::ops::Deref for StdoutRun {
+    type Target = Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<std::process::Output> for StdoutRun {
+    fn from(output: std::process::Output) -> Self {
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let lines = stdout
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+            .collect();
+        Self {
+            run: Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
+            stdout,
+        }
+    }
+}
+
 /// A finished `fiber` run with stdout and stderr as text: every
 /// binary-level text test reads the same shape, so the exit code and the
 /// two streams are shared here (`docs/testing.md`, "Levels").
@@ -396,7 +435,12 @@ impl From<std::process::Output> for Output {
 
 #[test]
 fn output_from_a_zero_exit_has_empty_text() {
-    let output = Output::from(Command::new("true").output().unwrap());
+    use std::os::unix::process::ExitStatusExt;
+    let output = Output::from(std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    });
     assert_eq!(output.code, Some(0));
     assert_eq!(output.stdout, "");
     assert_eq!(output.stderr, "");

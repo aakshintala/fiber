@@ -22,35 +22,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use fakes::ProviderServer;
-use serde_json::{Value, json};
-use support::{KillGroup, Setup, group_alive, hello, is_status, spawn_watched};
-
-/// One finished run that keeps stdout's text: the command tests pin the
-/// text output, while the ask test reads parsed lines. Shared behaviour
-/// comes from the inner run; the [`Debug`] impl keeps failure output.
-struct StdoutRun {
-    run: support::Run,
-    stdout: String,
-}
-
-impl std::ops::Deref for StdoutRun {
-    type Target = support::Run;
-
-    fn deref(&self) -> &Self::Target {
-        &self.run
-    }
-}
-
-impl std::fmt::Debug for StdoutRun {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StdoutRun")
-            .field("code", &self.code)
-            .field("stdout", &self.stdout)
-            .field("stderr", &self.stderr)
-            .field("lines", &self.lines)
-            .finish()
-    }
-}
+use serde_json::json;
+use support::{KillGroup, Setup, StdoutRun, group_alive, hello, spawn_watched};
 
 impl Setup {
     /// Runs `fiber` with `args` in `dir` under `home`, waits for it under
@@ -108,19 +81,7 @@ impl Setup {
         );
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        StdoutRun {
-            run: support::Run {
-                code: output.status.code(),
-                stderr: String::from_utf8(output.stderr).unwrap(),
-                lines: stdout
-                    .lines()
-                    .filter(|l| !is_status(l))
-                    .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-                    .collect(),
-            },
-            stdout,
-        }
+        StdoutRun::from(output)
     }
 
     /// Runs `fiber` with `args` in the workspace under this home.

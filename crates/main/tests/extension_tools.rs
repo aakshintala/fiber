@@ -18,52 +18,18 @@ mod support;
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::Output;
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{Setup, function_call, hello_single_delta as hello, on_disk, outputs_sent, stream};
+use support::{
+    Setup, StdoutRun, function_call, hello_single_delta as hello, on_disk, outputs_sent, stream,
+};
 
 /// One finished `fiber ask`: its exit code, its stdout lines parsed (less
 /// `session_status`, which an observer thread writes), its raw stdout and
 /// its stderr.
-/// One finished run that keeps stdout's text: the redaction tests scan it
-/// for leaked secrets, while the ask tests read parsed lines. Shared
-/// behaviour (`kinds`, `all`) comes from the inner run.
-struct StdoutRun {
-    run: support::Run,
-    stdout: String,
-}
-
-impl std::ops::Deref for StdoutRun {
-    type Target = support::Run;
-
-    fn deref(&self) -> &Self::Target {
-        &self.run
-    }
-}
-
-impl From<Output> for StdoutRun {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|line| !line.contains(r#""kind":"session_status""#))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            run: support::Run {
-                code: output.status.code(),
-                lines,
-                stderr: String::from_utf8(output.stderr).unwrap(),
-            },
-            stdout,
-        }
-    }
-}
-
 impl StdoutRun {
     fn payload(&self, kind: &str) -> &Value {
         &self

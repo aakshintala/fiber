@@ -470,7 +470,7 @@ fn approved_repository_start_times_connect_and_skipped_writes_none() {
         "srv/run.sh",
         &dir.display().to_string(),
     ]);
-    assert_eq!(add.code, Some(0), "stderr: {}", add.stderr);
+    assert_eq!(add.code, Some(0), "{add:?}");
     // The approved declaration starts with the session: timed.
     let provider = calling("mcp__db__echo");
     setup.provider(&provider);
@@ -495,9 +495,7 @@ fn approved_repository_start_times_connect_and_skipped_writes_none() {
                 .as_str()
                 .unwrap_or_default()
                 .contains("db")),
-        "the unapproved server is skipped: stderr: {}, lines: {:?}",
-        ask.stderr,
-        ask.lines
+        "the unapproved server is skipped: {ask:?}"
     );
     assert!(
         connects(&log_lines(&fresh)).is_empty(),

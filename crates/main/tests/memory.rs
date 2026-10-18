@@ -16,14 +16,14 @@ mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, Setup, function_call, hello, is_status, spawn_watched,
+    Deadline, HELLO_KINDS, KillGroup, Setup, StdoutRun, function_call, hello, spawn_watched,
     stream, write_json,
 };
 
@@ -144,43 +144,6 @@ impl Setup {
 fn write_text(file: &Path, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-/// One finished run that keeps stdout's text: the extension-list test pins
-/// `list`'s text, while the ask tests read parsed lines. Shared behaviour
-/// (`kinds`, `first`) comes from the inner run.
-// debt: runner-local StdoutRun (#1707 keeps it: shared behaviour lives in
-// support::Run, while only this file's extension-list test pins stdout text).
-struct StdoutRun {
-    run: support::Run,
-    stdout: String,
-}
-
-impl std::ops::Deref for StdoutRun {
-    type Target = support::Run;
-
-    fn deref(&self) -> &Self::Target {
-        &self.run
-    }
-}
-
-impl From<Output> for StdoutRun {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            run: support::Run {
-                code: output.status.code(),
-                lines,
-                stderr: String::from_utf8(output.stderr).unwrap(),
-            },
-            stdout,
-        }
-    }
 }
 
 /// Whether `extensions_loaded` lists the memory extension.

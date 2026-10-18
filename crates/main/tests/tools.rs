@@ -16,15 +16,15 @@ mod support;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, TOOL_NAMES, function_call, hello,
-    holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, StdoutRun, TOOL_NAMES, function_call,
+    hello, holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
 };
 
 impl Setup {
@@ -330,41 +330,6 @@ fn mkfifo(setup: &Setup, path: &Path) {
         .stderr(Stdio::piped());
     let made = support::run_to_exit(setup.deadline, "mkfifo", command);
     assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
-}
-
-/// One finished run that keeps stdout's text: the redaction tests scan it
-/// for leaked markers, while the ask tests read parsed lines. Shared
-/// behaviour (`kinds`, `session_id`) comes from the inner run.
-struct StdoutRun {
-    run: support::Run,
-    stdout: String,
-}
-
-impl std::ops::Deref for StdoutRun {
-    type Target = support::Run;
-
-    fn deref(&self) -> &Self::Target {
-        &self.run
-    }
-}
-
-impl From<Output> for StdoutRun {
-    fn from(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            run: support::Run {
-                code: output.status.code(),
-                lines,
-                stderr: String::from_utf8(output.stderr).unwrap(),
-            },
-            stdout,
-        }
-    }
 }
 
 impl StdoutRun {
