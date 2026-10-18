@@ -10,7 +10,7 @@ use contract::shapes::Failure;
 mod misc;
 mod session;
 
-pub(crate) use misc::{AskUserError, WebSearchError};
+pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
 
 /// Every way a built-in tool call fails. The root is the one type that
@@ -33,6 +33,9 @@ pub(crate) enum ToolError {
     /// The `ask_user` call or answer does not parse.
     #[error(transparent)]
     AskUser(#[from] AskUserError),
+    /// `skill` names no loadable skill.
+    #[error(transparent)]
+    Skill(#[from] SkillError),
     /// `web_search` has nothing to run or the backend failed.
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
@@ -48,6 +51,7 @@ impl ToolError {
             Self::SessionList(error) => error.code(),
             Self::SessionMessage(error) => error.code(),
             Self::AskUser(error) => error.code(),
+            Self::Skill(error) => error.code(),
             Self::WebSearch(error) => error.code(),
         }
     }

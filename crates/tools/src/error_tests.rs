@@ -3,7 +3,7 @@
 
 use contract::ErrorCode;
 
-use super::{ArgumentsError, AskUserError, FileError, ToolError, WebSearchError};
+use super::{ArgumentsError, AskUserError, FileError, SkillError, ToolError, WebSearchError};
 use crate::error::{SessionListError, SessionMessageError};
 
 #[test]
@@ -210,6 +210,81 @@ fn a_mismatched_answer_is_a_tool_error() {
     assert_eq!(error.to_string(), "The answer does not fit the form.");
     let root = ToolError::from(error);
     assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn an_unlisted_skill_names_the_listing() {
+    let error = SkillError::NotListed {
+        name: "nope".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "No skill named `nope` is in the skills listing, or it is switched off. \
+         Load a name from the listing."
+    );
+}
+
+#[test]
+fn an_unresolvable_skill_names_the_file() {
+    let error = SkillError::Unreadable {
+        file: std::path::PathBuf::from("/skills/nope/SKILL.md"),
+        error: "gone".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "Could not read skill /skills/nope/SKILL.md: gone."
+    );
+}
+
+#[test]
+fn a_non_utf8_skill_target_is_invalid() {
+    let error = SkillError::NotUtf8 {
+        name: "nope".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "Skill `nope` cannot be loaded: its path is not valid UTF-8."
+    );
+}
+
+#[test]
+fn a_moved_skill_names_nothing_read() {
+    let error = SkillError::PathChanged {
+        name: "nope".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::PathChanged);
+    assert_eq!(
+        error.to_string(),
+        "`nope`'s SKILL.md changed between the permission check and the read. Nothing was read."
+    );
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::PathChanged);
+}
+
+#[test]
+fn an_unreadable_skill_body_keeps_its_message() {
+    let error = SkillError::Io {
+        message: "disk gone".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "disk gone");
+}
+
+#[test]
+fn an_invalid_skill_header_names_the_listing() {
+    let error = SkillError::Invalid {
+        name: "nope".to_owned(),
+        listing: "/skills/nope/SKILL.md".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "Skill `nope` at /skills/nope/SKILL.md cannot be loaded: its header no longer \
+         parses, names another skill, or turns off model invocation."
+    );
 }
 
 #[derive(Debug, serde::Deserialize)]
