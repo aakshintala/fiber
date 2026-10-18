@@ -129,6 +129,9 @@ impl Peer {
             let bound = rustix::event::Timespec::try_from(deadline.left()).unwrap();
             rustix::event::poll(&mut fds, Some(&bound)).unwrap();
             let (mut stream, _) = listener.accept().unwrap();
+            // macOS inherits the listener's nonblocking mode; peer I/O must
+            // block up to its socket timeout, not fail before the client closes.
+            stream.set_nonblocking(false).unwrap();
             stream.set_read_timeout(Some(deadline.left())).unwrap();
             stream.set_write_timeout(Some(deadline.left())).unwrap();
             let mut line = String::new();
