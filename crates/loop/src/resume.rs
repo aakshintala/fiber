@@ -416,11 +416,10 @@ impl Loop {
         mut suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
         for delivery in self.inbox.try_iter() {
-            match delivery {
-                Delivery::ExtensionJob(started, delegate) => {
-                    self.record_extension_job(started, delegate)?;
-                }
-                delivery => self.deferred.push_back(delivery),
+            if let Delivery::ExtensionJob(started, delegate) = delivery {
+                self.record_extension_job(started, delegate)?;
+            } else {
+                self.deferred.push_back(delivery);
             }
         }
         // The repository's offer resolves before the first request. A
