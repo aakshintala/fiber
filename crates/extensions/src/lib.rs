@@ -88,7 +88,6 @@ pub use extension_tools::LuaTool;
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use host::Session;
-pub use host::exec::kill_every_group;
 pub use host::script::{ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
 pub use install::Provenance;
 pub use installed::{

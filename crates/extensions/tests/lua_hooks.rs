@@ -26,6 +26,7 @@ use extensions::{LuaExtension, SessionExtensions};
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
+use support::group;
 
 /// How long a test waits for a signal or an answer before failing. A hook
 /// that is stopped returns on the fake clock, so this fires only when one
@@ -1478,7 +1479,7 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
         .unwrap();
     assert!(pid > 1);
     let watchdog = fakes::Watchdog::group(pid);
-    extensions::kill_every_group();
+    group::kill_every_group();
     // The killed run ends the hook: its signal, not an error. The run
     // returns only once it has reaped the shell and seen the group empty,
     // so the probe below cannot meet an unreaped member.
