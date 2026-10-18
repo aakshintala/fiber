@@ -16,7 +16,9 @@ impl App {
     /// refusal shows on home. The first stage, one `summary` unless the
     /// connection already holds `summary`, goes out now; the `commands`
     /// line follows once that subscribe is accepted, so a refused open
-    /// sends nothing else and starts no second process; the `full`
+    /// sends nothing else and starts no second process. With no
+    /// first-stage subscribe no acceptance can refuse it, so its
+    /// `commands` line rides in the batch; the `full`
     /// raise follows the first frame. The raise's acknowledgement ends
     /// the gate. With `held` the screen keeps its rows for a reconnect:
     /// home is reset without clearing them, nothing is read, and the
@@ -49,8 +51,12 @@ impl App {
             ack = Some(id);
             lines.push(line);
         }
-        // No `commands` line rides in this batch: it goes out once the
-        // gated subscribe is accepted, never after a refusal.
+        // With a first-stage subscribe the `commands` line waits for its
+        // acceptance, never going out after a refusal; with none no
+        // acceptance can refuse it, so it rides in the batch.
+        if ack.is_none() {
+            lines.push(self.ask_commands(&session));
+        }
         if let Some(home) = self.home.as_mut() {
             home.subs.gate(session, ack, held);
         }

@@ -519,31 +519,15 @@ fn an_open_with_summary_expected_sends_no_subscribe() {
     let mut app = home_at(OpenAt::Home);
     let lines =
         commands(app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false));
-    assert!(
-        lines.is_empty(),
-        "no subscribe and no commands yet, got {lines:?}"
-    );
-    // The tail waits for the owed `commands` line: the open stays due.
-    assert!(app.tail_due().is_none());
-    // The due path sends `commands` first, once its subscribe is long
-    // accepted, and the raise follows on the next call.
-    let first = app.take_raise().unwrap_or_else(|| panic!("commands"));
-    let asked: Value = serde_json::from_str(&first).unwrap_or_else(|err| panic!("{first}: {err}"));
-    assert_eq!(asked["command"], "commands");
-    assert_eq!(asked["session_id"], "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    // The raise is due at once: the first frame releases it.
     let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
     let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(raise["args"], json!({"level": "full"}));
-    assert_ne!(asked["id"], raise["id"]);
     assert!(app.take_raise().is_none(), "one raise only");
-    // Leaving before the first frame drops the open: no owed `commands`
-    // goes out for a detached session.
-    let mut app = home_at(OpenAt::Home);
-    app.open_session(id("s_aaaaaaaaaaaaaaaa"), Some(Level::Summary), None, false);
-    app.leave();
-    assert!(app.take_raise().is_none());
 }
 
 /// The raise a frame releases, parsed from its line.

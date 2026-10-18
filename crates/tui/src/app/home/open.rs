@@ -59,16 +59,10 @@ impl Subscriptions {
     /// once. `held` keeps the screen's rows: the tail read is skipped
     /// and the raise goes out after the first frame draws, once the
     /// preview is up. Until the raise's acknowledgement the gate holds.
-    /// With no first-stage subscribe the `commands` line still owes its
-    /// send through `take_raise`, so `Due` starts with it pending.
     pub(super) fn gate(&mut self, session: SessionId, ack: Option<String>, held: bool) {
         self.opening = Some(match ack {
             Some(ack) => Opening::Summary { session, ack, held },
-            None => Opening::Due {
-                session,
-                held,
-                commands: true,
-            },
+            None => Opening::Due { session, held },
         });
     }
 
@@ -95,24 +89,18 @@ impl Subscriptions {
 
     /// Moves a due open to the tail read for the attached session: the
     /// read before the raise. A held open reads nothing and stays due;
-    /// an open whose `commands` line still owes its send through
-    /// `take_raise` stays due until that line goes out; an open whose
-    /// session is no longer attached drops. Some with the session to
-    /// read when the move happened.
+    /// an open whose session is no longer attached drops. Some with the
+    /// session to read when the move happened.
     pub(super) fn tail_due(&mut self, attached: Option<&SessionId>) -> Option<SessionId> {
-        let (session, held, commands) = match self.opening.as_ref() {
-            Some(Opening::Due {
-                session,
-                held,
-                commands,
-            }) => (session.clone(), *held, *commands),
+        let (session, held) = match self.opening.as_ref() {
+            Some(Opening::Due { session, held, .. }) => (session.clone(), *held),
             _ => return None,
         };
         if Some(&session) != attached {
             self.opening = None;
             return None;
         }
-        if held || commands {
+        if held {
             return None;
         }
         self.opening = Some(Opening::Reading {
@@ -147,14 +135,7 @@ enum Opening {
     },
     /// The first stage answered: the `full` raise goes out after the
     /// first frame draws, once the tail read installs the preview.
-    /// `commands` is whether the `commands` line still owes its send
-    /// through `take_raise`: set when no first-stage subscribe went out,
-    /// cleared once that line goes out.
-    Due {
-        session: SessionId,
-        held: bool,
-        commands: bool,
-    },
+    Due { session: SessionId, held: bool },
     /// The tail read in flight: the raise goes once it installs.
     Reading { session: SessionId },
     /// The `full` raise in flight.
@@ -417,11 +398,7 @@ impl App {
                     Some(Some(Opening::Summary { session, held, .. })) => {
                         let line = self.ask_commands(&session);
                         if let Some(home) = self.home.as_mut() {
-                            home.subs.opening = Some(Opening::Due {
-                                session,
-                                held,
-                                commands: false,
-                            });
+                            home.subs.opening = Some(Opening::Due { session, held });
                         }
                         return Some(vec![line]);
                     }
@@ -442,46 +419,13 @@ impl App {
 
     /// The `full` raise due after the first frame drew: one `full`
     /// subscribe for the opening session, written after `draw` returns
-    /// so no `full` line goes out before the first frame. When the open
-    /// went out with no first-stage subscribe the `commands` line still
-    /// owes its send, so the first call sends it and the raise follows
-    /// on the next call, once the subscribe it waits on is long
-    /// accepted. The raise goes when the open is due with no read
-    /// started, due for a held screen, or reading with the tail
-    /// installed; a read open raises over the installed preview. When
-    /// the attached session is not the opening one the open was left,
-    /// so it drops and nothing goes out. Else `None`: no raise is due.
+    /// so no `full` line goes out before the first frame. The raise goes
+    /// when the open is due with no read started, due for a held screen,
+    /// or reading with the tail installed; a read open raises over the
+    /// installed preview. When the attached session is not the opening
+    /// one the open was left, so it drops and nothing goes out. Else
+    /// `None`: no raise is due.
     pub(crate) fn take_raise(&mut self) -> Option<String> {
-        let owed = self.home.as_ref().and_then(|home| {
-            home.subs
-                .opening
-                .as_ref()
-                .and_then(|opening| match opening {
-                    Opening::Due {
-                        session,
-                        commands: true,
-                        ..
-                    } => Some(session.clone()),
-                    Opening::Summary { .. }
-                    | Opening::Due { .. }
-                    | Opening::Reading { .. }
-                    | Opening::Raised { .. } => None,
-                })
-        });
-        if let Some(session) = owed {
-            if self.session() != Some(&session) {
-                if let Some(home) = self.home.as_mut() {
-                    home.subs.opening = None;
-                }
-                return None;
-            }
-            if let Some(home) = self.home.as_mut()
-                && let Some(Opening::Due { commands, .. }) = home.subs.opening.as_mut()
-            {
-                *commands = false;
-            }
-            return Some(self.ask_commands(&session));
-        }
         let opening = self
             .home
             .as_ref()
