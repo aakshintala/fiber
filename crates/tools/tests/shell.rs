@@ -2551,3 +2551,139 @@ fn a_relative_artifacts_directory_spills_under_its_absolute_form() {
     assert!(kept.path.is_absolute());
     assert!(kept.path.starts_with(owned.path()));
 }
+
+fn configured_shell(dir: &Path, entries: Vec<(String, Vec<String>)>) -> Shell {
+    Shell::new(dir.to_path_buf(), FakeClock::new()).with_read_only(Arc::new(Mutex::new(entries)))
+}
+
+fn effects_of(shell: &Shell, command: &str) -> contract::tool::Effects {
+    shell.effects(&args(command)).expect("effects")
+}
+
+fn jq_r() -> Vec<(String, Vec<String>)> {
+    vec![("jq".to_owned(), vec!["-r".to_owned()])]
+}
+
+#[test]
+fn a_shell_with_a_read_only_entry_reads_a_listed_command() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = configured_shell(&workspace, jq_r());
+    let effects = effects_of(&shell, "jq -r . f");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+    assert!(effects.declared.reversible);
+    assert_eq!(
+        effects.declared.paths,
+        Some(vec![
+            workspace.join(".").to_str().unwrap().to_owned(),
+            workspace.join("f").to_str().unwrap().to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn a_plain_shell_executes_what_a_configured_shell_reads() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-default");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let plain = Shell::new(workspace.clone(), FakeClock::new());
+    let effects = effects_of(&plain, "jq -r . f");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+    assert!(!effects.declared.reversible);
+    assert!(effects.declared.paths.is_none());
+    // An unlisted flag executes on the configured instance too.
+    let configured = configured_shell(&workspace, jq_r());
+    let effects = effects_of(&configured, "jq -c . f");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+    assert!(effects.declared.paths.is_none());
+}
+
+#[test]
+fn one_shells_list_does_not_leak_into_another() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-isolation");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let first = configured_shell(&workspace, jq_r());
+    let second = configured_shell(&workspace, vec![("yq".to_owned(), Vec::new())]);
+    assert_eq!(
+        effects_of(&first, "yq . f").declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+    assert_eq!(
+        effects_of(&second, "jq -r . f").declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+}
+
+#[test]
+fn replacing_the_handles_contents_reaches_the_shell_and_its_clone() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-replace");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let handle = Arc::new(Mutex::new(jq_r()));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_read_only(Arc::clone(&handle));
+    let clone = shell.clone();
+    *handle.lock().unwrap() = vec![("yq".to_owned(), Vec::new())];
+    // The same shell and its clone both answer from the replaced list.
+    for shell in [&shell, &clone] {
+        assert_eq!(
+            effects_of(shell, "yq . f").declared.effects,
+            vec![contract::shapes::Effect::Reads]
+        );
+        assert_eq!(
+            effects_of(shell, "jq -r . f").declared.effects,
+            vec![contract::shapes::Effect::Executes]
+        );
+    }
+}
+
+#[test]
+fn a_builtin_basename_stays_closed_through_the_public_path() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-basename");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = configured_shell(
+        &workspace,
+        vec![("/usr/bin/grep".to_owned(), vec!["-R".to_owned()])],
+    );
+    let effects = effects_of(&shell, "/usr/bin/grep -R x ws");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+    assert!(effects.declared.paths.is_none());
+}
+
+#[test]
+fn a_capped_clone_shares_the_read_only_handle() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-cap");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let handle = Arc::new(Mutex::new(jq_r()));
+    let shell = Shell::new(workspace.clone(), FakeClock::new()).with_read_only(Arc::clone(&handle));
+    let capped = shell.with_cap(1024).expect("a cap");
+    // The capped clone the loop holds answers from the same handle.
+    let effects = capped.effects(&args("jq -r . f")).expect("effects");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+    // A later replacement reaches the capped clone too: a copy in
+    // `with_cap` would keep answering from the old list.
+    *handle.lock().unwrap() = Vec::new();
+    let effects = capped.effects(&args("jq -r . f")).expect("effects");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+}

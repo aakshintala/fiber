@@ -4,7 +4,7 @@
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -95,6 +95,11 @@ pub struct Shell {
     /// [`Shell::with_timing`]. The stamp is read before the spawn work;
     /// the guard is created and dropped once the job runs.
     timing: Option<Timing>,
+    /// The person's `shell.read_only` entries, shared with every clone:
+    /// replacing the contents changes the next [`Tool::effects`] answer
+    /// of this shell and of each clone, including a capped one. The lock
+    /// is taken in `effects` only; a poisoned lock keeps its contents.
+    read_only: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     /// The held ends of a result: the first `start` and the last `end` bytes.
     bound: Bound,
     /// A test's writer around a spill's file, if any.
@@ -112,6 +117,7 @@ impl Shell {
             max_deadline_ms: MAX_DEADLINE_MS,
             artifacts: None,
             timing: None,
+            read_only: Arc::new(Mutex::new(Vec::new())),
             bound: Bound {
                 start: 8192,
                 end: 8192,
@@ -165,6 +171,19 @@ impl Shell {
     pub fn with_timing(self, timing: Timing) -> Self {
         Self {
             timing: Some(timing),
+            ..self
+        }
+    }
+
+    /// Answers the shell classifier from the person's `shell.read_only`
+    /// entries beside the built-in list (`docs/tools.md`, "Other
+    /// command-line tools"). The handle is shared: a reload that replaces
+    /// its contents reaches this shell and every clone of it. An entry
+    /// whose basename is built in is never consulted.
+    #[must_use]
+    pub fn with_read_only(self, entries: Arc<Mutex<Vec<(String, Vec<String>)>>>) -> Self {
+        Self {
+            read_only: entries,
             ..self
         }
     }
@@ -236,7 +255,13 @@ impl Tool for Shell {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
         match parse(arguments, &self.workspace, self.max_deadline_ms) {
-            Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir, &[])),
+            Ok(parsed) => {
+                let entries = self
+                    .read_only
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                Ok(classify(&parsed.command, &parsed.workdir, &entries))
+            }
             Err(_) => Ok(classify::executes(None, None)),
         }
     }
