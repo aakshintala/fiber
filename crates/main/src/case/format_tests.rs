@@ -248,7 +248,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
     assert_eq!(parsed.host.exec[0].request["program"], "git");
     assert_eq!(parsed.host.exec[0].request["cwd"], "/workspace");
     assert_eq!(parsed.host.exec[1].request["cwd"], Value::Null);
-    let Ok(extensions::ExecReply::Ran {
+    let Ok(extensions::ExecReply {
         end,
         stdout,
         stderr,
@@ -543,7 +543,7 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply::Ran {
+            Ok(extensions::ExecReply {
                 end: extensions::ExecEnd::Signal(9),
                 ..
             })
@@ -560,7 +560,7 @@ fn a_signal_exec_reply_parses_to_a_signal_end() {
     assert!(
         matches!(
             parsed.host.exec[0].reply,
-            Ok(extensions::ExecReply::Ran {
+            Ok(extensions::ExecReply {
                 end: extensions::ExecEnd::Code(7),
                 ..
             })
@@ -597,42 +597,13 @@ fn an_exec_reply_with_neither_code_nor_signal_names_both_fields() {
 }
 
 #[test]
-fn an_exec_reply_with_a_false_hang_names_hang() {
-    let mut value = session_case();
-    value["host"] = json!({"exec": [{"request": {"program": "sh"},
-        "reply": {"hang": false, "stdout": "", "stderr": ""}}]});
-    let error = case_error(&value);
-    assert!(error.contains("host.exec[1].reply.hang"), "{error}");
-    assert!(error.contains("expected true"), "{error}");
-}
-
-#[test]
-fn a_hung_exec_reply_with_another_key_names_hang_and_that_key() {
-    for key in ["code", "signal", "stdout"] {
-        let mut reply = json!({"hang": true});
-        reply[key] = json!(0);
-        let mut value = session_case();
-        value["host"] = json!({"exec": [{"request": {"program": "sh"}, "reply": reply}]});
-        let error = case_error(&value);
-        assert!(error.contains("host.exec[1].reply.hang"), "{key}: {error}");
-        assert!(error.contains("takes no other key"), "{key}: {error}");
-        assert!(error.contains(key), "{key}: {error}");
-    }
-}
-
-#[test]
-fn a_hung_exec_reply_parses_alone() {
+fn an_exec_reply_with_a_hang_key_names_hang_as_unknown() {
     let mut value = session_case();
     value["host"] = json!({"exec": [{"request": {"program": "sh"},
         "reply": {"hang": true}}]});
-    let Case::Session(parsed) = parse(&value).expect("hang reply parses") else {
-        panic!("hang reply parsed as a call case");
-    };
-    assert!(
-        matches!(parsed.host.exec[0].reply, Ok(extensions::ExecReply::Hang)),
-        "{:?}",
-        parsed.host.exec[0].reply
-    );
+    let error = case_error(&value);
+    assert!(error.contains("host.exec[1].reply.hang"), "{error}");
+    assert!(error.contains("unknown field"), "{error}");
 }
 
 #[test]

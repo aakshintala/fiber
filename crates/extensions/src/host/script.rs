@@ -1,13 +1,9 @@
 //! Scripted `host.http` and `host.exec` calls for extension cases (`docs/testing.md`, "Testing an extension").
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::ErrorCode;
-use contract::clock::{Clock, Wake};
 use serde_json::{Map, Value};
-use support::clock::Parker;
-use support::group::GROUP_POLL;
 
 use super::{HttpRequest, exec::ExecRequest};
 
@@ -31,20 +27,15 @@ pub enum ExecEnd {
     Signal(i32),
 }
 
-/// The result of a scripted `host.exec` run.
+/// The result of a scripted `host.exec` run: how it ended and both streams.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExecReply {
-    /// A finished run with its end and both streams.
-    Ran {
-        /// How the run ended.
-        end: ExecEnd,
-        /// Standard output.
-        stdout: String,
-        /// Standard error.
-        stderr: String,
-    },
-    /// A hang: the call parks on the case clock until its deadline.
-    Hang,
+pub struct ExecReply {
+    /// How the run ended.
+    pub end: ExecEnd,
+    /// Standard output.
+    pub stdout: String,
+    /// Standard error.
+    pub stderr: String,
 }
 
 /// One scripted result for a `host.exec` request.
@@ -173,7 +164,7 @@ impl HostScript {
         entry.reply
     }
 
-    pub(crate) fn exec(&self, request: Value) -> Result<(usize, ExecReply), (ErrorCode, String)> {
+    pub(crate) fn exec(&self, request: Value) -> Result<ExecReply, (ErrorCode, String)> {
         let mut state = lock(&self.state);
         let index = state.exec_next;
         let entry = state.exec.get(index).cloned();
@@ -188,53 +179,9 @@ impl HostScript {
                 .misses
                 .push(miss("exec", index, &redact_env(&request)));
             return Err(no_reply("exec"));
-        }
+        };
         state.exec_next = index.saturating_add(1);
-        entry.reply.map(|reply| (index, reply))
-    }
-
-    /// Parks a scripted hang on the case clock until `deadline`, as a real
-    /// `host.exec` parks on the injected clock. True when the deadline was
-    /// reached; false when the stop sender dropped first, which records the
-    /// still-parked hang as a miss. The deadline is checked before the stop
-    /// on every pass, so a stop caused by the timeout itself is never a
-    /// miss. Returns within `GROUP_POLL` of either condition.
-    pub(crate) fn park_hang(
-        &self,
-        index: usize,
-        request: &Value,
-        clock: &dyn Clock,
-        deadline: Instant,
-        stop: &mpsc::Receiver<()>,
-    ) -> bool {
-        let parker = Arc::new(Parker::new());
-        let waker: Arc<dyn Wake> = parker.clone();
-        clock.subscribe(Arc::downgrade(&waker));
-        loop {
-            let seen = parker.generation();
-            if clock.now() >= deadline {
-                return true;
-            }
-            if matches!(stop.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
-                lock(&self.state).misses.push(hung_miss(index, request));
-                return false;
-            }
-            parker.park_polled(clock, Some(deadline), Some(GROUP_POLL), seen);
-        }
-    }
-
-    /// Fails a scripted hang with no callback deadline: it never parks, so
-    /// the miss names the request at once and the case fails on close.
-    pub(crate) fn hang_without_deadline(
-        &self,
-        index: usize,
-        request: &Value,
-    ) -> (ErrorCode, String) {
-        lock(&self.state).misses.push(hung_miss(index, request));
-        (
-            ErrorCode::IoFailed,
-            "host.exec: scripted hang needs a callback deadline".to_owned(),
-        )
+        entry.reply
     }
 }
 
@@ -345,16 +292,6 @@ fn redact_env(request: &Value) -> Value {
         }
     }
     redacted
-}
-
-/// A hang still parked when the session closes: the entry that parked it
-/// and the redacted request, so the case names the hang on close.
-fn hung_miss(index: usize, request: &Value) -> String {
-    format!(
-        "host.exec[{}] hung: request {} still parked at close",
-        index.saturating_add(1),
-        redact_env(request)
-    )
 }
 
 fn miss(kind: &str, index: usize, request: &Value) -> String {

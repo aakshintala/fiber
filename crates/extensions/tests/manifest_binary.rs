@@ -211,7 +211,7 @@ fn a_scripted_case_sees_the_program_as_written() {
         Vec::new(),
         vec![ExecEntry {
             request: json!({ "program": "bin/mybin", "args": [] }),
-            reply: Ok(ExecReply::Ran {
+            reply: Ok(ExecReply {
                 end: ExecEnd::Code(0),
                 stdout: "scripted\n".to_owned(),
                 stderr: String::new(),

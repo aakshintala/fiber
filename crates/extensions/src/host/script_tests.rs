@@ -2,20 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-use std::sync::{Arc, mpsc};
-use std::thread;
-use std::time::Duration;
-
 use contract::ErrorCode;
-use contract::clock::Clock as _;
-use fakes::Deadline;
-use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{ExecEnd, ExecEntry, ExecReply, HostScript, HttpEntry, json_matches};
-
-/// How long a test waits for the hang to park or end before it fails.
-const WAIT: Duration = Duration::from_secs(10);
 
 #[test]
 fn oauth_entries_match_in_order_and_misses_consume_nothing() {
@@ -76,7 +66,7 @@ fn http(request: Value) -> HttpEntry {
 fn exec(request: Value) -> ExecEntry {
     ExecEntry {
         request,
-        reply: Ok(ExecReply::Ran {
+        reply: Ok(ExecReply {
             end: ExecEnd::Code(0),
             stdout: "ok".to_owned(),
             stderr: String::new(),
@@ -282,14 +272,11 @@ fn exec_matches_program_arguments_and_working_directory_in_order() {
     );
     assert_eq!(
         script.exec(request),
-        Ok((
-            0,
-            ExecReply::Ran {
-                end: ExecEnd::Code(0),
-                stdout: "ok".to_owned(),
-                stderr: String::new(),
-            }
-        ))
+        Ok(ExecReply {
+            end: ExecEnd::Code(0),
+            stdout: "ok".to_owned(),
+            stderr: String::new(),
+        })
     );
 
     let unmet = script.unmet();
@@ -393,27 +380,17 @@ fn an_exec_request_with_the_same_env_matches_its_entry() {
     let script = HostScript::new(vec![], vec![exec(request.clone())], Vec::new());
     assert_eq!(
         script.exec(request),
-        Ok((
-            0,
-            ExecReply::Ran {
-                end: ExecEnd::Code(0),
-                stdout: "ok".to_owned(),
-                stderr: String::new(),
-            }
-        ))
+        Ok(ExecReply {
+            end: ExecEnd::Code(0),
+            stdout: "ok".to_owned(),
+            stderr: String::new(),
+        })
     );
     assert!(script.unmet().is_empty());
 }
 
-fn hang(request: Value) -> ExecEntry {
-    ExecEntry {
-        request,
-        reply: Ok(ExecReply::Hang),
-    }
-}
-
 #[test]
-fn exec_returns_a_signal_end_with_its_entry_index() {
+fn exec_returns_a_signal_end() {
     let request = json!({
         "program": "sh",
         "args": [],
@@ -423,7 +400,7 @@ fn exec_returns_a_signal_end_with_its_entry_index() {
         vec![],
         vec![ExecEntry {
             request: request.clone(),
-            reply: Ok(ExecReply::Ran {
+            reply: Ok(ExecReply {
                 end: ExecEnd::Signal(9),
                 stdout: String::new(),
                 stderr: String::new(),
@@ -433,188 +410,11 @@ fn exec_returns_a_signal_end_with_its_entry_index() {
     );
     assert_eq!(
         script.exec(request),
-        Ok((
-            0,
-            ExecReply::Ran {
-                end: ExecEnd::Signal(9),
-                stdout: String::new(),
-                stderr: String::new(),
-            }
-        ))
+        Ok(ExecReply {
+            end: ExecEnd::Signal(9),
+            stdout: String::new(),
+            stderr: String::new(),
+        })
     );
     assert!(script.unmet().is_empty());
-}
-
-/// Parks `script`'s hang `index` on `clock` until `deadline` on a worker:
-/// the worker holds the hang so the Lua thread stays free, as the scripted
-/// branch does. Returns what the worker's `park_hang` returns.
-fn park_on(
-    script: Arc<HostScript>,
-    index: usize,
-    request: Value,
-    clock: Arc<FakeClock>,
-    deadline: std::time::Instant,
-    stop: mpsc::Receiver<()>,
-) -> mpsc::Receiver<bool> {
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let timed_out = script.park_hang(index, &request, &*clock, deadline, &stop);
-        done_tx
-            .send(timed_out)
-            .expect("the test collects the hang end");
-    });
-    done_rx
-}
-
-#[test]
-fn park_hang_ends_only_when_the_clock_reaches_its_deadline() {
-    let clock = FakeClock::new();
-    let deadline = clock.now() + Duration::from_millis(1000);
-    let request = json!({
-        "program": "sh",
-        "args": [],
-        "cwd": "/w",
-    });
-    let script = HostScript::new(vec![], vec![hang(request.clone())], Vec::new());
-    let (index, reply) = script.exec(request.clone()).expect("hang entry matches");
-    assert!(matches!(reply, ExecReply::Hang));
-    let (_stop, stop_rx) = mpsc::channel::<()>();
-    let done_rx = park_on(
-        Arc::clone(&script),
-        index,
-        request,
-        Arc::clone(&clock),
-        deadline,
-        stop_rx,
-    );
-    assert!(
-        clock.await_parked(deadline, WAIT),
-        "waited {WAIT:?} for the hang to park on its deadline"
-    );
-    assert!(
-        done_rx.try_recv().is_err(),
-        "the hang is still parked before its deadline"
-    );
-    clock.advance(Duration::from_millis(999));
-    assert!(
-        done_rx.try_recv().is_err(),
-        "the hang is still parked 1ms before its deadline"
-    );
-    clock.advance(Duration::from_millis(1));
-    assert!(
-        Deadline::after(WAIT)
-            .recv(&done_rx)
-            .expect("waited {WAIT:?} for the hang to end at its deadline"),
-        "the hang ends when the clock reaches its deadline"
-    );
-    assert!(
-        script.unmet().is_empty(),
-        "a hang that times out records no miss"
-    );
-}
-
-#[test]
-fn park_hang_stopped_before_its_deadline_names_the_parked_request() {
-    let clock = FakeClock::new();
-    let deadline = clock.now() + Duration::from_millis(1000);
-    let request = json!({
-        "program": "sh",
-        "args": [],
-        "cwd": "/w",
-        "env": {"FIBER_X": "s3cret-value"},
-    });
-    let script = HostScript::new(vec![], vec![hang(request.clone())], Vec::new());
-    let (index, reply) = script.exec(request.clone()).expect("hang entry matches");
-    assert!(matches!(reply, ExecReply::Hang));
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let done_rx = park_on(
-        Arc::clone(&script),
-        index,
-        request,
-        Arc::clone(&clock),
-        deadline,
-        stop_rx,
-    );
-    assert!(
-        clock.await_parked(deadline, WAIT),
-        "waited {WAIT:?} for the hang to park on its deadline"
-    );
-    drop(stop_tx);
-    assert!(
-        !Deadline::after(WAIT)
-            .recv(&done_rx)
-            .expect("waited {WAIT:?} for the stopped hang to end"),
-        "a stop before the deadline is not a timeout"
-    );
-    let unmet = script.unmet();
-    assert_eq!(unmet.len(), 1, "only the hung miss remains: {unmet:?}");
-    assert!(unmet[0].contains("host.exec[1] hung"), "{}", unmet[0]);
-    assert!(unmet[0].contains("still parked at close"), "{}", unmet[0]);
-    assert!(unmet[0].contains("sh"), "{}", unmet[0]);
-    assert!(!unmet[0].contains("s3cret-value"), "{}", unmet[0]);
-    assert!(unmet[0].contains("<redacted>"), "{}", unmet[0]);
-    assert!(unmet[0].contains("FIBER_X"), "{}", unmet[0]);
-}
-
-#[test]
-fn park_hang_at_its_deadline_beats_a_late_stop() {
-    let clock = FakeClock::new();
-    let deadline = clock.now() + Duration::from_millis(1000);
-    let request = json!({
-        "program": "sh",
-        "args": [],
-        "cwd": "/w",
-    });
-    let script = HostScript::new(vec![], vec![hang(request.clone())], Vec::new());
-    let (index, reply) = script.exec(request.clone()).expect("hang entry matches");
-    assert!(matches!(reply, ExecReply::Hang));
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let done_rx = park_on(
-        Arc::clone(&script),
-        index,
-        request,
-        Arc::clone(&clock),
-        deadline,
-        stop_rx,
-    );
-    assert!(
-        clock.await_parked(deadline, WAIT),
-        "waited {WAIT:?} for the hang to park on its deadline"
-    );
-    clock.advance(Duration::from_millis(1000));
-    drop(stop_tx);
-    assert!(
-        Deadline::after(WAIT)
-            .recv(&done_rx)
-            .expect("waited {WAIT:?} for the hang to end at its deadline"),
-        "the deadline wins when the stop lands after it"
-    );
-    assert!(
-        script.unmet().is_empty(),
-        "a hang that times out records no miss: {:?}",
-        script.unmet()
-    );
-}
-
-#[test]
-fn a_hang_without_a_callback_deadline_fails_and_names_the_request() {
-    let request = json!({
-        "program": "sh",
-        "args": [],
-        "cwd": "/w",
-        "env": {"FIBER_X": "s3cret-value"},
-    });
-    let script = HostScript::new(vec![], vec![hang(request.clone())], Vec::new());
-    let (index, reply) = script.exec(request.clone()).expect("hang entry matches");
-    assert!(matches!(reply, ExecReply::Hang));
-    let (code, message) = script.hang_without_deadline(index, &request);
-    assert_eq!(code, ErrorCode::IoFailed);
-    assert!(message.contains("deadline"), "{message}");
-    let unmet = script.unmet();
-    assert_eq!(unmet.len(), 1, "only the hung miss remains: {unmet:?}");
-    assert!(unmet[0].contains("host.exec[1] hung"), "{}", unmet[0]);
-    assert!(unmet[0].contains("still parked at close"), "{}", unmet[0]);
-    assert!(unmet[0].contains("sh"), "{}", unmet[0]);
-    assert!(!unmet[0].contains("s3cret-value"), "{}", unmet[0]);
-    assert!(unmet[0].contains("FIBER_X"), "{}", unmet[0]);
 }

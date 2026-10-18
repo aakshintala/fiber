@@ -544,26 +544,9 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         .ok_or_else(|| format!("{prefix}.reply: expected an object"))?;
     only(
         reply,
-        &["code", "signal", "stdout", "stderr", "hang"],
+        &["code", "signal", "stdout", "stderr"],
         &format!("{prefix}.reply"),
     )?;
-    if let Some(hang) = reply.get("hang") {
-        if hang != &Value::Bool(true) {
-            return Err(format!("{prefix}.reply.hang: expected true"));
-        }
-        if let Some(key) = ["code", "signal", "stdout", "stderr"]
-            .into_iter()
-            .find(|key| reply.contains_key(*key))
-        {
-            return Err(format!(
-                "{prefix}.reply.hang: takes no other key (found {key})"
-            ));
-        }
-        return Ok(extensions::ExecEntry {
-            request: Value::Object(request.clone()),
-            reply: Ok(extensions::ExecReply::Hang),
-        });
-    }
     let end = match (reply.contains_key("code"), reply.contains_key("signal")) {
         (true, false) => {
             let code = signed(reply, "code", &format!("{prefix}.reply"))?;
@@ -587,7 +570,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;
     Ok(extensions::ExecEntry {
         request: Value::Object(request.clone()),
-        reply: Ok(extensions::ExecReply::Ran {
+        reply: Ok(extensions::ExecReply {
             end,
             stdout,
             stderr,
