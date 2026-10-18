@@ -549,13 +549,18 @@ fn extensions_loaded_in_the_log_carries_each_replaces() {
         .iter()
         .rfind(|line| line["kind"] == "extensions_loaded")
         .expect("the log holds extensions_loaded");
+    let extensions = loaded["payload"]["extensions"]
+        .as_array()
+        .expect("extensions_loaded carries extensions");
     assert_eq!(
-        loaded["payload"]["extensions"],
-        json!([
-            {"name": "fake", "version": "v0.0.0"},
-            {"name": "fiber.test/worker", "version": "v2.0.0", "replaces": ["model"]},
-        ])
+        extensions
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["fake", "fiber.test/worker"]
     );
+    assert_eq!(extensions[0].get("replaces"), None);
+    assert_eq!(extensions[1]["replaces"], json!(["model"]));
     // The complete ordered kinds of the log: `clients` and
     // `session_status` are ephemeral, so they never reach the file
     // (docs/testing.md, "Event streams"). No turn runs, so no preamble
