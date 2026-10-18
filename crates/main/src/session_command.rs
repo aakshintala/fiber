@@ -7,7 +7,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::clock::wall_ms;
 use contract::diag::DebugLog;
 use contract::events::{Parent, VariablesSource};
 use contract::shapes::{Failure, Worktree};
@@ -17,8 +16,8 @@ use log::Log;
 use r#loop::Loop;
 
 use crate::{
-    Parts, ask_failed, ask_permissions, cli, crash, failed, finish, late_emit, mcp_servers,
-    parts_with, run_turn, session_extensions, shutdown,
+    Parts, ask_failed, ask_permissions, cli, failed, finish, late_emit, mcp_servers, parts_with,
+    run_turn, session_extensions, shutdown,
 };
 
 thread_local! {
@@ -315,7 +314,7 @@ pub(crate) fn run_new(
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
         }
     };
-    crash::attach(&id);
+    log::crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
     // names it.
@@ -736,29 +735,8 @@ pub(crate) fn close(
         .latest("session_status")
         .and_then(|line| serde_json::from_value(line.payload.into()).ok());
     session.close(log);
-    if !dir.is_dir() {
-        return;
-    }
-    let name = |path: Option<&Path>| {
-        path.and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
-    let row = hub::RecentRow {
-        session_id: SessionId(name(Some(dir))),
-        ts: wall_ms(clock.wall()),
-        // `projects/<key>/sessions/<id>`: the key names the grandparent.
-        project: name(dir.parent().and_then(Path::parent)),
-        workspace: workspace.to_string_lossy().into_owned(),
-        name: status
-            .as_ref()
-            .map(|status: &contract::events::SessionStatus| status.name.clone())
-            .unwrap_or_default(),
-        how: hub::Left::Exited,
-        status,
-    };
     // A row that cannot be written loses only the listing, not the log.
-    hub::append(home, &row).unwrap_or(());
+    hub::append_exited(home, dir, workspace, status, clock).unwrap_or(());
 }
 
 #[cfg(test)]

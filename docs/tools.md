@@ -1426,7 +1426,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session`, `session_list`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`), `name_session`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
