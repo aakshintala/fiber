@@ -1729,6 +1729,29 @@ fn a_second_left_widens_home_on_the_on_screen_row_after_moving() {
 }
 
 #[test]
+fn a_second_left_widens_home_on_a_row_keyed_past_one() {
+    let mut app = opened(&[A, B, C], C);
+    assert!(row_key(&app, C) > 1, "C's row key: {}", row_key(&app, C));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(key(&app, C)));
+    let widened = stroke_press(&mut app, plain(Code::Left));
+    assert!(matches!(widened, Effect::Send(_)), "{widened:?}");
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, C))))
+    );
+}
+
+#[test]
 fn a_focused_text_left_moves_the_cursor() {
     let mut app = opened(&[A, B], A);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
