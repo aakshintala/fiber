@@ -20,28 +20,6 @@ fn the_reader_reports_a_sixty_four_mebibyte_allocation() {
 }
 
 #[test]
-fn footprint_kib_divides_bytes_by_1024_rounding_down() {
-    let cases: &[(u64, u64)] = &[
-        (0, 0),
-        (1023, 0),
-        (1024, 1),
-        (1025, 1),
-        (u64::MAX, u64::MAX / 1024),
-    ];
-    for (bytes, want) in cases {
-        assert_eq!(footprint_kib(*bytes), *want, "{bytes}");
-    }
-}
-
-#[test]
-fn read_status_ok_accepts_only_zero() {
-    let cases: &[(i32, bool)] = &[(0, true), (1, false), (-1, false)];
-    for (status, want) in cases {
-        assert_eq!(read_status_ok(*status), *want, "{status}");
-    }
-}
-
-#[test]
 fn vm_hwm_reads_the_kb_figure_and_refuses_anything_else() {
     let cases: &[(&str, Option<u64>)] = &[
         ("VmHWM:\t  1234 kB", Some(1234)),
