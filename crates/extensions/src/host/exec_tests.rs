@@ -17,6 +17,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::ExecRequest;
+use super::resolve_in_package;
 use support::group::{self, DRAIN, GROUP_POLL};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -1270,4 +1271,201 @@ fn a_run_after_the_kill_pass_is_killed_at_its_listing() {
         .expect("the post-kill run ends with its signal");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     watchdog_a.stand_down(DEADLINE);
+}
+
+/// The package directory, canonicalized as `Vm::load` does, with its guard.
+fn package(name: &str) -> (fakes::TempDir, PathBuf) {
+    let dir = fakes::TempDir::new(name);
+    let path = dir.path().canonicalize().unwrap();
+    (dir, path)
+}
+
+#[test]
+fn resolve_in_package_a_slash_relative_program_resolves_inside_the_package() {
+    let (_guard, package) = package("fiber-resolve-inside");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    let expected = package.join("bin").join("acme").display().to_string();
+    for program in ["bin/acme", "./bin/acme", "bin/../bin/acme"] {
+        assert_eq!(
+            resolve_in_package(program, &package),
+            Ok(expected.clone()),
+            "{program}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_past_the_package_is_refused_naming_both() {
+    let (_guard, package) = package("fiber-resolve-escape");
+    for program in ["../x", "bin/../../x"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+        assert!(
+            err.contains(package.display().to_string().as_str()),
+            "the refusal names the directory: {err}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_that_stays_inside_resolves() {
+    let (_guard, package) = package("fiber-resolve-fold");
+    assert_eq!(
+        resolve_in_package("a/../b", &package),
+        Ok(package.join("b").display().to_string())
+    );
+    assert_eq!(
+        resolve_in_package("x/..", &package),
+        Ok(package.display().to_string())
+    );
+    let err = resolve_in_package("a/../../b", &package).unwrap_err();
+    assert!(err.contains("a/../../b"), "{err}");
+}
+
+#[test]
+fn resolve_in_package_a_dot_dot_that_pops_past_the_package_is_refused_even_when_it_reenters() {
+    let (_guard, package) = package("fiber-resolve-reentry");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(package.join("bin").join("ok"), "x").unwrap();
+    // The second `..` pops past the package, which is a refusal even
+    // though the path re-enters it and exists: the fold never climbs
+    // back in. A fold that miscounted its depth would resolve this.
+    let base = package.file_name().unwrap().to_str().unwrap().to_owned();
+    let program = format!("a/../../{base}/bin/ok");
+    let err = resolve_in_package(&program, &package).unwrap_err();
+    assert!(
+        err.contains(program.as_str()),
+        "the refusal names the path: {err}"
+    );
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_nul_byte_is_refused() {
+    let (_guard, package) = package("fiber-resolve-nul");
+    // A NUL byte can never name a runnable program: canonicalizing it
+    // fails with an error other than `NotFound`, which is a refusal,
+    // never a pass. A check that popped past every error would resolve it.
+    let program = "bin/\0tool";
+    let err = resolve_in_package(program, &package).unwrap_err();
+    assert!(err.contains(program), "the refusal names the path: {err}");
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "the refusal names the directory: {err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_symlink_out_of_the_package_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-link-outer");
+    let (_guard, package) = package("fiber-resolve-link-out");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(&outer, package.join("bin").join("link")).unwrap();
+    for program in ["bin/link", "bin/link/tool"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+        assert!(
+            err.contains(package.display().to_string().as_str()),
+            "the refusal names the directory: {err}"
+        );
+    }
+}
+
+#[test]
+fn resolve_in_package_a_symlink_that_stays_inside_resolves() {
+    use std::os::unix::fs::symlink;
+    let (_guard, package) = package("fiber-resolve-link-in");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    std::fs::write(package.join("bin").join("real"), "x").unwrap();
+    symlink("real", package.join("bin").join("link")).unwrap();
+    assert_eq!(
+        resolve_in_package("bin/link", &package),
+        Ok(package.join("bin").join("link").display().to_string())
+    );
+}
+
+#[test]
+fn resolve_in_package_a_symlink_loop_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_guard, package) = package("fiber-resolve-loop");
+    symlink("b", package.join("a")).unwrap();
+    symlink("a", package.join("b")).unwrap();
+    for program in ["./a", "a/tool"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "{err}");
+    }
+}
+
+#[test]
+fn resolve_in_package_a_dangling_link_in_the_middle_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-outer");
+    let (_guard, package) = package("fiber-resolve-dangling");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(outer.join("not-yet"), package.join("bin").join("dang")).unwrap();
+    let err = resolve_in_package("bin/dang/tool", &package).unwrap_err();
+    assert!(err.contains("bin/dang/tool"), "{err}");
+    assert!(
+        err.contains(package.display().to_string().as_str()),
+        "{err}"
+    );
+}
+
+#[test]
+fn resolve_in_package_a_dangling_link_is_refused_even_pointing_inside() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-dangling-in-outer");
+    let (_guard, package) = package("fiber-resolve-dangling-in");
+    std::fs::create_dir_all(package.join("bin")).unwrap();
+    symlink(outer.join("not-yet"), package.join("bin").join("out")).unwrap();
+    symlink("not-yet", package.join("bin").join("in")).unwrap();
+    std::fs::write(outer.join("real"), "x").unwrap();
+    symlink(outer.join("real"), package.join("bin").join("file")).unwrap();
+    for program in ["bin/out", "bin/in", "bin/file"] {
+        let err = resolve_in_package(program, &package).unwrap_err();
+        assert!(err.contains(program), "the refusal names the path: {err}");
+    }
+}
+
+#[test]
+fn resolve_in_package_a_tool_under_a_symlinked_directory_out_is_refused() {
+    use std::os::unix::fs::symlink;
+    let (_outer, outer) = package("fiber-resolve-subdir-outer");
+    let (_guard, package) = package("fiber-resolve-subdir");
+    std::fs::write(outer.join("tool"), "x").unwrap();
+    symlink(&outer, package.join("sub")).unwrap();
+    let err = resolve_in_package("sub/tool", &package).unwrap_err();
+    assert!(err.contains("sub/tool"), "{err}");
+    let err = resolve_in_package("sub/missing", &package).unwrap_err();
+    assert!(err.contains("sub/missing"), "{err}");
+}
+
+#[test]
+fn resolve_in_package_a_bare_name_and_an_absolute_path_pass_through() {
+    let (_outer, outer) = package("fiber-resolve-passthrough-outer");
+    let (_guard, package) = package("fiber-resolve-passthrough");
+    assert_eq!(resolve_in_package("node", &package), Ok("node".into()));
+    assert_eq!(resolve_in_package("", &package), Ok(String::new()));
+    assert_eq!(
+        resolve_in_package("/usr/bin/env", &package),
+        Ok("/usr/bin/env".into())
+    );
+    let absolute = outer.join("tool").display().to_string();
+    assert_eq!(
+        resolve_in_package(&absolute, &package),
+        Ok(absolute.clone())
+    );
+}
+
+#[test]
+fn resolve_in_package_a_missing_program_inside_resolves_for_the_spawn_to_report() {
+    let (_guard, package) = package("fiber-resolve-missing");
+    assert_eq!(
+        resolve_in_package("bin/missing", &package),
+        Ok(package.join("bin").join("missing").display().to_string())
+    );
 }
