@@ -19,7 +19,8 @@ use extensions::Providers;
 use r#loop::Model;
 
 use crate::{
-    failed, handoff, lua_providers, mcp_servers, prompt_files, scripted, settings, switch,
+    failed, handoff, lua_providers, mcp_servers, prompt_files, scripted, session_extensions,
+    settings, switch,
 };
 
 /// What a session is built from, read before it exists.
@@ -74,6 +75,9 @@ pub(crate) struct Parts {
     pub(crate) credential_files: Vec<PathBuf>,
     /// The installed extensions, started, and their hooks.
     pub(crate) extensions: Arc<extensions::SessionExtensions>,
+    /// Where the session's repository extensions are read, resolved to
+    /// the workspace whose declarations count.
+    pub(crate) repository: session_extensions::RepositoryScope,
     /// The session's per-path lock, shared by the file tools and `host.fs`.
     pub(crate) locks: Arc<tools::PathLocks>,
     pub(crate) mcp: mcp_servers::Specs,
@@ -121,6 +125,7 @@ pub(crate) fn parts_with<'a>(
     reads: Arc<switch::Reads>,
     process: log::diag::Process,
     seed: extensions::StateSeed,
+    repository: session_extensions::RepositoryScope,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -138,6 +143,7 @@ pub(crate) fn parts_with<'a>(
         reads,
         process,
         seed,
+        repository,
     )
 }
 
@@ -162,6 +168,7 @@ pub(crate) fn parts_in(
     reads: Arc<switch::Reads>,
     process: log::diag::Process,
     seed: extensions::StateSeed,
+    repository: session_extensions::RepositoryScope,
 ) -> Result<Parts, Failure> {
     let (sessions, project) = ::cli::project_of(&home, &workspace)?;
     // The one monotonic read the `startup.config` timer starts from,
@@ -209,20 +216,36 @@ pub(crate) fn parts_in(
     // read above stays outside, and the diagnostics below stay outside:
     // the guard ends before either.
     let extensions_timing = log::diag::timed(&diag, Op::StartupExtensions, None, None);
+    // The repository set loads from the scope's workspace, or the launch
+    // directory when it names none; skipped content stays out.
+    let repository = session_extensions::RepositoryScope {
+        workspace: Some(
+            repository
+                .workspace
+                .clone()
+                .unwrap_or_else(|| workspace.clone()),
+        ),
+        skipped: repository.skipped.clone(),
+    };
+    let set = session_extensions::repository_set(&home, &project, &workspace, &repository, &clock);
     let (mut providers, notices) =
-        Providers::load_enabled(&home, &config).map_err(|e| failed(e.code(), e))?;
+        Providers::load_repository(&home, &config, &set).map_err(|e| failed(e.code(), e))?;
     startup_notices.extend(notices);
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let mut extensions = extensions::SessionExtensions::load_with_state(
+    let mut extensions = extensions::SessionExtensions::load_repository(
         &home,
         &config,
         Arc::clone(&clock),
         session_locks,
         host,
         seed,
+        set,
     );
     drop(extensions_timing);
+    // A required repository extension that did not load fails the start
+    // before any session line is written.
+    session_extensions::required(&extensions)?;
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
     // provider HTTP and times non-tool hook chains, and the retained sink
@@ -448,6 +471,7 @@ pub(crate) fn parts_in(
         home,
         workspace,
         project,
+        repository,
         provider,
         observe,
         reviewer_observe,

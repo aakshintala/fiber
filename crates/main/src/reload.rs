@@ -65,6 +65,7 @@ pub(crate) fn record_declarations(
 pub(crate) fn record_load(
     load: r#loop::LoadApproved,
     late: Arc<std::sync::Mutex<Late>>,
+    repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
 ) -> r#loop::LoadApproved {
     Arc::new(move |outcome| {
         let approved = load(outcome)?;
@@ -72,6 +73,12 @@ pub(crate) fn record_load(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .tools
             .extend(approved.tools.clone());
+        // The offer's skips join the scope the next preparation reads:
+        // skipped content stays out of a reloaded or late set.
+        repository
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .skipped = outcome.skipped.clone();
         Ok(approved)
     })
 }
@@ -86,6 +93,10 @@ pub(crate) struct State {
     pub(crate) server_names: Vec<String>,
     pub(crate) prompt_rows: Vec<contract::events::CommandInfo>,
     pub(crate) late: Arc<std::sync::Mutex<Late>>,
+    /// The repository scope the next preparation reads: the launch
+    /// workspace, or the recorded one on resume, and the content the
+    /// offer skipped.
+    pub(crate) repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
     pub(crate) declare: doors::Declare,
     pub(crate) replace: Arc<dyn Fn(doors::Replacement) + Send + Sync>,
     pub(crate) drive: Arc<dyn contract::extension::Drive>,
@@ -116,6 +127,7 @@ impl State {
         log: Arc<log::Log>,
         diag: Arc<log::diag::Diag>,
         shell_read_only: crate::settings::ShellReadOnly,
+        repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
     ) -> (
         Self,
         r#loop::LoadApproved,
@@ -130,6 +142,7 @@ impl State {
                 switching.reloadable().caps,
             ),
             late.clone(),
+            repository.clone(),
         );
         let names = tools
             .iter()
@@ -150,6 +163,7 @@ impl State {
             server_names: servers.server_names,
             prompt_rows: servers.prompts.commands(),
             late,
+            repository,
             declare: session.declarer(),
             replace: session.reloader(),
             drive: session.driver(),
@@ -170,13 +184,35 @@ impl State {
         )
     }
 
-    pub(crate) fn preparer(self) -> r#loop::PrepareReload {
-        let reads = self.switching.reads();
+    /// The reload preparer and the late preparer: the late one prepares
+    /// the same set, but drops every notice the startup already wrote,
+    /// so an approval installs the new lines only.
+    pub(crate) fn preparers(
+        self,
+        written: Vec<contract::events::Notice>,
+    ) -> (r#loop::PrepareReload, r#loop::PrepareReload) {
         let state = Arc::new(self);
-        preparer(
-            move |route| state.prepare(route),
-            move |purpose, work| reads.run(purpose, work),
-        )
+        let reload = {
+            let state = state.clone();
+            let reads = state.switching.reads();
+            preparer(
+                move |route| state.prepare(route),
+                move |purpose, work| reads.run(purpose, work),
+            )
+        };
+        let late = {
+            let state = state.clone();
+            let reads = state.switching.reads();
+            preparer(
+                move |route| {
+                    let mut prepared = state.prepare(route)?;
+                    prepared.notices.retain(|notice| !written.contains(notice));
+                    Ok(prepared)
+                },
+                move |purpose, work| reads.run(purpose, work),
+            )
+        };
+        (reload, late)
     }
 
     fn prepare(
@@ -201,12 +237,34 @@ impl State {
             })?,
         );
         let now = self.switching.reloadable();
-        let mut extensions = self.current.get().reload(
+        // The repository set is read again, from the scope's workspace
+        // minus the offer's skips: a changed declaration or a skipped
+        // content loads, or drops, on reload.
+        let scope = self
+            .repository
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let set = crate::session_extensions::repository_set(
+            &self.sources.home,
+            &self.sources.project,
+            &self.sources.workspace,
+            &scope,
+            &now.loader.clock,
+        );
+        let mut extensions = self.current.get().reload_repository(
             &self.sources.home,
             &config,
             now.loader.clock.clone(),
             now.loader.locks.clone(),
+            set,
         );
+        // A required repository extension that did not load rejects the
+        // reload before anything is published: `current` is unchanged.
+        crate::session_extensions::required(&extensions).map_err(|error| Rejection {
+            code: error.code,
+            message: error.message,
+        })?;
         if self.diag.debugging() {
             extensions = extensions.with_diagnostics(
                 self.diag.timings(),

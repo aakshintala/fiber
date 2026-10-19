@@ -227,6 +227,118 @@ fn kinds(looped: &Loop) -> Vec<String> {
         .collect()
 }
 
+/// Hooks holding one recorded state line: `take_state_lines` hands it
+/// out once, as the late preparation's fresh hooks would a turn that ran
+/// while the await was queued.
+struct StatefulHooks {
+    state: Mutex<Vec<contract::events::Event>>,
+}
+
+impl contract::hook::Hooks for StatefulHooks {
+    fn take_state_lines(&self) -> Vec<contract::events::Event> {
+        std::mem::take(&mut *self.state.lock().unwrap())
+    }
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+    fn before_message(
+        &self,
+        _message: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+    fn session_start(
+        &self,
+        _start: &contract::hook::SessionStart<'_>,
+    ) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+    fn turn_start(&self, _turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+    fn before_model_call(
+        &self,
+        _call: &contract::hook::BeforeModelCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+    fn turn_end(&self, _end: &contract::hook::TurnEnd<'_>) -> contract::hook::ContextAnswer {
+        contract::hook::ContextAnswer {
+            outcome: contract::hook::ContextOutcome::Added(Vec::new()),
+            notices: Vec::new(),
+        }
+    }
+    fn before_handoff(
+        &self,
+        _handoff: &contract::hook::BeforeHandoff<'_>,
+    ) -> contract::hook::BeforeHandoffAnswer {
+        fakes::no_note()
+    }
+    fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<contract::inbox::Delivery>) {}
+}
+
+#[test]
+fn a_late_apply_drains_the_prepared_hooks_state() {
+    let mut w = world();
+    let hooks = Arc::new(StatefulHooks {
+        state: Mutex::new(vec![contract::events::Event::Notice(
+            contract::events::Notice {
+                code: ErrorCode::IoFailed,
+                message: "a turn that ran while the await was queued".into(),
+                extension: None,
+            },
+        )]),
+    });
+    let mut prep = prepared();
+    prep.hooks = Some(hooks.clone());
+    w.looped.apply_late(prep).unwrap();
+    assert!(
+        hooks.state.lock().unwrap().is_empty(),
+        "the drain takes the recorded state, as `apply_reload` does"
+    );
+    assert_eq!(kinds(&w.looped), ["session_started", "extensions_loaded"]);
+}
+
 #[test]
 fn closing_busy_and_rewound_refuse_without_preparing_or_writing() {
     for state in ["closing", "busy", "rewound"] {

@@ -16,6 +16,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use config::ProjectKey;
 use contract::clock::Clock;
@@ -28,6 +29,7 @@ use super::kind_name;
 use crate::Error;
 use crate::git::Origin;
 use crate::install::{io as io_error, remove};
+use crate::installed::LOCK_TRIES;
 use crate::manage::plan_depends;
 use crate::prepare::prepare;
 
@@ -156,27 +158,42 @@ impl Store {
     /// An extension's and a hook's approvals are per project; a server's are
     /// per machine.
     fn approvals(&self, kind: OfferedKind) -> PathBuf {
+        Self::approvals_in(&self.home, &self.project, kind)
+    }
+
+    /// The approvals directory for `home` and `project`: what listing
+    /// reads without building a store.
+    fn approvals_in(home: &Path, project: &ProjectKey, kind: OfferedKind) -> PathBuf {
         match kind {
-            OfferedKind::Extension | OfferedKind::Hook => self
-                .home
-                .join("projects")
-                .join(self.project.as_str())
-                .join("approvals"),
-            OfferedKind::McpServer => self.home.join("approvals"),
+            OfferedKind::Extension | OfferedKind::Hook => {
+                config::project_approvals_dir(home, project)
+            }
+            OfferedKind::McpServer => config::machine_approvals_dir(home),
         }
     }
 
     /// Where the copy of a content is kept.
     pub fn copy_dir(&self, hash: &str) -> PathBuf {
-        self.home.join("pinned").join(hash)
+        config::pinned_dir(&self.home).join(hash)
     }
 
     /// The decision recorded for this content, if any.
     pub fn decision(&self, kind: OfferedKind, hash: &str) -> Option<Decision> {
+        Self::decision_in(&self.home, &self.project, kind, hash)
+    }
+
+    /// The decision recorded for `home` and `project` about this content,
+    /// if any: what listing reads without building a store.
+    pub(crate) fn decision_in(
+        home: &Path,
+        project: &ProjectKey,
+        kind: OfferedKind,
+        hash: &str,
+    ) -> Option<Decision> {
         if !is_hash(hash) {
             return None;
         }
-        let text = fs::read_to_string(self.approvals(kind).join(hash)).ok()?;
+        let text = fs::read_to_string(Self::approvals_in(home, project, kind).join(hash)).ok()?;
         match serde_json::from_str::<Value>(&text)
             .ok()?
             .get("decision")?
@@ -199,7 +216,7 @@ impl Store {
         // is the only place that takes it, so `approve` and `never` share
         // its order with `ensure_copy` and `remove_copy`. A prune running
         // under the same lock cannot miss the record being written.
-        let (_lock, pinned) = self.global_lock(item)?;
+        let (_lock, pinned) = self.global_lock(item, Wait::Block)?;
         let copy = self.copy_dir(hash);
         self.pin_locked(item, hash, &copy, &pinned)?;
         pause_before_record(self);
@@ -210,9 +227,20 @@ impl Store {
     /// made. The lock is still held across the record, as in `approve`, so
     /// a prune revalidation running under `pinned/.lock` sees the decision.
     pub fn never(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
+        Self::never_in(&self.home, &self.project, item, hash)
+    }
+
+    /// Records `never` for this content without a store: the CLI's
+    /// remove, which holds only `&dyn Clock`, never blocks on a copy.
+    pub fn never_in(
+        home: &Path,
+        project: &ProjectKey,
+        item: &RepoItem,
+        hash: &str,
+    ) -> Result<(), Error> {
         check(item, hash)?;
-        let (_lock, _pinned) = self.global_lock(item)?;
-        self.record(item, hash, "never")
+        let (_lock, _pinned) = global_lock_in(home, item, Wait::Block)?;
+        Self::record_in(home, project, item, hash, "never")
     }
 
     /// Under `pinned/.lock`: checks the copy `pinned/<hash>`, runs `check`
@@ -233,7 +261,7 @@ impl Store {
                 why: "that is not a content hash".to_owned(),
             });
         }
-        let Some((_lock, pinned)) = pinned_lock(home, hash, false)? else {
+        let Some((_lock, pinned)) = pinned_lock(home, hash, false, Wait::Block)? else {
             return Ok(CopyRemoval::Absent);
         };
         let copy = pinned.join(hash);
@@ -362,8 +390,22 @@ impl Store {
     /// holds it: never runs the repository's files. Writes nothing under
     /// `approvals/`. A copy that cannot be made is the caller's error.
     pub fn ensure_copy(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
+        self.copy_wait(item, hash, Wait::Block)
+    }
+
+    /// As `ensure_copy`, but `pinned/.lock` is tried `installed::LOCK_TRIES` times,
+    /// 10 ms apart on the store's clock, then `Error::Busy`: session start and reload never wait
+    /// on another process's approval.
+    pub fn try_ensure_copy(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
+        self.copy_wait(item, hash, Wait::Tries(&*self.clock))
+    }
+
+    /// One copy through one wait for `pinned/.lock`: blocking for an
+    /// approval or a person-waiting caller, bounded for a session start
+    /// or reload that must never wait on another process.
+    fn copy_wait(&self, item: &RepoItem, hash: &str, wait: Wait<'_>) -> Result<CopyHold, Error> {
         check(item, hash)?;
-        let (_lock, pinned) = self.global_lock(item)?;
+        let (_lock, pinned) = self.global_lock(item, wait)?;
         let copy = self.copy_dir(hash);
         self.pin_locked(item, hash, &copy, &pinned)?;
         // Still under `pinned/.lock`: the shared hold on a finished copy.
@@ -382,16 +424,12 @@ impl Store {
 
     /// `pinned/.lock`, held: what serialises concurrent approvals. The
     /// pinned root is checked before the lock file is even opened, so a
-    /// link where the root goes never receives one. The lock is blocking,
-    /// including for finished copies: a concurrent approval waits rather
-    /// than racing a rebuild.
-    fn global_lock(&self, item: &RepoItem) -> Result<(File, PathBuf), Error> {
-        // `pinned_lock` with `create` makes the root, so `None` would mean
-        // a concurrent removal of `pinned/` itself, which no code does.
-        pinned_lock(&self.home, &item.name, true)?.ok_or(Error::Pin {
-            item: item.name.clone(),
-            why: "pinned/ is missing after it was created".to_owned(),
-        })
+    /// link where the root goes never receives one. The wait is blocking
+    /// for an approval, including for finished copies, so a concurrent
+    /// approval waits rather than racing a rebuild; bounded for a session
+    /// start or reload, so it never waits on another process.
+    fn global_lock(&self, item: &RepoItem, wait: Wait<'_>) -> Result<(File, PathBuf), Error> {
+        global_lock_in(&self.home, item, wait)
     }
 
     /// The copy itself, with `pinned/.lock` already held: keeping a
@@ -609,7 +647,17 @@ impl Store {
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
-        let dir = self.approvals(item.kind);
+        Self::record_in(&self.home, &self.project, item, hash, decision)
+    }
+
+    fn record_in(
+        home: &Path,
+        project: &ProjectKey,
+        item: &RepoItem,
+        hash: &str,
+        decision: &str,
+    ) -> Result<(), Error> {
+        let dir = Self::approvals_in(home, project, item.kind);
         fs::create_dir_all(&dir).map_err(io_error(&dir))?;
         let files: Vec<&str> = item.files.iter().map(|f| f.rel.as_str()).collect();
         let files = Value::from(files);
@@ -761,13 +809,40 @@ fn check_marker(item: &str, home: &Path, path: &Path) -> Result<bool, Error> {
     }
 }
 
+/// Under `pinned/.lock`, for callers without a store.
+fn global_lock_in(home: &Path, item: &RepoItem, wait: Wait<'_>) -> Result<(File, PathBuf), Error> {
+    // `pinned_lock` with `create` makes the root, so `None` would mean
+    // a concurrent removal of `pinned/` itself, which no code does.
+    pinned_lock(home, &item.name, true, wait)?.ok_or(Error::Pin {
+        item: item.name.clone(),
+        why: "pinned/ is missing after it was created".to_owned(),
+    })
+}
+
+/// How `pinned_lock` waits for `pinned/.lock`: an approval or removal
+/// blocks, since a person is waiting on it; a session start or reload
+/// tries a bounded number of times, then fails rather than waiting on
+/// another process's approval.
+#[derive(Clone, Copy)]
+enum Wait<'c> {
+    Block,
+    Tries(&'c dyn Clock),
+}
+
 /// `pinned/.lock`, held: what serialises approvals and prune's removals.
 /// With `create` the root is made first, as approvals need; without it a
 /// missing root is `None` and nothing is created, as removals need. Either
 /// way the root is checked before the lock file is even opened, so a link
-/// or file where the root goes never receives one. The lock is blocking:
-/// a concurrent approval or removal waits rather than racing a rebuild.
-fn pinned_lock(home: &Path, name: &str, create: bool) -> Result<Option<(File, PathBuf)>, Error> {
+/// or file where the root goes never receives one. The wait is blocking
+/// for an approval or removal, which waits rather than racing a rebuild;
+/// bounded for a session start or reload, which fails with [`Error::Busy`]
+/// after `LOCK_TRIES` tries, ten milliseconds apart on the wait's clock.
+fn pinned_lock(
+    home: &Path,
+    name: &str,
+    create: bool,
+    wait: Wait<'_>,
+) -> Result<Option<(File, PathBuf)>, Error> {
     let pinned = home.join("pinned");
     check_dirs(name, home, &pinned, true)?;
     if create {
@@ -786,7 +861,27 @@ fn pinned_lock(home: &Path, name: &str, create: bool) -> Result<Option<(File, Pa
         .open(&lock_path)
         .map_err(io_error(&lock_path))?;
     signal_lock_attempt();
-    lock.lock().map_err(io_error(&lock_path))?;
+    match wait {
+        Wait::Block => {
+            lock.lock().map_err(io_error(&lock_path))?;
+        }
+        Wait::Tries(clock) => {
+            let mut held = false;
+            for _ in 0..LOCK_TRIES {
+                match lock.try_lock() {
+                    Ok(()) => {
+                        held = true;
+                        break;
+                    }
+                    Err(TryLockError::WouldBlock) => clock.sleep(Duration::from_millis(10)),
+                    Err(TryLockError::Error(e)) => return Err(io_error(&lock_path)(e)),
+                }
+            }
+            if !held {
+                return Err(Error::Busy);
+            }
+        }
+    }
     Ok(Some((lock, pinned)))
 }
 

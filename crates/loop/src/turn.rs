@@ -149,8 +149,18 @@ impl Loop {
         if self.load_after_reload {
             self.load_after_reload = false;
             let held = self.tools.len();
-            self.load_approved()?;
-            if self.tools.len() != held {
+            let late = self.load_approved()?;
+            // A reload's build stands unless a load replaced its tools:
+            // a post-offer load that registered one, or the late step.
+            if late || self.tools.len() != held {
+                self.preamble = None;
+            }
+        } else if self.preamble.is_some() {
+            // A rewound loop holds a logged preamble: the late step
+            // installs when this process's offer approved an extension,
+            // and no-ops otherwise, so no guard is needed. When it
+            // installs, its build replaces the logged one.
+            if self.load_approved()? {
                 self.preamble = None;
             }
         }

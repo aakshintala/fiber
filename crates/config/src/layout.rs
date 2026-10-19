@@ -13,11 +13,31 @@ pub fn extensions_dir(home: &Path) -> PathBuf {
     home.join("extensions")
 }
 
+/// `<home>/pinned`: the approved copies of code a repository ships,
+/// one `pinned/<hash>/` directory each.
+pub fn pinned_dir(home: &Path) -> PathBuf {
+    home.join("pinned")
+}
+
+/// `<home>/approvals`: the per-machine approvals of code a repository
+/// ships, one file per MCP server decision.
+pub fn machine_approvals_dir(home: &Path) -> PathBuf {
+    home.join("approvals")
+}
+
 /// `<layer>/data/<slug>`: one extension's data directory. `layer` is Fiber
 /// home for machine-wide data or `projects/<key>/` for per-project data;
 /// `slug` is already `crate::dir_name(..)`.
 pub fn extension_data_dir(layer: &Path, slug: &str) -> PathBuf {
     layer.join("data").join(slug)
+}
+
+/// `<home>/projects/<key>/approvals`: one project's approvals of code a
+/// repository ships, one file per extension or hook decision.
+pub fn project_approvals_dir(home: &Path, project: &ProjectKey) -> PathBuf {
+    home.join("projects")
+        .join(project.as_str())
+        .join("approvals")
 }
 
 /// `<home>/projects/<key>/data/<slug>`: one extension's per-project data

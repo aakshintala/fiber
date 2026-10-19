@@ -377,6 +377,10 @@ fn resumed_session(
         Arc::clone(&reads),
         process,
         seed,
+        crate::session_extensions::RepositoryScope {
+            workspace: Some(std::path::PathBuf::from(&folded.workspace)),
+            skipped: folded.skipped(),
+        },
     )?;
     // The session directory's log: the opening message's
     // environment names it.
@@ -410,6 +414,7 @@ fn resumed_session(
         resolve,
         web_search,
         shell_read_only,
+        repository,
         ..
     } = parts;
     // The log is already open: install the writer before any append the
@@ -592,8 +597,13 @@ fn resumed_session(
         log.clone(),
         diag.clone(),
         shell_read_only,
+        std::sync::Arc::new(std::sync::Mutex::new(repository)),
     );
-    let reloader = reload.preparer();
+    // Every notice the startup already wrote, including the ones
+    // `mcp_servers_started` writes after this read: the late preparer
+    // drops the ones it would repeat and keeps the new ones.
+    let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
+    let (reloader, late) = reload.preparers(written);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was. The commit below
     // decides the window between `start` and the first write: a recorded
@@ -607,7 +617,12 @@ fn resumed_session(
     match signals.commit(|| {
         r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
             .and_then(|()| crate::session_extensions::written(&log, &current.get()))
-            .and_then(|()| r#loop::mcp_servers_started(&log, server_failures, mcp.notices))
+            .and_then(|()| {
+                // The providers load reports the same shadow the
+                // session's load reported: `written` wrote that half.
+                let notices = crate::session_extensions::unwritten(mcp.notices, &current.get());
+                r#loop::mcp_servers_started(&log, server_failures, notices)
+            })
     }) {
         Err(code) => {
             servers.stop();
@@ -670,6 +685,7 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switcher, switchable)
                         .reloader(reloader)
+                        .late_extensions(late)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)

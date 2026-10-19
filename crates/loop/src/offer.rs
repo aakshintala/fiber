@@ -12,7 +12,7 @@ use contract::events::{
     RepositoryCodeResolved, ToolReplaced,
 };
 use contract::inbox::{Ack, Delivery};
-use contract::repository::{RepositoryCode, Unapproved};
+use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::shapes::Failure;
 use contract::tool::Tool;
 use contract::{ErrorCode, RequestId};
@@ -104,6 +104,12 @@ pub(crate) struct State {
     pub(crate) load: Option<LoadApproved>,
     /// The load ran in this process.
     pub(crate) loaded: bool,
+    /// Prepares the session's extensions again once this process's offer
+    /// recorded an approval of an extension, before its first preamble.
+    pub(crate) late: Option<crate::PrepareReload>,
+    /// This process's offer recorded an approval of an extension. The
+    /// late step runs once, then clears it.
+    pub(crate) approved_extension: bool,
     /// The step ran in this process.
     done: bool,
 }
@@ -402,9 +408,20 @@ impl Loop {
             if *decision == OfferDecision::Skip {
                 continue;
             }
-            if let Err(failure) = code.decide(item, *decision) {
-                inbox::reject(ack, failure.code, &failure.message);
-                return Ok(false);
+            let decided = match code.decide(item, *decision) {
+                Ok(decided) => decided,
+                Err(failure) => {
+                    inbox::reject(ack, failure.code, &failure.message);
+                    return Ok(false);
+                }
+            };
+            // An approval of an extension arms this process's late step:
+            // it runs once before the first preamble, then clears this.
+            if *decision == OfferDecision::Approve
+                && item.kind == OfferedKind::Extension
+                && matches!(decided, Decided::Recorded)
+            {
+                self.repository.approved_extension = true;
             }
         }
         // A skip lives only in the log and this session, committed only
@@ -464,6 +481,16 @@ impl Loop {
         self
     }
 
+    /// Prepares the session's extensions again once this process's offer
+    /// recorded an approval of an extension, before its first preamble:
+    /// the late step writes `extensions_loaded` with the prepared set and
+    /// its notices, and no `reloaded`. Unlike the post-offer load, it also
+    /// runs on a loop that holds a logged preamble, whose build it drops.
+    pub fn late_extensions(mut self, prepare: crate::PrepareReload) -> Self {
+        self.repository.late = Some(prepare);
+        self
+    }
+
     /// What the offer step settled in this session: the log's folded skips
     /// plus this process's decisions and notices.
     fn outcome(&self) -> OfferOutcome {
@@ -506,43 +533,71 @@ impl Loop {
     /// registers it, except one whose name the load found already held:
     /// what was registered before the load stands, with no replacement
     /// recorded. A later approved tool of a name an earlier approved tool
-    /// took still replaces it and is recorded.
-    pub(crate) fn load_approved(&mut self) -> Result<(), Error> {
-        let Some(load) = self.repository.load.clone() else {
-            return Ok(());
-        };
-        if self.repository.loaded {
-            return Ok(());
-        }
-        // Set before calling, so an `Err` is not retried.
-        self.repository.loaded = true;
-        let mut outcome = self.outcome();
-        // The names held before the load: what was registered stands,
-        // with no replacement recorded. Taken before calling, so a
-        // collision inside the load still replaces and records, and the
-        // load drops the declared rows those names held.
-        outcome.held = self.tools.keys().cloned().collect();
-        match load(&outcome) {
-            Ok(approved) => {
-                for event in &approved.events {
-                    self.write(event, None, None)?;
-                }
-                for (by, tool) in approved.tools {
-                    let definition = tool.definition();
-                    let name = definition.name.clone();
-                    if outcome.held.contains(&name) {
-                        continue;
+    /// took still replaces it and is recorded. Then the late step: when
+    /// this process's offer recorded an approval of an extension, the
+    /// late preparer installs before the first preamble, after the
+    /// post-offer load's events. Returns whether the late step installed.
+    pub(crate) fn load_approved(&mut self) -> Result<bool, Error> {
+        if let Some(load) = self.repository.load.clone()
+            && !self.repository.loaded
+        {
+            // Set before calling, so an `Err` is not retried.
+            self.repository.loaded = true;
+            let mut outcome = self.outcome();
+            // The names held before the load: what was registered stands,
+            // with no replacement recorded. Taken before calling, so a
+            // collision inside the load still replaces and records, and the
+            // load drops the declared rows those names held.
+            outcome.held = self.tools.keys().cloned().collect();
+            match load(&outcome) {
+                Ok(approved) => {
+                    for event in &approved.events {
+                        self.write(event, None, None)?;
                     }
-                    if let Some((from, _, _)) = self
-                        .tools
-                        .insert(name.clone(), (by.clone(), tool, definition))
-                    {
-                        self.replaced.push(ToolReplaced { name, from, to: by });
+                    for (by, tool) in approved.tools {
+                        let definition = tool.definition();
+                        let name = definition.name.clone();
+                        if outcome.held.contains(&name) {
+                            continue;
+                        }
+                        if let Some((from, _, _)) = self
+                            .tools
+                            .insert(name.clone(), (by.clone(), tool, definition))
+                        {
+                            self.replaced.push(ToolReplaced { name, from, to: by });
+                        }
                     }
                 }
-                Ok(())
+                Err(failure) => return Err(Error::RepositoryCode(failure)),
             }
-            Err(failure) => Err(Error::RepositoryCode(failure)),
+        }
+        // The late step runs once, on the post-offer load's usual path
+        // and on a loop holding a logged preamble alike: a rewound one's
+        // server half never runs, but an approval in this process still
+        // installs. Cleared before preparing, so a failure is not
+        // retried; without a late preparer the flag simply stays armed.
+        if !self.repository.approved_extension {
+            return Ok(false);
+        }
+        let Some(prepare) = self.repository.late.clone() else {
+            return Ok(false);
+        };
+        self.repository.approved_extension = false;
+        let route = crate::ReloadRoute {
+            model: self.model.reference.clone(),
+            credential: self.prompt.credential.clone(),
+        };
+        match prepare(&route) {
+            Ok(prepared) => {
+                self.apply_late(prepared)?;
+                Ok(true)
+            }
+            Err(rejection) => Err(Error::RepositoryCode(Failure {
+                code: rejection.code,
+                message: rejection.message,
+                retry_after_ms: None,
+                provider: None,
+            })),
         }
     }
 }

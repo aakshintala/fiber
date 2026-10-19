@@ -296,6 +296,7 @@ pub(crate) fn run_new(
                 Arc::clone(&reads),
                 process,
                 seed,
+                crate::session_extensions::RepositoryScope::default(),
             )?
         }
         None => {
@@ -310,6 +311,7 @@ pub(crate) fn run_new(
                 Arc::clone(&reads),
                 process,
                 extensions::StateSeed::new(),
+                crate::session_extensions::RepositoryScope::default(),
             )
             .map_err(|failure| ::cli::with_fix(failure, &overrides_for_fix))?
         }
@@ -341,6 +343,7 @@ pub(crate) fn run_new(
         project,
         workspace,
         sessions,
+        repository,
         credential_files,
         extensions,
         locks,
@@ -531,8 +534,13 @@ pub(crate) fn run_new(
         log.clone(),
         diag.clone(),
         shell_read_only,
+        std::sync::Arc::new(std::sync::Mutex::new(repository)),
     );
-    let reloader = reload.preparer();
+    // Every notice the startup already wrote, including the ones
+    // `mcp_servers_started` writes after this read: the late preparer
+    // drops the ones it would repeat and keeps the new ones.
+    let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
+    let (reloader, late) = reload.preparers(written);
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: nothing was written, so nothing more is.
     let reads = switching.reads();
@@ -619,7 +627,10 @@ pub(crate) fn run_new(
                 started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                     session_extensions::written(&log, &current.get())?;
-                    r#loop::mcp_servers_started(&log, server_failures, mcp.notices)?;
+                    // The providers load reports the same shadow the
+                    // session's load reported: `written` wrote that half.
+                    let notices = crate::session_extensions::unwritten(mcp.notices, &current.get());
+                    r#loop::mcp_servers_started(&log, server_failures, notices)?;
                     Ok(looped)
                 })
             });
@@ -640,6 +651,7 @@ pub(crate) fn run_new(
                         .on_handoff(forget)
                         .switcher(switcher, switchable)
                         .reloader(reloader)
+                        .late_extensions(late)
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)

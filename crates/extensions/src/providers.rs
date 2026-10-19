@@ -278,7 +278,7 @@ impl Providers {
     /// numbers. Each damaged directory leaves one `extension_failed`
     /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |_| true)
+        Self::load_with(home, |_: &str| true, &crate::RepositorySet::default())
     }
 
     /// Reads the installed providers enabled by the effective configuration.
@@ -287,12 +287,34 @@ impl Providers {
         home: &Path,
         config: &config::Config,
     ) -> Result<(Self, Vec<Notice>), Error> {
-        Self::load_with(home, |name| crate::is_enabled(config, name))
+        Self::load_with(
+            home,
+            |name: &str| crate::is_enabled(config, name),
+            &crate::RepositorySet::default(),
+        )
+    }
+
+    /// Reads the session's providers from the merged personal and
+    /// repository entries: an approved repository copy replaces the
+    /// personal install of the same name, with one notice naming both,
+    /// whether or not it is enabled. A damaged personal install keeps
+    /// its `extension_failed` notice.
+    pub fn load_repository(
+        home: &Path,
+        config: &config::Config,
+        repository: &crate::RepositorySet,
+    ) -> Result<(Self, Vec<Notice>), Error> {
+        Self::load_with(
+            home,
+            |name: &str| crate::is_enabled(config, name),
+            repository,
+        )
     }
 
     fn load_with(
         home: &Path,
         enabled: impl Fn(&str) -> bool,
+        repository: &crate::RepositorySet,
     ) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
         let mut providers = Self::default();
@@ -307,12 +329,15 @@ impl Providers {
                 extension: Some(short_name(&hit.name).to_owned()),
             });
         }
-        for entry in entries.found {
-            let dir = entry.dir;
-            let manifest = entry.manifest;
-            if !enabled(&manifest.name) {
-                continue;
-            }
+        // An approved repository copy replaces the personal install of
+        // the same name: the merged list carries both in slug order, with
+        // one notice per shadowed install.
+        let (merged, mut shadows) =
+            crate::repository::candidates(entries.found, repository, &enabled);
+        notices.append(&mut shadows);
+        for candidate in merged {
+            let dir = candidate.dir;
+            let manifest = candidate.manifest;
             if manifest.api != API {
                 notices.push(Notice {
                     code: ErrorCode::ExtensionIncompatible,
@@ -369,8 +394,8 @@ impl Providers {
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
             // The built-in provider's name is reserved: a package that
-            // claims it is left out, with one notice, like a bad addendum
-            // leaves its providers out.
+            // claims it keeps none of its providers, with one
+            // `extension_failed` notice naming the package.
             datas.retain(|data| {
                 if data.name != scripted::SCRIPTED {
                     return true;

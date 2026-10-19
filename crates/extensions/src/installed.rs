@@ -36,7 +36,7 @@ pub struct Installed {
 /// How many times, ten milliseconds apart, a second operation tries for the
 /// lock before it fails. A process another thread just started can hold a
 /// copy of the lock's file for a moment after its owner let go.
-const LOCK_TRIES: u32 = 50;
+pub(crate) const LOCK_TRIES: u32 = 50;
 
 /// The file lock over `extensions/.lock`. A plan keeps one across approval.
 pub(crate) struct Lock {

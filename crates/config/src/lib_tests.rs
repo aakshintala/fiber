@@ -9,7 +9,25 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use super::{Config, ProjectKey, Source, Sources, full_name, keys, path, view};
+use super::{
+    Config, ProjectKey, Source, Sources, full_name, keys, machine_approvals_dir, path, pinned_dir,
+    project_approvals_dir, view,
+};
+
+#[test]
+fn layout_builds_the_approvals_and_pinned_dirs() {
+    let home = PathBuf::from("/home");
+    let project = ProjectKey::new("key").unwrap();
+    assert_eq!(
+        project_approvals_dir(&home, &project),
+        PathBuf::from("/home/projects/key/approvals")
+    );
+    assert_eq!(
+        machine_approvals_dir(&home),
+        PathBuf::from("/home/approvals")
+    );
+    assert_eq!(pinned_dir(&home), PathBuf::from("/home/pinned"));
+}
 
 #[test]
 fn view_borrows_without_a_model() {

@@ -7,6 +7,7 @@
 mod content;
 mod declared;
 mod offer;
+mod project;
 mod servers;
 mod session;
 mod store;
@@ -38,6 +39,8 @@ use contract::events::OfferedKind;
 pub use content::{Index, hash};
 pub use declared::{RepoItem, declared_items, mcp_server_item};
 pub use offer::{Pending, pending};
+pub use project::{ApprovedExtension, RepositorySet, approved_extension, approved_extensions};
+pub(crate) use project::{Candidate, candidates};
 pub use servers::{ApprovedServer, ServerApproval, SpawnGuard, repository_servers};
 pub use session::SessionOffer;
 pub use store::{CopyHold, CopyRemoval, Decision, Fetch, KeptCopy, Store};

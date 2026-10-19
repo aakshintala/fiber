@@ -1122,8 +1122,11 @@ Behaviour is `docs/extensions.md`.
 #### `extensions_loaded`
 
 Durable. The full set of extensions the session loaded. Written at each
-process start, a resume included, before the first model request, and again
-after every `reload`, following `reloaded`. It always carries the whole set, never a
+process start, a resume included, before the first model request; again
+before the process's first `preamble_built` when its offer approved an
+extension, which then loads in that process, with no `reloaded`
+(`docs/extensions.md`, "Code a repository ships"); and again after every `reload`,
+following `reloaded`. It always carries the whole set, never a
 difference; the latest wins, and a `summary` connection is sent the latest.
 A client half reads it to decide whether it draws for this session
 (`docs/extensions.md`, "Client halves").

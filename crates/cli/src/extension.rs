@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use extensions::{Origin, Provenance, Request};
+use extensions::{Origin, Provenance, Request, approved_extension, approved_extensions};
 
 use crate::{failed, finish, finish_code, write_line};
 
@@ -106,17 +106,21 @@ pub fn extension_update(name: Option<&str>, fiber_version: &str, clock: &dyn Clo
     finish_code(ran)
 }
 
-/// `fiber extension remove <name>`: removes an extension, the
-/// dependencies nothing else uses, and their data and settings, asking
-/// first in a terminal.
+/// `fiber extension remove <name>`: in the launch project, never's a
+/// declared repository extension for its current content, so it is not
+/// offered again until its content changes; anything else removes a
+/// personal install, asking first in a terminal.
 pub fn extension_remove(name: &str, clock: &dyn Clock) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            remove(
+            let workspace =
+                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            remove_in(
                 &home,
+                &workspace,
                 name,
                 clock,
                 Io {
@@ -156,11 +160,23 @@ pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -
 }
 
 /// `fiber extension list`: one line per installed extension: name,
-/// version and commit.
+/// version and commit; then one line per approved repository extension
+/// of the launch project: name, version, `repository`, the project,
+/// the declared path and the approved content hash.
 pub fn extension_list(clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
-        .and_then(|home| list(&home, clock, &mut io::stdout().lock()));
+        .and_then(|home| {
+            let workspace =
+                std::env::current_dir().map_err(|e| failed(contract::ErrorCode::IoFailed, e))?;
+            list_in(
+                &home,
+                &workspace,
+                clock,
+                &mut io::stdout().lock(),
+                &mut io::stderr(),
+            )
+        });
     finish(ran)
 }
 
@@ -238,6 +254,125 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
     for name in names {
         writeln!(err, "fiber: removed {name}").unwrap_or(());
     }
+    Ok(0)
+}
+
+/// Whether the workspace's repository declares an extension: the project
+/// key costs a `git` call, so it is computed only then (ruling 17). A
+/// declaration that does not read still counts as declaring, so the
+/// repository path reports the failure as today.
+fn declares_extensions(workspace: &Path) -> bool {
+    match config::declared(workspace) {
+        Ok(declared) => !declared.extensions.is_empty(),
+        Err(_) => true,
+    }
+}
+
+/// The launch project's key, or `None` when the workspace declares no
+/// extension and the repository path is skipped.
+fn repository_project(
+    home: &Path,
+    workspace: &Path,
+) -> Result<Option<config::ProjectKey>, Failure> {
+    if !declares_extensions(workspace) {
+        return Ok(None);
+    }
+    crate::project_of(home, workspace).map(|(_, project)| Some(project))
+}
+
+/// `fiber extension list` in `workspace`: the personal lines, then one
+/// row per declared extension this project approved, at its current
+/// content: name, version, `repository`, the project, the declared
+/// path and the content hash. A declaration that does not read names
+/// itself once and leaves the personal lines alone.
+fn list_in(
+    home: &Path,
+    workspace: &Path,
+    clock: &dyn Clock,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), Failure> {
+    let Some(project) = repository_project(home, workspace)? else {
+        return list(home, clock, out);
+    };
+    let approved = match approved_extensions(home, &project, workspace, clock) {
+        Ok(approved) => approved,
+        Err(e) => {
+            writeln!(err, "fiber: {e}").unwrap_or(());
+            Vec::new()
+        }
+    };
+    list(home, clock, out)?;
+    for entry in &approved {
+        // A closed stdout leaves nobody to tell.
+        write_line(
+            out,
+            &format!(
+                "{} {} repository {} {} {}",
+                entry.name,
+                entry.version,
+                doors::project(workspace).display(),
+                entry.path,
+                entry.hash
+            ),
+        )
+        .unwrap_or(());
+    }
+    Ok(())
+}
+
+/// `fiber extension remove <name>` in `workspace`: a declared extension
+/// whose current content this project approved is recorded never for
+/// that content, so it is not offered again until its content changes;
+/// the pinned copy, a personal install of the same name and its data
+/// stay. Anything else falls through to the personal removal, asking
+/// first in a terminal.
+fn remove_in(
+    home: &Path,
+    workspace: &Path,
+    typed: &str,
+    clock: &dyn Clock,
+    io: Io<'_>,
+) -> Result<i32, Failure> {
+    let Io {
+        terminal,
+        input,
+        err,
+    } = io;
+    let project = repository_project(home, workspace)?;
+    let found = match &project {
+        Some(project) => match approved_extension(home, project, workspace, typed, clock) {
+            Ok(found) => found,
+            Err(e) => {
+                writeln!(err, "fiber: {e}").unwrap_or(());
+                None
+            }
+        },
+        None => None,
+    };
+    let (Some(project), Some((item, digest))) = (project, found) else {
+        return remove(
+            home,
+            typed,
+            clock,
+            Io {
+                terminal,
+                input,
+                err,
+            },
+        );
+    };
+    if !approve::remove_approved(std::slice::from_ref(&item.name), &[], terminal, input, err)? {
+        writeln!(err, "fiber: nothing was removed.").unwrap_or(());
+        return Ok(1);
+    }
+    extensions::Store::never_in(home, &project, &item, &digest).map_err(|e| failed(e.code(), e))?;
+    writeln!(
+        err,
+        "fiber: removed {} from this project; it is not offered again until its content changes",
+        item.name
+    )
+    .unwrap_or(());
     Ok(0)
 }
 
@@ -357,3 +492,7 @@ fn commit_plan(
 #[cfg(test)]
 #[path = "extension_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "extension_repo_tests.rs"]
+mod repo_tests;

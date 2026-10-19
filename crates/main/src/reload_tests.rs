@@ -100,6 +100,7 @@ impl Fixture {
                 Arc::default(),
                 log::diag::Process::Session,
                 extensions::StateSeed::new(),
+                crate::session_extensions::RepositoryScope::default(),
             )
             .unwrap()
         });
@@ -130,6 +131,9 @@ impl Fixture {
             server_names: vec!["db".into()],
             prompt_rows: Vec::new(),
             late: Arc::default(),
+            repository: Arc::new(Mutex::new(
+                crate::session_extensions::RepositoryScope::default(),
+            )),
             declare: Arc::new(move |name, info| {
                 let mut map = declared_now.lock().unwrap();
                 match info {
@@ -505,4 +509,344 @@ fn a_second_reload_replaces_again_and_an_empty_config_empties() {
         fixture.state.shell_read_only.lock().unwrap().is_empty(),
         "a reload from a config with no entry empties the list"
     );
+}
+
+/// The repository package `dir` with this manifest and `init.lua`, listed
+/// by git as a repository package is.
+fn declare_pkgs(rig: &Rig, pkgs: &[(&str, serde_json::Value, &str, bool)]) {
+    fakes::git::git(&rig.workspace, &["init", "--quiet"]);
+    let mut declared = Vec::new();
+    for (dir, manifest, init, required) in pkgs {
+        let pkg = rig.workspace.join(dir);
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("extension.json"), manifest.to_string()).unwrap();
+        std::fs::write(pkg.join("init.lua"), init).unwrap();
+        declared.push(json!({"path": dir, "required": required}));
+    }
+    std::fs::create_dir_all(rig.workspace.join(".fiber")).unwrap();
+    std::fs::write(
+        rig.workspace.join(".fiber/config.json"),
+        json!({"repository_extensions": declared}).to_string(),
+    )
+    .unwrap();
+}
+
+fn manifest(name: &str) -> serde_json::Value {
+    json!({"name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1})
+}
+
+/// Approves the declared extension `name` through the public store API.
+fn approve(fixture: &Fixture, name: &str) {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let items =
+        extensions::declared_items(&fixture.rig.workspace, &*clock).expect("declared items");
+    let found = items
+        .into_iter()
+        .find(|item| item.kind == contract::events::OfferedKind::Extension && item.name == name)
+        .expect("the declared extension");
+    let mut index = extensions::Index::load(&fixture.rig.home);
+    let digest = extensions::hash(&mut index, &found).expect("the content hash");
+    let store = extensions::Store::new(
+        &fixture.rig.home,
+        &fixture.state.sources.project,
+        std::sync::Arc::clone(&clock),
+    )
+    .fetching(extensions::Fetch::new(
+        extensions::Origin::github(),
+        env!("CARGO_PKG_VERSION"),
+        clock,
+    ));
+    store.approve(&found, &digest).expect("the approval");
+}
+
+#[test]
+fn reload_lists_an_approved_repository_package() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "pkg",
+            manifest("fiber.test/lint"),
+            "fiber.command('lint',{timeout=5000,run=function() return 'lint' end})",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/lint");
+    let prepared = fixture.prepare();
+    let listed = prepared
+        .extensions
+        .iter()
+        .find(|extension| extension.name == "fiber.test/lint")
+        .expect("the approved package is listed");
+    assert_eq!(listed.version, "v1.0.0");
+}
+
+#[test]
+fn reload_lists_a_repository_package_disabled_in_configuration() {
+    let fixture = Fixture::new();
+    declare_pkgs(&fixture.rig, &[("pkg", manifest("x"), "-- entry\n", false)]);
+    approve(&fixture, "x");
+    // The `enabled` gate is personal: an approved repository copy loads
+    // even when configuration disables the name.
+    fixture
+        .rig
+        .write_global(&json!({"model":"scripted/s.json", "extensions":{"x":{"enabled":false}}}));
+    let prepared = fixture.prepare();
+    assert!(
+        prepared
+            .extensions
+            .iter()
+            .any(|extension| extension.name == "x"),
+        "the disabled repository package still lists: {:?}",
+        prepared.extensions
+    );
+}
+
+#[test]
+fn reload_rejects_a_missing_required_package_and_keeps_current() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "pkg",
+            manifest("fiber.test/need"),
+            "error(\"boom\")\n",
+            true,
+        )],
+    );
+    approve(&fixture, "fiber.test/need");
+    let old = fixture.state.current.get();
+    let state = fixture.state.clone();
+    let rejected = fakes::within("required reload", fakes::MUST_SUCCEED_WITHIN, move || {
+        state
+            .prepare(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .err()
+            .unwrap()
+    });
+    assert_eq!(rejected.code, contract::ErrorCode::ExtensionRequiredFailed);
+    assert!(
+        rejected.message.contains("fiber.test/need"),
+        "the rejection names the missing extension: {}",
+        rejected.message
+    );
+    assert!(Arc::ptr_eq(&old, &fixture.state.current.get()));
+}
+
+#[test]
+fn the_late_preparer_drops_written_notices_and_keeps_new_ones() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    // The first preparation stands in for the startup: its notices are
+    // what the session already wrote.
+    let written = fixture.prepare().notices;
+    assert_eq!(written.len(), 1, "{written:?}");
+    declare_pkgs(
+        &fixture.rig,
+        &[
+            (
+                "old",
+                manifest("fiber.test/old"),
+                "error(\"old boom\")\n",
+                false,
+            ),
+            (
+                "new",
+                manifest("fiber.test/new"),
+                "error(\"new boom\")\n",
+                false,
+            ),
+        ],
+    );
+    approve(&fixture, "fiber.test/new");
+    let state =
+        Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
+    let (_reload, late) = state.preparers(written);
+    let prepared = fakes::within("late preparation", fakes::MUST_SUCCEED_WITHIN, move || {
+        late(&r#loop::ReloadRoute {
+            model: "scripted/s.json".into(),
+            credential: None,
+        })
+        .unwrap()
+    });
+    assert_eq!(prepared.notices.len(), 1, "{:?}", prepared.notices);
+    assert!(
+        prepared.notices[0].message.contains("new boom"),
+        "the new notice is kept: {:?}",
+        prepared.notices
+    );
+}
+
+/// A startup notice of the kind `mcp_servers_started` writes.
+fn startup_notice(text: &str) -> contract::events::Notice {
+    contract::events::Notice {
+        code: contract::ErrorCode::ExtensionFailed,
+        message: text.to_owned(),
+        extension: None,
+    }
+}
+
+#[test]
+fn a_rejected_required_package_quotes_its_own_notice() {
+    let fixture = Fixture::new();
+    // The other package fails too, and its notice comes first in the
+    // set: the rejection must quote the missing package's own notice.
+    declare_pkgs(
+        &fixture.rig,
+        &[
+            (
+                "other",
+                manifest("fiber.test/other"),
+                "error(\"other boom\")\n",
+                false,
+            ),
+            (
+                "need",
+                manifest("fiber.test/need"),
+                "error(\"need boom\")\n",
+                true,
+            ),
+        ],
+    );
+    approve(&fixture, "fiber.test/other");
+    approve(&fixture, "fiber.test/need");
+    let state = fixture.state.clone();
+    let rejected = fakes::within("required detail", fakes::MUST_SUCCEED_WITHIN, move || {
+        state
+            .prepare(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .err()
+            .unwrap()
+    });
+    assert_eq!(rejected.code, contract::ErrorCode::ExtensionRequiredFailed);
+    assert!(
+        rejected.message.contains("need boom"),
+        "the rejection quotes the missing package's notice: {}",
+        rejected.message
+    );
+    assert!(
+        !rejected.message.contains("other boom"),
+        "another package's notice is not quoted: {}",
+        rejected.message
+    );
+}
+
+#[test]
+fn a_late_install_does_not_repeat_the_startup_notices() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    // The startup installs the old package: its notice is the one the
+    // session already wrote.
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let written = crate::session_extensions::startup_written(&fixture.state.current.get(), &[]);
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert!(written[0].message.contains("old boom"), "{written:?}");
+    declare_pkgs(
+        &fixture.rig,
+        &[
+            (
+                "old",
+                manifest("fiber.test/old"),
+                "error(\"old boom\")\n",
+                false,
+            ),
+            (
+                "new",
+                manifest("fiber.test/new"),
+                "error(\"new boom\")\n",
+                false,
+            ),
+        ],
+    );
+    approve(&fixture, "fiber.test/new");
+    let state =
+        Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
+    let (_reload, late) = state.preparers(written);
+    let prepared = fakes::within("late install", fakes::MUST_SUCCEED_WITHIN, move || {
+        late(&r#loop::ReloadRoute {
+            model: "scripted/s.json".into(),
+            credential: None,
+        })
+        .unwrap()
+    });
+    assert_eq!(prepared.notices.len(), 1, "{:?}", prepared.notices);
+    assert!(
+        prepared.notices[0].message.contains("new boom"),
+        "only the new notice is written: {:?}",
+        prepared.notices
+    );
+}
+
+#[test]
+fn startup_written_is_the_session_notices_then_the_startup_notices() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let current = fixture.state.current.get();
+    let session = current.notices();
+    assert_eq!(session.len(), 1, "{session:?}");
+    let startup = startup_notice("a startup note");
+    assert_eq!(
+        crate::session_extensions::startup_written(&current, std::slice::from_ref(&startup)),
+        vec![session[0].clone(), startup],
+    );
+}
+
+#[test]
+fn unwritten_keeps_only_the_startup_notices_the_session_did_not_write() {
+    let fixture = Fixture::new();
+    declare_pkgs(
+        &fixture.rig,
+        &[(
+            "old",
+            manifest("fiber.test/old"),
+            "error(\"old boom\")\n",
+            false,
+        )],
+    );
+    approve(&fixture, "fiber.test/old");
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    let current = fixture.state.current.get();
+    let written = current.notices()[0].clone();
+    let first = startup_notice("first new");
+    let second = startup_notice("second new");
+    let kept = crate::session_extensions::unwritten(
+        vec![first.clone(), written, second.clone()],
+        &current,
+    );
+    assert_eq!(kept, vec![first, second]);
 }

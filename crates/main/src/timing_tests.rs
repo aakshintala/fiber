@@ -107,6 +107,7 @@ fn parts(
                 reads,
                 log::diag::Process::Session,
                 extensions::StateSeed::new(),
+                crate::session_extensions::RepositoryScope::default(),
             )
         })
     };
@@ -173,6 +174,7 @@ fn a_malformed_config_keeps_the_load_error_and_writes_nothing() {
                 reads,
                 log::diag::Process::Session,
                 extensions::StateSeed::new(),
+                crate::session_extensions::RepositoryScope::default(),
             )
         })
     }
