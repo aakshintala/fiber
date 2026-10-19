@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
+use contract::commands::{Command, CommandLine, Message, SubscribeArgs, SubscribeLevel};
 use contract::sessions::{ListError, MessageError, Running, Sessions};
 use contract::tool::Cancel;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -104,9 +105,13 @@ impl SessionSockets {
             let sent = crate::attach::send(
                 &mut stream,
                 &id,
-                &command,
-                "subscribe",
-                serde_json::json!({"level":"summary"}),
+                &CommandLine {
+                    id: contract::CommandId(command.clone()),
+                    command: Command::Subscribe(SubscribeArgs {
+                        level: SubscribeLevel::Summary,
+                        credential: None,
+                    }),
+                },
             );
             connections.push(Connection {
                 running: Running { id, status: None },
@@ -317,20 +322,24 @@ impl SessionSockets {
         let command = crate::mint("c_");
         let mut out = Vec::new();
         out.extend_from_slice(
-            &serde_json::to_vec(&serde_json::json!({
-                "id": subscribe,
-                "command": "subscribe",
-                "args": {"level": "summary"},
-            }))
+            &serde_json::to_vec(&CommandLine {
+                id: contract::CommandId(subscribe.clone()),
+                command: Command::Subscribe(SubscribeArgs {
+                    level: SubscribeLevel::Summary,
+                    credential: None,
+                }),
+            })
             .map_err(|e| message_io(path, e))?,
         );
         out.push(b'\n');
         out.extend_from_slice(
-            &serde_json::to_vec(&serde_json::json!({
-                "id": command,
-                "command": "message",
-                "args": {"from_session_id": &from.0, "text": text},
-            }))
+            &serde_json::to_vec(&CommandLine {
+                id: contract::CommandId(command.clone()),
+                command: Command::Message(Message {
+                    from_session_id: from.clone(),
+                    text: text.to_owned(),
+                }),
+            })
             .map_err(|e| message_io(path, e))?,
         );
         out.push(b'\n');

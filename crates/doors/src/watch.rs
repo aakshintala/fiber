@@ -8,7 +8,8 @@ use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use contract::{Envelope, SessionId};
+use contract::commands::{Command, CommandLine, SubscribeArgs, SubscribeLevel};
+use contract::{CommandId, Envelope, SessionId};
 
 use crate::attach::{check_version, is_answer, next_line, rejection, send};
 use crate::mint;
@@ -59,9 +60,13 @@ pub fn watch_after(
     send(
         &mut writer,
         id,
-        &sub,
-        "subscribe",
-        serde_json::json!({"level": "full"}),
+        &CommandLine {
+            id: CommandId(sub.clone()),
+            command: Command::Subscribe(SubscribeArgs {
+                level: SubscribeLevel::Full,
+                credential: None,
+            }),
+        },
     )
     .map_err(failed)?;
     // The acknowledgement is written before the writer starts, so it is

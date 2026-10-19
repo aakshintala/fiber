@@ -7,8 +7,11 @@ use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use contract::SessionId;
+use contract::commands::{
+    Command, CommandLine, ContentArgs, SentPart, SubscribeArgs, SubscribeLevel,
+};
 use contract::shapes::Failure;
+use contract::{CommandId, SessionId};
 
 use crate::attach::{check_version, is_answer, next_line, rejection, send};
 use crate::mint;
@@ -131,9 +134,13 @@ pub fn steer(
     if send(
         &mut writer,
         id,
-        &sub,
-        "subscribe",
-        serde_json::json!({"level": "summary"}),
+        &CommandLine {
+            id: CommandId(sub.clone()),
+            command: Command::Subscribe(SubscribeArgs {
+                level: SubscribeLevel::Summary,
+                credential: None,
+            }),
+        },
     )
     .is_err()
     {
@@ -169,16 +176,30 @@ pub fn steer(
     if send(
         &mut writer,
         id,
-        command,
-        "steer",
-        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+        &CommandLine {
+            id: CommandId(command.to_owned()),
+            command: Command::Steer(ContentArgs {
+                content: vec![SentPart::Text {
+                    text: text.to_owned(),
+                }],
+            }),
+        },
     )
     .is_err()
     {
         return Steered::Gone;
     }
     let probe = mint("c_");
-    if send(&mut writer, id, &probe, "tools", serde_json::json!({})).is_err() {
+    if send(
+        &mut writer,
+        id,
+        &CommandLine {
+            id: CommandId(probe.clone()),
+            command: Command::Tools,
+        },
+    )
+    .is_err()
+    {
         return Steered::Gone;
     }
     let mut queued = false;

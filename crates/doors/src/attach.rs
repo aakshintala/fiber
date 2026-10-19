@@ -10,8 +10,11 @@ use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
+use contract::commands::{
+    Command, CommandLine, ContentArgs, CredentialArgs, SentPart, SubscribeArgs, SubscribeLevel,
+};
 use contract::shapes::Failure;
-use contract::{ErrorCode, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
 use serde_json::Value;
 
 use crate::{failure, mint};
@@ -52,9 +55,13 @@ pub fn attach(
     send(
         &mut writer,
         id,
-        &sub,
-        "subscribe",
-        serde_json::json!({"level": "full"}),
+        &CommandLine {
+            id: CommandId(sub.clone()),
+            command: Command::Subscribe(SubscribeArgs {
+                level: SubscribeLevel::Full,
+                credential: None,
+            }),
+        },
     )?;
     // The acknowledgement is written before the writer starts, so it is the
     // first line this connection reads, ahead of the fold.
@@ -81,9 +88,12 @@ pub fn attach(
         send(
             &mut writer,
             id,
-            &switch,
-            "credential",
-            serde_json::json!({"label": label}),
+            &CommandLine {
+                id: CommandId(switch.clone()),
+                command: Command::Credential(CredentialArgs {
+                    label: label.to_owned(),
+                }),
+            },
         )?;
         loop {
             let Some((_, line)) = next_line(&mut reader) else {
@@ -100,9 +110,12 @@ pub fn attach(
     send(
         &mut writer,
         id,
-        &command,
-        "prompt",
-        serde_json::json!({"content": [{"type": "text", "text": prompt}]}),
+        &CommandLine {
+            id: CommandId(command.clone()),
+            command: Command::Prompt(ContentArgs {
+                content: vec![SentPart::Text { text: prompt }],
+            }),
+        },
     )?;
     let mut printing = false;
     loop {
@@ -133,16 +146,9 @@ pub fn attach(
 pub(crate) fn send(
     writer: &mut UnixStream,
     id: &SessionId,
-    command: &str,
-    name: &str,
-    args: Value,
+    line: &CommandLine,
 ) -> Result<(), Failure> {
-    let bytes = serde_json::to_vec(&serde_json::json!({
-        "id": command,
-        "command": name,
-        "args": args,
-    }))
-    .map_err(|e| {
+    let bytes = serde_json::to_vec(line).map_err(|e| {
         failure(
             ErrorCode::IoFailed,
             format!("a command could not be written as JSON: {e}"),
