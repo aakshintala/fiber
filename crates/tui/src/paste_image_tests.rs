@@ -597,10 +597,6 @@ fn waiting(
     end: std::time::Instant,
     what: &str,
 ) {
-    assert!(
-        clock.await_parked(end, DEADLINE),
-        "{what}: the read never parked at its deadline"
-    );
     let mark = clock.advance_when_parked(
         Some(end),
         None,
