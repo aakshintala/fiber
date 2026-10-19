@@ -209,7 +209,7 @@ fn quote(path: &Path) -> String {
 /// inside the read.
 fn exec_script(mark: &Path, ready: &Path, hold: &Path, prefix: &str) -> String {
     format!(
-        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < \"$({}echo {})\"\n",
+        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < \"$({}echo {})\" & wait\n",
         quote(mark),
         quote(ready),
         prefix,
