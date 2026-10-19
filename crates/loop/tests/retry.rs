@@ -20,6 +20,7 @@ use contract::ErrorCode;
 use contract::events::{TextDelta, ToolCallArgumentsDelta, TurnOutcome};
 use contract::provider::{CallError, CallUsage, Delta, InputSize};
 use contract::shapes::Failure;
+use fakes::Deadline;
 use fakes::{Scripted, call_usage};
 use r#loop::Retry;
 
@@ -140,7 +141,12 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
             1,
             "no second request before the wait ends"
         );
-        clock.advance(Duration::from_secs(2));
+        clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_secs(2),
+            &Deadline::after(DEADLINE),
+        );
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
@@ -222,8 +228,7 @@ fn three_failures_then_success_waits_2_4_8s() {
             (14, Duration::from_secs(8)),
         ] {
             let until = clock.origin() + Duration::from_secs(until);
-            assert!(clock.await_parked(until, DEADLINE), "parks {until:?} out");
-            clock.advance(wait);
+            clock.advance_when_parked(Some(until), None, wait, &Deadline::after(DEADLINE));
         }
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
@@ -289,8 +294,7 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
             (14, Duration::from_secs(8)),
         ] {
             let until = clock.origin() + Duration::from_secs(until);
-            assert!(clock.await_parked(until, DEADLINE), "parks {until:?} out");
-            clock.advance(wait);
+            clock.advance_when_parked(Some(until), None, wait, &Deadline::after(DEADLINE));
         }
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Failed));
     });
@@ -453,11 +457,12 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
     std::thread::scope(|scope| {
         let turn = scope.spawn(|| session.turn());
         let until = clock.origin() + Duration::from_secs(30);
-        assert!(
-            clock.await_parked(until, DEADLINE),
-            "the 30s asked wait beats the 2s backoff"
+        clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_secs(30),
+            &Deadline::after(DEADLINE),
         );
-        clock.advance(Duration::from_secs(30));
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
@@ -709,7 +714,12 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
             1,
             "the earlier advance buys no retry"
         );
-        clock.advance(Duration::from_secs(2));
+        clock.advance_when_parked(
+            Some(until),
+            None,
+            Duration::from_secs(2),
+            &Deadline::after(DEADLINE),
+        );
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
