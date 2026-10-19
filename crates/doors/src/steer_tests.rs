@@ -50,8 +50,10 @@ fn the_tools_probe_carries_no_args_key() {
     let run = home.join("run");
     std::fs::create_dir_all(&run).unwrap();
     let listener = UnixListener::bind(run.join(&id.0)).unwrap();
-    let served = thread::spawn(move || {
+    let (served_tx, served_rx) = mpsc::channel::<()>();
+    let _served = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut raw = String::new();
         reader.read_line(&mut raw).unwrap();
@@ -77,14 +79,33 @@ fn the_tools_probe_carries_no_args_key() {
             serde_json::json!({"id": probe_id, "command": "tools"}),
             "the tools probe carries no args key"
         );
+        let _sent = served_tx.send(());
     });
-    let mut commit = || true;
-    let mut on_queued = || {};
+    let (done_tx, done_rx) = mpsc::channel();
+    let home_client = home.clone();
+    let id_client = id.clone();
+    let _steered = thread::spawn(move || {
+        let mut commit = || true;
+        let mut on_queued = || {};
+        let outcome = steer(
+            &home_client,
+            &id_client,
+            &mint("c_"),
+            "pin",
+            &mut commit,
+            &mut on_queued,
+        );
+        let _sent = done_tx.send(outcome);
+    });
     assert_eq!(
-        steer(&home, &id, &mint("c_"), "pin", &mut commit, &mut on_queued),
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("steer answered"),
         Steered::Accepted
     );
-    served.join().expect("the server read the probe line");
+    Deadline::after(DEADLINE)
+        .recv(&served_rx)
+        .expect("the server read the probe line");
 }
 
 #[test]

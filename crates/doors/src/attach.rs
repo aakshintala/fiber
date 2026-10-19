@@ -121,7 +121,7 @@ pub fn attach(
             printing = true;
         } else if printing && envelope.kind == "turn_completed" {
             emit(out, &raw)?;
-            return Ok(completed(&envelope));
+            return Ok(exit_code(&envelope));
         } else if printing && envelope.kind == "fiber_exited" {
             return Err(ended(id));
         }
@@ -311,7 +311,7 @@ fn starts_turn(envelope: &Envelope, command: &str) -> bool {
 }
 
 /// The exit code for `envelope`'s outcome: 0 for `completed`, 1 for the rest.
-fn completed(envelope: &Envelope) -> i32 {
+fn exit_code(envelope: &Envelope) -> i32 {
     if envelope.payload.get("outcome").and_then(Value::as_str) == Some("completed") {
         0
     } else {
@@ -329,9 +329,9 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
     })
 }
 
-/// The subscribe or credential rejection's code and message, read from the
-/// answer's payload map. Envelope readers pass `envelope.payload` directly;
-/// raw-line readers pass the whole line here.
+/// Any command's rejection code and message, read from the answer line's
+/// payload map. Envelope readers pass `envelope.payload` to [`rejection`]
+/// directly; raw-line readers pass the whole line here.
 pub(crate) fn rejected(line: &Value) -> Failure {
     let empty = Map::new();
     let payload = line
@@ -341,9 +341,9 @@ pub(crate) fn rejected(line: &Value) -> Failure {
     rejection(payload)
 }
 
-/// The subscribe or credential rejection's code and message, read from the
-/// answer's payload map. Envelope readers pass `envelope.payload` directly;
-/// raw-line readers use [`rejected`] on the whole line.
+/// Any command's rejection code and message, read from the answer's payload
+/// map. Envelope readers pass `envelope.payload` directly; raw-line readers
+/// use [`rejected`] on the whole line.
 pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
     let code = payload
         .get("code")
