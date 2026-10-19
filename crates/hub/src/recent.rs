@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -111,14 +111,13 @@ impl RecentError {
 /// file opened for append, created mode 0600 (`docs/state.md`, "Concurrent
 /// access").
 pub fn append(home: &Path, row: &RecentRow) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(row)?;
-    bytes.push(b'\n');
+    let bytes = serde_json::to_vec(row)?;
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
         .mode(0o600)
         .open(path(home))?;
-    file.write_all(&bytes)
+    support::framing::write_line(&mut file, &bytes)
 }
 
 /// Every row in file order; a line that does not parse is skipped, and a

@@ -21,7 +21,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
+#[cfg(test)]
+use std::io::Write;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -455,10 +457,10 @@ impl Feed {
         // The `c_hub_feed_` prefix keeps the feed's own connection
         // distinct from a relay rejoin.
         let subscribe = format!(
-            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}\n",
+            "{{\"id\":\"{}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"summary\"}}}}",
             crate::start::mint("c_hub_feed_")
         );
-        if read.get_ref().write_all(subscribe.as_bytes()).is_err() {
+        if support::framing::write_line(&mut read.get_ref(), subscribe.as_bytes()).is_err() {
             return;
         }
         let mut state = lock(&self.state);
@@ -497,13 +499,14 @@ impl Feed {
     ) {
         let dir = found.as_ref().map(|(_, dir, _)| dir.clone());
         let mut read = BufReader::new(read);
-        let mut buf = Vec::new();
         loop {
-            buf.clear();
-            match read.read_until(b'\n', &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if !self.on_line(id, &buf, dir.as_deref()) {
+            match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+                Ok(None) | Err(_) => break,
+                Ok(Some(mut line)) => {
+                    // `snapshot` concatenates stored lines with no separator,
+                    // so every line kept ends in exactly one LF.
+                    line.push(b'\n');
+                    if !self.on_line(id, &line, dir.as_deref()) {
                         read.get_ref()
                             .get_ref()
                             .shutdown(Shutdown::Both)
