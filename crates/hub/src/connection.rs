@@ -17,9 +17,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -112,9 +110,12 @@ pub(crate) struct Hub {
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
-    /// Tests only: the longest client line the read loop takes, in bytes
-    /// before its line feed. Production always takes `MAX_LINE`.
-    #[cfg(test)]
+    /// The longest client line the read loop takes, in bytes
+    /// before its line feed: tests lower it so the cap is reachable
+    /// without a 64 MiB line, production takes `MAX_LINE`. One field
+    /// and one function, so the mutation check pins the production
+    /// value through the test seam instead of leaving a fallback
+    /// no test compiles.
     pub(crate) line_cap: AtomicUsize,
 }
 
@@ -201,7 +202,6 @@ impl Hub {
             before_disconnect_cleanup: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
-            #[cfg(test)]
             line_cap: AtomicUsize::new(support::framing::MAX_LINE),
         }
     }
@@ -401,15 +401,8 @@ impl Hub {
 
 /// The longest client line the read loop takes: the test seam lowers it
 /// so the cap is reachable without a 64 MiB line.
-#[cfg(test)]
 fn line_cap(hub: &Hub) -> usize {
     hub.line_cap.load(Ordering::SeqCst)
-}
-
-/// The longest client line the read loop takes.
-#[cfg(not(test))]
-fn line_cap(_hub: &Hub) -> usize {
-    support::framing::MAX_LINE
 }
 
 /// Tests only: a one-shot pause before the next forwarded session line:
