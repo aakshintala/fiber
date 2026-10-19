@@ -28,8 +28,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, ignore_closed_peer, installed,
-    is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
+    Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, installed, probe, probe_with,
+    render_json, render_text,
 };
 use crate::hub_unit::{Manager, name};
 
@@ -440,8 +440,94 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     assert_eq!(request, json!({"id": "c_status", "command": "status"}));
 }
 
+/// Whether `stream` is in blocking mode, read from the socket itself.
+fn is_blocking(stream: &UnixStream) -> bool {
+    !rustix::fs::fcntl_getfl(stream)
+        .unwrap()
+        .contains(rustix::fs::OFlags::NONBLOCK)
+}
+
+#[test]
+fn ask_restores_blocking_after_a_reply() {
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(accepted("c_status", "1.2.3", 1).as_bytes())
+        .unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = ANSWER;
+    fakes::within("the ask", DEADLINE, move || {
+        let reply = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        )
+        .unwrap();
+        assert_eq!(reply.version, "1.2.3");
+        assert!(is_blocking(&stream), "a reply leaves the stream blocking");
+    });
+}
+
+#[test]
+fn ask_restores_blocking_after_a_close_before_the_answer() {
+    let (stream, peer) = UnixStream::pair().unwrap();
+    peer.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = ANSWER;
+    fakes::within("the ask", DEADLINE, move || {
+        let Err(error) = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        ) else {
+            panic!("a close before the answer is an error");
+        };
+        assert!(error.message.contains("closed"), "{}", error.message);
+        assert!(
+            is_blocking(&stream),
+            "a close before the answer leaves the stream blocking"
+        );
+    });
+}
+
+#[test]
+fn ask_restores_blocking_after_the_deadline() {
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    assert!(is_blocking(&stream), "the stream arrives blocking");
+    let clock = FakeClock::new();
+    let within = Duration::ZERO;
+    fakes::within("the ask", DEADLINE, move || {
+        let Err(error) = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        ) else {
+            panic!("a deadline is an error");
+        };
+        assert!(
+            error.message.contains("did not answer"),
+            "{}",
+            error.message
+        );
+        assert!(
+            is_blocking(&stream),
+            "a deadline leaves the stream blocking"
+        );
+    });
+}
+
 #[test]
 fn an_answer_followed_by_a_close_is_read() {
+    // The one test through `ask` reaching the closed-peer `InvalidInput` side (macOS only; Linux never refuses).
     let (_dir, home) = home();
     let (_got, _hub) = fake_hub(&home, |mut stream| {
         stream
@@ -623,21 +709,6 @@ fn the_json_is_one_line_in_field_order() {
 }
 
 #[test]
-fn only_a_missing_devices_dir_is_no_devices() {
-    assert!(is_missing(std::io::ErrorKind::NotFound));
-    for kind in [
-        std::io::ErrorKind::PermissionDenied,
-        std::io::ErrorKind::NotADirectory,
-        std::io::ErrorKind::TimedOut,
-        std::io::ErrorKind::WouldBlock,
-        std::io::ErrorKind::InvalidInput,
-        std::io::ErrorKind::ConnectionReset,
-    ] {
-        assert!(!is_missing(kind), "{kind:?}");
-    }
-}
-
-#[test]
 fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     let (_dir, home) = home();
     let probed = home.clone();
@@ -650,34 +721,6 @@ fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     fs::write(home.join("hub/devices"), b"x").unwrap();
     let error = super::devices(&home).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
-}
-
-#[test]
-fn only_the_closed_peer_refusal_is_ignored() {
-    use std::io::ErrorKind;
-    fn error(kind: ErrorKind) -> std::io::Error {
-        std::io::Error::new(kind, "injected for the test")
-    }
-    assert!(is_closed_peer(ErrorKind::InvalidInput));
-    for kind in [
-        ErrorKind::NotFound,
-        ErrorKind::TimedOut,
-        ErrorKind::WouldBlock,
-        ErrorKind::ConnectionReset,
-    ] {
-        assert!(!is_closed_peer(kind), "{kind:?}");
-    }
-    assert!(ignore_closed_peer(Ok(())).is_ok());
-    assert!(ignore_closed_peer(Err(error(ErrorKind::InvalidInput))).is_ok());
-    for kind in [
-        ErrorKind::TimedOut,
-        ErrorKind::WouldBlock,
-        ErrorKind::NotFound,
-        ErrorKind::ConnectionReset,
-    ] {
-        let folded = ignore_closed_peer(Err(error(kind)));
-        assert_eq!(folded.unwrap_err().kind(), kind, "{kind:?}");
-    }
 }
 
 /// The child's marker: set, the test runs `hub_status` and exits with its
