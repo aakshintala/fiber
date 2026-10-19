@@ -214,11 +214,11 @@ pub(crate) fn request(
     command_id: &str,
     command: HubCommand,
 ) -> Result<Value, Failure> {
-    let value = serde_json::to_value(&HubCommandLine {
+    let line = HubCommandLine {
         id: CommandId(command_id.to_owned()),
         command,
-    })
-    .map_err(|e| {
+    };
+    let bytes = serde_json::to_vec(&line).map_err(|e| {
         failed(
             ErrorCode::IoFailed,
             format!("a command could not be written as JSON: {e}"),
@@ -226,16 +226,15 @@ pub(crate) fn request(
     })?;
     // The name for the messages below, read from the serialised line so a
     // renamed variant cannot leave a stale name here.
-    let name = value
-        .get("command")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let bytes = serde_json::to_vec(&value).map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("a command could not be written as JSON: {e}"),
-        )
-    })?;
+    let name = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
     support::framing::write_line(read.get_mut(), &bytes).map_err(lost)?;
     loop {
@@ -250,7 +249,7 @@ pub(crate) fn request(
         let Ok(answer) = serde_json::from_slice::<HubLine>(&buf) else {
             continue;
         };
-        if let Some(answered) = answer_of(&answer, command_id, name) {
+        if let Some(answered) = answer_of(&answer, command_id, &name) {
             return answered;
         }
     }

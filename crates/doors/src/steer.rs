@@ -117,7 +117,8 @@ pub fn steer(
     commit: &mut dyn FnMut() -> bool,
     on_queued: &mut dyn FnMut(),
 ) -> Steered {
-    let opened = match open(home, id, SubscribeLevel::Summary) {
+    let socket = home.join("run").join(&id.0);
+    let opened = match open(&socket, id, SubscribeLevel::Summary) {
         Ok(opened) => opened,
         Err(_) => return Steered::Gone,
     };
@@ -174,7 +175,12 @@ pub fn steer(
             return Steered::Gone;
         };
         if is_answer(&line, "command_rejected", command) {
-            return Steered::Rejected(rejection(&line));
+            let empty = serde_json::Map::new();
+            let payload = line
+                .get("payload")
+                .and_then(serde_json::Value::as_object)
+                .unwrap_or(&empty);
+            return Steered::Rejected(rejection(payload));
         }
         if is_answer(&line, "command_accepted", command) {
             return Steered::Accepted;

@@ -48,7 +48,8 @@ pub fn watch_after(
     after: Option<u64>,
     on_line: &mut dyn FnMut(&Envelope),
 ) -> std::io::Result<Watched> {
-    let (mut reader, _) = match subscribe_full(home, id) {
+    let socket = home.join("run").join(&id.0);
+    let (mut reader, _) = match subscribe_full(&socket, id) {
         Ok(pair) => pair,
         Err(Unsubscribed::Connect(error) | Unsubscribed::Clone(error)) => return Err(error),
         Err(Unsubscribed::Write(failure)) => return Err(failed(failure)),

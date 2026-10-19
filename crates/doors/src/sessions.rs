@@ -426,7 +426,12 @@ impl SessionSockets {
                     return Ok(());
                 }
                 if crate::attach::is_answer(&line, "command_rejected", &command) {
-                    return Err(MessageError::Rejected(crate::attach::rejection(&line)));
+                    let empty = serde_json::Map::new();
+                    let payload = line
+                        .get("payload")
+                        .and_then(serde_json::Value::as_object)
+                        .unwrap_or(&empty);
+                    return Err(MessageError::Rejected(crate::attach::rejection(payload)));
                 }
             }
             if buffer.len() > MAX_LINE {

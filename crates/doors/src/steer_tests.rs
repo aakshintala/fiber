@@ -71,8 +71,7 @@ fn the_tools_probe_carries_no_args_key() {
         reader.read_line(&mut raw).unwrap();
         let probe: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let probe_id = probe["id"].as_str().unwrap().to_owned();
-        // `Command::Tools` is a unit variant, so it writes no `args`
-        // key, where the hand-built line wrote `"args":{}`.
+        // `Command::Tools` is a unit variant, so it writes no `args` key.
         assert_eq!(
             probe,
             serde_json::json!({"id": probe_id, "command": "tools"}),

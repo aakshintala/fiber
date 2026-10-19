@@ -222,7 +222,7 @@ pub struct DeviceLogin {
 }
 
 /// The `args` of `configure`: the operation and its own arguments. The
-/// operations' arguments stay a JSON map: no Part 3 caller builds them,
+/// operations' arguments stay a JSON map: no caller builds them,
 /// and typing each of the twenty operations with no consumer would add
 /// unverified structs.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

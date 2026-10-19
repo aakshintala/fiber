@@ -46,14 +46,17 @@ pub fn attach(
     // then read until its answer and check the version, all on the raw
     // line. A session on another schema version may answer outside this
     // build's envelope, so the answer is matched before any envelope
-    // parse (`docs/invocation.md`, "Processes").
-    let (mut reader, mut writer) = match subscribe_full(home, id) {
+    // parse (`docs/invocation.md`, "Processes"). The socket path is joined
+    // here, where the Fiber-home allowance lives, and passed down; `open`
+    // below never joins a home path itself.
+    let socket = home.join("run").join(&id.0);
+    let (mut reader, mut writer) = match subscribe_full(&socket, id) {
         Ok(pair) => pair,
         Err(Unsubscribed::Connect(_)) => return Err(refused),
         Err(Unsubscribed::Clone(e)) => {
             return Err(failure(
                 ErrorCode::IoFailed,
-                format!("{}: {e}", home.join("run").join(&id.0).display()),
+                format!("{}: {e}", socket.display()),
             ));
         }
         Err(Unsubscribed::Write(f) | Unsubscribed::Rejected(f) | Unsubscribed::Version(f)) => {
@@ -80,13 +83,13 @@ pub fn attach(
             },
         )?;
         loop {
-            let Some((_, line)) = next_line(&mut reader) else {
+            let Some((_, envelope)) = next_envelope(&mut reader) else {
                 return Err(ended(id));
             };
-            if is_answer(&line, "command_rejected", &switch) {
-                return Err(rejection(&line));
+            if answers(&envelope, "command_rejected", &switch) {
+                return Err(rejection(&envelope.payload));
             }
-            if is_answer(&line, "command_accepted", &switch) {
+            if answers(&envelope, "command_accepted", &switch) {
                 break;
             }
         }
@@ -107,12 +110,9 @@ pub fn attach(
             return Err(ended(id));
         };
         if answers(&envelope, "command_rejected", &command) {
-            // The prompt's own rejection, read through the one helper so
-            // its code and message match the handshake's.
-            return Err(rejection(&Value::Object(Map::from_iter([(
-                "payload".to_owned(),
-                Value::Object(envelope.payload.clone()),
-            )]))));
+            // The prompt's own rejection, read from its payload so its
+            // code and message match the handshake's.
+            return Err(rejection(&envelope.payload));
         }
         if envelope.kind == "command_accepted" || envelope.kind == "command_rejected" {
             continue;
@@ -166,7 +166,11 @@ pub(crate) fn kind(line: &Value) -> &str {
     line.get("kind").and_then(Value::as_str).unwrap_or("")
 }
 
-/// Whether `line` answers `command` with `kind`.
+/// Whether `line` answers `command` with `kind`, on the raw JSON line.
+/// This stays on `Value` for the readers that match before any envelope
+/// parse: the subscribe handshake (a session on another schema version
+/// may answer outside this build's envelope), `steer`, and the sessions
+/// poll loop. Envelope readers past the handshake use [`answers`] instead.
 pub(crate) fn is_answer(line: &Value, kind: &str, command: &str) -> bool {
     self::kind(line) == kind
         && line.pointer("/payload/command_id").and_then(Value::as_str) == Some(command)
@@ -197,17 +201,18 @@ pub(crate) enum Unsubscribed {
     Version(Failure),
 }
 
-/// Connects to the session `id` running under `home`, mints the subscribe
-/// id and writes the `level` subscribe. `steer` subscribes `summary` and
-/// pauses between this and [`subscribed`]; `attach` and `watch` subscribe
-/// `full` through [`subscribe_full`].
+/// Connects to the session socket, mints the subscribe id and writes the
+/// `level` subscribe. The caller joins the socket path under its own
+/// Fiber-home allowance and passes it in: this never joins a home path
+/// itself. `steer` subscribes `summary` and pauses between this and
+/// [`subscribed`]; `attach` and `watch` subscribe `full` through
+/// [`subscribe_full`].
 pub(crate) fn open(
-    home: &Path,
+    socket: &Path,
     id: &SessionId,
     level: SubscribeLevel,
 ) -> Result<Opened, Unsubscribed> {
-    let socket = home.join("run").join(&id.0);
-    let stream = UnixStream::connect(&socket).map_err(Unsubscribed::Connect)?;
+    let stream = UnixStream::connect(socket).map_err(Unsubscribed::Connect)?;
     let reader = BufReader::new(stream.try_clone().map_err(Unsubscribed::Clone)?);
     let mut writer = stream;
     let sub = mint("c_");
@@ -251,7 +256,12 @@ pub(crate) fn subscribed(
             return Err(Unsubscribed::Closed);
         };
         if is_answer(&line, "command_rejected", &sub.0) {
-            return Err(Unsubscribed::Rejected(rejection(&line)));
+            let empty = Map::new();
+            let payload = line
+                .get("payload")
+                .and_then(Value::as_object)
+                .unwrap_or(&empty);
+            return Err(Unsubscribed::Rejected(rejection(payload)));
         }
         if is_answer(&line, "command_accepted", &sub.0) {
             if let Err(failure) = check_version(id, &line) {
@@ -262,12 +272,13 @@ pub(crate) fn subscribed(
     }
 }
 
-/// [`open`] at `full`, then [`subscribed`]: the whole handshake.
+/// [`open`] at `full`, then [`subscribed`]: the whole handshake. Takes the
+/// already-joined socket path, as [`open`] does.
 pub(crate) fn subscribe_full(
-    home: &Path,
+    socket: &Path,
     id: &SessionId,
 ) -> Result<(BufReader<UnixStream>, UnixStream), Unsubscribed> {
-    let opened = open(home, id, SubscribeLevel::Full)?;
+    let opened = open(socket, id, SubscribeLevel::Full)?;
     subscribed(opened, id)
 }
 
@@ -323,14 +334,17 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
     })
 }
 
-pub(crate) fn rejection(line: &Value) -> Failure {
-    let code = line
-        .pointer("/payload/code")
+/// The subscribe or credential rejection's code and message, read from the
+/// answer's payload map. Envelope readers pass `envelope.payload` directly;
+/// raw-line readers pass the line's `payload` object.
+pub(crate) fn rejection(payload: &Map<String, Value>) -> Failure {
+    let code = payload
+        .get("code")
         .cloned()
         .and_then(|code| serde_json::from_value(code).ok())
         .unwrap_or(ErrorCode::Other("unknown".to_owned()));
-    let message = line
-        .pointer("/payload/message")
+    let message = payload
+        .get("message")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_owned();

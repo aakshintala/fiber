@@ -75,9 +75,7 @@ fn add_run(
         let answer = crate::sessions::request(
             &mut io::BufReader::new(stream),
             "c_pair",
-            HubCommand::Pair(Pair {
-                code: contract::Secret::new(code.expose().into()),
-            }),
+            HubCommand::Pair(Pair { code: code.clone() }),
         )
         .map_err(|mut error| {
             error.message = error.message.replace(code.expose(), "[redacted]");
