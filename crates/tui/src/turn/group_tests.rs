@@ -2018,11 +2018,10 @@ fn the_gutter_edge_keeps_its_branch_at_six_columns() {
     assert!(texts[1].links.is_empty());
 }
 
-/// Current behaviour: at step 100000 the gutter is seven cells, so at
-/// width 6 the ledger row is wider than its width; the follow-up for
-/// the overflow is #2785.
+/// At step 100000 the gutter is seven cells, so at width 6 the row is
+/// the gutter cut to the width, and the row fits (#2785).
 #[test]
-fn the_six_digit_gutter_at_width_six_keeps_today_two_rows() {
+fn the_six_digit_gutter_at_width_six_is_cut_to_the_width() {
     let group = Group {
         sections: vec![Section {
             step: 100000,
@@ -2038,8 +2037,8 @@ fn the_six_digit_gutter_at_width_six_keeps_today_two_rows() {
     let bound = seam(&fake, false);
     let (rows, _) = draw(&group, 6, Some(&bound));
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[1].0.to_string(), "100000 ");
-    assert_eq!(cells(&rows[1].0), 7);
+    assert_eq!(rows[1].0.to_string(), "100000");
+    assert_eq!(cells(&rows[1].0), 6);
 }
 
 /// An error, a wrong shape, and a refused link each fall back to the

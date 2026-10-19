@@ -897,7 +897,8 @@ cut with "…", so the duration and the toggle stay put.
 ```
 
 A ledger row is the step's number right-aligned in a five-column dim gutter
-on the step's first row, then a glyph: ○ in `attention` while the call runs or
+on the step's first row. A step number longer than five digits widens the
+gutter, and the row is cut to its width. Then a glyph: ○ in `attention` while the call runs or
 waits, ✓ in `success` once it completes, ⊘ dim when cancelled, ✗ dim
 otherwise. Then the call's kind in `info`, padded to nine columns, its target
 cut with "…", and its result: "N lines" for a read, "N matches" for a
