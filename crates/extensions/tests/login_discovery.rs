@@ -32,7 +32,11 @@ fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
         .mark_parked(at, WAIT)
         .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
     let threads = mark.threads();
-    assert_eq!(threads.len(), 1, "only one thread parks at {at:?}: {threads:?}");
+    assert_eq!(
+        threads.len(),
+        1,
+        "only one thread parks at {at:?}: {threads:?}"
+    );
     threads.into_iter().next().expect("one parked thread")
 }
 
