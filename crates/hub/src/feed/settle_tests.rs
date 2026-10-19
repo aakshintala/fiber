@@ -308,6 +308,7 @@ fn a_session_found_after_the_first_scan_is_not_awaited() {
         .expect("the feed is started")
         .thread()
         .id();
+    // debt: duplicates feed_tests advance_to_scan's scanner lookup and advance (P3-2), upgrade when a third caller of the scanner advance appears.
     clock.advance_when_parked(
         Some(due),
         Some(scanner),

@@ -157,9 +157,8 @@ fn entry_of(feed: &Feed, id: &str) -> Option<&'static str> {
     })
 }
 
-/// Advances to the scanner's next scan. The scanner parks at the clock's
-/// origin plus `RUN_SCAN` after `start`; a call before `start` or after an
-/// earlier move fails inside the helper.
+/// Advances to the scanner's next scan at the clock's now plus `RUN_SCAN`;
+/// fails inside the helper when the started scanner is not parked there.
 fn advance_to_scan(feed: &Feed, clock: &FakeClock) {
     let scanner = lock(&feed.scanner)
         .as_ref()
