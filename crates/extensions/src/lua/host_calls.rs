@@ -356,12 +356,6 @@ pub(super) fn admit<'a>(
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
                             #[cfg(test)]
                             settle_hook(&target, Pause::ExecEnding);
-                            // The group is empty or killed and drained past
-                            // here: a cancelled call may return only now.
-                            hub_exec.lock().finish_exec(id);
-                            hub_exec.notify();
-                            #[cfg(test)]
-                            settle_hook(&target, Pause::ExecFinished);
                             match &outcome {
                                 Ok(ran) => send_exec(&hub_exec, meta.as_ref(), ran),
                                 Err(failed) => {
@@ -370,6 +364,12 @@ pub(super) fn admit<'a>(
                                     }
                                 }
                             }
+                            // Queue the line before releasing the callback or
+                            // the shutdown barrier: both may seal its router.
+                            hub_exec.lock().finish_exec(id);
+                            hub_exec.notify();
+                            #[cfg(test)]
+                            settle_hook(&target, Pause::ExecFinished);
                             run_deliver(match outcome {
                                 Ok(ran) => Reply::Exec(Ok(ran)),
                                 Err(failed) => Reply::Exec(Err((failed.code, failed.message))),

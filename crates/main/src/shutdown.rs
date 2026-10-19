@@ -102,9 +102,9 @@ fn shutdown_steps(
     stop_callbacks: impl FnOnce(),
     rest: impl FnOnce(),
 ) {
-    stop_callbacks();
     // The code first: the loop reads it once the stopper wakes it.
     publish(code);
+    stop_callbacks();
     rest();
 }
 

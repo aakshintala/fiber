@@ -304,7 +304,14 @@ impl Hub {
     }
 
     /// Closes admission and waits until every admitted exec has queued its line.
-    pub(super) fn wait_for_execs(&self) {}
+    pub(super) fn wait_for_execs(&self) {
+        // Empty is final only after the same gate that admits runs closes.
+        self.stop_for_shutdown();
+        let mut shared = self.lock();
+        while !shared.execs.is_empty() {
+            shared = self.wait(shared, None);
+        }
+    }
 
     /// Records the extension's drop under the same lock that routes
     /// deliveries: anything routed after this is dropped. A drop cancels

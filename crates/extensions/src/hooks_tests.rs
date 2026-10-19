@@ -1369,7 +1369,7 @@ fn session_wait_for_runs_queues_an_exec_before_returning() {
         "barrier",
         Some(&format!(
             r#"fiber.command("run", {{ timeout = 5000, run = function()
-  host.exec("sh", {{"-c", "echo $$ > \\\"$0\\\"", {ready:?}}})
+  host.exec("sh", {{"-c", "echo $$ > \"$0\"", {ready:?}}})
   return "finished"
 end }})"#,
             ready = ready.display().to_string(),

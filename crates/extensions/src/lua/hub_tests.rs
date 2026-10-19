@@ -60,7 +60,7 @@ fn timer_exec(
     let init = format!(
         r#"fiber.command("arm", {{ timeout = 5000, run = function()
   host.after(100, function()
-    host.exec("sh", {{"-c", "echo $$ > \\\"$0\\\"", {ready:?}}})
+    host.exec("sh", {{"-c", "echo $$ > \"$0\"", {ready:?}}})
     return "fired"
   end, {{ timeout = 5000 }})
   return "armed"
