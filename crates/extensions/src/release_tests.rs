@@ -9,7 +9,7 @@ use std::path::Path;
 
 use fakes::ustar::{archive, gzip, header, sha256 as sha};
 
-use super::{Release, expected_digest, install_release_with, scratch, swap_docs, url};
+use super::{Release, expected_digest, install_release_with, swap_docs, url};
 use crate::Error;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -251,7 +251,7 @@ fn a_commit_that_cannot_be_put_back_is_finished_by_the_next_lock() {
         .unwrap()
         .filter(|e| {
             let name = e.as_ref().unwrap().file_name();
-            name.to_string_lossy().starts_with(".docs.")
+            name.to_string_lossy().starts_with(".docs-")
         })
         .count();
     assert_eq!(docs_left, 0);
@@ -261,51 +261,6 @@ fn a_commit_that_cannot_be_put_back_is_finished_by_the_next_lock() {
     assert!(!home.join("extensions/.commit").exists());
     assert_eq!(commit_of(&home, "anthropic"), "aaa");
     assert_eq!(commit_of(&home, "memory"), "aaa");
-}
-
-#[test]
-fn two_scratch_directories_are_never_shared() {
-    let held = fakes::TempDir::new("fiber-scratch");
-    let one = scratch(held.path()).unwrap();
-    let two = scratch(held.path()).unwrap();
-    assert_ne!(one.path, two.path);
-    assert!(one.path.is_dir() && two.path.is_dir());
-    let (first, second) = (one.path.clone(), two.path.clone());
-    drop(one);
-    assert!(!first.exists());
-    assert!(second.is_dir());
-}
-
-#[test]
-fn a_taken_scratch_name_is_skipped_not_reused() {
-    let held = fakes::TempDir::new("fiber-scratch-taken");
-    let pid = std::process::id();
-    let next = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
-    let taken = held.path().join(format!("fiber-release-{pid}-{next}"));
-    fs::create_dir(&taken).unwrap();
-    fs::write(taken.join("mine"), "x").unwrap();
-    let got = scratch(held.path()).unwrap();
-    assert_ne!(got.path, taken);
-    assert_eq!(fs::read_dir(&got.path).unwrap().count(), 0);
-    assert!(taken.join("mine").exists());
-}
-
-#[test]
-fn a_scratch_directory_that_cannot_be_made_is_that_error_not_a_retry() {
-    let held = fakes::TempDir::new("fiber-scratch-missing");
-    let missing = held.path().join("missing");
-    let before = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
-    let Err(err) = scratch(&missing) else {
-        panic!("a scratch directory was made under a missing directory");
-    };
-    let Error::Io { path, source } = &err else {
-        panic!("{err:?}");
-    };
-    assert_eq!(path.parent(), Some(missing.as_path()), "{err}");
-    assert_eq!(source.kind(), io::ErrorKind::NotFound, "{err}");
-    // Other tests may take names meanwhile, but never all the tries.
-    let after = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
-    assert!(after - before < super::SCRATCH_TRIES, "{before}..{after}");
 }
 
 /// This process's scratch directories left in the system temporary

@@ -231,7 +231,7 @@ fn a_copy_whose_own_put_back_fails_is_put_back_by_the_rollback() {
 }
 
 #[test]
-fn staging_directories_differ_by_plan_id() {
+fn staging_directories_differ_by_call() {
     use super::{Provenance, Record, stage};
     let dirs = Dirs::new("ids");
     let source = dirs.path("src");
@@ -249,10 +249,74 @@ fn staging_directories_differ_by_plan_id() {
         floor: None,
     };
     let home = dirs.path("home");
-    let one = stage(&home, 1, &source, "0.1.0", &record).unwrap().2;
-    let two = stage(&home, 2, &source, "0.1.0", &record).unwrap().2;
+    let one = stage(&home, &source, "0.1.0", &record).unwrap().2;
+    let two = stage(&home, &source, "0.1.0", &record).unwrap().2;
     assert_ne!(one.fresh, two.fresh);
     assert!(one.fresh.is_dir() && two.fresh.is_dir());
+}
+
+#[test]
+fn unique_names_carry_the_prefix_pid_and_counter_and_never_repeat() {
+    let pid = std::process::id();
+    let a = super::unique_name("x");
+    let b = super::unique_name("x");
+    assert_ne!(a, b);
+    for name in [&a, &b] {
+        assert!(name.starts_with(&format!("x-{pid}-")), "{name}");
+    }
+}
+
+#[test]
+fn two_scratch_directories_are_never_shared() {
+    let held = fakes::TempDir::new("fiber-scratch");
+    let one = super::Scratch::create(held.path(), "fiber-release", 0o700).unwrap();
+    let two = super::Scratch::create(held.path(), "fiber-release", 0o700).unwrap();
+    assert_ne!(one.path, two.path);
+    assert!(one.path.is_dir() && two.path.is_dir());
+    let (first, second) = (one.path.clone(), two.path.clone());
+    drop(one);
+    assert!(!first.exists());
+    assert!(second.is_dir());
+}
+
+#[test]
+fn a_taken_scratch_name_is_skipped_not_reused() {
+    let held = fakes::TempDir::new("fiber-scratch-taken");
+    let pid = std::process::id();
+    let next = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    let taken = held.path().join(format!("fiber-release-{pid}-{next}"));
+    fs::create_dir(&taken).unwrap();
+    fs::write(taken.join("mine"), "x").unwrap();
+    let got = super::Scratch::create(held.path(), "fiber-release", 0o700).unwrap();
+    assert_ne!(got.path, taken);
+    assert_eq!(fs::read_dir(&got.path).unwrap().count(), 0);
+    assert!(taken.join("mine").exists());
+}
+
+#[test]
+fn a_scratch_directory_that_cannot_be_made_is_that_error_not_a_retry() {
+    let held = fakes::TempDir::new("fiber-scratch-missing");
+    let missing = held.path().join("missing");
+    let before = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    let Err(err) = super::Scratch::create(&missing, "fiber-release", 0o700) else {
+        panic!("a scratch directory was made under a missing directory");
+    };
+    let crate::Error::Io { path, source } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(path.parent(), Some(missing.as_path()), "{err}");
+    assert_eq!(source.kind(), io::ErrorKind::NotFound, "{err}");
+    // Other tests may take names meanwhile, but never all the tries.
+    let after = super::NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(after - before < super::SCRATCH_TRIES, "{before}..{after}");
+}
+
+#[test]
+fn a_scratch_directory_is_created_with_its_mode() {
+    let held = fakes::TempDir::new("fiber-scratch-mode");
+    let got = super::Scratch::create(held.path(), "fiber-release", 0o700).unwrap();
+    let mode = fs::metadata(got.path()).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
 }
 
 fn journal(dir: &Path, committed: bool, steps: serde_json::Value) {
@@ -515,7 +579,7 @@ fn staging_reads_providers_from_the_copy_not_the_source() {
     assert_eq!(at_source[0].models[0].id, "from-source");
 
     // The link dangles in the copy: staging refuses and removes its copy.
-    let Err(err) = stage(&home, 7, &source, "0.1.0", &record) else {
+    let Err(err) = stage(&home, &source, "0.1.0", &record) else {
         panic!("a dangling provider link was staged");
     };
     assert!(matches!(err, crate::Error::Config(_)), "{err}");
@@ -527,7 +591,7 @@ fn staging_reads_providers_from_the_copy_not_the_source() {
 
     // The link resolves in the copy to another file: that one is returned.
     fs::write(home.join("extensions/x.json"), provider_file("from-copy")).unwrap();
-    let (_, providers, paths) = stage(&home, 8, &source, "0.1.0", &record).unwrap();
+    let (_, providers, paths) = stage(&home, &source, "0.1.0", &record).unwrap();
     assert_eq!(providers[0].models[0].id, "from-copy");
     assert!(paths.fresh.is_dir());
 }
@@ -567,7 +631,7 @@ fn a_record_without_a_floor_reads_with_no_floor_and_writes_none() {
         requested: true,
         floor: None,
     };
-    let (_, _, paths) = stage(&dirs.path("home"), 11, &source, "0.1.0", &staged).unwrap();
+    let (_, _, paths) = stage(&dirs.path("home"), &source, "0.1.0", &staged).unwrap();
     let text = fs::read_to_string(paths.fresh.join(".fiber.json")).unwrap();
     assert!(!text.contains("\"floor\":"), "{text}");
     assert_eq!(Record::read(&paths.fresh).unwrap().floor, None);
@@ -591,7 +655,7 @@ fn a_record_with_a_floor_round_trips_through_staging() {
         requested: false,
         floor: Some("v1.5.0".into()),
     };
-    let (_, _, paths) = stage(&dirs.path("home"), 12, &source, "0.1.0", &staged).unwrap();
+    let (_, _, paths) = stage(&dirs.path("home"), &source, "0.1.0", &staged).unwrap();
     let text = fs::read_to_string(paths.fresh.join(".fiber.json")).unwrap();
     assert!(text.contains("\"floor\":\"v1.5.0\""), "{text}");
     let back = Record::read(&paths.fresh).unwrap();
@@ -652,7 +716,7 @@ fn a_record_that_cannot_be_written_fails_naming_it_and_leaves_nothing() {
         floor: Some("v1.5.0".into()),
     };
     let home = dirs.path("home");
-    let Err(err) = stage(&home, 13, &source, "0.1.0", &record) else {
+    let Err(err) = stage(&home, &source, "0.1.0", &record) else {
         panic!("a record that cannot be written was staged");
     };
     assert!(err.to_string().contains(".fiber.json"), "{err}");
