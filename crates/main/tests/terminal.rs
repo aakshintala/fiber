@@ -2403,8 +2403,8 @@ fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
 /// `FIBER_TEST_FAKE_KEY`, and makes `fake/m` the configured model: `m`
 /// declares the thinking levels low, medium and high, defaulting to
 /// high, so the Session card opens on `fake/m` with `high`. A second
-/// provider `other` carries `om`, whose key names an unset variable, so
-/// choosing it rejects while the turn runs (`docs/model-routing.md`,
+/// provider `other` carries `om`, whose key comes from a command that
+/// exits at once, so choosing it rejects while the turn runs (`docs/model-routing.md`,
 /// "When a credential is missing or fails"). The hub idles out a second
 /// after its last client leaves, so no hub lingers.
 fn provider_thinking_pair(setup: &support::Setup, server: &ProviderServer) {
@@ -2446,7 +2446,7 @@ fn provider_thinking_pair(setup: &support::Setup, server: &ProviderServer) {
         &other.join("providers/other.json"),
         &json!({
             "name": "other",
-            "credential": {"env": "FIBER_TEST_MISSING_KEY"},
+            "credential": {"command": ["sh", "-c", "exit 1"]},
             "models": [{"id": "om", "protocol": "openai-responses",
                         "base_url": format!("{}/v1", server.url()), "context_window": 100000}],
         }),
@@ -2703,17 +2703,28 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
         |grid| shows(grid, "other/om applies when this turn ends"),
         || session_model_changed(&setup),
     );
-    // Preparing the switch reads the unset key, so the session rejects
-    // with `credential_missing`: "nothing is stored in
-    // credentials/other/default, and the environment variable
-    // FIBER_TEST_MISSING_KEY is not set" (`config::Credentials`,
-    // "The one precedence"). The row cuts long messages, so the wait
-    // names the fitting head. The rejection takes the pending notice's
-    // place, and the card keeps the old chips.
+    // Esc interrupts the running turn; the loop then admits the queued
+    // choice and prepares it, and preparing it runs the key command,
+    // which exits at once, so the session rejects with
+    // `credential_missing`: "nothing is stored in
+    // credentials/other/default, and `sh` failed (exit status: 1)"
+    // (`config::Credentials`, "The one precedence"). The notice row
+    // cuts the long message short, so the wait names the head that fits
+    // on screen. The rejection takes the pending notice's place, and the
+    // card keeps the old chips.
+    run.write(b"\x1b[27u");
+    run.wait_screen("the interrupted turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("interrupted")
+    });
     let rejected = run.wait_screen_reporting(
         "the rejection notice",
-        |grid| shows(grid, "nothing is stored in credentials/other/default"),
+        |grid| shows(grid, "nothing is stored in credentials"),
         || session_model_changed(&setup),
+    );
+    assert!(
+        shows(&rejected, "credential_missing"),
+        "the rejection notice names its code: {:?}",
+        rejected.rows
     );
     assert!(
         !shows(&rejected, "applies when this turn ends"),
@@ -2721,5 +2732,5 @@ fn choosing_an_unreadable_model_mid_turn_replaces_the_pending_notice_with_its_re
         rejected.rows
     );
     assert_card_stale(&rejected, "other/om");
-    cancel_and_quit(run);
+    quit(run);
 }
