@@ -183,3 +183,15 @@ fn credit_reads_its_figure_and_bar() {
     assert_eq!(lines[1], "credit  42%");
     assert!(lines[2].contains('▆'), "{lines:?}");
 }
+
+#[test]
+fn a_past_reset_time_reads_zero_minutes_not_negative() {
+    let rows = quota(json!([
+        {"provider": "codex", "credential": "default", "windows": [
+            {"name": "weekly", "percent_used": 38.0,
+                "resets_at": NOW_MS - 60_000},
+        ]},
+    ]));
+    let lines = text(&show(&rows, false));
+    assert!(lines.iter().any(|line| line == "resets in 0m"), "{lines:?}");
+}
