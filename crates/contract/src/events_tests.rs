@@ -1745,10 +1745,7 @@ fn notes_results_write_and_read_evidence_proposals_and_optional_error() {
         evidence: vec![Evidence::Files {
             text: "remote".into(),
         }],
-        proposed: vec![Proposed {
-            text: "ours".into(),
-            cites: vec![0],
-        }],
+        proposed: vec![Proposed::new("ours".into(), vec![0]).unwrap()],
         error: None,
     };
     let wire = json!({"evidence":[{"kind":"files","text":"remote"}],"proposed":[{"text":"ours","cites":[0]}]});

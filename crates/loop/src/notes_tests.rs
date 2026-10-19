@@ -149,11 +149,11 @@ fn idle_notes_send_only_evidence_and_write_usage_before_answering() {
         ]
     );
     assert_eq!(
-        proposed.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(),
+        proposed.iter().map(|p| p.text()).collect::<Vec<_>>(),
         ["remote rule", "answer rule"]
     );
-    assert_eq!(proposed[0].cites, [0]);
-    assert_eq!(proposed[1].cites, [1]);
+    assert_eq!(proposed[0].cites(), [0]);
+    assert_eq!(proposed[1].cites(), [1]);
     assert!(error.is_none());
     let requests = provider.requests();
     assert_eq!(requests.len(), 1);
@@ -399,20 +399,11 @@ fn a_failed_append_returns_before_calling_the_ack() {
     use std::process::{Command, Stdio};
 
     if std::env::var_os("FIBER_NOTES_LIMIT_CHILD").is_none() {
-        let original = std::env::current_exe().unwrap();
-        // Cargo supplies CARGO_TARGET_TMPDIR to integration tests only;
-        // a unit test uses the same target/tmp directory beside its profile.
-        let target_tmp = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| original.ancestors().nth(3).unwrap().join("tmp"));
-        std::fs::create_dir_all(&target_tmp).unwrap();
-        let copied = fakes::TempDir::under(&target_tmp, "notes-append");
-        let exe = copied.path().join("notes-tests");
-        std::fs::copy(&original, &exe).unwrap();
+        let exe = std::env::current_exe().unwrap();
         // Ignored signals survive exec, so no unsafe signal handler is
         // needed in Rust. The size limit applies only in this child.
         let child = Command::new("/bin/sh")
-            .args(["-c", "trap '' XFSZ; exec \"$@\"", "notes-append"])
+            .args(["-s", "--"])
             .arg(exe)
             .args([
                 "--exact",
@@ -421,13 +412,18 @@ fn a_failed_append_returns_before_calling_the_ack() {
                 "--test-threads=1",
             ])
             .env("FIBER_NOTES_LIMIT_CHILD", "1")
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
             .spawn()
             .unwrap();
-        let output = fakes::finished("notes append failure child", child, &[], DEADLINE);
+        let output = fakes::finished(
+            "notes append failure child",
+            child,
+            b"trap '' XFSZ\nexec \"$@\"\n",
+            DEADLINE,
+        );
         assert!(
             output.status.success(),
             "child failed: {}{}",
@@ -579,7 +575,7 @@ fn notes_number_each_kind_in_evidence_order_and_answer_last() {
             contract::notes::EvidenceKind::Answer
         ]
     );
-    assert_eq!(proposed[0].cites, [2]);
+    assert_eq!(proposed[0].cites(), [2]);
     assert!(error.is_none());
     assert_eq!(provider.requests()[0].conversation, vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [session] | 1 escalation answered allow for `p`\n3 [answer] | answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
 }
@@ -705,7 +701,7 @@ fn proposals_keep_valid_citations_as_zero_based_indices() {
     assert_eq!(
         proposals
             .iter()
-            .map(|p| (p.text.as_str(), p.cites.clone()))
+            .map(|p| (p.text(), p.cites().to_vec()))
             .collect::<Vec<_>>(),
         vec![
             ("second", vec![1]),
@@ -733,7 +729,7 @@ fn proposals_drop_each_invalid_or_repeated_line() {
         let reply = format!("{line}\n2 | valid\n2 | valid");
         let proposals = read_proposals(&reply, &evidence(), &["earlier".into()]);
         assert_eq!(proposals.len(), 1, "{line}");
-        assert_eq!(proposals[0].text, "valid", "{line}");
+        assert_eq!(proposals[0].text(), "valid", "{line}");
     }
     assert!(read_proposals("1 | no evidence\n0 | zero", &[], &[]).is_empty());
 }
@@ -746,5 +742,5 @@ fn proposals_strip_userinfo_before_deduplicating() {
         &["https://old/".into()],
     );
     assert_eq!(proposals.len(), 1);
-    assert_eq!(proposals[0].text, "https://h/");
+    assert_eq!(proposals[0].text(), "https://h/");
 }

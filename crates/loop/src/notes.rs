@@ -29,18 +29,11 @@ impl Loop {
             .filter(|line| !line.is_empty())
             .map(str::to_owned)
             .collect();
-        if let Some(limit) = self.budget.filter(|limit| self.ledger.spend() >= *limit) {
+        if let Some(failure) = self.budget_failure() {
             (ack.0)(Ok(Some(CommandResult::ProposeNotes {
                 evidence,
                 proposed: Vec::new(),
-                error: Some(Box::new(Failure {
-                    code: ErrorCode::BudgetExceeded,
-                    message: format!(
-                        "The session reached its spending budget of ${limit:.2} (budget.usd)."
-                    ),
-                    retry_after_ms: None,
-                    provider: None,
-                })),
+                error: Some(Box::new(failure)),
             })));
             return Ok(());
         }
@@ -151,10 +144,10 @@ pub(crate) fn read_proposals(
         if earlier.iter().any(|line| line == &text) {
             continue;
         }
-        if proposed.iter().any(|line| line.text == text) {
+        if proposed.iter().any(|line| line.text() == text) {
             continue;
         }
-        proposed.push(Proposed { text, cites });
+        proposed.extend(Proposed::new(text, cites));
     }
     proposed
 }

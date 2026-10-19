@@ -21,6 +21,7 @@ pub enum Topic {
 }
 
 impl Topic {
+    // debt: retain only the planned setup helpers below, Part 4 uses them in the terminal flow.
     /// The setup's topic order.
     pub const ALL: [Self; 5] = [
         Self::SourceControl,
@@ -166,6 +167,7 @@ impl SessionTally {
             text,
         })
     }
+    // debt: retain only the planned tally accessors, Part 4 uses them to render session evidence.
     /// The rule prefix counted.
     pub fn prefix(&self) -> &str {
         &self.prefix
@@ -218,10 +220,28 @@ impl From<SessionTally> for TallyWire {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ProposalWire")]
 pub struct Proposed {
+    text: String,
+    cites: Vec<usize>,
+}
+
+impl Proposed {
+    /// Refuses a line that cites no evidence.
+    pub fn new(text: String, cites: Vec<usize>) -> Result<Self, &'static str> {
+        if cites.is_empty() {
+            return Err("a proposal must cite evidence");
+        }
+        Ok(Self { text, cites })
+    }
+
     /// One fact or rule.
-    pub text: String,
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     /// Nonempty, zero-based indices into the answer's evidence.
-    pub cites: Vec<usize>,
+    pub fn cites(&self) -> &[usize] {
+        &self.cites
+    }
 }
 
 #[derive(Deserialize)]
@@ -232,13 +252,7 @@ struct ProposalWire {
 impl TryFrom<ProposalWire> for Proposed {
     type Error = &'static str;
     fn try_from(wire: ProposalWire) -> Result<Self, Self::Error> {
-        if wire.cites.is_empty() {
-            return Err("a proposal must cite evidence");
-        }
-        Ok(Self {
-            text: wire.text,
-            cites: wire.cites,
-        })
+        Self::new(wire.text, wire.cites)
     }
 }
 

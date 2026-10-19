@@ -79,6 +79,18 @@ fn tallies_validate_each_boundary_and_describe_the_count() {
 }
 
 #[test]
+fn proposals_require_citations_in_rust_as_well_as_on_the_wire() {
+    assert!(Proposed::new("line".into(), vec![]).is_err());
+    let proposal = Proposed::new("line".into(), vec![0, 2]).unwrap();
+    assert_eq!(proposal.text(), "line");
+    assert_eq!(proposal.cites(), [0, 2]);
+    assert_eq!(
+        to_value(proposal).unwrap(),
+        json!({"text":"line","cites":[0,2]})
+    );
+}
+
+#[test]
 fn evidence_and_proposals_validate_their_wire_shapes() {
     for (wire, kind, text) in [
         (
