@@ -2132,7 +2132,7 @@ fn job_session(
     script: &str,
     server: &ProviderServer,
     after_prompt: impl FnOnce(),
-) -> (Running, Socket, u32) {
+) -> (Running, Socket, u32, String) {
     let fifo = setup.root.path().join("ready.fifo");
     fakes::fifo(&fifo);
     let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
@@ -2170,7 +2170,7 @@ fn job_session(
     // the group first, so it is forgotten and only fires if the test
     // process dies.
     std::mem::forget(Watchdog::group(job_group));
-    (running, client, job_group)
+    (running, client, job_group, id)
 }
 
 /// The session's stdout kinds without `job_delta`: it is ephemeral, and
@@ -2214,7 +2214,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
     server.hold();
-    let (running, client, job_group) =
+    let (running, client, job_group, _) =
         job_session(&setup, JOB_SCRIPT_FOREVER, &server, || server.release_one());
     // The first response is through, the job runs, and the second request
     // is held: the turn is in flight.
@@ -2259,7 +2259,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
 fn close_now_while_idle_with_a_job_starts_no_turn() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
-    let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
+    let (running, client, job_group, _) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
     // The prompt's turn completed: the session is idle with the job running.
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
@@ -2493,7 +2493,8 @@ fn close_now_while_idle_with_no_jobs_exits_0() {
 fn close_without_now_waits_for_the_job_to_finish() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
-    let (mut running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let (mut running, client, job_group, _) =
+        job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -2554,10 +2555,57 @@ fn close_without_now_waits_for_the_job_to_finish() {
 }
 
 #[test]
+fn a_closing_session_says_so_to_a_client_that_subscribes_mid_close() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
+    let (running, client, _job_group, id) =
+        job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        done.iter()
+            .filter(|line| line["kind"] == "session_status")
+            .all(|line| line["payload"].get("closing").is_none()),
+        "no status carries closing before the close: {done:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    // The job holds the session open, so a second client that subscribes
+    // now reads closing in the first status it is sent.
+    let second = Socket::connect(setup.deadline, &setup.socket(&id))
+        .expect("the session's socket accepted before the deadline");
+    send(
+        &second,
+        r#"{"id":"c_sub2","command":"subscribe","args":{"level":"summary"}}"#,
+    );
+    let subbed = until_session(&second, "the first session_status", |line| {
+        line["kind"] == "session_status"
+    });
+    let first = subbed
+        .iter()
+        .find(|line| line["kind"] == "session_status")
+        .expect("a session_status");
+    assert_eq!(first["payload"]["closing"], json!(true), "{first}");
+    // The first client waits for the ending notice, then the job ends and
+    // the session exits 0.
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    fs::write(setup.workspace().join("go"), "").unwrap();
+    let _tail = until_session_close(&client);
+    drop(client);
+    drop(second);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+}
+
+#[test]
 fn close_now_after_close_stops_the_job_it_was_waiting_for() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
-    let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let (running, client, job_group, _) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until_session(&client, "the prompt's turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
