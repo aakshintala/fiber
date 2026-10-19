@@ -194,18 +194,17 @@ impl HostScript {
     pub(crate) fn exec(&self, request: Value) -> (usize, Result<ExecReply, (ErrorCode, String)>) {
         let mut state = lock(&self.state);
         let at = state.exec_next;
-        let index = at.saturating_add(1);
         let entry = state.exec.get(at).cloned();
         let Some(entry) = entry else {
             state.misses.push(miss("exec", at, &redact_env(&request)));
-            return (index, Err(no_reply("exec")));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         };
         if json_matches(&entry.request, &request).is_err() {
             state.misses.push(miss("exec", at, &redact_env(&request)));
-            return (index, Err(no_reply("exec")));
+            return (at.saturating_add(1), Err(no_reply("exec")));
         }
-        state.exec_next = index;
-        (index, entry.reply)
+        state.exec_next = at.saturating_add(1);
+        (at.saturating_add(1), entry.reply)
     }
 
     /// Records a scripted hang match: exec entry `index` (1-based, from
@@ -285,11 +284,7 @@ impl HostScript {
     /// nothing: the runner owns the stuck report.
     pub(crate) fn park_hang(&self, clock: &dyn Clock, deadline: Instant, stop: &Receiver<()>) {
         let mut guard = lock(&self.state);
-        // The stop sender's drop ends the park: a sent value never arrives,
-        // the channel carries only the drop from the run's stop, cancel or
-        // dispose.
-        while clock.now() < deadline && !matches!(stop.try_recv(), Err(TryRecvError::Disconnected))
-        {
+        while clock.now() < deadline && !is_disconnected(stop) {
             // The slice is a wake-up cadence, not a timing judgement: the
             // loop's decision reads only the case clock after each slice.
             let parked = support::clock::park(
@@ -415,6 +410,13 @@ fn redact_env(request: &Value) -> Value {
         }
     }
     redacted
+}
+
+/// Whether the stop sender is gone: the run's stop, cancel or dispose
+/// dropped it, so the parked worker ends. A sent value never arrives; the
+/// channel carries only the drop.
+fn is_disconnected(stop: &Receiver<()>) -> bool {
+    matches!(stop.try_recv(), Err(TryRecvError::Disconnected))
 }
 
 fn miss(kind: &str, index: usize, request: &Value) -> String {
