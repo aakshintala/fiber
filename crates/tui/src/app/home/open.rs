@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::super::{App, Effect, Link, Phase, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Subs};
+use crate::keyset::Context;
 use contract::SessionId;
 
 /// This connection's subscriptions: the level per session, the session
@@ -224,6 +225,13 @@ impl App {
             .as_ref()
             .and_then(|home| home.came_from.clone());
         self.go_home();
+        // Home's list focus is requested per entry: a plain leave
+        // lands on the entry bar, and the callers that focus a row ask
+        // for it after. Without this a leave re-pins the last row focus
+        // requested, so `/new` would land back on the left row.
+        if let Some(home) = self.home.as_mut() {
+            home.focus_list = None;
+        }
         let Some(session) = attached else {
             if let Some(home) = self.home.as_mut() {
                 home.came_from = came_from;
@@ -277,6 +285,36 @@ impl App {
             self.focus_row(key);
         }
         effect
+    }
+
+    /// Goes back to the session home came from: `None` unless home
+    /// draws with an empty box, the key context is the input box or the
+    /// conversation, no completion panel or steering selection is open,
+    /// no notice overlay is up, and the came-from session is live. No
+    /// chip test: the `→` caller checks focus, and Esc goes back with
+    /// a chip focused. Otherwise the came-from row opens as one from
+    /// home does; with the link down or a `start` in flight that open
+    /// is a no-op, and the key stays taken.
+    pub(in crate::app) fn go_back(&mut self) -> Option<Effect> {
+        if !self.on_home()
+            || !self.draft.is_empty()
+            || self.completions().is_some()
+            || !matches!(
+                self.key_context(),
+                Context::Input | Context::Conversation
+            )
+            || self.notice_overlay().is_some()
+            || !self.came_from_live()
+        {
+            return None;
+        }
+        let key = self
+            .home
+            .as_ref()
+            .and_then(|home| home.came_from.clone())
+            .and_then(|came_from| self.home.as_ref()?.sessions.row(&came_from))
+            .map(|row| row.key)?;
+        Some(self.open_entry(key))
     }
 
     /// Opens the row with `key` while home draws.

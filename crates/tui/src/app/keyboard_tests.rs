@@ -468,6 +468,400 @@ fn alt_0_goes_home_on_the_on_screen_sessions_row() {
     );
 }
 
+/// A `session_left` hub line for `session`, exited.
+fn left(session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session, "how": "exited"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// Home left from [`SESSION`] with its live row fed: the back key is
+/// live for it.
+fn backed() -> App {
+    let mut app = homed(80, 24);
+    app.on_line(hello());
+    app.on_line(live(SESSION));
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    app
+}
+
+/// The sent lines parsed.
+fn parsed(lines: &[String]) -> Vec<Value> {
+    lines
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .collect()
+}
+
+/// The session `press` attached, from an `Effect::Send` of `lines`.
+fn attached_session(lines: &[String]) -> String {
+    let lines = parsed(lines);
+    assert_eq!(lines[0]["command"], "subscribe");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    lines[0]["session_id"].as_str().unwrap_or_else(|| panic!("session")).to_owned()
+}
+
+#[test]
+fn back_right_after_home_goes_back_to_the_session() {
+    let mut app = backed();
+    let Effect::Send(lines) = press(&mut app, "right") else {
+        panic!("→ goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn back_esc_after_home_goes_back_to_the_session() {
+    let mut app = backed();
+    let Effect::Send(lines) = press(&mut app, "esc") else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn back_esc_with_the_row_focused_goes_back() {
+    let mut app = backed();
+    frame(&mut app);
+    assert!(matches!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
+    ));
+    let Effect::Send(lines) = press(&mut app, "esc") else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn back_right_with_the_row_focused_goes_back() {
+    let mut app = backed();
+    frame(&mut app);
+    assert!(matches!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(_)))
+    ));
+    let Effect::Send(lines) = press(&mut app, "right") else {
+        panic!("→ goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn right_with_a_chip_focused_moves_between_chips() {
+    let mut app = backed();
+    frame(&mut app);
+    app.focus = None;
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    let first = app.focused().expect("a chip focused");
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    let moved = app.focused().expect("still focused");
+    assert_ne!(moved, first);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn text_typed_keeps_right_and_esc_from_going_back() {
+    let mut app = backed();
+    type_text(&mut app, "x");
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert_eq!(app.draft(), "x");
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn open_completions_keep_right_and_esc_from_going_back() {
+    let mut app = backed();
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn an_open_key_map_keeps_right_and_esc_from_going_back() {
+    let mut app = backed();
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn an_open_workspace_picker_keeps_right_and_esc_from_going_back() {
+    let mut app = backed();
+    app.home_click(Spot::Workspace);
+    assert!(app.home_modal());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
+    let mut app = homed(80, 24);
+    let (_, recent) = linked(&mut app);
+    app.on_line(live(SESSION));
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [{
+            "session_id": "s_bbbbbbbbbbbbbbbb",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }]}),
+    ));
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.on_home());
+    let key = app
+        .home_screen()
+        .and_then(|screen| {
+            crate::home::home_test_rows(&screen)
+                .into_iter()
+                .find(|(_, text)| text.contains("old work"))
+                .map(|row| row.0)
+        })
+        .expect("the exited row");
+    assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
+    assert!(app.home_modal());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn esc_closes_a_notice_without_going_back() {
+    let mut app = backed();
+    app.notices.push("extension_failed", "A notice.".to_owned());
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.notice_overlay().is_some());
+    assert!(app.session().is_none());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.notice_overlay().is_none());
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn a_selected_steering_row_keeps_right_and_esc_from_going_back() {
+    let mut app = homed(80, 24);
+    app.on_line(live(SESSION));
+    app.on_line(steering_queue());
+    app.select_steering(0);
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.on_home());
+    // The selection returns on home: the rows stayed while leaving.
+    app.select_steering(0);
+    assert_eq!(app.draft(), "steer me");
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn back_keys_with_an_exited_came_from_do_nothing() {
+    let mut app = backed();
+    app.on_line(left(SESSION));
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn back_keys_with_no_came_from_row_do_nothing() {
+    let mut app = homed(80, 24);
+    app.on_line(hello());
+    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn back_keys_with_the_link_down_are_a_no_op() {
+    let mut app = backed();
+    app.disconnected();
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn back_keys_while_a_start_waits_are_a_no_op() {
+    let mut app = backed();
+    // With a model on the chip Enter starts instead of opening the
+    // picker, as on a launch that names one.
+    if let Some(home) = app.home.as_mut() {
+        home.launch.model = Some("test/model".to_owned());
+    }
+    type_text(&mut app, "hi");
+    let Effect::Send(_) = app.on_key(Key::Enter, now()) else {
+        panic!("Enter starts");
+    };
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn a_rebound_back_key_answers_its_new_key() {
+    let mut app = backed();
+    keyed(&mut app, &[("close_or_interrupt", json!("f5"))]);
+    let Effect::Send(lines) = press(&mut app, "f5") else {
+        panic!("F5 goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    let mut app = backed();
+    keyed(&mut app, &[("close_or_interrupt", json!("f5"))]);
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+}
+
+#[test]
+fn an_unbound_back_key_still_answers_right() {
+    let mut app = backed();
+    keyed(&mut app, &[("close_or_interrupt", json!([]))]);
+    let Effect::Send(lines) = press(&mut app, "right") else {
+        panic!("→ goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn ctrl_n_then_right_returns_to_the_session() {
+    let mut app = homed(80, 24);
+    app.on_line(hello());
+    app.on_line(live(SESSION));
+    app.on_line(steering_queue());
+    app.select_steering(0);
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    let Effect::Send(lines) = press(&mut app, "right") else {
+        panic!("→ goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn ctrl_n_then_esc_returns_to_the_session() {
+    let mut app = homed(80, 24);
+    app.on_line(hello());
+    app.on_line(live(SESSION));
+    app.on_line(steering_queue());
+    app.select_steering(0);
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    assert!(app.on_home());
+    let Effect::Send(lines) = press(&mut app, "esc") else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn ctrl_n_from_a_focused_item_then_right_returns_to_the_session() {
+    let mut app = groups(1, 80, 24);
+    app.set_home(launch());
+    app.on_line(hello());
+    app.on_line(live(SESSION));
+    frame(&mut app);
+    assert_eq!(app.on_key(Key::BackTab, now()), Effect::None);
+    assert!(app.focused().is_some());
+    assert_eq!(press(&mut app, "ctrl+n"), Effect::None);
+    assert!(app.session().is_none());
+    let Effect::Send(lines) = press(&mut app, "right") else {
+        panic!("→ goes back");
+    };
+    assert_eq!(attached_session(&lines), SESSION);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
 #[test]
 fn an_unknown_action_does_nothing() {
     let mut app = homed(80, 24);

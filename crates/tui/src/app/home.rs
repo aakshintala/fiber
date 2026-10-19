@@ -776,6 +776,13 @@ impl App {
         {
             return self.picker_key(key);
         }
+        // Esc on home goes back to the session home came from, with a
+        // chip or a row focused as well as from the entry bar.
+        if matches!(key, Key::Esc)
+            && let Some(effect) = self.go_back()
+        {
+            return Some(effect);
+        }
         // A focused chip takes its keys ahead of focus: arrows move,
         // Enter clicks, typing returns to the entry bar. `None` passes
         // the key on.
@@ -929,6 +936,14 @@ impl App {
         // entry bar and applies there.
         if self.focused_chip().is_some()
             && let Some(effect) = self.chip_edit(edit)
+        {
+            return Some(effect);
+        }
+        // `→` with no chip focused goes back to the session home came
+        // from; with a chip focused the chip row keeps it.
+        if matches!(edit, Edit::Right)
+            && self.focused_chip().is_none()
+            && let Some(effect) = self.go_back()
         {
             return Some(effect);
         }

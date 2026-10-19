@@ -3,7 +3,7 @@
 
 use super::{App, Effect};
 use crate::home::{Launch, Spot};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
 use contract::clock::Clock;
@@ -4888,4 +4888,115 @@ fn slash_home_on_home_leaves_focus_unchanged() {
     assert!(app.on_home());
     drawn(&mut app);
     assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn an_exited_came_from_session_hides_the_back_hint() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert!(foot(&app).contains("→ or Esc back to the session"));
+    assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
+    assert!(!foot(&app).contains("back to the session"));
+}
+
+#[test]
+fn slash_new_then_right_returns_to_the_session_left() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(enter_text(&mut app, "/new"), Effect::None);
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    let Effect::Send(_) = app.on_edit(Edit::Right) else {
+        panic!("→ goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_new_then_esc_returns_to_the_session_left() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(enter_text(&mut app, "/new"), Effect::None);
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(_) = app.on_key(Key::Esc, now) else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_resume_then_right_returns_to_the_session_left() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    let exited = *keys(&app)
+        .get(1)
+        .expect("the exited row follows the live row");
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(exited)))
+    );
+    let Effect::Send(_) = app.on_edit(Edit::Right) else {
+        panic!("→ goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
+}
+
+#[test]
+fn slash_resume_then_esc_returns_to_the_session_left() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "current work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    answer_recent(&mut app, &recent, &[("s_bbbbbbbbbbbbbbbb", "old work")]);
+    drawn(&mut app);
+    assert!(matches!(enter_text(&mut app, "/resume"), Effect::Send(_)));
+    assert!(app.on_home());
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(_) = app.on_key(Key::Esc, now) else {
+        panic!("Esc goes back");
+    };
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some("s_aaaaaaaaaaaaaaaa")
+    );
+    assert!(!app.on_home());
 }
