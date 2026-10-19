@@ -157,6 +157,23 @@ fn entry_of(feed: &Feed, id: &str) -> Option<&'static str> {
     })
 }
 
+/// Advances to the scanner's next scan. The scanner parks at the clock's
+/// origin plus `RUN_SCAN` after `start`; a call before `start` or after an
+/// earlier move fails inside the helper.
+fn advance_to_scan(feed: &Feed, clock: &FakeClock) {
+    let scanner = lock(&feed.scanner)
+        .as_ref()
+        .expect("the feed is started")
+        .thread()
+        .id();
+    clock.advance_when_parked(
+        Some(clock.now() + RUN_SCAN),
+        Some(scanner),
+        RUN_SCAN,
+        &Deadline::after(DEADLINE),
+    );
+}
+
 /// A running session `id` saying `state`; its status line.
 fn running(temp: &Temp, id: &str, state: &str) -> (FakeSession, String) {
     let session = FakeSession::bind(&temp.dir, id);
@@ -233,7 +250,7 @@ fn a_socket_that_appears_after_start_is_found_after_one_scan() {
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
     // Exactly one period: the scan is due at, not after, it.
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the late session's status"), line);
     stop_within(&feed);
@@ -279,7 +296,7 @@ fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
     assert_eq!(sub.raw("the top-level status"), first);
     assert_eq!(sub.raw("the top-level change"), second);
     // A later scan leaves the delegate alone.
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     await_scanner(&clock);
     assert!(!child.await_subscribed(2, Duration::ZERO));
     assert_eq!(entry_of(&feed, &delegate), None);
@@ -401,7 +418,7 @@ fn a_session_that_never_sent_a_status_gets_no_session_left() {
     });
     let other = temp.session(2, "p", "turn_completed");
     let (_session, line) = running(&temp, &other, "idle");
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     assert_eq!(sub.raw("the next session's status"), line);
     stop_within(&feed);
 }
@@ -416,7 +433,7 @@ fn a_crashed_session_that_comes_back_is_running_again() {
     let back = FakeSession::bind(&temp.dir, &id);
     let line = status_line(&id, &status("again", "/w", "idle", None));
     back.say(&line);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     assert!(back.await_subscribed(1, DEADLINE));
     assert_eq!(sub.raw("the resumed status"), line);
     assert_eq!(entry_of(&feed, &id), Some("running"));
@@ -1187,7 +1204,7 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     back.say(&again);
     sub.left(&id, "exited");
     assert!(temp.rows().is_empty());
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     assert_eq!(sub.raw("the resumed status"), again);
     stop_within(&feed);
 }
@@ -1478,7 +1495,7 @@ fn a_resumed_session_raising_its_request_again_is_not_announced_but_its_turn_end
     await_true("the hub to drop the old run", move || {
         entry_of(&dropped, &id(1)) != Some("running")
     });
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     await_scanner(&clock);
     // The finished arrives next, so the repeated waiting r1 sent nothing.
     let finished = heard.next("the finished attention");
@@ -1498,7 +1515,7 @@ fn a_resumed_run_that_starts_idle_is_not_announced() {
     session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 7)));
     session.say(&status_line(&id(1), &state_of("waiting", "r1", WALL + 7)));
     start(&feed, &clock);
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
     // The waiting r1 arrives first, so the idle without a turn sent nothing.
     let waiting = heard.next("the waiting attention");
@@ -1595,7 +1612,7 @@ fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
     await_true("the hub to drop the old run", move || {
         entry_of(&dropped, &id(1)) != Some("running")
     });
-    clock.advance(RUN_SCAN);
+    advance_to_scan(&feed, &clock);
     await_scanner(&clock);
     // The waiting r1 arrives next, so the repeated idle sent nothing.
     let waiting = heard.next("the waiting attention");
