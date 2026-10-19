@@ -364,6 +364,7 @@ fn started(output: &contract::tool::Output) -> contract::events::JobStarted {
 fn through_open(fixture: &Fixture, reached: &mpsc::Receiver<()>, release: &mpsc::Sender<()>) {
     let deadline = Deadline::after(STEP);
     deadline.recv_or_fail(reached, "the call inside adoption setup");
+    // No code under test waits on the clock here; the call is held inside jobs.open and the job's drive thread starts after it returns, so this move is the time the jobs.start scope measures (ruling 6179406086).
     fixture.clock.advance(TICK);
     release.send(()).unwrap();
 }
