@@ -926,10 +926,11 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     });
     if let Some(held_for) = held_for {
         // The reaper stays held while the fake clock passes the old
-        // bound: the released pass parks at its poll, and the empty
+        // bound one poll at a time: each pass parks at its poll, so each
+        // advance lands exactly on the named instant, and the empty
         // channel proves the drop cannot complete while the group stays
         // listed. The hold stays short of the shutdown end, so the settle
-        // below still parks instead of giving up.
+        // still parks instead of giving up.
         releases.release_settle();
         assert!(
             fake.await_parked(fake.origin() + GROUP_POLL, DEADLINE),
@@ -939,9 +940,18 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
             matches!(is_dropped.try_recv(), Err(mpsc::TryRecvError::Empty)),
             "the guard's drop finished with the reaper held"
         );
-        let mark = fake.advance_marked(held_for);
+        let hold_end = fake.origin() + held_for;
+        let mut poll = fake.origin() + GROUP_POLL;
+        let mut mark =
+            fake.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
+        poll = poll.checked_add(GROUP_POLL).expect("the hold is countable");
+        while poll <= hold_end {
+            mark =
+                fake.advance_when_parked(Some(poll), None, GROUP_POLL, &Deadline::after(DEADLINE));
+            poll = poll.checked_add(GROUP_POLL).expect("the hold is countable");
+        }
         assert!(
-            fake.await_parked_since(&mark, Some(fake.origin() + held_for + GROUP_POLL), DEADLINE),
+            fake.await_parked_since(&mark, Some(hold_end + GROUP_POLL), DEADLINE),
             "the settle parked again past the old bound"
         );
         assert!(
