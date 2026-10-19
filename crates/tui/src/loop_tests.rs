@@ -1146,6 +1146,86 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
 /// it: a named receive deadline, never a sleep on the test thread.
 const DRAIN: Duration = Duration::from_secs(5);
 
+/// The resume test's hub thread's last step: the last command name it
+/// read and whether a socket write is in progress. The hub sets each
+/// field and drops the guard before any blocking call, so the panic
+/// path can always read it.
+#[derive(Clone, Debug, Default)]
+struct HubProgress {
+    last_command: String,
+    writing: bool,
+}
+
+/// One helper thread's end state from its done channel: finished, still
+/// working, or gone without answering.
+fn done_state(done: &Result<(), mpsc::TryRecvError>) -> &'static str {
+    match done {
+        Ok(()) => "done",
+        Err(mpsc::TryRecvError::Empty) => "waiting",
+        Err(mpsc::TryRecvError::Disconnected) => "gone",
+    }
+}
+
+/// The stall report for the resume test's drain window expiring: names
+/// whether the run thread is alive (the finished channel is empty) or
+/// gone (disconnected), the hub's last step, and both helpers' end states.
+/// Pure, so unit tests pin its exact output for the covered end states.
+fn stall_report(
+    finished: &mpsc::TryRecvError,
+    hub: &HubProgress,
+    hub_done: &Result<(), mpsc::TryRecvError>,
+    reader_done: &Result<(), mpsc::TryRecvError>,
+) -> String {
+    format!(
+        "{finished:?}; hub at {:?} (writing: {}), hub {}; reader {}",
+        hub.last_command,
+        hub.writing,
+        done_state(hub_done),
+        done_state(reader_done),
+    )
+}
+
+#[test]
+fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
+    let hub = HubProgress {
+        last_command: "subscribe".to_owned(),
+        writing: false,
+    };
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting);
+    assert_eq!(
+        report,
+        "Empty; hub at \"subscribe\" (writing: false), hub waiting; reader waiting",
+    );
+}
+
+#[test]
+fn stall_report_names_a_gone_run_thread() {
+    let hub = HubProgress {
+        last_command: "history".to_owned(),
+        writing: true,
+    };
+    let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
+    let report = stall_report(&mpsc::TryRecvError::Disconnected, &hub, &waiting, &waiting);
+    assert_eq!(
+        report,
+        "Disconnected; hub at \"history\" (writing: true), hub waiting; reader waiting",
+    );
+}
+
+#[test]
+fn stall_report_names_finished_helpers() {
+    let hub = HubProgress {
+        last_command: "subscribe".to_owned(),
+        writing: false,
+    };
+    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()));
+    assert_eq!(
+        report,
+        "Empty; hub at \"subscribe\" (writing: false), hub done; reader done",
+    );
+}
+
 /// Drains the run thread chunk by chunk: each fold signal renews the
 /// no-progress window and sends one release, so a slow machine folds
 /// every chunk within the window while the whole log takes what it
@@ -1376,6 +1456,11 @@ fn resume_open_replays_the_log_to_the_tail() {
     let stream = lines.clone();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
+    // The hub's last step for the stall report: the hub sets each field
+    // and drops the guard before any blocking call, so the panic path
+    // can always read it.
+    let hub_progress = Arc::new(Mutex::new(HubProgress::default()));
+    let hub_step = Arc::clone(&hub_progress);
     // The pause point holding the subscribe answer: the hub signals it
     // reached subscribe, then waits on a channel whose sender the test
     // owns, so the hold needs no deadline of its own. The test sends to
@@ -1392,9 +1477,15 @@ fn resume_open_replays_the_log_to_the_tail() {
             let mut hub_end = hub_end;
             let mut text = String::new();
             let mut write = |value: Value| {
+                if let Ok(mut held) = hub_step.lock() {
+                    held.writing = true;
+                }
                 let mut bytes = serde_json::to_string(&value).unwrap_or_default();
                 bytes.push('\n');
                 hub_end.write_all(bytes.as_bytes()).unwrap_or(());
+                if let Ok(mut held) = hub_step.lock() {
+                    held.writing = false;
+                }
             };
             let hub_ack = |id: &Value, result: Value| {
                 json!({"kind": "command_accepted", "ts": 0,
@@ -1412,6 +1503,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                 text.clear();
                 if let Ok(mut held) = record.lock() {
                     held.push(command.clone());
+                }
+                if let Ok(mut held) = hub_step.lock() {
+                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
                 }
                 let id = command["id"].clone();
                 match command["command"].as_str() {
@@ -1502,8 +1596,31 @@ fn resume_open_replays_the_log_to_the_tail() {
     // no-progress window, so a slow machine folds every chunk within
     // `DRAIN` while the whole log takes what it takes. Panicking drops
     // the release sender, which releases the held loop thread too.
-    let (code, lp) = drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished)
-        .unwrap_or_else(|err| panic!("the loop folded no chunk for {DRAIN:?}: {err}"));
+    // The run thread may have finished between the drain's check and
+    // now: the drain error still panics, and the panic names the run
+    // thread's state and each helper thread's last step, so the next
+    // sighting shows which stall candidate happened.
+    let (code, lp) = match drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished) {
+        Ok(done) => done,
+        Err(err) => {
+            let prefix = format!("the loop folded no chunk for {DRAIN:?}: {err}");
+            match finished.try_recv() {
+                Ok(_) => panic!("{prefix}\nrun thread finished after the drain gave up"),
+                Err(finished_state) => panic!(
+                    "{prefix}\n{}",
+                    stall_report(
+                        &finished_state,
+                        &hub_progress
+                            .lock()
+                            .map(|held| held.clone())
+                            .unwrap_or_default(),
+                        &hub_done.try_recv(),
+                        &reader_done.try_recv(),
+                    ),
+                ),
+            }
+        }
+    };
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
     // returned: hang guards, not drain bounds.
