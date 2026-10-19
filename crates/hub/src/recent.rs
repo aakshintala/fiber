@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -198,21 +198,39 @@ pub(crate) fn page_with_total(
 /// [`RECENT_KEEP`] rows, each session's newest, when it is crashed or
 /// exited waiting, not a delegate, and its directory is still there.
 pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
-    let rows = read_all(home);
-    let kept = rows
-        .into_iter()
-        .rev()
-        .take(RECENT_KEEP)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    newest_first(kept)
+    let rows = match fs::File::open(path(home)) {
+        Ok(file) => tail_with(file),
+        Err(_) => Vec::new(),
+    };
+    newest_first(rows)
         .into_iter()
         .filter(|row| !row.delegate())
         .filter(|row| row.how == Left::Crashed || row.waiting())
         .filter(|row| row.dir_exists(home))
         .collect()
+}
+
+/// The newest [`RECENT_KEEP`] parsed rows of an open `recent.jsonl`, in
+/// file order, newest last: read backward from the tail, so the head is
+/// never touched. A line that does not parse is skipped and does not
+/// count toward the window; a final line with no newline is a write in
+/// progress and is ignored. An empty file or any seek or read error is
+/// empty. The seam the counted-reader test drives.
+fn tail_with(file: impl Read + Seek) -> Vec<RecentRow> {
+    let mut file = file;
+    let end = match file.seek(SeekFrom::End(0)) {
+        Ok(0) | Err(_) => return Vec::new(),
+        Ok(end) => end,
+    };
+    let (newest_first, _) = super::prompt_history::read_back(
+        &mut file,
+        end,
+        super::prompt_history::CHUNK,
+        RECENT_KEEP,
+        |line| serde_json::from_slice(line).ok(),
+    )
+    .unwrap_or_default();
+    newest_first.into_iter().rev().collect()
 }
 
 /// How many directory lookups `feed` made: every `follow` connects

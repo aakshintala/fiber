@@ -8,15 +8,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::thread;
 
 use super::*;
 use crate::fake::status;
+use crate::prompt_history::CHUNK;
 use crate::testkit::id;
 use log::session_dir;
 
@@ -349,6 +352,148 @@ fn seeds_come_from_the_newest_hundred_rows_only() {
     temp.append(&temp.row(500, "p", Left::Exited, Some("idle")));
     // 101 rows: the oldest is not.
     assert!(seeds(&temp.dir).is_empty());
+}
+
+/// A reader over `bytes` that refuses the head: any read starting below
+/// `floor` panics, and the smallest read offset is kept in `min`.
+struct Counted<'a> {
+    inner: Cursor<&'a [u8]>,
+    floor: u64,
+    min: Rc<Cell<u64>>,
+}
+
+impl Read for Counted<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let at = self.inner.stream_position().unwrap_or(u64::MAX);
+        if at < self.min.get() {
+            self.min.set(at);
+        }
+        assert!(
+            at >= self.floor,
+            "a read at {at} reaches into the head ending at {}",
+            self.floor
+        );
+        self.inner.read(buf)
+    }
+}
+
+impl Seek for Counted<'_> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+#[test]
+fn seeds_do_not_read_the_head_of_the_file() {
+    const OLD: u64 = 800;
+    let temp = Temp::new();
+    // A head of 128 KiB of non-UTF-8 bytes and a newline: more than two
+    // `CHUNK`, so a forward reader trips the guard below.
+    let mut head = vec![0xFF; 128 * 1024];
+    head.push(b'\n');
+    fs::write(temp.dir.join("recent.jsonl"), &head).unwrap();
+    // Older rows, enough that the tail runs past two `CHUNK`.
+    for n in 0..OLD {
+        temp.append(&row(n, "p", Left::Exited, Some("idle")));
+    }
+    // Exactly the newest 100 rows, distinct sessions with directories:
+    // one crashed, one waiting, the rest exited-idle.
+    for j in 0..RECENT_KEEP {
+        let n = OLD + j as u64;
+        let (how, state) = if j == 0 {
+            (Left::Crashed, Some("idle"))
+        } else if j == 1 {
+            (Left::Exited, Some("waiting"))
+        } else {
+            (Left::Exited, Some("idle"))
+        };
+        temp.append(&temp.row(n, "p", how, state));
+    }
+    let bytes = fs::read(temp.dir.join("recent.jsonl")).unwrap();
+    let file_len = bytes.len() as u64;
+    let tail = file_len - head.len() as u64;
+    assert!(
+        tail > 2 * CHUNK as u64,
+        "the tail of {tail} fits in two chunks"
+    );
+    // The newest 100 rows and the delimiter before them fit inside the
+    // final `CHUNK`: the reader stops there.
+    let mut newlines = bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(at, byte)| (*byte == b'\n').then_some(at as u64));
+    let mut delimiter = newlines.next().unwrap();
+    for _ in 0..OLD {
+        delimiter = newlines.next().unwrap();
+    }
+    assert!(
+        file_len - delimiter <= CHUNK as u64,
+        "the newest rows spill past one chunk"
+    );
+    let seen = Rc::new(Cell::new(u64::MAX));
+    let counted = Counted {
+        inner: Cursor::new(bytes.as_slice()),
+        floor: head.len() as u64,
+        min: Rc::clone(&seen),
+    };
+    let rows = tail_with(counted);
+    assert!(
+        seen.get() >= head.len() as u64,
+        "a read at {} reaches the head",
+        seen.get()
+    );
+    assert_eq!(rows.len(), RECENT_KEEP);
+    assert!(ids(&rows).contains(&id(OLD)), "the crashed row is a seed");
+    assert!(
+        ids(&rows).contains(&id(OLD + 1)),
+        "the waiting row is a seed"
+    );
+}
+
+#[test]
+fn seeds_skip_lines_that_do_not_parse_and_count_only_rows() {
+    let temp = Temp::new();
+    let mut lines = Vec::new();
+    for n in 0..100u64 {
+        let row = if n == 0 {
+            temp.row(n, "p", Left::Crashed, Some("idle"))
+        } else {
+            temp.row(n, "p", Left::Exited, Some("idle"))
+        };
+        if n > 0 {
+            lines.push("{not json}".to_owned());
+        }
+        lines.push(serde_json::to_string(&row).unwrap());
+    }
+    fs::write(temp.dir.join("recent.jsonl"), lines.join("\n") + "\n").unwrap();
+    // 100 valid rows past 99 malformed lines: the oldest valid row is
+    // still in the window, so the crashed row seeds.
+    assert_eq!(ids(&seeds(&temp.dir)), [id(0)]);
+}
+
+#[test]
+fn a_torn_final_line_is_not_a_seed_and_costs_no_row() {
+    let temp = Temp::new();
+    assert!(seeds(&temp.dir).is_empty(), "a missing file seeds nothing");
+    fs::write(temp.dir.join("recent.jsonl"), b"").unwrap();
+    assert!(seeds(&temp.dir).is_empty(), "an empty file seeds nothing");
+    for n in 0..RECENT_KEEP as u64 {
+        temp.append(&temp.row(n, "p", Left::Crashed, None));
+    }
+    // A write in progress: bytes with no newline are not a row and do
+    // not count toward the window, so the oldest of the 100 still seeds.
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(temp.dir.join("recent.jsonl"))
+        .unwrap();
+    file.write_all(b"{\"session_id\":\"").unwrap();
+    drop(file);
+    let seeded = seeds(&temp.dir);
+    assert_eq!(seeded.len(), RECENT_KEEP);
+    assert!(
+        ids(&seeded).contains(&id(0)),
+        "the torn line costs no window row"
+    );
 }
 
 /// An exited row's last `session_status`, as `close` reads it.
