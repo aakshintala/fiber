@@ -220,10 +220,7 @@ impl App {
         let attached = self.session().cloned();
         // `go_home` resets before the session clears, so the value is
         // saved first and put back when nothing was attached.
-        let came_from = self
-            .home
-            .as_ref()
-            .and_then(|home| home.came_from.clone());
+        let came_from = self.home.as_ref().and_then(|home| home.came_from.clone());
         self.go_home();
         // Home's list focus is requested per entry: a plain leave
         // lands on the entry bar, and the callers that focus a row ask
@@ -299,10 +296,7 @@ impl App {
         if !self.on_home()
             || !self.draft.is_empty()
             || self.completions().is_some()
-            || !matches!(
-                self.key_context(),
-                Context::Input | Context::Conversation
-            )
+            || !matches!(self.key_context(), Context::Input | Context::Conversation)
             || self.notice_overlay().is_some()
             || !self.came_from_live()
         {

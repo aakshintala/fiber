@@ -9,9 +9,21 @@ pub(crate) const SHOWN: usize = 8;
 /// The built-in commands this terminal runs, in the "Slash commands"
 /// table's order: name, description, argument hint.
 const BUILT_INS: &[(&str, &str, Option<&str>)] = &[
-    ("home", "Goes home, focused on the session on screen's row.", None),
-    ("new", "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.", None),
-    ("resume", "Goes home, focused on the first exited row.", None),
+    (
+        "home",
+        "Goes home, focused on the session on screen's row.",
+        None,
+    ),
+    (
+        "new",
+        "Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running.",
+        None,
+    ),
+    (
+        "resume",
+        "Goes home, focused on the first exited row.",
+        None,
+    ),
     ("model", "Opens the model picker.", None),
     (
         "thinking",

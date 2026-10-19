@@ -506,7 +506,10 @@ fn attached_session(lines: &[String]) -> String {
     let lines = parsed(lines);
     assert_eq!(lines[0]["command"], "subscribe");
     assert_eq!(lines[0]["session_id"], SESSION);
-    lines[0]["session_id"].as_str().unwrap_or_else(|| panic!("session")).to_owned()
+    lines[0]["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session"))
+        .to_owned()
 }
 
 #[test]

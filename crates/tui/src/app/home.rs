@@ -133,10 +133,7 @@ fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
             Style::new().add_modifier(Modifier::DIM),
         ));
     }
-    spans.push(Span::styled(
-        "→",
-        Style::new().add_modifier(Modifier::BOLD),
-    ));
+    spans.push(Span::styled("→", Style::new().add_modifier(Modifier::BOLD)));
     if let Some(key) = esc {
         spans.push(Span::styled(
             " or ",
