@@ -380,6 +380,15 @@ pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> Se
 }
 
 impl Configure for Fake {
+    fn install_provider(
+        &self,
+        _workspace: &Path,
+        _provider: &str,
+        _clock: Arc<dyn Clock>,
+    ) -> Result<crate::ProviderInstall, ConfigureError> {
+        Ok(crate::ProviderInstall::default())
+    }
+
     fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {
         if let Ok(mut reads) = self.reads.lock() {
             reads.push(workspace.to_path_buf());

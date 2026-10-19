@@ -177,6 +177,24 @@ pub(super) fn stored(value: &Value) -> Option<Stored> {
         replaced: read!(value, "replaced")?,
     })
 }
+pub(super) fn install(value: &Value) -> Option<crate::ProviderInstall> {
+    Some(crate::ProviderInstall {
+        installed: read!(value, "installed")?,
+        summary: read!(value, "summary")?,
+        login: value
+            .get("login")?
+            .as_array()?
+            .iter()
+            .map(|need| {
+                Some(crate::LoginNeed {
+                    provider: read!(need, "provider")?,
+                    error: optional!(need, "error")?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
 pub(super) fn reviewer(value: &Value) -> Option<ReviewerModels> {
     Some(ReviewerModels {
         models: read!(value, "models")?,
