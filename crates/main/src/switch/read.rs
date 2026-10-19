@@ -49,6 +49,10 @@ pub(crate) struct Reads {
     /// test. Absent outside the unit tests.
     #[cfg(test)]
     reap_pause: Mutex<Option<SpawnPause>>,
+    /// The next late spawn's pause after it reaped its leader and before
+    /// the count drops, armed by a test. Absent outside the unit tests.
+    #[cfg(test)]
+    reaped_pause: Mutex<Option<SpawnPause>>,
     /// The next spawn's pause after it lists its group, armed by a test.
     /// Absent outside the unit tests.
     #[cfg(test)]
@@ -587,6 +591,8 @@ impl Reads {
             #[cfg(test)]
             self.pause_before_reap();
             let _reaped = child.wait();
+            #[cfg(test)]
+            self.pause_after_reaped();
             self.spawned_out();
             return Err(interrupted());
         }
@@ -886,6 +892,36 @@ impl Reads {
     fn pause_before_reap(&self) {
         let point = self
             .reap_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the next late spawn reaps its leader and
+    /// before the count drops: the spawn sends on `entered` once the
+    /// leader is reaped and blocks until `release` arrives, so the test
+    /// holds the raised count past the reap on every run. The pause is
+    /// one-shot.
+    pub(crate) fn pause_at_reaped(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .reaped_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the late spawn reaped its leader and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_after_reaped(&self) {
+        let point = self
+            .reaped_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
