@@ -1593,7 +1593,12 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
         ),
         "inner delta waits on its clock interval"
     );
-    session.clock.advance(interval);
+    session.clock.advance_when_parked(
+        Some(session.clock.now() + interval),
+        Some(thread),
+        interval,
+        &fakes::Deadline::after(std::time::Duration::from_secs(2)),
+    );
     let b = tap.wait_for_delta("b");
     assert_eq!(b.action_id, a.action_id);
     release_last.send(()).unwrap();

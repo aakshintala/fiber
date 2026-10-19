@@ -1304,7 +1304,7 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
         Deadline::after(DEADLINE)
             .recv(&entered_rx)
             .expect("the receiver is blocked");
-        // No thread parks on the clock; the move fires a wake.
+        // No code under test waits on the clock here: the session blocks on its inbox, woken by the clock subscription rather than parked in wait_until, and the move fires the wake under test (ruling 6179406086).
         clock.advance(Duration::from_millis(1));
     });
     opened

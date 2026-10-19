@@ -778,7 +778,12 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
             tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
             "a delta leaked before the clock moved"
         );
-        clock.advance(Duration::from_millis(100));
+        clock.advance_when_parked(
+            Some(due),
+            None,
+            Duration::from_millis(100),
+            &fakes::Deadline::after(Duration::from_secs(10)),
+        );
         let second = tap.wait_for_delta("two");
         assert_eq!(second.action_id, first.action_id);
         gate2.open();
@@ -1008,7 +1013,12 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
             tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
             "a delta leaked before the clock moved"
         );
-        clock.advance(interval);
+        clock.advance_when_parked(
+            Some(due),
+            None,
+            interval,
+            &fakes::Deadline::after(Duration::from_secs(10)),
+        );
         let second = tap.wait_for_delta("small");
         assert_eq!(second.action_id, first.action_id);
         gate2.open();

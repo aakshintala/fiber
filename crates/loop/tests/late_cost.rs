@@ -17,7 +17,7 @@ mod support;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -176,10 +176,12 @@ fn unpriced(text: &str, generation: &str) -> Scripted {
 /// waits for the worker to park again with nothing queued: what it settled
 /// is pushed.
 fn settle(clock: &FakeClock, due: Instant) {
-    let mark = clock
-        .mark_parked(due, DEADLINE)
-        .expect("the lookup worker parks at the due");
-    clock.advance(due.saturating_duration_since(clock.now()));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        due.saturating_duration_since(clock.now()),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "the lookup worker parks with nothing queued once it has pushed"
@@ -446,11 +448,12 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
     assert_eq!(kinds(&first_lines), FAILED_FIRST_KINDS);
     assert!(session.clock.await_parked(start + AFTER, DEADLINE));
     run_to_end(&mut session);
-    session.clock.advance(AFTER);
     // The lookup goes once the loop and the stopped worker have let go.
     Deadline::after(DEADLINE)
         .recv(&seen.dropped)
         .expect("the worker let go of the lookup");
+    // No code under test waits on the clock here: the worker has exited (ruling 6179406086).
+    session.clock.advance(AFTER);
     assert!(seen.calls().is_empty());
     let all = log::read(&session.dir).unwrap();
     assert_eq!(kinds(&all), FAILED_FIRST_KINDS);
@@ -692,13 +695,17 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
     assert_late_record_first(&lines, &review, 0.125);
 }
 
-/// Moves the clock to `to` and wakes the loop with a reply naming nothing,
-/// as a real clock's timeout would, returning once the loop took it.
+/// Moves the clock to `to` once the loop thread parks at `park`, and wakes
+/// the loop with a reply naming nothing, as a real clock's timeout would,
+/// returning once the loop took it. `to` never passes `park`.
 #[track_caller]
-fn advance_and_wake(session: &Session, to: Instant) {
-    session
-        .clock
-        .advance(to.saturating_duration_since(session.clock.now()));
+fn advance_and_wake(session: &Session, loop_thread: ThreadId, park: Instant, to: Instant) {
+    session.clock.advance_when_parked(
+        Some(park),
+        Some(loop_thread),
+        to.saturating_duration_since(session.clock.now()),
+        &Deadline::after(DEADLINE),
+    );
     let (done, taken) = mpsc::channel();
     session
         .inbox
@@ -736,31 +743,32 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
     session.inbox.send(delivery("hi")).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
+    let loop_thread = thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
+    let loop_thread = loop_thread.thread().id();
 
     let refresh = start + Duration::from_secs(270);
     assert!(
         session.clock.await_parked(refresh, DEADLINE),
         "a refresh is due"
     );
-    advance_and_wake(&session, refresh);
+    advance_and_wake(&session, loop_thread, refresh, refresh);
     let due = refresh + AFTER;
+    let exit = start + Duration::from_secs(300) + MINUTE;
     let mark = session
         .clock
         .mark_parked(due, DEADLINE)
         .expect("the lookup worker parks at the due");
-    advance_and_wake(&session, due);
+    advance_and_wake(&session, loop_thread, exit, due);
     assert!(
         session.clock.await_parked_since(&mark, None, DEADLINE),
         "the lookup worker settled"
     );
     assert_eq!(seen.calls(), ["gen_warm"]);
-    let exit = start + Duration::from_secs(300) + MINUTE;
     assert!(
         session.clock.await_parked(exit, DEADLINE),
         "idle counts from the cap"
     );
-    advance_and_wake(&session, exit);
+    advance_and_wake(&session, loop_thread, exit, exit);
     assert!(
         Deadline::after(DEADLINE)
             .recv(&finished)

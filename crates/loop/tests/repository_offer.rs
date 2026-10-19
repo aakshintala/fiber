@@ -761,13 +761,14 @@ fn waiting_on_an_offer_is_idle() {
     let clock = Arc::clone(&session.clock);
     let watcher = session.log.watch();
     let finished = spawn_run(&mut session);
-    assert!(
-        clock.await_parked(clock.now() + delay, DEADLINE),
-        "the idle wait parks"
-    );
     // The offer's idle clock starts when it is raised, not when the idle
     // wait before the prompt began.
-    clock.advance(Duration::from_secs(10));
+    clock.advance_when_parked(
+        Some(clock.now() + delay),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(DEADLINE),
+    );
     let (ack, prompt_answer) = probe();
     session
         .inbox
@@ -776,10 +777,12 @@ fn waiting_on_an_offer_is_idle() {
     let (_, lines) = until_kind(watcher, "repository_code_offered");
     let request = request_of(lines.last().unwrap());
     let deadline = clock.now() + delay;
-    let mark = clock
-        .mark_parked(deadline, DEADLINE)
-        .expect("the offer waits until its own deadline");
-    clock.advance(Duration::from_millis(59_999));
+    let mark = clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(59_999),
+        &Deadline::after(DEADLINE),
+    );
     // A clock move reaches the loop as a wake, which the wait discards.
     session.inbox.send(Delivery::Cancelled).unwrap();
     assert!(
@@ -787,7 +790,12 @@ fn waiting_on_an_offer_is_idle() {
         "1 ms early the offer still waits"
     );
     assert!(finished.try_recv().is_err());
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     session.inbox.send(Delivery::Cancelled).unwrap();
     ended(&finished).unwrap();
     let kinds = durable_kinds(&session);
@@ -1389,11 +1397,9 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
     let (_, lines) = until_kind(watcher, "repository_code_offered");
     let offer = request_of(lines.last().unwrap());
     let deadline = history.clock.now() + delay;
-    assert!(
-        history.clock.await_parked(deadline, DEADLINE),
-        "the offer waits"
-    );
-    history.clock.advance(delay);
+    history
+        .clock
+        .advance_when_parked(Some(deadline), None, delay, &Deadline::after(DEADLINE));
     inbox.send(Delivery::Cancelled).unwrap();
     finished_ok(&finished);
     let raised = history.of("permission_requested");
@@ -1567,11 +1573,9 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
         let (_, lines) = until_kind(watcher, "repository_code_offered");
         assert_eq!(lines.last().unwrap().payload["request_id"], "r_old");
         let deadline = history.clock.now() + delay;
-        assert!(
-            history.clock.await_parked(deadline, DEADLINE),
-            "the offer waits"
-        );
-        history.clock.advance(delay);
+        history
+            .clock
+            .advance_when_parked(Some(deadline), None, delay, &Deadline::after(DEADLINE));
         inbox.send(Delivery::Cancelled).unwrap();
         finished_ok(&finished);
         assert!(history.of("repository_code_resolved").is_empty());

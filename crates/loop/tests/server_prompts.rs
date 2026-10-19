@@ -511,11 +511,12 @@ fn a_rejected_prompt_does_not_move_the_idle_deadline() {
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(looped.run()).unwrap());
-    assert!(
-        clock.await_parked(deadline, support::DEADLINE),
-        "idle before the rejected prompt"
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_secs(10),
+        &Deadline::after(support::DEADLINE),
     );
-    clock.advance(Duration::from_secs(10));
     let (ack, answers) = capture();
     session
         .inbox

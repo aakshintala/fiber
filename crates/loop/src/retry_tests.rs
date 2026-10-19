@@ -332,7 +332,12 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     let remaining = RETRY_DELAY
         .checked_sub(PARTIAL_ADVANCE)
         .expect("the partial advance is shorter than the retry delay");
-    partial.clock.advance(remaining);
+    partial.clock.advance_when_parked(
+        Some(partial.origin + RETRY_DELAY),
+        None,
+        remaining,
+        &Deadline::after(DEADLINE),
+    );
     partial.wait_for_retry_started(DEADLINE);
     partial.finish();
 }
@@ -567,6 +572,7 @@ impl Clock for AdvanceOnScheduledClock {
     fn now(&self) -> Instant {
         self.poll_scheduled();
         if self.scheduled.load(Ordering::SeqCst) && !self.advanced.swap(true, Ordering::SeqCst) {
+            // No code under test waits on the clock here: the advance runs on the loop's own thread inside `now()`, before the retry wait starts, and a helper would wait for a park of the thread that calls it (ruling 6179406086).
             self.inner.advance(self.advance);
         }
         self.inner.now()

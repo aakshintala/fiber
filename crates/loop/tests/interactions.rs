@@ -184,10 +184,11 @@ fn session(calls: &[&str], tools: Vec<Arc<dyn Tool>>) -> Session {
 fn spawn_turn(session: &mut Session) -> mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)> {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
+    let turn = thread::spawn(move || {
         let outcome = looped.turn();
         let _sent = done.send((looped, outcome));
     });
+    session.turn_thread = Some(turn.thread().id());
     finished
 }
 
@@ -832,8 +833,12 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
     session.inbox.send(delivery("go")).unwrap();
     let finished = spawn_turn(&mut session);
     tap.wait_for("interaction_requested");
-    assert!(clock.await_parked(at, DEADLINE), "the step waits until it");
-    let mark = clock.advance_marked(Duration::from_millis(9_999));
+    let mark = clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        Duration::from_millis(9_999),
+        &Deadline::after(DEADLINE),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(at), DEADLINE),
         "the step waits again"
@@ -845,7 +850,12 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
         "1 ms before it, the request still pends"
     );
     assert!(answers.try_recv().is_err(), "the call still waits");
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        Some(at),
+        session.turn_thread,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let wait = Deadline::after(DEADLINE);
     assert_eq!(told(answers, &wait), Answered::NoAnswer);
     assert_eq!(
@@ -1137,7 +1147,12 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
     // The second change is held for the 100 ms interval, then written.
     let due = clock.now() + Duration::from_millis(100);
     assert!(clock.await_parked(due, DEADLINE), "the held change waits");
-    clock.advance(Duration::from_millis(100));
+    clock.advance_when_parked(
+        Some(due),
+        session.turn_thread,
+        Duration::from_millis(100),
+        &Deadline::after(DEADLINE),
+    );
     tap.wait_for_delta("two");
     gates[2].open();
     assert_eq!(answer(&session, &request, yes()), Ok(None));

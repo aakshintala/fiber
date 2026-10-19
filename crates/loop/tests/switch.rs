@@ -950,7 +950,12 @@ fn an_idle_deadline_in_an_approval_wait_writes_no_model_changed() {
         .recv(&ack_rx)
         .expect("the model is answered");
     assert!(answer.is_ok());
-    clock.advance(Duration::from_secs(60));
+    clock.advance_when_parked(
+        Some(start + Duration::from_secs(60)),
+        None,
+        Duration::from_secs(60),
+        &Deadline::after(DEADLINE),
+    );
     wake();
     let (looped, outcome) = Deadline::after(DEADLINE)
         .recv(&finished)

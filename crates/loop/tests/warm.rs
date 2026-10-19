@@ -55,13 +55,24 @@ fn parked(clock: &FakeClock, until: Instant, what: &str) {
     assert!(clock.await_parked(until, DEADLINE), "{what}");
 }
 
+/// Moves the clock to `to` once the loop parks at `park`, and wakes the
+/// loop, as a real clock's timeout would; `to` never passes `park`.
+#[track_caller]
+fn advance_short_of(session: &Session, park: Instant, to: Instant) {
+    session.clock.advance_when_parked(
+        Some(park),
+        None,
+        to.saturating_duration_since(session.clock.now()),
+        &Deadline::after(DEADLINE),
+    );
+    wake(session);
+}
+
 /// Moves the clock to `to` and wakes the loop, as a real clock's timeout
 /// would.
 #[track_caller]
 fn advance_to(session: &Session, to: Instant) {
-    let now = session.clock.now();
-    session.clock.advance(to.saturating_duration_since(now));
-    wake(session);
+    advance_short_of(session, to, to);
 }
 
 /// Wakes the loop with a reply naming nothing, and returns once the loop
@@ -182,7 +193,7 @@ fn an_hour_lifetime_refreshes_twice_then_the_idle_clock_starts_at_the_cap() {
     let exit = start + Duration::from_secs(7200) + 30 * MINUTE;
     parked(&session.clock, exit, "idle counts from the cap");
     assert_refreshes(&session, 2);
-    advance_to(&session, start + Duration::from_millis(8_999_999));
+    advance_short_of(&session, exit, start + Duration::from_millis(8_999_999));
     parked(&session.clock, exit, "not idle yet");
     assert!(finished.try_recv().is_err());
     advance_to(&session, exit);
@@ -301,11 +312,11 @@ fn a_refresh_due_at_the_cap_is_not_sent() {
     assert_refreshes(&session, 1);
 }
 
+/// A refresh reached only past its due park is not sent: the loop wakes
+/// past the 540 s park at 550 s, while the cache from the 270 s refresh
+/// still holds, and that late wake is the behaviour under test.
 #[test]
 fn a_refresh_reached_only_at_the_cap_is_not_sent() {
-    // The wait starts at 250 s; the cap ends at 550 s. The second refresh is
-    // due at 540 s, but the loop gets to it only at 550 s, while the cache
-    // from the 270 s refresh still holds.
     let mut session = advancing(Duration::from_secs(250));
     arm(&mut session, MINUTE, Some(1));
     let start = session.clock.now();
@@ -320,7 +331,11 @@ fn a_refresh_reached_only_at_the_cap_is_not_sent() {
         "the second is due before the cap",
     );
     let late = start + Duration::from_secs(550);
-    advance_to(&session, late);
+    // Late wake past the 540 s park to 550 s; the park is proven just above (ruling 6261259790).
+    session
+        .clock
+        .advance(late.saturating_duration_since(session.clock.now()));
+    wake(&session);
     let exit = late + MINUTE;
     parked(&session.clock, exit, "warming stopped at the cap");
     advance_to(&session, exit);
@@ -398,12 +413,12 @@ fn a_prompt_while_warming_starts_a_turn_and_the_cap_counts_from_the_next_wait() 
     let start = session.clock.now();
     session.inbox.send(delivery("hi")).unwrap();
     let finished = spawn_run(&mut session);
-    parked(
-        &session.clock,
-        start + Duration::from_secs(270),
-        "warming after the first turn",
+    session.clock.advance_when_parked(
+        Some(start + Duration::from_secs(270)),
+        None,
+        Duration::from_secs(100),
+        &Deadline::after(DEADLINE),
     );
-    session.clock.advance(Duration::from_secs(100));
     session.inbox.send(delivery("again")).unwrap();
     let second = start + Duration::from_secs(100);
     for at in [370, 640] {
@@ -524,6 +539,10 @@ impl Jobs for Toggle {
     fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
 }
 
+/// A refresh held by a running job goes at once when the job ends, and a
+/// job running across that due park holds it again until the cache
+/// expires: the late wake past the 550 s park to 580 s is the behaviour
+/// under test.
 #[test]
 fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     let mut session = session(
@@ -542,7 +561,7 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     // While a job runs the wait keeps only the jobs check, from the prompt.
     let check = start + idle;
     parked(&session.clock, check, "a running job holds the refresh");
-    advance_to(&session, start + Duration::from_secs(280));
+    advance_short_of(&session, check, start + Duration::from_secs(280));
     parked(&session.clock, check, "still no refresh at 280 s");
     assert_refreshes(&session, 0);
 
@@ -560,7 +579,12 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     // A job runs across that due instant and ends as the cache expires.
     jobs.set(true);
     let expired = start + Duration::from_secs(580);
-    advance_to(&session, expired);
+    parked(&session.clock, next, "the due park before the late wake");
+    // Late wake past the 550 s park to 580 s; the park is proven just above (ruling 6261259790).
+    session
+        .clock
+        .advance(expired.saturating_duration_since(session.clock.now()));
+    wake(&session);
     parked(&session.clock, check, "a running job holds the refresh");
     jobs.set(false);
     wake(&session);
@@ -721,6 +745,7 @@ impl Provider for Advance {
 
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            // No code under test waits on the clock here: the advance runs on the loop thread inside the first model call, before any wait, and the step is stamped before it (ruling 6179406086).
             self.clock.advance(self.by);
         }
         self.inner.call(request)
@@ -863,7 +888,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     assert_refreshes(&session, 0);
     // A switch at t1, before anything refreshes.
     let switched = start + Duration::from_secs(100);
-    advance_to(&session, switched);
+    advance_short_of(&session, start + Duration::from_secs(270), switched);
     session
         .inbox
         .send(model_delivery("fake/model-2", None))
