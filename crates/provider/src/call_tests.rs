@@ -139,7 +139,7 @@ fn a_backwards_clock_contributes_zero() {
     let log = Capture::new(true);
     let clock = fakes::clock::FakeClock::new();
     let earlier = clock.now();
-    // No code under test waits on the clock here; it stamps the backwards stamp (ruling 6179406086).
+    // No code under test waits on the clock here; it stamps the earlier instant the backwards subtraction reads (ruling 6179406086).
     clock.advance(Duration::from_millis(9));
     // The stamps predate the send: no panic, no fabricated duration.
     let mut finish = record(&log, &clock, clock.now());
