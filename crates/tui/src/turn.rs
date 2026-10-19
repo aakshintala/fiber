@@ -411,7 +411,7 @@ impl Turn {
     pub(crate) fn call_started(&mut self, action: &str, ts: u64) -> bool {
         self.groups_mut().any(|group| {
             group.call(action).is_some_and(|call| {
-                call.started = true;
+                call.timing = group::Timing::Started(ts);
                 true
             }) && group.touched(ts)
         })
@@ -449,6 +449,9 @@ impl Turn {
                     content,
                 }));
                 call.exit = done.process.as_ref().and_then(|process| process.exit_code);
+                if let group::Timing::Started(started) = call.timing {
+                    call.timing = group::Timing::Took(ts.saturating_sub(started));
+                }
                 call.lines = call.content().lines().count() as u64;
                 call.images = crate::image::parts(&done.content);
                 true

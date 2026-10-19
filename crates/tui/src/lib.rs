@@ -25,6 +25,7 @@ mod context_view;
 mod diff;
 mod editor;
 mod event_loop;
+mod ext;
 pub mod files;
 mod focus;
 mod format;
@@ -119,6 +120,10 @@ pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
 pub use paging_session::paging_session;
 
 pub use event_loop::run;
+
+pub use ext::{
+    Failure, Input as RendererInput, LedgerRow, RawSpan, Registry, Renderer, RowError, Status,
+};
 
 /// Connects to the hub, starting one when none runs: the stream and the
 /// `hub_hello` it spoke first. Called again for each reconnect.

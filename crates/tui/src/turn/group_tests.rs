@@ -1,10 +1,16 @@
 //! Tests for a tool group's drawing.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
 use serde_json::json;
 
-use super::{Call, CallResult, Group, Section, Streaming, Thought};
+use super::{Call, CallResult, Group, Section, Streaming, Thought, Timing};
+use crate::app::Target;
+use crate::ext::cache::Cache;
+use crate::ext::{Bound, Failure, Input, RawSpan, Registry, Renderer, Status as ExtStatus};
 use crate::theme::Role;
 
 #[test]
@@ -19,7 +25,7 @@ fn read_call(id: usize, path: &str) -> Call {
         name: "read".to_owned(),
         arguments: json!({"path": path}),
         status: Some(CallStatus::Completed),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -31,7 +37,7 @@ fn search_call(id: usize, command: &str) -> Call {
         name: "shell".to_owned(),
         arguments: json!({"command": command}),
         status: Some(CallStatus::Completed),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -48,7 +54,7 @@ fn edit_call(id: usize, path: &str, added: u64, removed: u64) -> Call {
             added,
             removed,
         }],
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -60,7 +66,7 @@ fn running_call(id: usize, name: &str, arguments: serde_json::Value) -> Call {
         name: name.to_owned(),
         arguments,
         status: None,
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -88,7 +94,7 @@ fn doc_group() -> Group {
             name: "edit".to_owned(),
             arguments: json!({"path": format!("e{n:02}.rs")}),
             status: Some(CallStatus::Completed),
-            started: true,
+            timing: Timing::Started(0),
             ..Call::default()
         });
     }
@@ -447,7 +453,7 @@ fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, content: 
         })),
         exit,
         lines,
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -463,7 +469,7 @@ fn failed_call(id: usize) -> Call {
             headline: "nonzero_exit: exit 101".to_owned(),
             ..CallResult::default()
         })),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -479,7 +485,7 @@ fn denied_call(id: usize) -> Call {
             headline: "not allowed".to_owned(),
             ..CallResult::default()
         })),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -495,7 +501,7 @@ fn cancelled_call(id: usize) -> Call {
             content: "x".to_owned(),
             ..CallResult::default()
         })),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -540,7 +546,7 @@ fn ask_call(id: usize) -> Call {
         name: "ask_user".to_owned(),
         arguments: json!({"questions": [{}, {}]}),
         status: None,
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -749,7 +755,7 @@ fn ledger_results_name_what_each_call_did() {
                     name: "shell".to_owned(),
                     arguments: json!({"command": "fd x"}),
                     status: Some(CallStatus::Completed),
-                    started: true,
+                    timing: Timing::Started(0),
                     ..Call::default()
                 }
             },
@@ -1126,7 +1132,7 @@ fn open_read_call(id: usize, lines: usize) -> Call {
             ..CallResult::default()
         })),
         lines: lines as u64,
-        started: true,
+        timing: Timing::Started(0),
         open: true,
         ..Call::default()
     }
@@ -1290,7 +1296,7 @@ fn write_call(id: usize, path: &str) -> Call {
         name: "write".to_owned(),
         arguments: json!({"path": path}),
         status: Some(CallStatus::Completed),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -1302,7 +1308,7 @@ fn missing_call(id: usize, name: &str) -> Call {
         name: name.to_owned(),
         arguments: json!({}),
         status: Some(CallStatus::Completed),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -1314,7 +1320,7 @@ fn missing_edit_call(id: usize) -> Call {
         name: "edit".to_owned(),
         arguments: json!({}),
         status: Some(CallStatus::Completed),
-        started: true,
+        timing: Timing::Started(0),
         ..Call::default()
     }
 }
@@ -1516,4 +1522,692 @@ fn set_open_ignores_a_call_view_target() {
     assert!(group.calls().next().is_some_and(|call| call.open));
     assert!(!group.set_open(&crate::app::Target::CallView(1), false));
     assert!(group.calls().next().is_some_and(|call| call.open));
+}
+
+/// A test renderer: what slots it fills, what it was called with, what
+/// its built-in calls got, and what it answers.
+#[derive(Debug, Default)]
+struct Fake {
+    fills: RefCell<Vec<String>>,
+    calls: RefCell<Vec<(String, u16, String)>>,
+    builtins: RefCell<Vec<(u16, String)>>,
+    script: RefCell<Script>,
+}
+
+/// What [`Fake`] answers a render with.
+#[derive(Debug, Clone)]
+enum Script {
+    /// These lines.
+    Replace(Vec<Vec<RawSpan>>),
+    /// This failure.
+    Fail(String),
+    /// The built-in row at the width less the badge, then the badge.
+    Decorate { badge: Vec<RawSpan> },
+}
+
+impl Default for Script {
+    fn default() -> Self {
+        Script::Replace(vec![vec![raw("X")]])
+    }
+}
+
+/// A plain span of `text`.
+fn raw(text: &str) -> RawSpan {
+    RawSpan {
+        text: text.to_owned(),
+        ..RawSpan::default()
+    }
+}
+
+impl Renderer for Fake {
+    fn fills(&self, slot: &str) -> bool {
+        self.fills.borrow().iter().any(|filled| filled == slot)
+    }
+
+    fn render(
+        &self,
+        slot: &str,
+        input: &Input<'_>,
+        width: u16,
+        builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Result<Vec<Vec<RawSpan>>, Failure> {
+        self.calls
+            .borrow_mut()
+            .push((slot.to_owned(), width, format!("{input:?}")));
+        match self.script.borrow().clone() {
+            Script::Replace(lines) => Ok(lines),
+            Script::Fail(message) => Err(Failure {
+                extension: "fake".to_owned(),
+                message,
+            }),
+            Script::Decorate { badge } => {
+                let trimming: usize = badge
+                    .iter()
+                    .map(|span| crate::format::width(&span.text))
+                    .sum();
+                let trimming = u16::try_from(trimming).unwrap_or(u16::MAX);
+                let built = builtin(input, width.saturating_sub(trimming));
+                self.builtins
+                    .borrow_mut()
+                    .push((width.saturating_sub(trimming), format!("{input:?}")));
+                let mut row = built.into_iter().next().unwrap_or_default();
+                row.extend(badge);
+                Ok(vec![row])
+            }
+        }
+    }
+}
+
+/// A seam holding `fake`, drawing page 0.
+fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
+    let registry = Registry::default();
+    registry.set(fake.clone());
+    Bound {
+        registry,
+        cache: Rc::new(Cache::default()),
+        page: 0,
+        flat,
+    }
+}
+
+/// `group` drawn at `width`, through `seam` when one is bound. The
+/// group draws open: the seam covers the ledger rows.
+fn draw(
+    group: &Group,
+    width: u16,
+    seam: Option<&Bound>,
+) -> (Vec<super::super::Row>, Vec<crate::rows::RowText>) {
+    let mut group = group.clone();
+    group.open = true;
+    let mut out = crate::rows::Rows::default();
+    if let Some(seam) = seam {
+        out = out.with_seam(seam.clone());
+    }
+    group.rows(false, width, &crate::image::Layout::default(), &mut out);
+    out.into_parts()
+}
+
+/// The byte-identity fixtures: every result shape the built-in ledger
+/// row draws, one image call, and one opened call.
+fn identity_group() -> Group {
+    Group {
+        key: Some("a_0".to_owned()),
+        open: true,
+        sections: vec![
+            Section {
+                step: 1,
+                calls: vec![
+                    read_call(1, "a.rs"),
+                    search_call(2, "rg x"),
+                    edit_call(3, "e.rs", 2, 1),
+                    running_call(4, "shell", json!({"command": "sleep 1"})),
+                    cancelled_call(5),
+                    denied_call(6),
+                    failed_call(7),
+                    with_content(with_headline(failed_call(8), ""), "boom\nsecond"),
+                    ask_call(9),
+                    answered_ask_call(10),
+                ],
+                ..Section::default()
+            },
+            Section {
+                step: 2,
+                calls: vec![
+                    shell_call(11, "cargo test", Some(0), 2, "ok\nmore"),
+                    with_open(read_call(12, "b.rs")),
+                    Call {
+                        images: vec![crate::image::Part {
+                            path: "pic.png".to_owned(),
+                            width: 4,
+                            height: 4,
+                        }],
+                        ..read_call(13, "c.rs")
+                    },
+                ],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    }
+}
+
+/// An `ask_user` call whose form the person answered, folded through
+/// the real request and resolution: the only way the suite builds one,
+/// because the answer's outcome stays inside `answers`.
+fn answered_ask_call(id: usize) -> Call {
+    use super::super::{Fold, Turn};
+    let mut fold = Fold::default();
+    let mut turn = Turn::new(Vec::new(), 0);
+    turn.call_requested(
+        "a_1",
+        contract::events::ToolCallRequested {
+            name: "ask_user".to_owned(),
+            arguments: json!({"questions": [{}, {}]}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+        0,
+        &mut fold,
+    );
+    let mut turns = vec![turn];
+    for (kind, payload) in [
+        (
+            "interaction_requested",
+            json!({"request_id": "r_1", "kind": "form",
+                "action_ids": ["a_1"],
+                "fields": [{"header": "Base", "question": "Which branch?"}]}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r_1", "by": "person",
+                "answers": [{"labels": ["dev"]}]}),
+        ),
+    ] {
+        assert!(
+            super::super::answers::fold(
+                &mut turns,
+                &contract::Envelope {
+                    kind: kind.to_owned(),
+                    session_id: contract::SessionId("s".to_owned()),
+                    ts: 0,
+                    schema_version: contract::SCHEMA_VERSION,
+                    turn_id: None,
+                    action_id: None,
+                    seq: None,
+                    payload: payload.as_object().cloned().unwrap_or_default(),
+                },
+            ),
+            "the {kind} line folds"
+        );
+    }
+    let mut call = turns
+        .iter()
+        .flat_map(|turn| turn.groups())
+        .flat_map(|group| group.sections.iter())
+        .flat_map(|section| section.calls.iter())
+        .find(|call| call.action == "a_1")
+        .cloned()
+        .expect("the answered ask stays in its turn");
+    call.id = id;
+    call.action = format!("a_{id}");
+    call
+}
+
+/// A renderer that fills nothing draws exactly the built-in rows, at
+/// widths from a wide terminal down to five columns, and is never
+/// called.
+#[test]
+fn a_fills_nothing_renderer_draws_byte_identical_rows() {
+    let group = identity_group();
+    let cut = Group {
+        cut: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![running_call(1, "shell", json!({"command": "sleep 1"}))],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    for width in [120u16, 80, 40, 25, 19, 12, 5] {
+        for group in [&group, &cut] {
+            let (plain_rows, plain_texts) = draw(group, width, None);
+            let fake = Rc::new(Fake::default());
+            let bound = seam(&fake, false);
+            let (seam_rows, seam_texts) = draw(group, width, Some(&bound));
+            assert_eq!(seam_rows, plain_rows, "width {width}");
+            assert_eq!(seam_texts, plain_texts, "width {width}");
+            assert!(fake.calls.borrow().is_empty(), "width {width}");
+            assert!(fake.builtins.borrow().is_empty(), "width {width}");
+        }
+    }
+}
+
+/// A renderer that fills the slot replaces the row's text after the
+/// six-column gutter: the step's number shows on the section's first
+/// row only, the row opens the call, and the tail is the pad.
+#[test]
+fn a_renderer_replaces_the_row_after_the_gutter() {
+    let group = Group {
+        sections: vec![Section {
+            step: 4,
+            calls: vec![read_call(1, "a.rs"), read_call(2, "b.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 80, Some(&bound));
+    // The summary row first, then one ledger row per call.
+    assert_eq!(rows.len(), 3);
+    let (rows, texts) = (&rows[1..], &texts[1..]);
+    let first = format!("{:>5} X{}", 4, " ".repeat(80 - 7));
+    let second = format!("{}X{}", " ".repeat(6), " ".repeat(80 - 7));
+    assert_eq!(rows[0].0.to_string(), first);
+    assert_eq!(rows[1].0.to_string(), second);
+    assert_eq!(rows[0].1, Some(Target::Call(1)));
+    assert_eq!(rows[1].1, Some(Target::Call(2)));
+    assert_eq!(texts[0].tail, 80 - 7);
+    assert!(texts[0].links.is_empty());
+}
+
+/// The tool's own slot beats the catch-all: a shell call renders
+/// `ledger_row:shell` and never `ledger_row`, while a read call
+/// renders `ledger_row` after its own slot misses.
+#[test]
+fn the_tool_slot_beats_the_catch_all() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                shell_call(1, "cargo test", Some(0), 2, "ok\nmore"),
+                read_call(2, "a.rs"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned(), "ledger_row:shell".to_owned()]),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, _) = draw(&group, 80, Some(&bound));
+    assert_eq!(rows.len(), 3);
+    let calls = fake.calls.borrow();
+    assert_eq!(calls[0].0, "ledger_row:shell");
+    assert_eq!(calls[1].0, "ledger_row");
+}
+
+/// A fake filling only the catch-all serves every tool under it.
+#[test]
+fn the_catch_all_serves_every_tool() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                shell_call(1, "cargo test", Some(0), 2, "ok\nmore"),
+                read_call(2, "a.rs"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, _) = draw(&group, 80, Some(&bound));
+    assert_eq!(rows.len(), 3);
+    let calls = fake.calls.borrow();
+    assert_eq!(calls.len(), 2);
+    assert!(calls.iter().all(|(slot, _, _)| slot == "ledger_row"));
+}
+
+/// A decorator draws the built-in row plus its badge, uncut: the fake
+/// calls the built-in with the width less the badge's two cells, the
+/// built-in text equals the ledger's own row output cell for cell,
+/// and the row's text is that text plus the badge.
+#[test]
+fn a_decorator_draws_the_built_in_row_plus_its_badge() {
+    crate::work::take();
+    let call = read_call(1, "a.rs");
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![call.clone()],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Decorate {
+            badge: vec![raw(" +")],
+        }),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, _) = draw(&group, 80, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    let rows = &rows[1..];
+    // The terminal less the six-column gutter is 74; the badge takes
+    // two, so the built-in draws at 72.
+    let builtins = fake.builtins.borrow();
+    assert_eq!(builtins.len(), 1);
+    assert_eq!(builtins[0].0, 72);
+    let output = super::first_result_line(call.content());
+    let row = group.ledger_input(&call, &output, false);
+    let built = group.builtin_row(&row, 72);
+    let built_text: String = built.iter().map(|span| span.content.as_ref()).collect();
+    // The row is the gutter, the built-in text, the badge, and the
+    // pad: the built-in text cell for cell.
+    let taken = 6 + crate::format::width(&built_text) + 2;
+    let text = rows[0].0.to_string();
+    assert_eq!(
+        text,
+        format!("    1 {built_text} +{}", " ".repeat(80 - taken))
+    );
+    // One render, one cache miss: the built-in call touches no cache.
+    assert_eq!(fake.calls.borrow().len(), 1);
+    assert_eq!(crate::work::take().renderer_calls, 1);
+}
+
+/// The renderer gets the row width less the six-column gutter: 74 at
+/// 80 columns, and 0 when the gutter leaves nothing.
+#[test]
+fn the_renderer_gets_the_width_less_the_gutter() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    for (max, width) in [(80u16, 74u16), (6, 0), (5, 0)] {
+        let fake = Rc::new(Fake {
+            fills: RefCell::new(vec!["ledger_row".to_owned()]),
+            ..Fake::default()
+        });
+        let bound = seam(&fake, false);
+        let (rows, _) = draw(&group, max, Some(&bound));
+        let calls = fake.calls.borrow();
+        assert_eq!(calls.len(), 1, "width {max}");
+        assert_eq!(calls[0].1, width, "width {max}");
+        for row in &rows {
+            assert!(crate::format::width(&row.0.to_string()) <= usize::from(max));
+        }
+    }
+}
+
+/// An error, a wrong shape, and a refused link each fall back to the
+/// built-in row, and the failure is cached: two draws call the fake
+/// once per row.
+#[test]
+fn a_bad_render_falls_back_to_the_built_in_row() {
+    let group = identity_group();
+    let scripts = [
+        Script::Fail("boom".to_owned()),
+        Script::Replace(vec![vec![RawSpan {
+            text: "X".to_owned(),
+            fg: Some("no-such-role".to_owned()),
+            ..RawSpan::default()
+        }]]),
+        Script::Replace(vec![vec![raw("ab\u{7}")]]),
+        Script::Replace(vec![vec![RawSpan {
+            text: "X".to_owned(),
+            fg: Some("#ff00zz".to_owned()),
+            ..RawSpan::default()
+        }]]),
+        Script::Replace(vec![vec![RawSpan {
+            text: "here".to_owned(),
+            link: Some("https://exa mple.com".to_owned()),
+            ..RawSpan::default()
+        }]]),
+    ];
+    let (plain_rows, plain_texts) = draw(&group, 80, None);
+    for script in scripts {
+        let fake = Rc::new(Fake {
+            fills: RefCell::new(vec!["ledger_row".to_owned()]),
+            script: RefCell::new(script),
+            ..Fake::default()
+        });
+        let bound = seam(&fake, false);
+        let (rows, texts) = draw(&group, 80, Some(&bound));
+        assert_eq!(rows, plain_rows);
+        assert_eq!(texts, plain_texts);
+        draw(&group, 80, Some(&bound));
+        let ledger = plain_rows
+            .iter()
+            .filter(|row| matches!(row.1, Some(Target::Call(_))))
+            .count();
+        assert_eq!(fake.calls.borrow().len(), ledger);
+    }
+}
+
+/// Several lines draw several rows with a blank gutter after the
+/// first; zero lines draw no row for the call while its opened detail
+/// still draws.
+#[test]
+fn several_lines_draw_several_rows_and_none_draws_none() {
+    let group = Group {
+        sections: vec![Section {
+            step: 4,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(vec![vec![raw("one")], vec![raw("two")]])),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 80, Some(&bound));
+    assert_eq!(rows.len(), 3);
+    let (rows, texts) = (&rows[1..], &texts[1..]);
+    assert_eq!(
+        rows[0].0.to_string(),
+        format!("{:>5} one{}", 4, " ".repeat(80 - 9))
+    );
+    assert_eq!(
+        rows[1].0.to_string(),
+        format!("{}two{}", " ".repeat(6), " ".repeat(80 - 9))
+    );
+    for (row, text) in rows.iter().zip(texts.iter()) {
+        assert_eq!(row.1, Some(Target::Call(1)));
+        assert_eq!(text.tail, 80 - 9);
+    }
+    // Zero lines: the ledger row is gone but the opened detail stays.
+    let open = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![with_open(read_call(2, "b.rs"))],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let empty = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(Vec::new())),
+        ..Fake::default()
+    });
+    let bound = seam(&empty, false);
+    let (rows, _) = draw(&open, 80, Some(&bound));
+    let (plain_rows, _) = draw(&open, 80, None);
+    // The summary row, then the opened detail: the ledger row between
+    // them is gone.
+    assert!(!rows.is_empty());
+    assert_eq!(rows[0], plain_rows[0]);
+    assert_eq!(rows[1..], plain_rows[2..]);
+}
+
+/// The renderer input folds the call's events: what status the call is
+/// in, its exit and lines, its headline's code and message, its
+/// answer, its duration, and whether the page is flat.
+#[test]
+fn ledger_input_folds_the_call_events() {
+    let group = Group::default();
+    // A call that never started is pending; nothing ran.
+    let pending = Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "shell".to_owned(),
+        arguments: json!({"command": "sleep 1"}),
+        ..Call::default()
+    };
+    let row = group.ledger_input(&pending, "", false);
+    assert_eq!(row.name, "shell");
+    assert_eq!(row.arguments, &json!({"command": "sleep 1"}));
+    assert_eq!(row.status, ExtStatus::Pending);
+    assert_eq!(row.exit, None);
+    assert_eq!(row.duration_ms, None);
+    assert_eq!(row.lines, 0);
+    assert!(row.changes.is_empty());
+    assert_eq!(row.error, None);
+    assert_eq!(row.output, "");
+    assert_eq!(row.answer, None);
+    assert!(!row.flat);
+    // A started call with no completion is running.
+    let running = running_call(2, "shell", json!({"command": "sleep 1"}));
+    let row = group.ledger_input(&running, "", false);
+    assert_eq!(row.status, ExtStatus::Running);
+    assert_eq!(row.duration_ms, None);
+    // A completed shell carries its exit and its lines.
+    let done = Call {
+        timing: Timing::Took(2500),
+        ..shell_call(3, "cargo test", Some(0), 2, "ok\nmore")
+    };
+    let output = super::first_result_line(done.content());
+    let row = group.ledger_input(&done, &output, false);
+    assert_eq!(row.status, ExtStatus::Completed);
+    assert_eq!(row.exit, Some(0));
+    assert_eq!(row.lines, 2);
+    assert_eq!(row.duration_ms, Some(2500));
+    assert_eq!(row.output, "ok");
+    // A failed call's headline splits at the first ": " into its
+    // code and message.
+    let failed = with_content(
+        with_headline(failed_call(4), "nonzero_exit: x: y"),
+        "out\nmore",
+    );
+    let output = super::first_result_line(failed.content());
+    let row = group.ledger_input(&failed, &output, false);
+    assert_eq!(row.status, ExtStatus::Failed);
+    assert_eq!(
+        row.error,
+        Some(crate::ext::RowError {
+            code: "nonzero_exit",
+            message: "x: y",
+        })
+    );
+    assert_eq!(row.output, "out");
+    // A failed call with no headline names no code: the row ends
+    // with its output.
+    let bare = with_content(with_headline(failed_call(5), ""), "boom\nsecond");
+    let output = super::first_result_line(bare.content());
+    let row = group.ledger_input(&bare, &output, false);
+    assert_eq!(row.status, ExtStatus::Failed);
+    assert_eq!(
+        row.error,
+        Some(crate::ext::RowError {
+            code: "",
+            message: "",
+        })
+    );
+    assert_eq!(row.output, "boom");
+    // A denied call and a cancelled call carry no error: the built-in
+    // row names the denial and the cancellation itself.
+    for (call, status) in [
+        (denied_call(6), ExtStatus::Denied),
+        (cancelled_call(7), ExtStatus::Cancelled),
+    ] {
+        let output = super::first_result_line(call.content());
+        let row = group.ledger_input(&call, &output, false);
+        assert_eq!(row.status, status);
+        assert_eq!(row.error, None);
+    }
+    // A started call of a cut turn may have run: its status is
+    // unknown.
+    let cut = Group {
+        cut: true,
+        ..Group::default()
+    };
+    let row = cut.ledger_input(&running, "", false);
+    assert_eq!(row.status, ExtStatus::Unknown);
+    // An answered form carries the person's answer.
+    let answered = answered_ask_call(8);
+    let output = super::first_result_line(answered.content());
+    let row = group.ledger_input(&answered, &output, false);
+    assert_eq!(row.answer, Some("answered"));
+    let waiting = ask_call(9);
+    let output = super::first_result_line(waiting.content());
+    let row = group.ledger_input(&waiting, &output, false);
+    assert_eq!(row.answer, None);
+    // An edit carries its counts.
+    let edit = edit_call(10, "e.rs", 2, 1);
+    let output = super::first_result_line(edit.content());
+    let row = group.ledger_input(&edit, &output, true);
+    assert_eq!(row.status, ExtStatus::Completed);
+    assert!(row.flat);
+    assert_eq!(row.changes.len(), 1);
+    assert_eq!(row.changes[0].added, 2);
+    assert_eq!(row.changes[0].removed, 1);
+}
+
+/// An extension link's range moves right by the six gutter cells, on
+/// the first row and under a blank gutter; a link the width cuts away
+/// leaves no range.
+#[test]
+fn extension_links_shift_right_by_the_gutter() {
+    let linked = vec![vec![
+        raw("ab"),
+        RawSpan {
+            text: "hel".to_owned(),
+            link: Some("https://example.com".to_owned()),
+            ..RawSpan::default()
+        },
+        raw("lo"),
+    ]];
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![read_call(1, "a.rs"), read_call(2, "b.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Replace(linked)),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (_, texts) = draw(&group, 80, Some(&bound));
+    assert_eq!(texts.len(), 3);
+    for text in &texts[1..] {
+        assert_eq!(text.links, vec![(8..11, "https://example.com".to_owned())]);
+    }
+    // At eight columns the gutter leaves "ab": the link's whole
+    // text is cut away, so the row links nowhere.
+    let (_, texts) = draw(&group, 8, Some(&bound));
+    assert_eq!(texts.len(), 3);
+    for text in &texts[1..] {
+        assert!(text.links.is_empty(), "{text:?}");
+    }
+}
+
+/// The drawn text is the span texts plus the pad: `to_string` minus
+/// the tail is the text.
+#[test]
+fn the_drawn_text_is_the_span_texts_plus_the_pad() {
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        ..Fake::default()
+    });
+    let bound = seam(&fake, false);
+    let (rows, texts) = draw(&group, 20, Some(&bound));
+    assert_eq!(rows.len(), 2);
+    let (rows, texts) = (&rows[1..], &texts[1..]);
+    let text = rows[0].0.to_string();
+    assert_eq!(texts[0].tail, 20 - 7);
+    assert_eq!(&text[..text.len() - texts[0].tail as usize], "    1 X");
+    assert!(texts[0].links.is_empty());
 }

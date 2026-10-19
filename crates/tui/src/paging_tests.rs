@@ -4,8 +4,11 @@
 //! width counts every page again, and what the person opened survives a
 //! page's reload.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use contract::clock::Clock;
 use contract::{ActionId, Envelope, Seq, SessionId};
@@ -13,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::{Draw, Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
+use crate::ext::{Failure, Input, RawSpan, Renderer};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
@@ -3698,4 +3702,305 @@ fn stale_owed_names_an_uncounted_dropped_page() {
     assert!(pages.stale_owed(), "a dropped page waits to be counted");
     pages.failed.insert(0);
     assert!(!pages.stale_owed(), "a failed page is owed nothing");
+}
+
+/// A test renderer: one counted call per render, scripted lines, a
+/// distinctive styled span when asked, and an optional failure for
+/// edit calls.
+#[derive(Debug)]
+struct Fake {
+    calls: RefCell<usize>,
+    per_input: RefCell<HashMap<String, usize>>,
+    failed: RefCell<HashSet<String>>,
+    lines: usize,
+    styled: bool,
+    fail_edits: bool,
+}
+
+impl Fake {
+    /// `lines` plain `X` lines per render.
+    fn lines(lines: usize) -> Self {
+        Fake {
+            calls: RefCell::new(0),
+            per_input: RefCell::new(HashMap::new()),
+            failed: RefCell::new(HashSet::new()),
+            lines,
+            styled: false,
+            fail_edits: false,
+        }
+    }
+}
+
+impl Renderer for Fake {
+    fn fills(&self, slot: &str) -> bool {
+        slot == "ledger_row"
+    }
+
+    fn render(
+        &self,
+        slot: &str,
+        input: &Input<'_>,
+        _width: u16,
+        _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Result<Vec<Vec<RawSpan>>, Failure> {
+        let key = format!("{slot} {input:?}");
+        *self.calls.borrow_mut() += 1;
+        *self.per_input.borrow_mut().entry(key.clone()).or_insert(0) += 1;
+        if self.fail_edits && matches!(input, Input::LedgerRow(row) if row.name == "edit") {
+            self.failed.borrow_mut().insert(key);
+            return Err(Failure {
+                extension: "fake".to_owned(),
+                message: "edits stay built-in".to_owned(),
+            });
+        }
+        let span = if self.styled {
+            RawSpan {
+                text: "zxqy".to_owned(),
+                fg: Some("success".to_owned()),
+                bold: true,
+                ..RawSpan::default()
+            }
+        } else {
+            RawSpan {
+                text: "X".to_owned(),
+                ..RawSpan::default()
+            }
+        };
+        Ok(vec![vec![span]; self.lines])
+    }
+}
+
+/// Every resident page, in order.
+fn resident(app: &App) -> Vec<usize> {
+    (0..app.pages().index().pages().len())
+        .filter(|at| app.pages().part(*at).is_some())
+        .collect()
+}
+
+/// The search-style draw over every resident page.
+fn search(app: &App) {
+    for at in resident(app) {
+        app.pages().page_text_open_turns(at);
+    }
+}
+
+/// Renderer calls since the last count.
+fn calls() -> usize {
+    crate::work::take().renderer_calls
+}
+
+/// Scrolling redraws from the cache: after the first frame, ten redraws
+/// at different tops and a Ctrl+O toggle add no calls; the search-style
+/// draw calls once per distinct input not yet seen, and never twice.
+#[test]
+fn scrolling_and_searching_call_once_per_distinct_input() {
+    let lines = session(2, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let (top, _) = app.scroll();
+    let height = app.conversation_height();
+    // The first full frame, with no renderer installed: nothing to call.
+    app.pages().shown(top, height);
+    for delta in 0..10 {
+        app.pages().shown(top + delta, height);
+    }
+    app.on_key(Key::CtrlO, now());
+    assert_eq!(calls(), 0);
+    // Installing the renderer caches nothing: the search-style draw
+    // over every resident page calls once per distinct input.
+    let fake = Rc::new(Fake::lines(1));
+    app.pages().ext.registry.set(fake.clone());
+    search(&app);
+    assert!(calls() > 0, "unseen inputs call");
+    search(&app);
+    assert_eq!(calls(), 0);
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count == 1),
+        "no input called twice"
+    );
+    // Redraws and a toggle hit the hot cache.
+    for delta in 0..10 {
+        app.pages().shown(top + delta, height);
+    }
+    app.on_key(Key::CtrlO, now());
+    assert_eq!(calls(), 0);
+}
+
+/// A new page width calls every successful input again; back at the old
+/// width they call a third time, while a failing input never calls again.
+#[test]
+fn a_new_width_calls_again_and_a_failure_never_calls_again() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    let fake = Rc::new(Fake {
+        fail_edits: true,
+        ..Fake::lines(1)
+    });
+    pages.ext.registry.set(fake.clone());
+    for line in &lines {
+        pages.apply(line);
+    }
+    // Loading every page counts it under the fake.
+    assert!(!joined(&mut pages, &lines).is_empty());
+    assert!(calls() > 0, "the first width calls");
+    assert!(!fake.failed.borrow().is_empty(), "an edit failed");
+    // A new width drops the entries: every successful input calls
+    // again, each failure stays cached.
+    pages.set_width(100);
+    assert!(!joined(&mut pages, &lines).is_empty());
+    assert!(calls() > 0, "the new width calls again");
+    for (input, count) in fake.per_input.borrow().iter() {
+        if fake.failed.borrow().contains(input) {
+            assert_eq!(*count, 1, "a failing input never calls again");
+        } else {
+            assert_eq!(*count, 2, "a new width calls again");
+        }
+    }
+    // Back at the old width the entries are gone too: a third call.
+    pages.set_width(80);
+    assert!(!joined(&mut pages, &lines).is_empty());
+    for (input, count) in fake.per_input.borrow().iter() {
+        if fake.failed.borrow().contains(input) {
+            assert_eq!(*count, 1, "a failing input never calls again");
+        } else {
+            assert_eq!(*count, 3, "the old width calls again");
+        }
+    }
+}
+
+/// Cached lines keep the theme's role markers: two frames draw the same
+/// rows with no new calls, every styled span carries an `Indexed`
+/// marker, and no span carries an `Rgb` colour.
+#[test]
+fn cached_lines_keep_role_markers_across_frames() {
+    use ratatui::style::Color;
+    let lines = session(1, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let fake = Rc::new(Fake {
+        styled: true,
+        ..Fake::lines(1)
+    });
+    app.pages().ext.registry.set(fake.clone());
+    search(&app);
+    let first = calls();
+    assert!(first > 0, "the first frame calls");
+    // The look resolves the markers at paint time, so a second frame
+    // under either look hits the same entries.
+    search(&app);
+    assert_eq!(calls(), 0);
+    let mut marked = false;
+    for at in resident(&app) {
+        let (rows, _) = app.pages().page_text_open_turns(at).expect("resident");
+        for (line, _) in &rows {
+            for span in &line.spans {
+                assert!(!matches!(span.style.fg, Some(Color::Rgb(..))), "{span:?}");
+                assert!(!matches!(span.style.bg, Some(Color::Rgb(..))), "{span:?}");
+                marked = marked
+                    || matches!(
+                        span.style.fg,
+                        Some(Color::Indexed(n)) if n == crate::theme::Role::Success as u8
+                    );
+            }
+        }
+    }
+    assert!(marked, "a styled extension span drew");
+}
+
+/// Dropping a page drops its entries: reloading it calls its inputs
+/// again once, while an undropped page costs nothing.
+#[test]
+fn dropping_a_page_calls_again_on_reload() {
+    let lines = session(2, false);
+    let mut pages = Pages::new(80);
+    let fake = Rc::new(Fake::lines(1));
+    pages.ext.registry.set(fake.clone());
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(!joined(&mut pages, &lines).is_empty());
+    assert!(calls() > 0, "loading calls");
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count == 1),
+        "each input called once"
+    );
+    // Drop every closed page: the open page stays, and redrawing it
+    // costs nothing.
+    pages.trim(0, 0);
+    let open = pages.closed.len();
+    assert!(pages.part(open).is_some(), "the open page stays");
+    pages.page_text_open_turns(open);
+    assert_eq!(calls(), 0, "an undropped page does not call again");
+    // Reloading a dropped page calls its inputs again, exactly once.
+    let range = pages
+        .index()
+        .pages()
+        .get(0)
+        .map(|page| page.first_seq..=page.last_seq);
+    if let Some(range) = range {
+        pages.load(&history(&lines, &range));
+    }
+    assert!(pages.part(0).is_some(), "page 0 loads back");
+    assert!(calls() > 0, "the reload calls again");
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count <= 2),
+        "no input called more than twice"
+    );
+    assert!(
+        fake.per_input.borrow().values().any(|count| *count == 2),
+        "a reloaded input called again"
+    );
+}
+
+/// Installing a renderer recounts every page under its lines, and
+/// replacing it recounts again.
+#[test]
+fn installing_a_renderer_recounts_under_its_lines() {
+    let lines = session(1, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    let rows = || {
+        app.pages()
+            .index()
+            .pages()
+            .iter()
+            .map(|page| page.rows)
+            .collect::<Vec<_>>()
+    };
+    let before = rows();
+    // Two lines per ledger row: every ledger row grows the counts.
+    let two = Rc::new(Fake::lines(2));
+    app.use_renderer(two.clone());
+    assert!(*two.calls.borrow() > 0, "the install recounts");
+    let grown = rows();
+    assert!(grown.iter().sum::<usize>() > before.iter().sum::<usize>());
+    // One line per row again: the counts come back.
+    let one = Rc::new(Fake::lines(1));
+    app.use_renderer(one.clone());
+    assert!(*one.calls.borrow() > 0, "replacing recounts");
+    assert_eq!(rows(), before);
+}
+
+/// A fresh copy draws through the same install with an empty cache,
+/// and copies the flag.
+#[test]
+fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
+    let lines = session(1, false);
+    let mut pages = Pages::new(80);
+    let fake = Rc::new(Fake::lines(1));
+    pages.ext.registry.set(fake.clone());
+    pages.set_flat(true);
+    for line in &lines {
+        pages.apply(line);
+    }
+    assert!(joined(&mut pages, &lines).len() > 0);
+    // The copy draws through the same install: the same fake is
+    // called, once per distinct input, then never again.
+    let mut fresh = pages.fresh();
+    assert!(fresh.ext.flat, "the copy keeps the flag");
+    calls();
+    assert!(!joined(&mut fresh, &lines).is_empty());
+    assert!(calls() > 0, "an empty cache calls");
+    assert!(!joined(&mut fresh, &lines).is_empty());
+    assert_eq!(calls(), 0, "the second draw hits");
 }
