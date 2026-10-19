@@ -289,7 +289,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
     let idle_exit = Duration::from_secs(30);
     let serve_clock = Arc::clone(&clock);
     let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn({
+    let handle = thread::spawn({
         let home = home.clone();
         move || {
             let starter = Arc::new(FakeStarter::hang(&home));
@@ -392,11 +392,17 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
     drop(writer);
     closer.shutdown(Shutdown::Both).unwrap();
     Deadline::after(WITHIN).recv_or_fail(&reader_done_rx, "the reader thread to end");
+    let serve_id = handle.thread().id();
     assert!(
         clock.await_parked(origin + idle_exit, WITHIN),
         "the hub parks for its idle exit"
     );
-    clock.advance(idle_exit + Duration::from_secs(1));
+    clock.advance_when_parked(
+        Some(origin + idle_exit),
+        Some(serve_id),
+        idle_exit,
+        &Deadline::after(WITHIN),
+    );
     let code = Deadline::after(WITHIN)
         .recv_or_fail(&done_rx, "the hub to exit for idleness")
         .expect("serve returns");
