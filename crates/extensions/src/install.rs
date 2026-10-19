@@ -5,10 +5,11 @@
 //! A failed step puts every previous version back, so a failed install
 //! leaves nothing behind.
 
-use std::fs::{self, File};
+use std::fs::{self, DirBuilder, File};
 use std::io::{self, ErrorKind, Write};
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
 
@@ -107,6 +108,60 @@ impl Record {
     }
 }
 
+/// One process-wide counter behind every temporary name this crate
+/// makes, so two calls never return the same string before it wraps.
+static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// How many temporary names a guard tries before it fails.
+const SCRATCH_TRIES: usize = 64;
+
+/// A temporary name: `{prefix}-{pid}-{n}`, with `n` from the
+/// process-wide counter. Two calls in one process never return the same
+/// string before the counter wraps, which is out of reach for one
+/// process; a guard would catch a repeat by `AlreadyExists` anyway.
+pub(crate) fn unique_name(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// A directory only its holder uses, removed when it is dropped. The
+/// directory is created with `mode` (not recursive: a missing parent is
+/// `NotFound`, returned at once, not retried); up to 64 names are tried,
+/// only on `AlreadyExists`. A taken directory is never entered or
+/// removed.
+pub(crate) struct Scratch {
+    path: PathBuf,
+}
+
+impl Scratch {
+    pub(crate) fn create(parent: &Path, prefix: &str, mode: u32) -> Result<Scratch, Error> {
+        for _ in 0..SCRATCH_TRIES {
+            let path = parent.join(unique_name(prefix));
+            match DirBuilder::new().mode(mode).create(&path) {
+                Ok(()) => return Ok(Scratch { path }),
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(io(&path)(e)),
+            }
+        }
+        Err(io(parent)(io::Error::other(
+            "every scratch directory name tried is taken",
+        )))
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        remove(&self.path).unwrap_or(());
+    }
+}
+
 /// Where a staged copy waits, and where it goes.
 #[derive(Clone)]
 pub(crate) struct Paths {
@@ -143,12 +198,12 @@ pub(crate) fn check(
 
 /// Checks the extension at `source` and copies it, with its record, to a
 /// fresh directory beside where it will live; nothing installed changes.
-/// `id` is unique to the plan, so two plans never share a directory. The
-/// providers returned are read from the copy, which keeps symbolic links
-/// as links, so a link that leaves the extension is refused there.
+/// Each call stages under its own name, so two calls never share a
+/// directory. The providers returned are read from the copy, which keeps
+/// symbolic links as links, so a link that leaves the extension is
+/// refused there.
 pub(crate) fn stage(
     home: &Path,
-    id: usize,
     source: &Path,
     fiber_version: &str,
     record: &Record,
@@ -158,11 +213,11 @@ pub(crate) fn stage(
     let root = config::extensions_dir(home);
     fs::create_dir_all(&root).map_err(io(&root))?;
     overlap(source, &root)?;
-    let pid = std::process::id();
+    let stem = unique_name(&format!(".{slug}"));
     let paths = Paths {
         target: root.join(&slug),
-        fresh: root.join(format!(".{slug}.{pid}.{id}.new")),
-        old: root.join(format!(".{slug}.{pid}.{id}.old")),
+        fresh: root.join(format!("{stem}.new")),
+        old: root.join(format!("{stem}.old")),
     };
     remove(&paths.fresh)?;
     remove(&paths.old)?;

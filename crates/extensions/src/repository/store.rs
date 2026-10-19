@@ -15,7 +15,6 @@ use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use config::ProjectKey;
@@ -680,13 +679,13 @@ impl Store {
         }
         .to_string()
             + "\n";
+        // The approval file is the last thing an approval writes, and
+        // the write is atomic: a reader sees the old file or the new
+        // one, never half. A directory-sync failure reports `Unsynced`
+        // with the file already in place; rewriting the same bytes is
+        // idempotent, so a retry is safe.
         let target = dir.join(hash);
-        let temp = dir.join(format!(".tmp-{}-{}", std::process::id(), next()));
-        let written = fs::write(&temp, body).and_then(|()| fs::rename(&temp, &target));
-        if let Err(e) = written {
-            fs::remove_file(&temp).unwrap_or(());
-            return Err(io_error(&target)(e));
-        }
+        config::write_atomic(&target, body.as_bytes(), 0o666)?;
         Ok(())
     }
 
@@ -973,11 +972,6 @@ fn claim(ready: &Path) -> Result<File, Error> {
 
 fn is_hash(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-pub(super) fn next() -> usize {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(test)]

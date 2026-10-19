@@ -786,7 +786,12 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
         "the write did not park at its wait"
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
-    clock.advance(Duration::from_millis(250));
+    clock.advance_when_parked(
+        Some(deadline),
+        None,
+        Duration::from_millis(250),
+        &Deadline::after(DEADLINE),
+    );
     let answer = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the write returned")
@@ -1039,13 +1044,14 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
         .recv(&entered)
         .expect("the write reached the terminal");
     // Parked inside the clock wait, past the writer's own check.
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the write did not park on the clock"
+    let mark = clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_millis(999),
+        &Deadline::after(DEADLINE),
     );
     // The writer processes the pre-deadline advance and parks again
     // before the test asserts it is still waiting.
-    let mark = clock.advance_marked(Duration::from_millis(999));
     assert!(
         clock.await_parked_since(&mark, None, DEADLINE),
         "the write did not park again after the pre-deadline advance"
@@ -1055,7 +1061,12 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
         "the write returned before its deadline"
     );
     // At the deadline it reports that the terminal never took the input.
-    clock.advance(Duration::from_millis(1));
+    clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_millis(1),
+        &Deadline::after(DEADLINE),
+    );
     let err = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the write returned at its deadline");
@@ -1105,11 +1116,12 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
     drop(guard);
     // Parked inside the clock wait, past the writer's own check, before
     // the clock moves past the deadline.
-    assert!(
-        clock.await_parked_unbounded(DEADLINE),
-        "the write did not park on the clock"
+    clock.advance_when_parked(
+        None,
+        None,
+        Duration::from_millis(1001),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(1001));
     let err = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the write returned at its deadline");
@@ -1174,13 +1186,14 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
     // Parked inside the clock wait, past the writer's own check, before
     // the clock moves.
     let due = clock.origin() + Duration::from_secs(3600);
-    assert!(
-        clock.await_parked(due, DEADLINE),
-        "the write did not park on the clock"
-    );
     // The only wake is the clock passing the deadline: no second
     // advance, no cancel call.
-    clock.advance(Duration::from_secs(2));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_secs(2),
+        &Deadline::after(DEADLINE),
+    );
     let err = Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("the write returned at its deadline");

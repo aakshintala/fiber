@@ -573,7 +573,7 @@ impl Feed {
         crate::rewind::notify_left(&self.on_rewound, id, &found);
         let how = found
             .as_ref()
-            .filter(|(_, dir, _)| dir.is_dir())
+            .filter(|(_, dir, _)| log::dir_exists(dir))
             .map(|(_, dir, from)| match how_left(dir) {
                 Left::Exited => Left::Exited,
                 // Resumed already: the log's last line is the new run's,

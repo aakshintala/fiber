@@ -89,9 +89,18 @@ fn an_already_stored_label_is_refused_naming_as_and_the_key_is_never_asked() {
     let mut keys = Fake::new("new-key");
     let (result, err) = setup.login_as(Some("acme"), Some("work"), false, "", &mut keys);
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::Usage);
+    assert!(
+        matches!(
+            e,
+            CliError::StoreRefused {
+                refusal: Refusal::AlreadyStored { .. },
+                hint: true,
+            }
+        ),
+        "{e:?}"
+    );
     assert_eq!(
-        e.message,
+        e.to_string(),
         "credentials/acme/work is already stored; log in under another label with --as <label>, or run `fiber logout acme --as work` first. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
@@ -111,8 +120,9 @@ fn an_invalid_label_fails_before_the_key_is_asked_and_writes_nothing() {
         let mut keys = Fake::new(KEY);
         let (result, err) = setup.login_as(Some("acme"), Some(label), false, "", &mut keys);
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::InvalidArguments, "{label:?}");
-        assert!(!e.message.contains(KEY), "{}", e.message);
+        assert!(matches!(e, CliError::CredentialFile(_)), "{label:?}: {e:?}");
+        assert_eq!(e.code(), contract::ErrorCode::InvalidArguments, "{label:?}");
+        assert!(!e.to_string().contains(KEY), "{}", e);
         assert_eq!(err, "", "{label:?}");
         assert_eq!(keys.asked, 0, "{label:?}");
     }
@@ -148,7 +158,8 @@ fn a_failed_global_write_removes_the_chosen_label_not_default() {
     fs::create_dir(setup.home().join("config.json")).unwrap();
     let (result, err) = setup.login_as(Some("acme"), Some("work"), false, "", &mut Fake::new(KEY));
     let e = failed(result);
-    assert!(!e.message.contains(KEY), "{}", e.message);
+    assert!(matches!(e, CliError::Config(_)), "{e:?}");
+    assert!(!e.to_string().contains(KEY), "{e}");
     assert_eq!(err, "");
     assert_eq!(setup.stored("acme", "work"), None);
     assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
@@ -175,9 +186,19 @@ fn logout_as_a_missing_label_names_the_stored_ones_and_deletes_nothing() {
     store(&setup, "acme", "default");
     let (result, err) = setup.logout_target(Some("acme"), LogoutTarget::Label("missing"));
     let e = failed(result);
-    assert_eq!(e.code, ErrorCode::CredentialMissing);
+    assert!(
+        matches!(
+            e,
+            CliError::LabelNotAmong {
+                ref name,
+                ref label,
+                ..
+            } if name == "acme" && label == "missing"
+        ),
+        "{e:?}"
+    );
     assert_eq!(
-        e.message,
+        e.to_string(),
         "no stored credential missing for acme; the stored labels are default, work"
     );
     assert_eq!(err, "");
@@ -192,8 +213,10 @@ fn logout_with_a_flag_and_nothing_stored_is_the_empty_case_failure() {
     for target in [LogoutTarget::Label("missing"), LogoutTarget::All] {
         let (result, err) = setup.logout_target(Some("acme"), target);
         let e = failed(result);
-        assert_eq!(e.code, ErrorCode::CredentialMissing);
-        assert_eq!(e.message, "no stored credential for acme");
+        assert!(
+            matches!(e, CliError::NoStoredCredential { ref name } if name == "acme"),
+            "{e:?}"
+        );
         assert_eq!(err, "");
     }
 }

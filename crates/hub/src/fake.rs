@@ -3,7 +3,7 @@
 //! sent.
 
 use std::fs::DirBuilder;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -449,13 +449,13 @@ fn serve_one(
         Err(_) => return,
     };
     let mut read = BufReader::new(stream);
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
+        match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
             // The hub's liveness check closed without sending.
-            Ok(0) => return,
-            Ok(_) => {
+            Ok(None) => return,
+            Ok(Some(mut buf)) => {
+                // Received lines keep their one trailing line feed.
+                buf.push(b'\n');
                 let text = String::from_utf8_lossy(&buf).into_owned();
                 let command = command_of(&text);
                 let closes = match closing {
@@ -517,12 +517,10 @@ fn hold(read: &mut BufReader<UnixStream>) {
     if read.get_mut().set_read_timeout(None).is_err() {
         return;
     }
-    let mut buf = Vec::new();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
+        match support::framing::read_line(&mut *read, support::framing::MAX_LINE) {
+            Ok(None) | Err(_) => return,
+            Ok(Some(_)) => {}
         }
     }
 }
@@ -562,12 +560,8 @@ fn write_accepted(writer: &mut UnixStream, command: &str) {
         "schema_version": 1,
         "payload": { "command_id": id },
     });
-    let mut bytes = serde_json::to_vec(&ack).unwrap_or_default();
-    bytes.push(b'\n');
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.flush())
-        .unwrap_or(());
+    let bytes = serde_json::to_vec(&ack).unwrap_or_default();
+    support::framing::write_line(writer, &bytes).unwrap_or(());
 }
 
 fn write_ack(writer: &mut UnixStream, prompt: &str, reply: &Handshake) {
@@ -594,12 +588,8 @@ fn write_ack(writer: &mut UnixStream, prompt: &str, reply: &Handshake) {
             },
         })
     };
-    let mut bytes = serde_json::to_vec(&ack).unwrap_or_default();
-    bytes.push(b'\n');
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.flush())
-        .unwrap_or(());
+    let bytes = serde_json::to_vec(&ack).unwrap_or_default();
+    support::framing::write_line(writer, &bytes).unwrap_or(());
 }
 
 fn refused(path: &Path, error: &std::io::Error) -> std::io::Error {
@@ -780,32 +770,32 @@ fn session_serve(stream: UnixStream, shared: &Arc<(Mutex<SessionState>, std::syn
         return;
     };
     let mut read = BufReader::new(stream);
-    let mut buf = Vec::new();
     // A probe that sends nothing closes; only a subscriber is held.
-    match read.read_until(b'\n', &mut buf) {
-        Ok(0) | Err(_) => return,
-        Ok(_) => {}
-    }
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    let mut ack = writer.try_clone().map(Some).unwrap_or(None);
-    if let Some(ack) = ack.as_mut() {
-        write_accepted(ack, &text);
-    }
-    {
-        let (state, cv) = &**shared;
-        let mut state = lock(state);
-        if state.closed {
-            return;
+    match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
+        Ok(None) | Err(_) => (),
+        Ok(Some(buf)) => {
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            let mut ack = writer.try_clone().map(Some).unwrap_or(None);
+            if let Some(ack) = ack.as_mut() {
+                write_accepted(ack, &text);
+            }
+            {
+                let (state, cv) = &**shared;
+                let mut state = lock(state);
+                if state.closed {
+                    return;
+                }
+                for line in &state.said {
+                    let mut out = &writer;
+                    out.write_all(line.as_bytes()).unwrap_or(());
+                }
+                state.conns.push(writer);
+                state.subscribed += 1;
+                cv.notify_all();
+            }
+            hold(&mut read);
         }
-        for line in &state.said {
-            let mut out = &writer;
-            out.write_all(line.as_bytes()).unwrap_or(());
-        }
-        state.conns.push(writer);
-        state.subscribed += 1;
-        cv.notify_all();
     }
-    hold(&mut read);
 }
 
 /// Records machine calls and answers configuration operations from a script.

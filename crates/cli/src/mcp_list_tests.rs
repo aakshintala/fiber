@@ -85,7 +85,7 @@ impl Setup {
 }
 
 struct Run {
-    result: Result<(), contract::shapes::Failure>,
+    result: Result<(), crate::CliError>,
     out: String,
     err: String,
 }
@@ -142,7 +142,7 @@ fn rows_sort_by_name_then_layer_and_shadowed_names_list_twice() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         ran.out,
@@ -168,7 +168,7 @@ fn an_approved_repository_row_says_so_and_a_changed_one_does_not() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         ran.out, "docs  repository  approved\n",
@@ -197,7 +197,7 @@ fn an_approved_repository_row_says_so_and_a_changed_one_does_not() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         ran.out, "docs  repository  not approved\n",
@@ -221,7 +221,7 @@ fn a_never_record_prints_not_approved() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(
         ran.out, "docs  repository  not approved\n",
@@ -256,7 +256,7 @@ fn an_entry_holding_no_value_is_not_listed() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert_eq!(ran.out, "docs  global\n", "stdout: {}", ran.out);
 }
@@ -278,7 +278,7 @@ fn nothing_about_a_declaration_prints() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(!ran.out.contains("zzz"), "stdout: {}", ran.out);
     assert!(!ran.out.contains("example.test"), "stdout: {}", ran.out);
@@ -293,7 +293,7 @@ fn an_empty_configuration_prints_nothing() {
     assert!(
         ran.result.is_ok(),
         "{:?}",
-        ran.result.err().map(|e| e.message)
+        ran.result.err().map(|e| e.to_string())
     );
     assert!(ran.out.is_empty(), "stdout: {}", ran.out);
     assert!(ran.err.is_empty(), "stderr: {}", ran.err);

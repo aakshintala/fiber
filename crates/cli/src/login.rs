@@ -16,15 +16,12 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use config::{
-    Config, ConfigError, CredentialFile, CredentialLock, Login, ProviderData, Secret, Sources,
+    Config, CredentialFile, CredentialLock, Login, ProviderData, Secret, Sources,
     credential_labels, delete_credential, delete_credential_held, read_credential, read_secret,
     set_global_if_unset, store_credential, store_secret,
 };
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::Notice;
-use contract::shapes::Failure;
-use doors::failure;
 use extensions::Providers;
 use rustix::termios::{self, LocalModes, OptionalActions, Termios};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
@@ -33,7 +30,7 @@ use signal_hook::iterator::{Handle, Signals};
 mod browser;
 mod reviewer;
 
-use crate::{LOGOUT_SHAPE, finish, project_of};
+use crate::{CliError, Refusal, finish, project_of};
 use browser::login_with;
 pub use browser::{LoginCancel, browser_login};
 pub use reviewer::{ReviewerModels, reviewer_models, set_reviewer};
@@ -244,21 +241,6 @@ pub(crate) struct LoginIo<'a> {
     pub(crate) clock: Arc<dyn Clock>,
 }
 
-fn usage_with_hint(message: impl Into<String>) -> Failure {
-    failure(
-        ErrorCode::Usage,
-        format!("{} Run `fiber --help` for usage.", message.into()),
-    )
-}
-
-fn config_failure(e: ConfigError) -> Failure {
-    failure(e.code(), e.to_string())
-}
-
-fn terminal_failure(e: io::Error) -> Failure {
-    failure(ErrorCode::IoFailed, format!("the terminal: {e}"))
-}
-
 /// The credential directory a provider reads.
 fn stored_name(provider: &ProviderData) -> &str {
     provider
@@ -268,17 +250,13 @@ fn stored_name(provider: &ProviderData) -> &str {
 }
 
 /// The provider named `name`, or a usage error naming the installed ones.
-fn installed<'a>(providers: &'a Providers, name: &str) -> Result<&'a ProviderData, Failure> {
+fn installed<'a>(providers: &'a Providers, name: &str) -> Result<&'a ProviderData, CliError> {
     providers.get(name).ok_or_else(|| {
-        let names: Vec<&str> = providers.names().collect();
-        usage_with_hint(if names.is_empty() {
-            format!("`{name}` is not an installed provider, and none is installed.")
-        } else {
-            format!(
-                "`{name}` is not an installed provider; the installed providers are {}.",
-                names.join(", ")
-            )
-        })
+        let installed: Vec<String> = providers.names().map(str::to_owned).collect();
+        CliError::ProviderNotInstalled {
+            name: name.to_owned(),
+            installed,
+        }
     })
 }
 
@@ -290,33 +268,21 @@ fn declared(providers: &Providers) -> impl Iterator<Item = &str> {
         .filter(|name| providers.get(name).is_none())
 }
 
-/// The message for a name that is neither a provider nor a declared
+/// The refusal for a name that is neither a provider nor a declared
 /// secret, listing both, with no CLI hint: `login` adds it.
-fn unknown_message(providers: &Providers, name: &str) -> String {
-    let names: Vec<&str> = providers.names().collect();
-    let secrets: Vec<&str> = declared(providers).collect();
-    let names = if names.is_empty() {
-        "no provider is installed".to_owned()
-    } else {
-        format!("the installed providers are {}", names.join(", "))
-    };
-    let secrets = if secrets.is_empty() {
-        "no installed extension declares a secret".to_owned()
-    } else {
-        format!("the declared secrets are {}", secrets.join(", "))
-    };
-    format!(
-        "`{name}` is neither an installed provider nor a declared secret; {names}, and {secrets}."
-    )
+fn unknown_refusal(providers: &Providers, name: &str) -> Refusal {
+    Refusal::UnknownName {
+        name: name.to_owned(),
+        providers: providers.names().map(str::to_owned).collect(),
+        secrets: declared(providers).map(str::to_owned).collect(),
+    }
 }
 
 /// The provider or declared secret a person picks from the menu, by number
 /// or by name. Providers are numbered first, then secrets.
-fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
+fn choose(io: &mut LoginIo<'_>) -> Result<String, CliError> {
     if !io.terminal {
-        return Err(usage_with_hint(
-            "`fiber login` takes a provider or a secret's name when there is no terminal to ask on.",
-        ));
+        return Err(CliError::LoginNeedsName);
     }
     let all = targets(io.providers);
     let providers: Vec<&str> = all
@@ -334,9 +300,7 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         })
         .collect();
     if providers.is_empty() && secrets.is_empty() {
-        return Err(usage_with_hint(
-            "No provider is installed, and no installed extension declares a secret.",
-        ));
+        return Err(CliError::NothingToLogInTo);
     }
     let mut menu = String::new();
     if !providers.is_empty() {
@@ -355,22 +319,24 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
     io.err
         .write_all(menu.as_bytes())
         .and_then(|()| io.err.flush())
-        .map_err(terminal_failure)?;
+        .map_err(CliError::Terminal)?;
     let mut answer = String::new();
-    io.stdin.read_line(&mut answer).map_err(terminal_failure)?;
+    io.stdin
+        .read_line(&mut answer)
+        .map_err(CliError::Terminal)?;
     let answer = answer.trim();
     if answer.is_empty() {
-        return Err(usage_with_hint("Nothing was chosen."));
+        return Err(CliError::NothingChosen);
     }
     let picked = match answer.parse::<usize>() {
         Ok(number) => number.checked_sub(1).and_then(|index| all.get(index)),
         Err(_) => all.iter().find(|target| target.name() == answer),
     };
-    picked.map(|target| target.name().to_owned()).ok_or_else(|| {
-        usage_with_hint(format!(
-            "`{answer}` is neither a listed number nor an installed provider or declared secret."
-        ))
-    })
+    picked
+        .map(|target| target.name().to_owned())
+        .ok_or_else(|| CliError::ChoiceUnknown {
+            answer: answer.to_owned(),
+        })
 }
 
 /// `providers."<name>".credential`, with a name that holds a dot quoted.
@@ -411,32 +377,6 @@ pub struct LoginStored {
     pub replaced: bool,
 }
 
-/// Why a store failed: a usage refusal, with no CLI hint, or a failure.
-enum StoreFailure {
-    /// A usage refusal, with no CLI hint.
-    Refused(String),
-    /// A failure to report as is.
-    Failed(Failure),
-}
-
-impl From<Failure> for StoreFailure {
-    fn from(failure: Failure) -> Self {
-        Self::Failed(failure)
-    }
-}
-
-/// Why a locked store failed: the credential file could not be built, or
-/// the store itself failed. Only the build error travels as a
-/// [`ConfigError`], so each caller keeps its own message for an invalid
-/// label; every later lock, read, write and global error already carries
-/// its config code.
-enum LockedStoreFailure {
-    /// Building the credential file failed.
-    Config(ConfigError),
-    /// The locked store failed.
-    Store(StoreFailure),
-}
-
 /// Stores one provider credential under the label's lock: build the file,
 /// hold the label lock across the re-read, the caller's write, the global
 /// label update and any rollback, then return the relative credential
@@ -447,40 +387,28 @@ fn store_locked(
     home: &Path,
     provider: &ProviderData,
     label: &str,
-    write: impl FnOnce(&CredentialLock) -> Result<(), StoreFailure>,
-) -> Result<String, LockedStoreFailure> {
+    write: impl FnOnce(&CredentialLock) -> Result<(), CliError>,
+) -> Result<String, CliError> {
     let name = provider.name.as_str();
     let stored = stored_name(provider);
-    let file = CredentialFile::new(home, stored, label).map_err(LockedStoreFailure::Config)?;
+    let file = CredentialFile::new(home, stored, label).map_err(CliError::CredentialFile)?;
     // Held until the login ends, so two logins never both pass the check.
-    let Some(lock) = file
-        .try_lock()
-        .map_err(config_failure)
-        .map_err(StoreFailure::Failed)
-        .map_err(LockedStoreFailure::Store)?
-    else {
-        return Err(LockedStoreFailure::Store(StoreFailure::Failed(failure(
-            ErrorCode::IoFailed,
-            format!("another login for {name} is running"),
-        ))));
+    let Some(lock) = file.try_lock()? else {
+        return Err(CliError::LoginRunning {
+            name: name.to_owned(),
+        });
     };
-    if read_credential(home, stored, label)
-        .map_err(config_failure)
-        .map_err(StoreFailure::Failed)
-        .map_err(LockedStoreFailure::Store)?
-        .is_some()
-    {
-        return Err(LockedStoreFailure::Store(StoreFailure::Refused(
-            already_stored(name, stored, label),
-        )));
+    if read_credential(home, stored, label)?.is_some() {
+        return Err(CliError::StoreRefused {
+            refusal: already_stored(name, stored, label),
+            hint: false,
+        });
     }
-    write(&lock).map_err(LockedStoreFailure::Store)?;
+    write(&lock)?;
     if let Err(e) = set_global_if_unset(home, &credential_key(name), label.into()) {
         // A retry must start clean: no key stored without its label.
         delete_credential_held(home, stored, label, &lock).unwrap_or(false);
-        return Err(LockedStoreFailure::Store(StoreFailure::Failed(
-            config_failure(e),
-        )));
+        return Err(CliError::Config(e));
     }
     Ok(format!("credentials/{stored}/{label}"))
 }
@@ -507,13 +435,13 @@ fn targets(providers: &Providers) -> Vec<LoginName> {
 }
 
 /// The installed providers in `home`.
-pub fn providers_in(home: &Path) -> Result<Providers, Failure> {
+pub fn providers_in(home: &Path) -> Result<Providers, CliError> {
     Ok(providers_with_notices(home)?.0)
 }
 
 /// The installed providers in `home`, and the notices loading them gave.
-pub(crate) fn providers_with_notices(home: &Path) -> Result<(Providers, Vec<Notice>), Failure> {
-    Providers::load(home).map_err(|e| failure(e.code(), e.to_string()))
+pub(crate) fn providers_with_notices(home: &Path) -> Result<(Providers, Vec<Notice>), CliError> {
+    Ok(Providers::load(home)?)
 }
 
 /// Stores `key` for provider or secret `name`, under `label` for a
@@ -524,24 +452,21 @@ fn store(
     providers: &Providers,
     name: &str,
     label: Option<&str>,
-    read: impl FnOnce(&str) -> Result<Secret, Failure>,
-) -> Result<LoginStored, StoreFailure> {
+    read: impl FnOnce(&str) -> Result<Secret, CliError>,
+) -> Result<LoginStored, CliError> {
     if let Some(data) = providers.get(name) {
         // A key login reveals no email; the browser login passes its own.
         let label = chosen_label(label, None);
         let path = store_locked(home, data, label, |_lock| {
             let key = read(&format!("Key for {name}: "))?;
             if key.expose().is_empty() {
-                return Err(StoreFailure::Refused(
-                    "No key was given; nothing was stored.".to_owned(),
-                ));
+                return Err(CliError::StoreRefused {
+                    refusal: Refusal::NoKeyGiven,
+                    hint: false,
+                });
             }
-            store_credential(home, stored_name(data), label, &key).map_err(config_failure)?;
+            store_credential(home, stored_name(data), label, &key)?;
             Ok(())
-        })
-        .map_err(|error| match error {
-            LockedStoreFailure::Config(e) => StoreFailure::Failed(config_failure(e)),
-            LockedStoreFailure::Store(failure) => failure,
         })?;
         Ok(LoginStored {
             path,
@@ -549,37 +474,46 @@ fn store(
         })
     } else if providers.secrets().any(|secret| secret == name) {
         if label.is_some() {
-            return Err(StoreFailure::Refused(format!(
-                "--as applies only to a provider, and `{name}` is a declared secret."
-            )));
+            return Err(CliError::StoreRefused {
+                refusal: Refusal::AsOnlyForProvider {
+                    name: name.to_owned(),
+                },
+                hint: false,
+            });
         }
-        let replaced = read_secret(home, name).map_err(config_failure)?.is_some();
+        let replaced = read_secret(home, name)?.is_some();
         let value = read(&format!("Value for {name}: "))?;
         if value.expose().is_empty() {
-            return Err(StoreFailure::Refused(
-                "No value was given; nothing was stored.".to_owned(),
-            ));
+            return Err(CliError::StoreRefused {
+                refusal: Refusal::NoValueGiven,
+                hint: false,
+            });
         }
-        store_secret(home, name, &value).map_err(config_failure)?;
+        store_secret(home, name, &value)?;
         Ok(LoginStored {
             path: format!("credentials/{name}"),
             replaced,
         })
     } else {
-        Err(StoreFailure::Refused(unknown_message(providers, name)))
+        Err(CliError::StoreRefused {
+            refusal: unknown_refusal(providers, name),
+            hint: false,
+        })
     }
 }
 
 /// Why a store failed to start: the label is already stored, naming
 /// `--as` (`docs/model-routing.md`, "Logging in").
-fn already_stored(name: &str, stored: &str, label: &str) -> String {
-    format!(
-        "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
-    )
+fn already_stored(name: &str, stored: &str, label: &str) -> Refusal {
+    Refusal::AlreadyStored {
+        name: name.to_owned(),
+        stored: stored.to_owned(),
+        label: label.to_owned(),
+    }
 }
 
 /// The installed providers by name, then the declared secrets.
-pub fn login_targets(home: &Path) -> Result<Vec<LoginName>, Failure> {
+pub fn login_targets(home: &Path) -> Result<Vec<LoginName>, CliError> {
     Ok(targets(&providers_in(home)?))
 }
 
@@ -590,12 +524,9 @@ pub fn login_store(
     name: &str,
     label: Option<&str>,
     key: Secret,
-) -> Result<LoginStored, Failure> {
+) -> Result<LoginStored, CliError> {
     let providers = providers_in(home)?;
-    store(home, &providers, name, label, |_| Ok(key)).map_err(|error| match error {
-        StoreFailure::Refused(message) => failure(ErrorCode::Usage, message),
-        StoreFailure::Failed(failure) => failure,
-    })
+    store(home, &providers, name, label, |_| Ok(key))
 }
 
 /// Logs in as `fiber login` does: prints each notice as one line on
@@ -608,7 +539,7 @@ pub(crate) fn login_with_notices(
     label: Option<&str>,
     io: &mut LoginIo<'_>,
     loading: Vec<Notice>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let mut notices = Vec::new();
     if let Ok(workspace) = std::env::current_dir()
         && let Ok((_, project)) = crate::project_of(io.home, &workspace)
@@ -636,7 +567,7 @@ pub(crate) fn login(
     name: Option<&str>,
     label: Option<&str>,
     io: &mut LoginIo<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let name = match name {
         Some(name) => name.to_owned(),
         None => choose(io)?,
@@ -654,9 +585,7 @@ pub(crate) fn login(
         && (io.providers.get(&name).is_some()
             || io.providers.secrets().any(|secret| secret == name))
     {
-        return Err(usage_with_hint(
-            "--device applies only to a provider that logs in by browser.",
-        ));
+        return Err(CliError::DeviceNeedsBrowserProvider);
     }
     let home = io.home;
     let providers = io.providers;
@@ -665,7 +594,7 @@ pub(crate) fn login(
         let prompt = if terminal { prompt } else { "" };
         io.keys
             .read_key(prompt, io.stdin, io.err)
-            .map_err(terminal_failure)
+            .map_err(CliError::Terminal)
     });
     match stored {
         Ok(stored) => {
@@ -689,12 +618,15 @@ pub(crate) fn login(
             {
                 post_store_reviewer(io, &name, &format!("fiber: {done} {}", stored.path))?;
             } else {
-                writeln!(io.err, "fiber: {done} {}", stored.path).map_err(terminal_failure)?;
+                writeln!(io.err, "fiber: {done} {}", stored.path).map_err(CliError::Terminal)?;
             }
             Ok(())
         }
-        Err(StoreFailure::Refused(message)) => Err(usage_with_hint(message)),
-        Err(StoreFailure::Failed(failure)) => Err(failure),
+        Err(CliError::StoreRefused { refusal, .. }) => Err(CliError::StoreRefused {
+            refusal,
+            hint: true,
+        }),
+        Err(error) => Err(error),
     }
 }
 
@@ -731,10 +663,10 @@ impl Drop for SigGuard {
     }
 }
 
-fn arm_sigint(stopped: Arc<AtomicBool>) -> Result<SigGuard, Failure> {
+fn arm_sigint(stopped: Arc<AtomicBool>) -> Result<SigGuard, CliError> {
     signal_hook::flag::register(SIGINT, stopped)
         .map(|id| SigGuard { id })
-        .map_err(|e| failure(ErrorCode::IoFailed, format!("the interrupt handler: {e}")))
+        .map_err(CliError::InterruptHandler)
 }
 
 /// Asks for the reviewer's model after `name`'s credential was stored:
@@ -745,10 +677,14 @@ fn arm_sigint(stopped: Arc<AtomicBool>) -> Result<SigGuard, Failure> {
 /// setting, prints that no reviewer was set and ends 0; a failed save
 /// keeps the credential and names the key with a non-zero exit. Only the
 /// prompt reads the terminal; discovery and the save never do.
-fn post_store_reviewer(io: &mut LoginIo<'_>, name: &str, stored_line: &str) -> Result<(), Failure> {
+fn post_store_reviewer(
+    io: &mut LoginIo<'_>,
+    name: &str,
+    stored_line: &str,
+) -> Result<(), CliError> {
     let stopped = Arc::new(AtomicBool::new(false));
     let _sig = arm_sigint(Arc::clone(&stopped))?;
-    writeln!(io.err, "{stored_line}").map_err(terminal_failure)?;
+    writeln!(io.err, "{stored_line}").map_err(CliError::Terminal)?;
     let home = io.home;
     let providers = io.providers;
     let terminal = io.terminal;
@@ -773,12 +709,12 @@ pub(crate) fn reviewer_stage(
     name: &str,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
-    discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
+    discover: &dyn Fn() -> Result<ReviewerModels, CliError>,
     stopped: &Arc<AtomicBool>,
     terminal: bool,
     clock: Arc<dyn Clock>,
     probe: Option<&ClaimProbe>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     // Armed before discovery, never reset: a SIGINT during the bounded
     // callback is recorded, and after the callback the stage takes the
     // cancelled outcome instead of presenting or saving.
@@ -798,18 +734,18 @@ fn reviewer_stage_armed(
     name: &str,
     input: &mut dyn BufRead,
     err: &mut dyn Write,
-    discover: &dyn Fn() -> Result<ReviewerModels, Failure>,
+    discover: &dyn Fn() -> Result<ReviewerModels, CliError>,
     stopped: &Arc<AtomicBool>,
     terminal: bool,
     clock: &Arc<dyn Clock>,
     probe: Option<&ClaimProbe>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let choices = discover()?;
     if stopped.load(Ordering::SeqCst) {
         return no_reviewer_set(err, name);
     }
     for notice in &choices.notices {
-        writeln!(err, "{notice}").map_err(terminal_failure)?;
+        writeln!(err, "{notice}").map_err(CliError::Terminal)?;
     }
     if choices.models.is_empty() {
         return Ok(());
@@ -823,7 +759,7 @@ fn reviewer_stage_armed(
         terminal,
         clock,
     )
-    .map_err(terminal_failure)?
+    .map_err(CliError::Terminal)?
     {
         reviewer::Pick::Chosen(id) => id,
         reviewer::Pick::Cancelled => return no_reviewer_set(err, name),
@@ -842,20 +778,19 @@ fn reviewer_stage_armed(
         probe.after_entered.send(()).unwrap_or(());
         probe.after_release.recv().unwrap_or(());
     }
-    match reviewer::set_reviewer(home, name, &id) {
-        Ok(()) => writeln!(err, "fiber: reviewer {name} {id}").map_err(terminal_failure),
-        Err(e) => Err(e),
-    }
+    reviewer::set_reviewer(home, name, &id)?;
+    writeln!(err, "fiber: reviewer {name} {id}").map_err(CliError::Terminal)?;
+    Ok(())
 }
 
 /// The cancelled-or-EOF outcome: the credential and any previous reviewer
 /// setting stand, and the login still ends 0.
-fn no_reviewer_set(err: &mut dyn Write, name: &str) -> Result<(), Failure> {
+fn no_reviewer_set(err: &mut dyn Write, name: &str) -> Result<(), CliError> {
     writeln!(
         err,
         "fiber: no reviewer was set for {name}; the credential stays."
     )
-    .map_err(terminal_failure)
+    .map_err(CliError::Terminal)
 }
 
 /// Where a provider's key comes from when nothing is stored: the first
@@ -882,43 +817,41 @@ pub(crate) fn logout(
     providers: &Providers,
     config: &Config,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let Some(name) = provider else {
-        return Err(failure(ErrorCode::Usage, LOGOUT_SHAPE));
+        return Err(CliError::LogoutNeedsProvider);
     };
     let data = installed(providers, name)?;
     let stored = stored_name(data);
-    let labels = credential_labels(home, stored).map_err(config_failure)?;
+    let labels = credential_labels(home, stored)?;
     if labels.is_empty() {
-        return Err(failure(
-            ErrorCode::CredentialMissing,
-            match declared_source(config, data) {
-                Some(source) => {
-                    format!("{name}'s key comes from {source}; fiber logout cannot remove it")
-                }
-                None => format!("no stored credential for {name}"),
+        return Err(match declared_source(config, data) {
+            Some(origin) => CliError::KeyFromElsewhere {
+                name: name.to_owned(),
+                origin,
             },
-        ));
+            None => CliError::NoStoredCredential {
+                name: name.to_owned(),
+            },
+        });
     }
     let doomed: Vec<&str> = match target {
         LogoutTarget::All => labels.iter().map(String::as_str).collect(),
         LogoutTarget::Label(label) if labels.iter().any(|l| l == label) => vec![label],
         LogoutTarget::Label(label) => {
-            return Err(failure(
-                ErrorCode::CredentialMissing,
-                format!(
-                    "no stored credential {label} for {name}; the stored labels are {}",
-                    labels.join(", ")
-                ),
-            ));
+            return Err(CliError::LabelNotAmong {
+                name: name.to_owned(),
+                label: label.to_owned(),
+                labels,
+            });
         }
         LogoutTarget::Only => match labels.as_slice() {
             [one] => vec![one.as_str()],
             _ => {
-                return Err(usage_with_hint(format!(
-                    "`{name}` has several stored credentials: {}; name one with --as <label>, or use --all.",
-                    labels.join(", ")
-                )));
+                return Err(CliError::LogoutSeveral {
+                    name: name.to_owned(),
+                    labels,
+                });
             }
         },
     };
@@ -937,20 +870,20 @@ pub(crate) fn logout(
         format!(", which {} also reads", siblings.join(", "))
     };
     for label in doomed {
-        if !delete_credential(home, stored, label).map_err(config_failure)? {
-            return Err(failure(
-                ErrorCode::CredentialMissing,
-                format!("no stored credential {label} for {name}"),
-            ));
+        if !delete_credential(home, stored, label)? {
+            return Err(CliError::NoStoredLabel {
+                name: name.to_owned(),
+                label: label.to_owned(),
+            });
         }
         writeln!(err, "fiber: removed credentials/{stored}/{label}{also}")
-            .map_err(terminal_failure)?;
+            .map_err(CliError::Terminal)?;
     }
     Ok(())
 }
 
-fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), Failure> {
-    let home = config::fiber_home_from_env().map_err(config_failure)?;
+fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), CliError> {
+    let home = config::fiber_home_from_env()?;
     let (providers, notices) = providers_with_notices(&home)?;
     Ok((home, providers, notices))
 }
@@ -998,19 +931,17 @@ pub fn run_login(
 /// `fiber logout <provider> [--as <label> | --all]`.
 pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
     if provider.is_none() {
-        return finish(Err(failure(ErrorCode::Usage, LOGOUT_SHAPE)));
+        return finish(Err(CliError::LogoutNeedsProvider));
     }
     let ran = home_and_providers().and_then(|(home, providers, loading)| {
-        let workspace = std::env::current_dir()
-            .map_err(|e| failure(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+        let workspace = std::env::current_dir().map_err(CliError::CurrentDirectory)?;
         let (_, project) = project_of(&home, &workspace)?;
         let config = Config::load(Sources {
             home: home.clone(),
             workspace,
             project,
             overrides: Vec::new(),
-        })
-        .map_err(config_failure)?;
+        })?;
         let mut err = io::stderr();
         let notices: Vec<Notice> = config.notices().iter().cloned().chain(loading).collect();
         crate::config::print_notices(&mut err, &notices);

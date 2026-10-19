@@ -6,14 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
 use contract::clock::Clock;
 
 use crate::Error;
 use crate::git::{Origin, full_name, split};
-use crate::install::{Paths, Provenance, Record, commit_all, io, remove, slug, stage};
+use crate::install::{Paths, Provenance, Record, Scratch, commit_all, io, remove, slug, stage};
 use crate::installed::{Damaged, Installed, Lock, lock, read};
 use crate::prepare::prepare;
 use crate::resolve::{meets, newest, newest_within, pick, root_meets};
@@ -131,7 +130,7 @@ pub struct Plan<'c> {
     items: BTreeMap<String, Item>,
     fresh: BTreeSet<String>,
     damaged: Vec<Damaged>,
-    scratch: PathBuf,
+    scratch: Scratch,
     _lock: Lock,
     clock: &'c dyn Clock,
 }
@@ -183,7 +182,6 @@ impl Plan<'_> {
 
 impl Drop for Plan<'_> {
     fn drop(&mut self) {
-        remove(&self.scratch).unwrap_or(());
         for item in self.items.values() {
             remove(&item.paths.fresh).unwrap_or(());
         }
@@ -199,29 +197,32 @@ struct Seed {
     depends: BTreeMap<String, String>,
 }
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
+/// Removes the staging copy a replaced item left behind, before its
+/// replacement is staged under its own name. The previous item stays in
+/// the plan, so a failure here or in the later stage leaves its cleanup
+/// to `Plan::drop`.
+fn retire(plan: &mut Plan, name: &str) -> Result<(), Error> {
+    if let Some(previous) = plan.items.get(name) {
+        remove(&previous.paths.fresh)?;
+    }
+    Ok(())
+}
 
 /// The locked, empty plan over `home`'s extensions, with a fresh scratch
 /// directory for fetching, keeping `clock` for its commit.
-fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<(Plan<'c>, usize), Error> {
+fn empty<'c>(home: &Path, clock: &'c dyn Clock) -> Result<Plan<'c>, Error> {
     let lock = lock(home, clock)?;
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
-    remove(&scratch)?;
-    fs::create_dir_all(&scratch).map_err(io(&scratch))?;
-    Ok((
-        Plan {
-            root: String::new(),
-            seed: None,
-            items: BTreeMap::new(),
-            fresh: BTreeSet::new(),
-            damaged: Vec::new(),
-            scratch,
-            _lock: lock,
-            clock,
-        },
-        id,
-    ))
+    let scratch = Scratch::create(&std::env::temp_dir(), "fiber-fetch", 0o777)?;
+    Ok(Plan {
+        root: String::new(),
+        seed: None,
+        items: BTreeMap::new(),
+        fresh: BTreeSet::new(),
+        damaged: Vec::new(),
+        scratch,
+        _lock: lock,
+        clock,
+    })
 }
 
 /// Fetches and checks what the manifest `root`'s dependencies need, against
@@ -236,7 +237,7 @@ pub(crate) fn plan_depends<'c>(
     origin: &Origin,
     clock: &'c dyn Clock,
 ) -> Result<Plan<'c>, Error> {
-    let (mut plan, id) = empty(home, clock)?;
+    let mut plan = empty(home, clock)?;
     plan.root = root.name.clone();
     plan.seed = Some(Seed {
         name: root.name.clone(),
@@ -244,7 +245,6 @@ pub(crate) fn plan_depends<'c>(
         depends: root.depends.clone(),
     });
     let mut ctx = Ctx {
-        id,
         home,
         fiber_version,
         origin,
@@ -267,11 +267,10 @@ pub fn plan<'c>(
     origin: &Origin,
     clock: &'c dyn Clock,
 ) -> Result<Plan<'c>, Error> {
-    let (mut plan, id) = empty(home, clock)?;
+    let mut plan = empty(home, clock)?;
     let listing = read(home)?;
     plan.damaged = listing.damaged;
     let mut ctx = Ctx {
-        id,
         home,
         fiber_version,
         origin,
@@ -382,7 +381,6 @@ pub fn plan<'c>(
 }
 
 struct Ctx<'a, 'c> {
-    id: usize,
     home: &'a Path,
     fiber_version: &'a str,
     origin: &'a Origin,
@@ -455,8 +453,8 @@ impl Ctx<'_, '_> {
             requested: true,
             floor,
         };
-        let (manifest, providers, paths) =
-            stage(self.home, self.id, &path, self.fiber_version, &record)?;
+        retire(plan, &manifest.name)?;
+        let (manifest, providers, paths) = stage(self.home, &path, self.fiber_version, &record)?;
         let name = manifest.name.clone();
         plan.items.insert(
             name.clone(),
@@ -495,7 +493,7 @@ impl Ctx<'_, '_> {
             None => newest(&self.origin.tags(repo, self.clock)?)
                 .ok_or_else(|| Error::NoTag { name: name.into() })?,
         };
-        let clone = plan.scratch.join(slug(name)?);
+        let clone = plan.scratch.path().join(slug(name)?);
         remove(&clone)?;
         let (commit, changes) = match pin {
             Some(commit) => (
@@ -542,13 +540,9 @@ impl Ctx<'_, '_> {
             requested: self.requested(name, asked),
             floor,
         };
-        let (manifest, providers, paths) = stage(
-            self.home,
-            self.id,
-            &clone.join(dir),
-            self.fiber_version,
-            &record,
-        )?;
+        retire(plan, name)?;
+        let (manifest, providers, paths) =
+            stage(self.home, &clone.join(dir), self.fiber_version, &record)?;
         if manifest.name != name {
             remove(&paths.fresh)?;
             return Err(Error::WrongName {
@@ -784,3 +778,7 @@ fn reachable(plan: &Plan) -> BTreeSet<String> {
     }
     reach
 }
+
+#[cfg(test)]
+#[path = "manage_tests.rs"]
+mod tests;

@@ -12,12 +12,12 @@
 //! opens with `hub_hello`, before any acknowledgement.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -110,6 +110,13 @@ pub(crate) struct Hub {
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
+    /// The longest client line the read loop takes, in bytes
+    /// before its line feed: tests lower it so the cap is reachable
+    /// without a 64 MiB line, production takes `MAX_LINE`. One field
+    /// and one function, so the mutation check pins the production
+    /// value through the test seam instead of leaving a fallback
+    /// no test compiles.
+    pub(crate) line_cap: AtomicUsize,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
@@ -195,6 +202,7 @@ impl Hub {
             before_disconnect_cleanup: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
+            line_cap: AtomicUsize::new(support::framing::MAX_LINE),
         }
     }
 
@@ -391,6 +399,12 @@ impl Hub {
     }
 }
 
+/// The longest client line the read loop takes: the test seam lowers it
+/// so the cap is reachable without a 64 MiB line.
+fn line_cap(hub: &Hub) -> usize {
+    hub.line_cap.load(Ordering::SeqCst)
+}
+
 /// Tests only: a one-shot pause before the next forwarded session line:
 /// the line about to be written, and the relays, with no lock held.
 #[cfg(test)]
@@ -525,13 +539,11 @@ fn serve_from(
     };
     hub.pairing.announce_owed(&hub, &who);
     let mut read = BufReader::new(stream);
-    let mut buf = Vec::new();
     let mut remote = Remote::default();
     loop {
-        buf.clear();
-        match read.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
+        match support::framing::read_line(&mut read, line_cap(&hub)) {
+            Ok(None) | Err(_) => break,
+            Ok(Some(buf)) => {
                 on_command(
                     &buf,
                     &hub,
@@ -1013,13 +1025,9 @@ pub(crate) fn send(
     kind: &str,
     payload: Map<String, Value>,
 ) {
-    let mut bytes = line(hub, kind, payload);
-    bytes.push(b'\n');
+    let bytes = line(hub, kind, payload);
     let mut writer = lock(writer);
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.flush())
-        .unwrap_or(());
+    support::framing::write_line(&mut *writer, &bytes).unwrap_or(());
 }
 
 /// Serialises one hub line, without its trailing newline: the port sends

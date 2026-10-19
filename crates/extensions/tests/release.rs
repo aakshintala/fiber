@@ -305,7 +305,7 @@ fn a_release_installs_its_docs_and_extensions() {
     let left: Vec<String> = fs::read_dir(&home)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with(".docs."))
+        .filter(|n| n.starts_with(".docs-"))
         .collect();
     assert!(left.is_empty(), "{left:?}");
 }

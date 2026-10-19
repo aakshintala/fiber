@@ -1816,3 +1816,200 @@ fn the_home_choice_marks_only_its_row() {
         .collect();
     assert_eq!(only, ["m2"]);
 }
+
+#[test]
+fn an_answer_with_nothing_owed_leaves_no_mark_and_keeps_balance() {
+    // Owed 0: an answer with no read out clears no mark, and the next
+    // take/store cycle still balances.
+    let mut picker = open_over(catalogue());
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.refreshing, None);
+    assert_eq!(picker.owed, 0);
+    // A taken `Cached` read counts as owed too, without ever marking.
+    picker.want = Some(crate::catalogue::Refresh::Cached);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Cached));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn one_owed_read_clears_the_mark_when_it_answers() {
+    // Owed 1: one read out, and its answer clears the mark.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_second_owed_read_keeps_the_mark_until_it_answers() {
+    // Owed 2: a refresh queued behind a running read. The older answer
+    // counts down without clearing, so the queued read keeps its mark
+    // until its own answer lands.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the first read's group died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the second read's group died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn the_startup_read_counts_as_owed_until_it_answers() {
+    // The startup ask bypasses `take_read`, so it counts through
+    // `note_asked`: its answer landing after a meanwhile taken read keeps
+    // that read's mark.
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            models: catalogue(),
+            notices: Vec::new(),
+            lists: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.note_asked();
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, None);
+    picker.open(Mode::Choose, None);
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    assert_eq!(picker.owed, 2);
+    // The startup read answers first, while the open read still runs.
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Stale));
+    picker.store(Err("gone".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn takes_merged_into_the_queued_slot_answer_once() {
+    // Two Ctrl+R presses while a `Stale` read runs merge into the one
+    // queued slot and answer once: the third take counts nothing more,
+    // so two answers clear the mark instead of leaking one owed read.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err("the queued read died".to_owned()));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_failed_queued_start_answers_its_single_owed_read() {
+    // The queued start's spawn failure sends one error for the whole
+    // queue (`catalogue::Reader::ask_with`): it answers the one counted
+    // queued read, clearing the mark instead of leaking it.
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Stale));
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(picker.owed, 2);
+    // The running read answers, then the queued start fails to spawn.
+    picker.store(Err("the running read died".to_owned()));
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(crate::catalogue::Refresh::Every));
+    picker.store(Err(
+        "terminal: could not start the model-list reader: no thread".to_owned(),
+    ));
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+}
+
+#[test]
+fn a_failed_spawn_followed_by_two_asks_keeps_the_mark_until_the_last_answer() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use crate::Input;
+    use crate::catalogue::{ReadModels, Reader, Refresh};
+    // #2738's P1: a failed spawn's error waits unconsumed while two
+    // later takes ask. Both wait on the busy reader (one queued, one
+    // merged) instead of starting over the error, so two answers arrive
+    // for two owed reads and the mark holds until the last one.
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read));
+    let (tx, rx) = mpsc::channel();
+    let spawns = Arc::new(Mutex::new(0usize));
+    let counting = || {
+        let spawns = Arc::clone(&spawns);
+        move |_: std::thread::Builder,
+              _: Box<dyn FnOnce() + Send + 'static>|
+              -> std::io::Result<std::thread::JoinHandle<()>> {
+            *spawns.lock().unwrap() += 1;
+            Err(std::io::Error::other("no thread"))
+        }
+    };
+    let mut picker = open_over(catalogue());
+    assert_eq!(picker.take_read(), Some(Refresh::Stale));
+    reader.ask_with(Refresh::Stale, &tx, counting());
+    // Two Ctrl+R presses before the failure's error is consumed.
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    picker.refresh();
+    assert_eq!(picker.take_read(), Some(Refresh::Every));
+    reader.ask_with(Refresh::Every, &tx, counting());
+    assert_eq!(picker.owed, 2);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // Only the failed start spawned: the next ask queued, the third
+    // merged into it. Without the fix the second ask spawns again, and
+    // the two counted answers clear the mark before the third lands.
+    assert_eq!(*spawns.lock().unwrap(), 1);
+    // The failure's error answers first, keeping the queued read's mark.
+    let wait = fakes::Deadline::after(Duration::from_secs(10));
+    let first = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the failed spawn: the failure, not anything else"),
+        Err(error) => panic!("waited 10s for the failure: {error}"),
+    };
+    match &first {
+        Err(message) => assert_eq!(
+            message,
+            "terminal: could not start the model-list reader: no thread"
+        ),
+        Ok(_) => panic!("the failed spawn: the failure, not an answer"),
+    }
+    picker.store(first);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 1);
+    assert_eq!(picker.refreshing, Some(Refresh::Every));
+    // The queued read runs now and answers last, clearing the mark.
+    let second = match wait.recv(&rx) {
+        Ok(Input::Models(result)) => result,
+        Ok(_) => panic!("the queued read: an answer, not anything else"),
+        Err(error) => panic!("waited 10s for the queued read: {error}"),
+    };
+    assert!(second.is_ok());
+    picker.store(second);
+    reader.done(&tx);
+    assert_eq!(picker.owed, 0);
+    assert_eq!(picker.refreshing, None);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}

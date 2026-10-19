@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use config::Layer;
 use contract::ErrorCode;
-use contract::shapes::Failure;
 use serde_json::json;
 
 use super::{run_get, run_set};
+use crate::CliError;
 
 /// Fiber home and a workspace in a temporary directory, removed on drop.
 struct Setup {
@@ -44,7 +44,7 @@ impl Setup {
     }
 
     /// Runs `get` with in-memory writers.
-    fn get(&self, key: &str) -> (Result<(), Failure>, String, String) {
+    fn get(&self, key: &str) -> (Result<(), CliError>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let result = run_get(&self.home(), &self.workspace(), key, &mut out, &mut err);
@@ -55,7 +55,7 @@ impl Setup {
         )
     }
 
-    fn set(&self, layer: Layer, key: &str, value: &str) -> Result<(), Failure> {
+    fn set(&self, layer: Layer, key: &str, value: &str) -> Result<(), CliError> {
         run_set(
             &self.home(),
             &self.workspace(),
@@ -68,7 +68,12 @@ impl Setup {
     }
 
     /// Runs `set` with stderr captured: its result and what it warned.
-    fn set_capturing(&self, layer: Layer, key: &str, value: &str) -> (Result<(), Failure>, String) {
+    fn set_capturing(
+        &self,
+        layer: Layer,
+        key: &str,
+        value: &str,
+    ) -> (Result<(), CliError>, String) {
         let mut err = Vec::new();
         let result =
             run_set(&self.home(), &self.workspace(), layer, key, value, &mut err).map(|_| ());
@@ -161,8 +166,10 @@ fn get_of_an_unknown_key_is_a_usage_error_naming_the_key() {
     let setup = Setup::new();
     let (result, out, err) = setup.get("no.such.key");
     let e = result.unwrap_err();
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert!(e.message.contains("`no.such.key`"), "{}", e.message);
+    assert!(
+        matches!(e, CliError::ConfigKeyUnknown { ref key } if key == "no.such.key"),
+        "{e:?}"
+    );
     assert_eq!(out, "");
     assert_eq!(err, "");
 }
@@ -317,12 +324,9 @@ fn set_of_a_person_only_key_at_the_repository_layer_is_a_usage_error() {
     let e = setup
         .set(Layer::Repository, "session.idle_exit_ms", "60000")
         .unwrap_err();
-    assert_eq!(e.code, ErrorCode::Usage);
-    assert!(
-        e.message.contains("`session.idle_exit_ms`"),
-        "{}",
-        e.message
-    );
+    assert!(matches!(e, CliError::Config(_)), "{e:?}");
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
     assert!(!setup.workspace().join(".fiber/config.json").exists());
 }
 
@@ -482,9 +486,9 @@ fn a_bare_id_in_two_providers_is_model_ambiguous_listing_both() {
     install(&setup.home(), "acme", "acme", &models(&["big"]));
     install(&setup.home(), "other", "other", &models(&["big"]));
     let e = setup.set(Layer::Global, "model", "big").unwrap_err();
-    assert_eq!(e.code, ErrorCode::ModelAmbiguous);
-    assert!(e.message.contains("acme/big"), "{}", e.message);
-    assert!(e.message.contains("other/big"), "{}", e.message);
+    assert!(matches!(e, CliError::ModelAmbiguous(_)), "{e:?}");
+    assert!(e.to_string().contains("acme/big"), "{e}");
+    assert!(e.to_string().contains("other/big"), "{e}");
     assert!(!setup.home().join("config.json").exists());
 }
 
@@ -493,9 +497,9 @@ fn an_installed_provider_missing_the_model_is_no_model_with_the_closest() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme", &models(&["gpt-5", "gpt-4"]));
     let e = setup.set(Layer::Global, "model", "acme/gtp-5").unwrap_err();
-    assert_eq!(e.code, ErrorCode::NoModel);
+    assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
     assert_eq!(
-        e.message,
+        e.to_string(),
         "No installed model matches `acme/gtp-5`. \
          Closest: `acme/gpt-5`, `acme/gpt-4`. Run `fiber models` to list them."
     );
@@ -512,9 +516,9 @@ fn the_closest_names_up_to_three_references() {
         &models(&["aaa", "aab", "abb", "bbb", "ccc"]),
     );
     let e = setup.set(Layer::Global, "model", "zzz").unwrap_err();
-    assert_eq!(e.code, ErrorCode::NoModel);
-    let refs = e.message.matches("`acme/").count();
-    assert_eq!(refs, 3, "{}", e.message);
+    assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
+    let refs = e.to_string().matches("`acme/").count();
+    assert_eq!(refs, 3, "{e}");
 }
 
 #[test]
@@ -522,9 +526,9 @@ fn a_bare_id_no_provider_has_is_no_model() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme", &models(&["big"]));
     let e = setup.set(Layer::Global, "model", "nope").unwrap_err();
-    assert_eq!(e.code, ErrorCode::NoModel);
-    assert!(e.message.contains("`nope`"), "{}", e.message);
-    assert!(e.message.contains("Run `fiber models`"), "{}", e.message);
+    assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
+    assert!(e.to_string().contains("`nope`"), "{e}");
+    assert!(e.to_string().contains("Run `fiber models`"), "{e}");
 }
 
 #[test]
@@ -569,7 +573,7 @@ fn a_suffixed_reference_to_a_missing_model_is_no_model() {
     let e = setup
         .set(Layer::Global, "model", "acme/nope:high")
         .unwrap_err();
-    assert_eq!(e.code, ErrorCode::NoModel);
+    assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
 }
 
 #[test]
@@ -810,9 +814,9 @@ fn set_of_a_bare_id_shared_with_a_configured_provider_is_ambiguous() {
     install_host(&setup.home(), "b", "b", json!({"workspace": {}}));
     let (result, err) = setup.set_capturing(Layer::Global, "model", "m");
     let e = result.unwrap_err();
-    assert_eq!(e.code, ErrorCode::ModelAmbiguous);
-    assert!(e.message.contains("a/m"), "{}", e.message);
-    assert!(e.message.contains("b/m"), "{}", e.message);
+    assert!(matches!(e, CliError::ModelAmbiguous(_)), "{e:?}");
+    assert!(e.to_string().contains("a/m"), "{e}");
+    assert!(e.to_string().contains("b/m"), "{e}");
     assert_eq!(err, "");
     assert!(!setup.home().join("config.json").exists());
 }

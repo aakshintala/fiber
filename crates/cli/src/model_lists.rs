@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use config::Config;
 use contract::ErrorCode;
-use contract::shapes::Failure;
 use extensions::{Providers, SessionExtensions};
+
+use crate::CliError;
 
 /// How the installed models' lists are read: [`model_lists`] on a thread
 /// off the loop, with Fiber home and the workspace.
@@ -31,10 +32,10 @@ pub enum ModelLists {
 /// its stable code with no wildcard arm.
 #[derive(Debug, thiserror::Error)]
 pub enum ModelListsError {
-    /// Loading the providers or the configuration failed: the failure as
+    /// Loading the providers or the configuration failed: the error as
     /// the caller built it.
-    #[error("{}", .0.message)]
-    Load(Failure),
+    #[error(transparent)]
+    Load(CliError),
     /// A cached list could not be read.
     #[error(transparent)]
     Config(#[from] config::ConfigError),
@@ -47,7 +48,7 @@ impl ModelListsError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Load(failure) => failure.code.clone(),
+            Self::Load(error) => error.code(),
             Self::Config(error) => error.code(),
             Self::Placeholders(error) => error.code(),
         }

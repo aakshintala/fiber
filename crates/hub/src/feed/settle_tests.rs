@@ -304,7 +304,12 @@ fn live_is_every_running_session_in_id_order_and_no_left_one() {
     let (feed, clock) = new_feed(&temp.dir);
     // A crashed session seeded from `recent.jsonl`: in the feed, not live.
     let crashed = id(5);
-    fs::create_dir_all(recent::session_dir(&temp.dir, "p", &crashed)).unwrap();
+    fs::create_dir_all(log::session_dir(
+        &temp.dir,
+        "p",
+        &contract::SessionId(crashed.clone()),
+    ))
+    .unwrap();
     let row = RecentRow {
         session_id: contract::SessionId(crashed.clone()),
         ts: 1,

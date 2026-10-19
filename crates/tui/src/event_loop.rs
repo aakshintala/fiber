@@ -211,7 +211,9 @@ pub(crate) fn run_with(
     terminal.files_out = Some(tx.clone());
     // The cached lists are asked after the first frame, so the first
     // frame draws at once and the picker lists them as soon as the read
-    // answers.
+    // answers. The ask bypasses the owed picker reads, so it counts as
+    // owed, or its answer would clear a meanwhile taken read's mark.
+    terminal.app.note_catalogue_read();
     terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
     match terminal
         .tty

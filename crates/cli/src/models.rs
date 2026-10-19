@@ -12,16 +12,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use config::{Config, Sources};
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::Notice;
 use contract::files::PathLock;
-use contract::shapes::Failure;
 use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::table::pad;
-use crate::{failed, project_of, with_dirs, write_line};
+use crate::{CliError, project_of, with_dirs, write_line};
 
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
@@ -143,17 +141,15 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
 pub(crate) fn providers_and_config(
     home: &Path,
     workspace: &Path,
-) -> Result<(Providers, Config, Vec<Notice>), Failure> {
+) -> Result<(Providers, Config, Vec<Notice>), CliError> {
     let (_, project) = project_of(home, workspace)?;
     let config = Config::load(Sources {
         home: home.to_path_buf(),
         workspace: workspace.to_path_buf(),
         project,
         overrides: Vec::new(),
-    })
-    .map_err(|e| failed(e.code(), e))?;
-    let (providers, notices) =
-        Providers::load_enabled(home, &config).map_err(|e| failed(e.code(), e))?;
+    })?;
+    let (providers, notices) = Providers::load_enabled(home, &config)?;
     Ok((providers, config, notices))
 }
 
@@ -174,7 +170,7 @@ fn run(
     spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
     clock: &dyn Clock,
     run: config::Runner<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     // Each notice as one line on stderr: this load's, the session
     // extensions', then discovery and placeholders', each once per
     // command run.
@@ -185,11 +181,7 @@ fn run(
     notices.extend(extensions.notices());
     notices
         .extend(providers.add_session(&extensions, &config, run, &|name| std::env::var(name).ok()));
-    notices.extend(
-        providers
-            .fill_placeholders(&config, &|name| std::env::var(name).ok())
-            .map_err(|e| failed(e.code(), e))?,
-    );
+    notices.extend(providers.fill_placeholders(&config, &|name| std::env::var(name).ok())?);
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:
@@ -206,8 +198,7 @@ fn run(
         let _ignored = spawn(stale);
     }
     if providers.names().next().is_none() {
-        writeln!(err, "{NO_PROVIDER}")
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard error: {e}")))?;
+        writeln!(err, "{NO_PROVIDER}").map_err(CliError::StandardError)?;
         return Ok(());
     }
     let needle = search.map(|search| search.to_ascii_lowercase());
@@ -244,9 +235,8 @@ fn run(
     }
     if json {
         for row in &rows {
-            let line = serde_json::to_string(row)
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("a model row: {e}")))?;
-            write_line(out, &line)?;
+            let line = serde_json::to_string(row).map_err(CliError::ModelRow)?;
+            write_line(out, &line).map_err(CliError::from)?;
         }
         return Ok(());
     }
@@ -255,7 +245,7 @@ fn run(
         return Ok(());
     }
     for line in &text_lines(&rows) {
-        write_line(out, line)?;
+        write_line(out, line).map_err(CliError::from)?;
     }
     Ok(())
 }

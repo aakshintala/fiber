@@ -670,11 +670,12 @@ fn a_wait_on_a_running_run_parks_then_answers_still_running() {
         let _sent = answer_tx.send(answer);
     });
     let until = clock.now() + Duration::from_millis(1_000);
-    assert!(
-        clock.await_parked(until, DEADLINE),
-        "the wait parks on the clock"
+    clock.advance_when_parked(
+        Some(until),
+        None,
+        Duration::from_millis(1_000),
+        &Deadline::after(DEADLINE),
     );
-    clock.advance(Duration::from_millis(1_000));
     let wait = Deadline::after(DEADLINE);
     let answer = wait.recv(&answer_rx).expect("the wait timed out");
     assert!(answer.text.contains("still running"), "{}", answer.text);
