@@ -205,13 +205,32 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
     let setup = Setup::new();
     let ready = ready_fifo(&setup);
     let mark = setup.root.path().join("mark");
-    // The exec program writes its pid to the fifo once it runs, then traps
-    // SIGTERM: the trap's mark proves SIGTERM arrived before any SIGKILL,
-    // and `sleep 60` keeps the group alive until the stop lands.
+    // The ticket's `sh -c 'trap ...; sleep 60'` runs the callback until
+    // SIGTERM: the trap's mark proves SIGTERM arrived before any SIGKILL.
+    // The trap is set before the pid line, so the ready wait proves it is
+    // armed; the `read` below blocks on a FIFO the test holds open instead
+    // of the ticket's `sleep 60`, parked with no CPU until the signal.
+    let hold = setup.root.path().join("hold.fifo");
+    fakes::fifo(&hold);
+    // This write-end open blocks until the exec program's `read` opens the
+    // FIFO: it runs on a thread, and the receive below carries the
+    // deadline. The binding holds the write end until the test ends.
+    let (held, writing) = mpsc::channel();
+    thread::spawn({
+        let hold = hold.clone();
+        move || {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&hold) {
+                match held.send(file) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    });
     let script = format!(
-        "echo $$ > {}; trap \"echo term > {}; exit 0\" TERM; sleep 60",
-        quote(ready.path()),
+        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < {}\n",
         quote(&mark),
+        quote(ready.path()),
+        quote(&hold),
     );
     let init = format!(
         "fiber.hook(\"after_tool\", {{ timeout = 30000, on_failure = \"blocking\",\n  run = function(call)\n    host.exec(\"sh\", {{\"-c\", [[{script}]]}})\n    return {{ content = \"hooked\" }}\n  end }})\n"
@@ -229,9 +248,13 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
     .unwrap();
     setup.provider(&server);
     let fiber = setup.start(&["ask", "read the note"], Stdio::null());
-    // The exec program runs, so the hook is in flight and the signals are
-    // armed before the shutdown starts.
+    // The exec program runs past its trap, and its `read` opened the FIFO,
+    // so the hook is in flight and parked before the shutdown starts.
     let _started = ready.wait(setup.deadline.left());
+    let _writer = setup
+        .deadline
+        .recv(&writing)
+        .expect("the hold FIFO opened for writing");
     fiber.signal("TERM");
     let ended = fiber.end();
 
@@ -244,6 +267,38 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
     // The process exits 143 with `fiber_exited` last and no error.
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert_eq!(ended.stderr, "");
+    let kinds: Vec<&str> = ended
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+            "extension_exec",
+            "fiber_exited",
+        ],
+    );
+    let completed = ended
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .expect("the interrupted turn ended");
+    assert_eq!(completed["payload"]["outcome"], "interrupted");
     let last = ended.lines.last().expect("a line on stdout");
     assert_eq!(last["kind"], "fiber_exited", "{:?}", ended.lines);
     assert_eq!(last["payload"]["exit_code"], 143);
