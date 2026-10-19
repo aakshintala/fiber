@@ -93,6 +93,21 @@ fn rig() -> Rig {
     }
 }
 
+/// Receives the stopped delegate's notice and asserts it ended cancelled.
+#[track_caller]
+fn assert_cancelled_notice(rig: &Rig) {
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
+}
+
 fn resolve() -> Resolve {
     Resolve {
         lookup: Arc::new(|model: &str| match model {
@@ -298,16 +313,7 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.model, "fake/m:high");
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let Delivery::Job(notice) = Deadline::after(DEADLINE)
-        .recv(&rig.inbox)
-        .expect("the stopped delegate reports")
-    else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
 }
 
 #[test]
@@ -364,16 +370,7 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.parent.0, "s_parent");
     assert_eq!(launched.model, "fake/m");
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let Delivery::Job(notice) = Deadline::after(DEADLINE)
-        .recv(&rig.inbox)
-        .expect("the stopped delegate reports")
-    else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
 }
 
 fn text_of(part: &contract::shapes::ContentPart) -> String {
@@ -561,13 +558,7 @@ fn absent_timeout_keeps_the_delegate_running_after_a_poll() {
     assert!(rig.inbox.try_recv().is_err());
     assert_eq!(rig.registry.stop_delegates(), 1);
     drop(release);
-    let Delivery::Job(notice) = deadline.recv(&rig.inbox).expect("stopped delegate reports") else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
     watchdog.stand_down(DEADLINE);
 }
 
@@ -1022,16 +1013,7 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
     // Stopping at once races the runner's first watch; the stop wins and
     // the job ends cancelled once the runner reaps it.
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let Delivery::Job(notice) = Deadline::after(DEADLINE)
-        .recv(&rig.inbox)
-        .expect("the stopped delegate reports")
-    else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
 }
 
 #[test]
@@ -1054,16 +1036,7 @@ fn a_role_credential_reaches_the_launcher() {
     assert_eq!(launched.model, "fake/m:high");
     assert_eq!(launched.credential, Some("work".to_owned()));
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let Delivery::Job(notice) = Deadline::after(DEADLINE)
-        .recv(&rig.inbox)
-        .expect("the stopped delegate reports")
-    else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
 }
 
 #[test]
@@ -1085,16 +1058,7 @@ fn a_full_reference_launches_with_no_credential() {
     assert_eq!(launched.model, "fake/m");
     assert_eq!(launched.credential, None);
     assert_eq!(rig.registry.stop_delegates(), 1);
-    let Delivery::Job(notice) = Deadline::after(DEADLINE)
-        .recv(&rig.inbox)
-        .expect("the stopped delegate reports")
-    else {
-        panic!("job notice");
-    };
-    assert_eq!(
-        notice.completed.status,
-        contract::events::Outcome::Cancelled
-    );
+    assert_cancelled_notice(&rig);
 }
 
 #[test]
