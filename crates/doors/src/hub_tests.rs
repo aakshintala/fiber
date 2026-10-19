@@ -93,6 +93,7 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     let line = hello_line();
     peer.write_all(&line[..1]).unwrap();
     let clock = fakes::clock::FakeClock::new();
+    let due = clock.now() + DEADLINE;
     let (read_tx, read_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -122,7 +123,7 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     // The reader read the first byte and checked the time left for the
     // next: at the deadline now, with no time left, so the next byte ends
     // the handshake.
-    clock.advance(DEADLINE);
+    clock.advance_when_parked(Some(due), None, DEADLINE, &Deadline::after(DEADLINE));
     peer.write_all(&line[1..2]).unwrap();
     let got = Deadline::after(Duration::from_secs(5))
         .recv(&done_rx)
