@@ -4611,6 +4611,56 @@ fn miss_display_names_threads_instants_and_the_pause() {
     exited.recv_or_fail(&exit_b, "the second thread's exit");
 }
 
+/// Three distinct thread ids: this thread, then two that have exited. Joining
+/// a finished thread waits on no clock and no timing.
+fn three_thread_ids() -> (thread::ThreadId, thread::ThreadId, thread::ThreadId) {
+    let first = thread::current().id();
+    let second = thread::spawn(|| thread::current().id()).join().unwrap();
+    let third = thread::spawn(|| thread::current().id()).join().unwrap();
+    (first, second, third)
+}
+
+#[test]
+fn mismatch_display_with_no_parked_thread_prints_empty_brackets() {
+    let (watched, _, _) = three_thread_ids();
+    let mismatch = Miss::Mismatch {
+        watched: (watched, None),
+        parked: vec![],
+    };
+    assert_eq!(
+        format!("{mismatch}"),
+        format!("watched park {watched:?} at None; parked threads: []"),
+    );
+}
+
+#[test]
+fn mismatch_display_with_one_parked_thread_writes_no_separator() {
+    let (watched, _, _) = three_thread_ids();
+    let mismatch = Miss::Mismatch {
+        watched: (watched, None),
+        parked: vec![(watched, None)],
+    };
+    assert_eq!(
+        format!("{mismatch}"),
+        format!("watched park {watched:?} at None; parked threads: [{watched:?} at None]"),
+    );
+}
+
+#[test]
+fn mismatch_display_with_two_parked_threads_separates_them_with_one_comma() {
+    let (watched, second, _) = three_thread_ids();
+    let mismatch = Miss::Mismatch {
+        watched: (watched, None),
+        parked: vec![(watched, None), (second, None)],
+    };
+    assert_eq!(
+        format!("{mismatch}"),
+        format!(
+            "watched park {watched:?} at None; parked threads: [{watched:?} at None, {second:?} at None]"
+        ),
+    );
+}
+
 #[test]
 fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
     let clock = FakeClock::new();
