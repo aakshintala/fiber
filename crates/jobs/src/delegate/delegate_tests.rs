@@ -297,11 +297,17 @@ fn a_role_starts_its_resolved_reference_and_records_it() {
         .expect("the launcher ran");
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.model, "fake/m:high");
-    // The stop reaches the running child; the clock lets the runner reap
-    // it so no thread is left parked. The watchdog above already guards
-    // it.
     assert_eq!(rig.registry.stop_delegates(), 1);
-    rig.clock.advance(Duration::from_secs(6));
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
 }
 
 #[test]
@@ -357,11 +363,17 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert_eq!(launched.session_id, delegate.delegate_session_id);
     assert_eq!(launched.parent.0, "s_parent");
     assert_eq!(launched.model, "fake/m");
-    // The stop reaches the running child; the clock lets the runner reap
-    // it so no thread is left parked. The watchdog above already guards
-    // it.
     assert_eq!(rig.registry.stop_delegates(), 1);
-    rig.clock.advance(Duration::from_secs(6));
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
 }
 
 fn text_of(part: &contract::shapes::ContentPart) -> String {
@@ -1010,30 +1022,16 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
     // Stopping at once races the runner's first watch; the stop wins and
     // the job ends cancelled once the runner reaps it.
     assert_eq!(rig.registry.stop_delegates(), 1);
-    for _ in 0..200 {
-        if let Ok(Delivery::Job(notice)) = rig.inbox.try_recv() {
-            assert_eq!(
-                notice.completed.status,
-                contract::events::Outcome::Cancelled
-            );
-            rig.clock.advance(Duration::from_secs(6));
-            return;
-        }
-        rig.clock.advance(Duration::from_millis(50));
-        // Wall time for the runner thread: advances alone cost it none.
-        // The wait itself may hold the notice, so it is read here too.
-        if let Ok(Delivery::Job(notice)) =
-            Deadline::after(Duration::from_millis(5)).recv(&rig.inbox)
-        {
-            assert_eq!(
-                notice.completed.status,
-                contract::events::Outcome::Cancelled
-            );
-            rig.clock.advance(Duration::from_secs(6));
-            return;
-        }
-    }
-    panic!("the stopped runner did not report");
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
 }
 
 #[test]
@@ -1056,7 +1054,16 @@ fn a_role_credential_reaches_the_launcher() {
     assert_eq!(launched.model, "fake/m:high");
     assert_eq!(launched.credential, Some("work".to_owned()));
     assert_eq!(rig.registry.stop_delegates(), 1);
-    rig.clock.advance(Duration::from_secs(6));
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
 }
 
 #[test]
@@ -1078,7 +1085,16 @@ fn a_full_reference_launches_with_no_credential() {
     assert_eq!(launched.model, "fake/m");
     assert_eq!(launched.credential, None);
     assert_eq!(rig.registry.stop_delegates(), 1);
-    rig.clock.advance(Duration::from_secs(6));
+    let Delivery::Job(notice) = Deadline::after(DEADLINE)
+        .recv(&rig.inbox)
+        .expect("the stopped delegate reports")
+    else {
+        panic!("job notice");
+    };
+    assert_eq!(
+        notice.completed.status,
+        contract::events::Outcome::Cancelled
+    );
 }
 
 #[test]
