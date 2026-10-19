@@ -16,7 +16,6 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 use contract::events::OfferedKind;
@@ -26,7 +25,7 @@ use serde_json::{Map, Value, json};
 use super::declared::RepoItem;
 use super::kind_name;
 use crate::Error;
-use crate::install::io as io_error;
+use crate::install::{io as io_error, unique_name};
 
 // debt: a file opened after its path was resolved and checked inside the
 // repository can be swapped for a link to outside in the window between the
@@ -106,12 +105,12 @@ impl Index {
                 }),
             );
         }
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let temp = file.with_extension(format!(
-            "json.tmp-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let Some(name) = file.file_name() else {
+            return Err(io_error(file)(io::Error::other(
+                "the index file has no file name",
+            )));
+        };
+        let temp = file.with_file_name(unique_name(&format!("{}.tmp", name.to_string_lossy())));
         let written =
             fs::write(&temp, Value::Object(map).to_string()).and_then(|()| fs::rename(&temp, file));
         if let Err(e) = written {
