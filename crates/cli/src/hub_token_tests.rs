@@ -2,7 +2,7 @@
 use super::*;
 use contract::HubLine;
 use fakes::Deadline;
-use serde_json::json;
+use serde_json::{Map, json};
 use std::io::BufRead as _;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;

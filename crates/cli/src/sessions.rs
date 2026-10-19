@@ -7,9 +7,10 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
+use contract::commands::hub::{Delete, HubCommand, HubCommandLine};
 use contract::shapes::Failure;
-use contract::{ErrorCode, HubLine, SessionId};
-use serde_json::{Value, json};
+use contract::{CommandId, ErrorCode, HubLine, SessionId};
+use serde_json::Value;
 
 use crate::approve::{confirmed, say};
 use crate::{failed, project_of, usage, with_dirs, write_line};
@@ -151,12 +152,16 @@ pub(crate) fn send_delete(
     id: &SessionId,
     cascade: bool,
 ) -> Result<(), Failure> {
-    let mut args = serde_json::Map::new();
-    args.insert("session".to_owned(), Value::String(id.0.clone()));
-    if cascade {
-        args.insert("cascade".to_owned(), Value::Bool(true));
-    }
-    request(read, command_id, "delete", args).map(drop)
+    request(
+        read,
+        command_id,
+        HubCommand::Delete(Delete {
+            session: id.clone(),
+            cascade: cascade.then_some(true),
+            expect: None,
+        }),
+    )
+    .map(drop)
 }
 
 /// Local connections keep their existing message; listed failures keep their code.
@@ -168,48 +173,85 @@ pub(crate) fn hub_failure(error: doors::Error) -> Failure {
     }
 }
 
-/// Sends hub command `command` with `args` as `command_id` and reads until
-/// its answer, skipping every other line: the accepted `result`, `null`
-/// when it has none. An end before the answer is `io_failed`; a rejection
-/// is a failure with its code and message.
+/// The hub's answer to `command_id`, when `line` carries it: the accepted
+/// `result`, `null` when it has none, or the rejection as a failure.
+/// `None` for any other line. A rejection without a usable code is
+/// `io_failed`; one without a message names the command.
+pub(crate) fn answer_of(line: &HubLine, id: &str, command: &str) -> Option<Result<Value, Failure>> {
+    if line.payload.get("command_id").and_then(Value::as_str) != Some(id) {
+        return None;
+    }
+    match line.kind.as_str() {
+        "command_accepted" => Some(Ok(line
+            .payload
+            .get("result")
+            .cloned()
+            .unwrap_or(Value::Null))),
+        "command_rejected" => {
+            let code = line
+                .payload
+                .get("code")
+                .and_then(Value::as_str)
+                .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
+                .unwrap_or(ErrorCode::IoFailed);
+            let message = line
+                .payload
+                .get("message")
+                .and_then(Value::as_str)
+                .map_or_else(|| format!("the hub refused `{command}`"), str::to_owned);
+            Some(Err(failed(code, message)))
+        }
+        _ => None,
+    }
+}
+
+/// Sends hub `command` as `command_id` and reads until its answer,
+/// skipping every other line: the accepted `result`, `null` when it has
+/// none. An end before the answer is `io_failed`; a rejection is a
+/// failure with its code and message.
 pub(crate) fn request(
     read: &mut BufReader<UnixStream>,
     command_id: &str,
-    command: &str,
-    args: serde_json::Map<String, Value>,
+    command: HubCommand,
 ) -> Result<Value, Failure> {
-    let line = json!({"id": command_id, "command": command, "args": args}).to_string();
+    let value = serde_json::to_value(&HubCommandLine {
+        id: CommandId(command_id.to_owned()),
+        command,
+    })
+    .map_err(|e| {
+        failed(
+            ErrorCode::IoFailed,
+            format!("a command could not be written as JSON: {e}"),
+        )
+    })?;
+    // The name for the messages below, read from the serialised line so a
+    // renamed variant cannot leave a stale name here.
+    let name = value
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let bytes = serde_json::to_vec(&value).map_err(|e| {
+        failed(
+            ErrorCode::IoFailed,
+            format!("a command could not be written as JSON: {e}"),
+        )
+    })?;
     let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
-    support::framing::write_line(read.get_mut(), line.as_bytes()).map_err(lost)?;
+    support::framing::write_line(read.get_mut(), &bytes).map_err(lost)?;
     loop {
         let Some(buf) =
             support::framing::read_line(read, support::framing::MAX_LINE).map_err(lost)?
         else {
             return Err(failed(
                 ErrorCode::IoFailed,
-                format!("the hub closed the connection before answering `{command}`"),
+                format!("the hub closed the connection before answering `{name}`"),
             ));
         };
-        let Ok(mut answer) = serde_json::from_slice::<HubLine>(&buf) else {
+        let Ok(answer) = serde_json::from_slice::<HubLine>(&buf) else {
             continue;
         };
-        let field = |key: &str| answer.payload.get(key).and_then(Value::as_str);
-        if field("command_id") != Some(command_id) {
-            continue;
-        }
-        match answer.kind.as_str() {
-            "command_accepted" => {
-                return Ok(answer.payload.remove("result").unwrap_or(Value::Null));
-            }
-            "command_rejected" => {
-                let code = field("code")
-                    .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
-                    .unwrap_or(ErrorCode::IoFailed);
-                let message = field("message")
-                    .map_or_else(|| format!("the hub refused `{command}`"), str::to_owned);
-                return Err(failed(code, message));
-            }
-            _ => {}
+        if let Some(answered) = answer_of(&answer, command_id, name) {
+            return answered;
         }
     }
 }

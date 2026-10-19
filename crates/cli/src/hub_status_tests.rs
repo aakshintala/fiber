@@ -153,7 +153,10 @@ fn a_running_hub_reports_its_version_and_the_other_clients() {
     assert_eq!(status.clients, 2);
     let request: Value =
         serde_json::from_str(&Deadline::after(DEADLINE).recv(&got).unwrap()).unwrap();
-    assert_eq!(request, json!({"id": "c_status", "command": "status"}));
+    assert_eq!(
+        request,
+        json!({"id": "c_status", "command": "status", "args": {}})
+    );
 }
 
 #[test]
@@ -437,7 +440,10 @@ fn a_full_send_buffer_waits_for_room_instead_of_failing() {
     let mut line = String::new();
     BufReader::new(&peer).read_line(&mut line).unwrap();
     let request: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(request, json!({"id": "c_status", "command": "status"}));
+    assert_eq!(
+        request,
+        json!({"id": "c_status", "command": "status", "args": {}})
+    );
 }
 
 /// Whether `stream` is in blocking mode, read from the socket itself.

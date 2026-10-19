@@ -2,6 +2,7 @@
 use crate::login::{KeyReader, NoEcho, Plain};
 use crate::{failed, usage, with_dirs};
 use config::{ConfigError, CredentialFile, CredentialLock, Secret};
+use contract::commands::hub::{HubCommand, Pair};
 use contract::{ErrorCode, clock::Clock, shapes::Failure};
 use doors::hub::{Address, Hub};
 use serde_json::Value;
@@ -74,8 +75,9 @@ fn add_run(
         let answer = crate::sessions::request(
             &mut io::BufReader::new(stream),
             "c_pair",
-            "pair",
-            serde_json::Map::from_iter([("code".into(), Value::String(code.expose().into()))]),
+            HubCommand::Pair(Pair {
+                code: contract::Secret::new(code.expose().into()),
+            }),
         )
         .map_err(|mut error| {
             error.message = error.message.replace(code.expose(), "[redacted]");

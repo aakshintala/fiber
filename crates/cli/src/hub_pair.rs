@@ -1,8 +1,9 @@
 //! Pairing codes and terminal QR output (`docs/invocation.md`, "Remote clients").
 use crate::{failed, finish, sessions::request, write_line};
+use contract::commands::hub::{Device, HubCommand};
 use contract::{ErrorCode, shapes::Failure};
 use qrcode::{QrCode, render::unicode::Dense1x2};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::io::{self, BufReader, IsTerminal as _, Write};
 
 const ADDRESS_RULE: &str = "The address must be a ws:// or wss:// URL.";
@@ -81,8 +82,9 @@ fn run(
     let answer = request(
         &mut read,
         "c_pairing_code",
-        "pairing_code",
-        Map::from_iter([("device".to_owned(), Value::from(device))]),
+        HubCommand::PairingCode(Device {
+            device: device.to_owned(),
+        }),
     )?;
     let code = answer
         .get("code")
