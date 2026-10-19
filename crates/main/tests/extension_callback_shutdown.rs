@@ -385,19 +385,13 @@ fn wait_stopped(deadline: Deadline, pid: u32) {
     }
 }
 
-/// Sends SIGCONT to process `pid` through `kill(2)`, starting no process:
-/// the shell stopped itself, and `support::kill_pid` names no CONT. An id
-/// of 1 or less panics before anything runs, since the signal would reach
-/// processes the test does not own.
+/// Sends SIGCONT to process `pid` through `support::kill_pid`, starting
+/// no process: the shell stopped itself, and SIGTERM stays pending until
+/// SIGCONT resumes it. An id of 1 or less panics before anything runs,
+/// since the signal would reach processes the test does not own.
 #[track_caller]
-fn continue_pid(pid: u32) {
-    assert!(
-        pid > 1,
-        "refusing to continue pid {pid}: an id of 1 or less reaches processes the test does not own"
-    );
-    let target = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap())
-        .unwrap_or_else(|| panic!("{pid} is not a pid"));
-    rustix::process::kill_process(target, rustix::process::Signal::CONT).unwrap();
+fn continue_pid(deadline: Deadline, pid: u32) {
+    assert!(support::kill_pid(deadline, pid, "CONT").unwrap());
 }
 
 #[test]
@@ -431,7 +425,7 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
     // stays pending until SIGCONT resumes it into the read.
     wait_stopped(setup.deadline, pid);
     assert!(support::kill_pid(setup.deadline, pid, "TERM").unwrap());
-    continue_pid(pid);
+    continue_pid(setup.deadline, pid);
     // This write-end open blocks until the exec program's `read` opens the
     // FIFO: it runs on a thread, and the receive below carries the
     // deadline. The binding holds the write end until the test ends.
