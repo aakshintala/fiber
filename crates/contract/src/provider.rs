@@ -16,6 +16,9 @@ use crate::events::{
 use crate::shapes::{Failure, Tokens};
 use crate::{ActionId, GenerationId, ProviderCallId, ThinkingLevel};
 
+/// The name of the tool that finds deferred tools.
+pub const TOOL_SEARCH: &str = "tool_search";
+
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
 pub trait Provider: Send + Sync {
@@ -32,6 +35,12 @@ pub trait Provider: Send + Sync {
     /// (`docs/model-routing.md`, "Cost"); `None` for every other provider.
     fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
         None
+    }
+
+    /// Whether this model takes deferred declarations (`docs/tools.md`,
+    /// "Deferral is a property of the model").
+    fn defers(&self) -> bool {
+        false
     }
 
     /// Whether `request`, resent with its output capped at one token,
@@ -93,7 +102,10 @@ pub struct ModelRequest {
     /// (`docs/prompt-cache.md`, "Cache markers and keys" and "Rules for other
     /// areas"). The caller builds it.
     pub cache_key: String,
-    /// The conversation, in log order.
+    /// The conversation, in log order. Its builder keeps every
+    /// [`Input::ToolSearchResult`]'s `loaded` non-empty, with each name a tool
+    /// the request sends deferred. None appears when the request's provider
+    /// does not defer ([`Provider::defers`] is false). Protocols rely on this.
     pub conversation: Vec<Input>,
     /// The tools as a rewound session's parent sent them, in that order:
     /// a rewound session's first request sends these verbatim, so it
@@ -238,6 +250,15 @@ pub enum Input {
         /// pages rendered as images (`docs/tools.md`, "read").
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pdfs: Vec<PdfRef>,
+    },
+    /// A `tool_search` call's result, from a completed `tool_call_completed`
+    /// carrying `loaded` (`docs/tools.md`, "Tool search"). Each protocol
+    /// renders it from `loaded`.
+    ToolSearchResult {
+        /// The call's action.
+        action_id: ActionId,
+        /// The tools the search loaded, by name, in the logged order.
+        loaded: Vec<String>,
     },
 }
 
