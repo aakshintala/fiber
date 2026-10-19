@@ -1186,9 +1186,12 @@ fn request_lines_carry_no_url_or_content() {
     })
     .expect("the userinfo request succeeds");
     assert_eq!(server.requests().len(), 2);
-    // A secret-bearing hostname without public DNS: the request fails,
-    // and the failure line still records no hostname.
-    let dns_dir = ext_dir(None, &[("p", &models_lua("http://secret-host.invalid"))]);
+    // The request names no resolver (IP literal, refused port): the
+    // request fails, and the failure line still records no host.
+    let dns_dir = ext_dir(
+        None,
+        &[("p", &models_lua("http://127.0.0.1:1/secret-host"))],
+    );
     let dns_ext = observed_ext(&dns_dir, FakeClock::new(), &sink);
     let dns_err = fakes::within("provider.list_models", fakes::MUST_SUCCEED_WITHIN, {
         let provider = LuaProvider::new(dns_ext, "p");
