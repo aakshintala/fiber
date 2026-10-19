@@ -222,16 +222,23 @@ fn provider_load_race(completion_first: bool) {
     let (result_tx, result_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     let asked = clock.now();
-    thread::spawn(move || result_tx.send(caller.provider_functions("p")));
+    let abandon_at = asked + LOAD_TIMEOUT + GRACE;
+    let caller_thread = thread::spawn(move || result_tx.send(caller.provider_functions("p")));
     Deadline::after(WAIT).recv_or_fail(&held_rx, "provider held in read");
-    assert!(clock.await_parked(asked + LOAD_TIMEOUT + GRACE, WAIT));
+    assert!(clock.await_parked(abandon_at, WAIT));
     if completion_first {
         release_tx.send(()).unwrap();
         Deadline::after(WAIT).recv_or_fail(&recorded_rx, "load result recorded before abandonment");
         let (advanced_tx, advanced_rx) = mpsc::channel();
         let advance_clock = Arc::clone(&clock);
+        let caller_id = caller_thread.thread().id();
         thread::spawn(move || {
-            advance_clock.advance_marked(LOAD_TIMEOUT + GRACE);
+            advance_clock.advance_when_parked(
+                Some(abandon_at),
+                Some(caller_id),
+                LOAD_TIMEOUT + GRACE,
+                &Deadline::after(WAIT),
+            );
             advanced_tx.send(()).unwrap();
         });
         Deadline::after(WAIT).recv_or_fail(&moved_rx, "clock moved before hub wake");
@@ -245,7 +252,12 @@ fn provider_load_race(completion_first: bool) {
         );
         assert!(ext.is_running());
     } else {
-        clock.advance(LOAD_TIMEOUT + GRACE);
+        clock.advance_when_parked(
+            Some(abandon_at),
+            Some(caller_thread.thread().id()),
+            LOAD_TIMEOUT + GRACE,
+            &Deadline::after(WAIT),
+        );
         let err = Deadline::after(WAIT)
             .recv_or_fail(&result_rx, "abandonment before recording")
             .unwrap_err();
