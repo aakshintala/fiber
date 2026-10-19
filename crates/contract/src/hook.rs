@@ -428,8 +428,8 @@ pub trait Hooks: Send + Sync {
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
 
     /// Returns once every `host.exec` run started by an extension that delivers
-    /// to the session inbox has ended and its `extension_exec` line is queued;
-    /// a provider-only VM is not waited on.
+    /// to the session inbox has ended and its `extension_exec` line is queued.
+    /// Every VM that delivers to the session inbox is waited on.
     fn wait_for_runs(&self) {}
 }
 

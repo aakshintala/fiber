@@ -174,10 +174,19 @@ impl SessionExtensions {
                     None => lua,
                 };
                 let lua = Arc::new(lua);
-                // Lock order: provider_vms, then emitter. emit_to and seal
-                // drop emitter before collecting VMs, so neither misses this VM.
+                // Lock order: provider_vms, then emitter, then inbox. emit_to,
+                // seal and deliver_to drop their sink before collecting VMs,
+                // so none misses this VM.
                 let emit = self
                     .emitter
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                // The retained session inbox reaches a late fresh VM before
+                // its handle escapes; a reused VM already has it, and none
+                // was ever delivered when the retained sender is `None`.
+                let inbox = self
+                    .inbox
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .clone();
@@ -185,6 +194,9 @@ impl SessionExtensions {
                 self.at_late(super::LatePoint::Read);
                 if let Some(emit) = emit {
                     lua.set_emit(emit);
+                }
+                if let Some(inbox) = inbox {
+                    lua.deliver_to(inbox);
                 }
                 vms.insert(extension.to_owned(), Arc::downgrade(&lua));
                 lua
