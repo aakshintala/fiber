@@ -84,11 +84,18 @@ impl std::io::Read for Flaky {
     }
 }
 
-struct Failing(io::ErrorKind);
+struct Failing {
+    kind: io::ErrorKind,
+    calls: u32,
+}
 
 impl BufRead for Failing {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        Err(io::Error::new(self.0, "no retry"))
+        if self.calls > 0 {
+            panic!("read_line retried a non-Interrupted fill error");
+        }
+        self.calls += 1;
+        Err(io::Error::new(self.kind, "no retry"))
     }
 
     fn consume(&mut self, _amount: usize) {}
@@ -111,8 +118,14 @@ fn an_interrupted_fill_is_retried() {
 
 #[test]
 fn any_other_fill_error_is_returned() {
-    let mut read = Failing(io::ErrorKind::Other);
-    assert!(read_line(&mut read, super::MAX_LINE).is_err());
+    let mut read = Failing {
+        kind: io::ErrorKind::Other,
+        calls: 0,
+    };
+    assert_eq!(
+        read_line(&mut read, super::MAX_LINE).unwrap_err().kind(),
+        io::ErrorKind::Other
+    );
 }
 
 #[test]
