@@ -34,6 +34,10 @@ mod approve;
 )]
 mod config;
 mod doctor;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod extension;
 mod extension_test;
 mod hub_list;

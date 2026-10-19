@@ -13,8 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{failed, finish_code, write_line};
-use contract::ErrorCode;
+use crate::{CliError, finish_code, write_line};
 use contract::clock::{Clock, Wake};
 use extensions::{Origin, Request};
 use rustix::process::Signal;
@@ -86,7 +85,7 @@ pub fn extension_test(
     let fiber = match fiber {
         Ok(fiber) => fiber,
         // The shared error branch prints the failure and gives code 1.
-        Err(error) => return finish_code(Err(failed(ErrorCode::IoFailed, error))),
+        Err(error) => return finish_code(Err(CliError::FiberExecutable(error))),
     };
     let options = RunOptions {
         clock,

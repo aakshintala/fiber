@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::shapes::Failure;
 use extensions::{Origin, Request};
 
 use super::{Io, install, list, remove, update_all};
+use crate::CliError;
 
 #[test]
 fn public_install_wrapper_propagates_project_scope() {
@@ -193,7 +193,11 @@ fn a_later_scope_key_failure_keeps_completed_keys_and_never_runs_install_steps()
             },
         )
         .unwrap_err();
-        assert_eq!(failure.code, ErrorCode::Usage);
+        assert!(
+            matches!(&failure, CliError::Config(_)),
+            "expected Config, got {failure:?}"
+        );
+        assert_eq!(failure.code(), ErrorCode::Usage);
         let (global, project) = scope_files(&setup);
         assert_eq!(
             json_file(&project),
@@ -215,7 +219,7 @@ fn scoped_install(
     source: &Path,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> Result<i32, Failure> {
+) -> Result<i32, CliError> {
     let workspace = setup.root.path().join("workspace");
     fs::create_dir_all(&workspace).unwrap();
     let (_, project) = crate::project_of(&setup.home(), &workspace).unwrap();
@@ -407,12 +411,12 @@ fn scope_write_failures_stop_install_and_keep_completed_project_keys() {
                     format!("printf marker > '{}'", marker.display())
                 ]);
                 let source = setup.source("acme", &m, &[]);
-                assert_eq!(
-                    scoped_install(&setup, &source, false, &mut Unread)
-                        .unwrap_err()
-                        .code,
-                    ErrorCode::ConfigInvalid
+                let failure = scoped_install(&setup, &source, false, &mut Unread).unwrap_err();
+                assert!(
+                    matches!(&failure, CliError::Config(_)),
+                    "expected Config, got {failure:?}"
                 );
+                assert_eq!(failure.code(), ErrorCode::ConfigInvalid);
                 assert_eq!(fs::read_to_string(broken).unwrap(), "not JSON");
                 assert!(!marker.exists());
                 assert!(!setup.home().join("extensions/acme").exists());
@@ -592,11 +596,11 @@ fn first_party_install_rejects_scripted_before_fetching() {
         &*fakes::clock::FakeClock::new(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        error.message,
-        "No first-party package serves the provider `scripted`."
-    );
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let CliError::NoFirstPartyPackage { provider } = &error else {
+        panic!("expected NoFirstPartyPackage, got {error:?}");
+    };
+    assert_eq!(provider, "scripted");
     assert!(!setup.home().join("extensions").exists());
 }
 
@@ -615,7 +619,14 @@ fn first_party_install_keeps_fetch_failures_and_cleans_staging() {
             &*clock,
         )
         .unwrap_err();
-        assert_eq!(error.code, ErrorCode::ExtensionNotFound);
+        assert_eq!(error.code(), ErrorCode::ExtensionNotFound);
+        assert!(
+            matches!(
+                &error,
+                CliError::Extensions(extensions::Error::NoRepository { .. })
+            ),
+            "expected Extensions(NoRepository), got {error:?}"
+        );
         assert!(
             extensions::list(&setup.home(), &*clock)
                 .unwrap()
@@ -690,7 +701,11 @@ fn first_party_install_rejects_an_unreadable_existing_provider_before_commit() {
             &*clock,
         )
         .unwrap_err();
-        assert_eq!(error.code, ErrorCode::ConfigInvalid);
+        assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+        assert!(
+            matches!(&error, CliError::Extensions(extensions::Error::Config(..))),
+            "expected Extensions(Config), got {error:?}"
+        );
         let installed = extensions::list(&setup.home(), &*clock).unwrap().installed;
         assert_eq!(
             installed
@@ -720,8 +735,14 @@ fn first_party_install_rejects_an_unreadable_cache_before_commit() {
             &*clock,
         )
         .unwrap_err();
-        assert_eq!(error.code, ErrorCode::IoFailed);
-        assert!(error.message.contains(&cache.display().to_string()));
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+        let CliError::Extensions(extensions::Error::Config(config::ConfigError::Io {
+            file, ..
+        })) = &error
+        else {
+            panic!("expected Extensions(Config(Io)), got {error:?}");
+        };
+        assert_eq!(file, &cache);
         assert!(
             extensions::list(&setup.home(), &*clock)
                 .unwrap()
@@ -821,8 +842,15 @@ fn first_party_install_rejects_a_staged_dependency_with_an_unreadable_addendum()
                 &*clock,
             )
             .unwrap_err();
-            assert_eq!(error.code, ErrorCode::ConfigInvalid);
-            assert!(error.message.contains("addenda/pc.md"));
+            assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+            let CliError::Extensions(extensions::Error::Config(config::ConfigError::WrongType {
+                source_name,
+                ..
+            })) = &error
+            else {
+                panic!("expected Extensions(Config(WrongType)), got {error:?}");
+            };
+            assert!(source_name.ends_with("addenda/pc.md"), "{source_name}");
             assert!(
                 extensions::list(&setup.home(), &*clock)
                     .unwrap()
@@ -960,7 +988,7 @@ fn run_install(
     origin: &Origin,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, Result<i32, Failure>) {
+) -> (String, Result<i32, CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
     let got = install(
@@ -986,7 +1014,7 @@ fn run_update_all(
     origin: &Origin,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, Result<i32, Failure>) {
+) -> (String, Result<i32, CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
     let got = update_all(
@@ -1009,7 +1037,7 @@ fn run_remove(
     typed: &str,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, Result<i32, Failure>) {
+) -> (String, Result<i32, CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
     let got = remove(
@@ -1026,7 +1054,7 @@ fn run_remove(
 }
 
 /// Runs `list`: its stdout, and its failure, if any.
-fn run_list(home: &Path) -> (String, Result<(), Failure>) {
+fn run_list(home: &Path) -> (String, Result<(), CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut out = Vec::new();
     let got = list(home, &*clock, &mut out);
@@ -1200,7 +1228,11 @@ fn install_by_name_without_git_is_a_usage_failure() {
         &mut unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
+    assert!(
+        matches!(&failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::Usage);
 }
 
 #[test]
@@ -1261,7 +1293,11 @@ fn reinstall_of_a_name_not_installed_fails() {
         &mut unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::ExtensionMissing);
+    assert!(
+        matches!(&failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
+    );
+    assert_eq!(failure.code(), ErrorCode::ExtensionMissing);
 }
 
 #[test]
@@ -1498,10 +1534,10 @@ fn remove_of_a_name_not_installed_fails() {
     let (_, got) = run_remove(&setup.home(), NAME_A, false, &mut unread);
     let failure = got.unwrap_err();
     assert!(
-        failure.message.contains("is not installed"),
-        "{}",
-        failure.message
+        matches!(&failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
     );
+    assert_eq!(failure.code(), ErrorCode::ExtensionNotInstalled);
 }
 
 #[test]
@@ -1719,6 +1755,90 @@ fn reinstall_command_gives_its_exit_code() {
 #[test]
 fn install_by_name_command_gives_its_exit_code() {
     run_case("install-by-name");
+}
+
+/// Set in the child that deletes its working directory before running one
+/// entry point: the value names the entry point. The child prints the
+/// bare directory-read error on stdout, then runs the entry point and
+/// exits with its code, so the parent can compare the printed `fiber: `
+/// line against the bare text without leaving its own directory.
+const DIR_CHILD: &str = "FIBER_CLI_EXTENSION_DIR_CHILD";
+
+fn dir_child_test_name(case: &str) -> &'static str {
+    match case {
+        "install-dir" => "install_with_project_in_a_deleted_directory_names_the_bare_error",
+        "remove-dir" => "remove_in_a_deleted_directory_names_the_bare_error",
+        "list-dir" => "list_in_a_deleted_directory_names_the_bare_error",
+        unknown => panic!("unknown extension directory child case: {unknown}"),
+    }
+}
+
+#[track_caller]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+fn run_dir_case(case: &str) {
+    if let Ok(child_case) = std::env::var(DIR_CHILD) {
+        assert_eq!(child_case, case);
+        let dir =
+            std::env::temp_dir().join(format!("fiber-extcwd-{}-{child_case}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        // The bare text the parent compares stderr against, read here in
+        // the child: the parent never leaves its own directory.
+        println!("{}", std::env::current_dir().unwrap_err());
+        let clock = fakes::clock::FakeClock::new();
+        let code = match child_case.as_str() {
+            "install-dir" => {
+                super::extension_install("github.com/acme/fiber-acme", true, FIBER_VERSION, &*clock)
+            }
+            "remove-dir" => super::extension_remove("github.com/acme/fiber-acme", &*clock),
+            _ => super::extension_list(&*clock),
+        };
+        std::process::exit(code);
+    }
+    let setup = Setup::new();
+    let full_test_name = format!(
+        "{}::{}",
+        module_path!().split_once("::").unwrap().1,
+        dir_child_test_name(case)
+    );
+    let output = fakes::rerun_prepared(
+        &full_test_name,
+        &[(DIR_CHILD, case)],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", setup.home());
+        },
+    );
+    let stdout_text = String::from_utf8(output.stdout).unwrap();
+    let stdout = strip_prelude(&stdout_text, &full_test_name);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // The `IoFailed` exit through the real conversion, whatever its number.
+    let converted =
+        contract::shapes::Failure::from(&CliError::ExtensionDirectory(io::Error::other("probe")));
+    assert_eq!(
+        output.status.code(),
+        Some(doors::exit_code(&converted)),
+        "{case}: {stderr}"
+    );
+    // Exactly the bare error after `fiber: `: wiring a site to
+    // `CurrentDirectory` prints its prefix and fails here.
+    assert_eq!(stderr, format!("fiber: {stdout}"));
+}
+
+#[test]
+fn install_with_project_in_a_deleted_directory_names_the_bare_error() {
+    run_dir_case("install-dir");
+}
+
+#[test]
+fn remove_in_a_deleted_directory_names_the_bare_error() {
+    run_dir_case("remove-dir");
+}
+
+#[test]
+fn list_in_a_deleted_directory_names_the_bare_error() {
+    run_dir_case("list-dir");
 }
 
 #[test]

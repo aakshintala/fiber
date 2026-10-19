@@ -7,9 +7,7 @@
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
-use contract::shapes::Failure;
-use doors::failure;
+use crate::CliError;
 
 /// What `fiber extension install` shows before it installs (`docs/extensions.md`,
 /// "What an install shows"): what the manifest and the files tell. Tools,
@@ -93,23 +91,22 @@ pub(crate) fn install_approved(
     terminal: bool,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
-) -> Result<bool, Failure> {
+) -> Result<bool, CliError> {
     if !terminal {
         return Ok(true);
     }
-    let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
     out.write_all(summary_text(summaries).as_bytes())
-        .map_err(io)?;
+        .map_err(CliError::Terminal)?;
     loop {
         out.write_all(b"Go ahead? [y/N/s to show the full source] ")
             .and_then(|()| out.flush())
-            .map_err(io)?;
+            .map_err(CliError::Terminal)?;
         let mut answer = String::new();
-        input.read_line(&mut answer).map_err(io)?;
+        input.read_line(&mut answer).map_err(CliError::Terminal)?;
         match answer.trim() {
             "s" | "S" => {
                 for summary in summaries {
-                    show_source(&summary.name, &summary.staged, out).map_err(io)?;
+                    show_source(&summary.name, &summary.staged, out).map_err(CliError::Terminal)?;
                 }
             }
             "y" | "Y" | "yes" => return Ok(true),
@@ -170,11 +167,10 @@ pub(crate) fn remove_approved(
     terminal: bool,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
-) -> Result<bool, Failure> {
+) -> Result<bool, CliError> {
     if !terminal {
         return Ok(true);
     }
-    let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
     let mut text = String::new();
     for name in names {
         text.push_str(&format!("Remove {name}\n"));
@@ -185,9 +181,9 @@ pub(crate) fn remove_approved(
     text.push_str("Go ahead? [y/N] ");
     out.write_all(text.as_bytes())
         .and_then(|()| out.flush())
-        .map_err(io)?;
+        .map_err(CliError::Terminal)?;
     let mut answer = String::new();
-    input.read_line(&mut answer).map_err(io)?;
+    input.read_line(&mut answer).map_err(CliError::Terminal)?;
     Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 

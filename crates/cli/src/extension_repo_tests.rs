@@ -13,10 +13,9 @@ use std::fs;
 use std::io::{BufRead, Cursor};
 use std::path::{Path, PathBuf};
 
-use contract::shapes::Failure;
-use extensions::Request;
-
 use super::{Io, install, list_in, remove_in, update_all};
+use crate::CliError;
+use extensions::Request;
 
 const FIBER_VERSION: &str = "0.1.0";
 
@@ -166,7 +165,7 @@ impl BufRead for Unread {
 
 /// Runs `list_in` for `workspace`: its stdout, its stderr, and its
 /// failure, if any.
-fn run_list_in(home: &Path, workspace: &Path) -> (String, String, Result<(), Failure>) {
+fn run_list_in(home: &Path, workspace: &Path) -> (String, String, Result<(), CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut out = Vec::new();
     let mut err = Vec::new();
@@ -186,7 +185,7 @@ fn run_remove_in(
     typed: &str,
     terminal: bool,
     input: &mut dyn BufRead,
-) -> (String, Result<i32, Failure>) {
+) -> (String, Result<i32, CliError>) {
     let clock = fakes::clock::FakeClock::new();
     let mut err = Vec::new();
     let got = remove_in(
@@ -402,7 +401,11 @@ fn remove_falls_through_without_an_approval_for_the_current_content() {
         &mut unread,
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, contract::ErrorCode::ExtensionNotInstalled);
+    assert!(
+        matches!(&failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
+    );
+    assert_eq!(failure.code(), contract::ErrorCode::ExtensionNotInstalled);
     assert_eq!(err, "");
 }
 
@@ -533,7 +536,11 @@ fn update_of_a_repository_only_name_fails_and_changes_nothing() {
         },
     );
     let failure = got.unwrap_err();
-    assert_eq!(failure.code, contract::ErrorCode::ExtensionMissing);
+    assert!(
+        matches!(&failure, CliError::Extensions(_)),
+        "expected Extensions, got {failure:?}"
+    );
+    assert_eq!(failure.code(), contract::ErrorCode::ExtensionMissing);
     assert_eq!(snapshot(&setup.home()), before);
     assert!(setup.home().join("pinned").join(&digest).is_dir());
 }
