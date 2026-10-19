@@ -353,7 +353,11 @@ fn start_and_subscribe_take_their_own_answer_and_keep_the_feed_lines_before_it()
 
 #[test]
 fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
-    let (setup, _server) = listing_setup(2);
+    let (setup, server) = listing_setup(2);
+    // The live session's reply waits for its release, so its turn stays
+    // `streaming` until the test lets it finish; the exited `ask one`
+    // takes the first reply at once.
+    server.hold_from(2, fakes::deadline::BUDGET);
     let exited = asked(&fiber_in(&setup, &setup.workspace(), &["ask", "one"]));
     let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
     let (watch, _) = support::connect_hub(&setup, &hub);
@@ -363,12 +367,53 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = support::SessionGuard::arm(Deadline::start(), &workspace);
     let live = support::start_session(&watch, &workspace, "two");
-    support::until(&watch, "the session's idle status", |line| {
+    // The full subscribe releases the held first prompt at once, instead
+    // of waiting out the hub's 1 s hold.
+    support::subscribe(&watch, &live);
+    // The held request is recorded first: two requests prove the live
+    // turn's model call is in flight while it waits for its release.
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the live turn's model call reached the provider"
+    );
+    // The turn's start folds before its end: the `streaming` status proves
+    // the turn is running, which the pre-turn `idle` never does.
+    support::until(&watch, "the live turn's streaming status", |line| {
+        line["kind"] == "session_status"
+            && line["session_id"] == live.as_str()
+            && line["payload"]["state"] == "streaming"
+    });
+    // The hub lists only sessions its scan has found, and a status on the
+    // subscribed connection arrives without any scan: poll until the held
+    // live session appears. The unreleased hold keeps its turn from
+    // finishing, so its row says `streaming` on every run.
+    let poll_listed = || loop {
+        let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
+        if listed_ids(&stdout).contains(&live) {
+            break stdout;
+        }
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the hub to list the live session"
+        );
+    };
+    let held = poll_listed();
+    let row: Value = held
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|row| row["id"] == live.as_str())
+        .unwrap();
+    assert_eq!(row["state"], "streaming", "{held}");
+    server.release();
+    // The reply the release sends finishes the turn: its end folds `idle`.
+    support::until(&watch, "the live turn's idle status", |line| {
         line["kind"] == "session_status"
             && line["session_id"] == live.as_str()
             && line["payload"]["state"] == "idle"
     });
-    let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
+    // The scan's follow persists while the session stays up, but it may
+    // still land after the turn's end: poll again before asserting.
+    let stdout = poll_listed();
     assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
     let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
     assert_eq!(first["state"], "idle", "{stdout}");
