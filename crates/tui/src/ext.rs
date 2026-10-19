@@ -6,7 +6,8 @@
 //! `tui` depends on no crate that holds the VM (`docs/architecture.md`,
 //! "The call rules"). `tui` tests use a fake renderer.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -25,8 +26,8 @@ pub(crate) mod spans;
 /// style from the returned spans.
 #[derive(Debug, Clone)]
 pub(crate) struct Bound {
-    /// The installed renderer, if any.
-    pub(crate) registry: Registry,
+    /// The installed renderer's slot on this thread, if any.
+    pub(crate) handle: Handle,
     /// The page's cache.
     pub(crate) cache: Rc<Cache>,
     /// The page these rows draw on.
@@ -37,12 +38,12 @@ pub(crate) struct Bound {
 
 /// The renderer seam's shared state: what every page's rows draw
 /// through. `Pages` owns one; `bind` hands each page's rows the seam
-/// bound to that page. The registry is shared, so one install reaches
+/// bound to that page. The handle is shared, so one install reaches
 /// every page; each page keeps its own cache entries.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Ext {
-    /// The installed renderer, if any.
-    pub(crate) registry: Registry,
+    /// The installed renderer's slot on this thread, if any.
+    pub(crate) handle: Handle,
     /// The pages' caches, one entry set per page.
     pub(crate) cache: Rc<Cache>,
     /// The screen reader drops every style from the returned spans.
@@ -53,7 +54,7 @@ impl Ext {
     /// The seam one page's rows draw through.
     pub(crate) fn bind(&self, page: usize) -> Bound {
         Bound {
-            registry: self.registry.clone(),
+            handle: self.handle,
             cache: Rc::clone(&self.cache),
             page,
             flat: self.flat,
@@ -248,25 +249,62 @@ fn hash_value(value: &Value, key: &mut DefaultHasher) {
     }
 }
 
-/// The installed renderer, if any: a shared cell, so every holder sees
-/// an install. One `Rc` because the VM is not `Send` and runs on the
-/// terminal's thread.
-#[derive(Clone, Default, Debug)]
-pub struct Registry {
-    /// The installed renderer.
-    renderer: Rc<RefCell<Option<Rc<dyn Renderer>>>>,
+thread_local! {
+    /// The installed renderers, one entry per install slot created on
+    /// this thread. The Lua VM is not `Send` and runs on the terminal's
+    /// thread, so `App` and `Pages` hold only the `Copy` slot below, and
+    /// every entry stays on the thread that created it
+    /// (`docs/architecture.md`, "The call rules").
+    static SLOTS: RefCell<HashMap<u64, Option<Rc<dyn Renderer>>>> =
+        RefCell::new(HashMap::new());
+    /// The next install slot's id on this thread.
+    static NEXT_ID: Cell<u64> = const { Cell::new(1) };
 }
 
-impl Registry {
-    /// Installs the renderer every holder sees.
-    pub(crate) fn set(&self, renderer: Rc<dyn Renderer>) {
-        *self.renderer.borrow_mut() = Some(renderer);
+/// An installed renderer's slot: a plain integer, so `App` and `Pages`
+/// stay `Send` while the renderer itself never leaves the terminal's
+/// thread. A handle resolved on a thread without its install draws the
+/// built-in row and does not panic.
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct Handle(Option<u64>);
+
+impl Handle {
+    /// A fresh install slot on this thread, empty until `set`.
+    pub(crate) fn create() -> Self {
+        let id = NEXT_ID.with(|next| {
+            let id = next.get();
+            next.set(id.saturating_add(1));
+            id
+        });
+        SLOTS.with(|slots| {
+            slots.borrow_mut().insert(id, None);
+        });
+        Self(Some(id))
     }
 
-    /// The installed renderer, if any. The borrow never crosses a
-    /// renderer call, so a renderer that calls back never panics here.
-    pub(crate) fn get(&self) -> Option<Rc<dyn Renderer>> {
-        self.renderer.borrow().clone()
+    /// Installs the renderer seen through this handle on this thread.
+    /// No entry on this thread means no install: a handle created on
+    /// another thread never installs there.
+    pub(crate) fn set(self, renderer: Rc<dyn Renderer>) {
+        let Some(id) = self.0 else {
+            return;
+        };
+        SLOTS.with(|slots| {
+            if let Ok(mut slots) = slots.try_borrow_mut() {
+                if let Some(entry) = slots.get_mut(&id) {
+                    *entry = Some(renderer);
+                }
+            }
+        });
+    }
+
+    /// The renderer installed through this handle on this thread, if
+    /// any. None for no handle, for a thread without the entry, or
+    /// while the install is empty. A failed borrow reads as none, so a
+    /// renderer that calls back into the cache never panics here.
+    pub(crate) fn get(self) -> Option<Rc<dyn Renderer>> {
+        let id = self.0?;
+        SLOTS.with(|slots| slots.try_borrow().ok()?.get(&id)?.clone())
     }
 }
 

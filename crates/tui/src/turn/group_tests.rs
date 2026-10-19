@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{Call, CallResult, Group, Section, Streaming, Thought, Timing};
 use crate::app::Target;
 use crate::ext::cache::Cache;
-use crate::ext::{Bound, Failure, Input, RawSpan, Registry, Renderer, Status as ExtStatus};
+use crate::ext::{Bound, Failure, Handle, Input, RawSpan, Renderer, Status as ExtStatus};
 use crate::theme::Role;
 
 #[test]
@@ -1600,10 +1600,10 @@ impl Renderer for Fake {
 
 /// A seam holding `fake`, drawing page 0.
 fn seam(fake: &Rc<Fake>, flat: bool) -> Bound {
-    let registry = Registry::default();
-    registry.set(fake.clone());
+    let handle = Handle::create();
+    handle.set(fake.clone());
     Bound {
-        registry,
+        handle,
         cache: Rc::new(Cache::default()),
         page: 0,
         flat,

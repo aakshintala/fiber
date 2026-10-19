@@ -20,7 +20,7 @@ use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, PanelKey, Queue};
-use crate::ext::{Registry, Renderer};
+use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::input::Draft;
 use crate::keys::Key;
@@ -251,7 +251,7 @@ pub(crate) struct App {
     screen: Screen,
     /// The installed ledger renderer, if any: shared with the screen's
     /// pages, so one install reaches every page they draw.
-    renderer: Registry,
+    handle: Handle,
     /// The first Ctrl+C, waiting for the second. Its hint shows while set.
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
@@ -331,7 +331,6 @@ pub(crate) struct App {
 impl App {
     /// An empty app in `workspace`, sized 80x24 until the loop sets it.
     pub(crate) fn new(workspace: PathBuf) -> Self {
-        let renderer = Registry::default();
         let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
@@ -347,7 +346,7 @@ impl App {
             pending: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
-            renderer,
+            handle: Handle::default(),
             armed_at: None,
             kitty: false,
             queue: Queue::default(),
@@ -381,7 +380,7 @@ impl App {
             motion: crate::motion::Motion::default(),
         };
         // One install reaches every page the screen draws.
-        app.screen.pages_mut().ext.registry = app.renderer.clone();
+        app.screen.pages_mut().ext.handle = app.handle;
         app
     }
 
@@ -1321,6 +1320,19 @@ impl App {
         self.screen.pages()
     }
 
+    /// Installs the ledger renderer for tests without recounting: the
+    /// first counted draw calls once per distinct input, which is what
+    /// the paging tests assert. Production installs through
+    /// `use_renderer`, which counts every page again.
+    #[cfg(test)]
+    pub(crate) fn install_renderer(&mut self, renderer: Rc<dyn Renderer>) {
+        if self.handle.get().is_none() {
+            self.handle = Handle::create();
+            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
+        }
+        self.handle.set(renderer);
+    }
+
     /// Installs the ledger renderer: every page counts again under it.
     /// No production caller yet: Part 3 adapts the extensions VM to it,
     /// and the PR body says so.
@@ -1329,7 +1341,13 @@ impl App {
         reason = "no production caller until Part 3 adapts the extensions VM"
     )]
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
-        self.renderer.set(renderer);
+        // A renderer installed on another thread resolves to nothing
+        // there, so moving the app across threads installs afresh here.
+        if self.handle.get().is_none() {
+            self.handle = Handle::create();
+            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
+        }
+        self.handle.set(renderer);
         self.attached_screen_mut().pages_mut().renderers_changed();
     }
 

@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::{Draw, Folded, Pages, Part, fold};
 use crate::app::{App, Effect, Target};
-use crate::ext::{Failure, Input, RawSpan, Renderer};
+use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
@@ -3809,7 +3809,7 @@ fn scrolling_and_searching_call_once_per_distinct_input() {
     // Installing the renderer caches nothing: the search-style draw
     // over every resident page calls once per distinct input.
     let fake = Rc::new(Fake::lines(1));
-    app.pages().ext.registry.set(fake.clone());
+    app.install_renderer(fake.clone());
     search(&app);
     assert!(calls() > 0, "unseen inputs call");
     search(&app);
@@ -3836,7 +3836,8 @@ fn a_new_width_calls_again_and_a_failure_never_calls_again() {
         fail_edits: true,
         ..Fake::lines(1)
     });
-    pages.ext.registry.set(fake.clone());
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(fake.clone());
     for line in &lines {
         pages.apply(line);
     }
@@ -3881,7 +3882,7 @@ fn cached_lines_keep_role_markers_across_frames() {
         styled: true,
         ..Fake::lines(1)
     });
-    app.pages().ext.registry.set(fake.clone());
+    app.install_renderer(fake.clone());
     search(&app);
     let first = calls();
     assert!(first > 0, "the first frame calls");
@@ -3891,7 +3892,7 @@ fn cached_lines_keep_role_markers_across_frames() {
     assert_eq!(calls(), 0);
     let mut marked = false;
     for at in resident(&app) {
-        let (rows, _) = app.pages().page_text_open_turns(at).expect("resident");
+        let (rows, ..) = app.pages().page_text_open_turns(at).expect("resident");
         for (line, _) in &rows {
             for span in &line.spans {
                 assert!(!matches!(span.style.fg, Some(Color::Rgb(..))), "{span:?}");
@@ -3914,7 +3915,8 @@ fn dropping_a_page_calls_again_on_reload() {
     let lines = session(2, false);
     let mut pages = Pages::new(80);
     let fake = Rc::new(Fake::lines(1));
-    pages.ext.registry.set(fake.clone());
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(fake.clone());
     for line in &lines {
         pages.apply(line);
     }
@@ -3959,7 +3961,7 @@ fn installing_a_renderer_recounts_under_its_lines() {
     let lines = session(1, true);
     let mut app = app(80, 20);
     open(&mut app, &lines);
-    let rows = || {
+    let rows = |app: &App| {
         app.pages()
             .index()
             .pages()
@@ -3967,18 +3969,18 @@ fn installing_a_renderer_recounts_under_its_lines() {
             .map(|page| page.rows)
             .collect::<Vec<_>>()
     };
-    let before = rows();
+    let before = rows(&app);
     // Two lines per ledger row: every ledger row grows the counts.
     let two = Rc::new(Fake::lines(2));
     app.use_renderer(two.clone());
     assert!(*two.calls.borrow() > 0, "the install recounts");
-    let grown = rows();
+    let grown = rows(&app);
     assert!(grown.iter().sum::<usize>() > before.iter().sum::<usize>());
     // One line per row again: the counts come back.
     let one = Rc::new(Fake::lines(1));
     app.use_renderer(one.clone());
     assert!(*one.calls.borrow() > 0, "replacing recounts");
-    assert_eq!(rows(), before);
+    assert_eq!(rows(&app), before);
 }
 
 /// A fresh copy draws through the same install with an empty cache,
@@ -3988,7 +3990,8 @@ fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
     let lines = session(1, false);
     let mut pages = Pages::new(80);
     let fake = Rc::new(Fake::lines(1));
-    pages.ext.registry.set(fake.clone());
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(fake.clone());
     pages.set_flat(true);
     for line in &lines {
         pages.apply(line);

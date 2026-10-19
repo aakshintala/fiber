@@ -1,6 +1,6 @@
-//! Tests for the seam types: the input key and the renderer registry.
+//! Tests for the seam types: the input key and the renderer handle.
 
-use super::{Failure, Input, LedgerRow, RawSpan, Registry, Renderer, RowError, Status};
+use super::{Failure, Handle, Input, LedgerRow, RawSpan, Renderer, RowError, Status};
 use contract::events::FileChange;
 
 #[derive(Debug)]
@@ -519,23 +519,38 @@ fn flat_is_in_the_key() {
 }
 
 #[test]
-fn an_empty_registry_fills_nothing() {
-    let registry = Registry::default();
-    assert!(registry.get().is_none());
+fn an_empty_handle_fills_nothing() {
+    assert!(Handle::default().get().is_none());
 }
 
 #[test]
 fn a_set_renderer_is_what_get_returns() {
     use std::rc::Rc;
-    let registry = Registry::default();
-    let seen = registry.get();
-    assert!(seen.is_none());
-    registry.set(Rc::new(Fake));
-    assert!(registry.get().is_some());
+    let handle = Handle::create();
+    assert!(handle.get().is_none());
+    handle.set(Rc::new(Fake));
+    assert!(handle.get().is_some());
     assert!(
-        !registry
+        !handle
             .get()
             .expect("a renderer was set")
             .fills("ledger_row")
     );
+}
+
+#[test]
+fn a_handle_on_another_thread_draws_built_in() {
+    use std::rc::Rc;
+    // The install lives on the thread that created it: resolving the
+    // same handle elsewhere finds nothing, so the row falls back to
+    // its built-in renderer without calling anything.
+    let handle = Handle::create();
+    handle.set(Rc::new(Fake));
+    assert!(handle.get().is_some());
+    // The install stays on this thread: resolving it elsewhere finds
+    // nothing and never panics, so the row falls back to built-in.
+    std::thread::spawn(move || assert!(handle.get().is_none()))
+        .join()
+        .expect("resolving a handle never panics");
+    assert!(handle.get().is_some());
 }

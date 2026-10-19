@@ -119,7 +119,7 @@ impl Rows {
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
     ) -> Option<Rc<Vec<FittedLine>>> {
         let seam = self.seam.as_ref()?;
-        let renderer = seam.registry.get()?;
+        let renderer = seam.handle.get()?;
         let page = seam.page;
         let cache = Rc::clone(&seam.cache);
         cache.lines(page, slot, input, width, || {

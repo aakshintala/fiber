@@ -538,7 +538,7 @@ impl Group {
                 };
                 let wrapped = Input::LedgerRow(input);
                 let rendered = out.seam.as_ref().and_then(|seam| {
-                    let renderer = seam.registry.get()?;
+                    let renderer = seam.handle.get()?;
                     // The tool's own slot beats the catch-all, with no
                     // notice: a renderer that fills neither costs one
                     // fills call per candidate slot and nothing else.

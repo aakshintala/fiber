@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Range, RangeInclusive};
+use std::rc::Rc;
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
 use contract::{Envelope, GenerationId, Seq};
@@ -365,16 +366,16 @@ impl Pages {
         let ledgers = self.fold.ledgers;
         let zone = self.zone.clone();
         let sizing = self.images.sizing;
-        let registry = self.ext.registry.clone();
+        let handle = self.ext.handle;
         let flat = self.ext.flat;
         *self = Self::new(self.width);
         self.fold.ledgers = ledgers;
         self.open.fold.ledgers = ledgers;
         self.zone = zone;
         self.images.sizing = sizing;
-        // The install and the flag survive a clear; the cache starts
-        // empty with the new pages.
-        self.ext.registry = registry;
+        // The install slot and the flag survive a clear; the cache
+        // starts empty with the new pages.
+        self.ext.handle = handle;
         self.ext.flat = flat;
     }
 
@@ -1075,7 +1076,7 @@ impl Pages {
         fresh.images.sizing = self.images.sizing;
         // The copy draws through the same install, with an empty cache
         // and the same flag.
-        fresh.ext.registry = self.ext.registry.clone();
+        fresh.ext.handle = self.ext.handle;
         fresh.ext.flat = self.ext.flat;
         fresh
     }
@@ -1586,11 +1587,25 @@ impl Pages {
 
     /// [`Pages::draw_data`], and each line's source `seq`.
     fn draw_sourced(&self, page: usize, part: &Part, mode: Draw) -> (DrawData, Vec<Option<Seq>>) {
+        // A scratch draw of a dropped page must not store entries under
+        // that page's index: the window only drops resident pages, so
+        // those entries would leak. It binds a throwaway cache instead,
+        // which serves repeats inside the draw and is dropped with it.
+        let seam = if self.part(page).is_none() {
+            crate::ext::Ext {
+                handle: self.ext.handle,
+                cache: Rc::new(crate::ext::cache::Cache::default()),
+                flat: self.ext.flat,
+            }
+            .bind(page)
+        } else {
+            self.ext.bind(page)
+        };
         let mut out = match mode {
             Draw::Shown => Rows::default(),
             Draw::AllOpen => Rows::all_open(),
         }
-        .with_seam(self.ext.bind(page));
+        .with_seam(seam);
         let mut turns = Vec::new();
         let mut asides = part
             .fold

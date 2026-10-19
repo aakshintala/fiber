@@ -121,9 +121,7 @@ pub use paging_session::paging_session;
 
 pub use event_loop::run;
 
-pub use ext::{
-    Failure, Input as RendererInput, LedgerRow, RawSpan, Registry, Renderer, RowError, Status,
-};
+pub use ext::{Failure, Input as RendererInput, LedgerRow, RawSpan, Renderer, RowError, Status};
 
 /// Connects to the hub, starting one when none runs: the stream and the
 /// `hub_hello` it spoke first. Called again for each reconnect.
