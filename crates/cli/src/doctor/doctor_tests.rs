@@ -468,8 +468,6 @@ fn an_unwritable_report_is_doctor_report() {
     );
     assert_eq!(error.code(), ErrorCode::IoFailed);
     // The report stops where it starts: the version line is the only
-    // line it tried to write.
-    // The report stops where it starts: the version line is the only
     // line it tried to write. `writeln!` writes the line before its
     // line feed, and that first write already fails.
     assert_eq!(out.attempted, vec![format!("fiber {VERSION}")]);
@@ -482,31 +480,17 @@ fn an_unwritable_report_is_doctor_report() {
 /// the test fails, at `CHILD_DEADLINE`.
 #[track_caller]
 fn child(test: &str, home: &Path, extra: &[(&str, &str)]) -> std::process::ExitStatus {
-    let module = module_path!().split_once("::").unwrap().1;
-    fakes::rerun_prepared(
-        &format!("{module}::{test}"),
-        &[(CHILD, "1")],
-        CHILD_DEADLINE,
-        |command| {
-            command.env("FIBER_HOME", home);
-            command.env_remove("FIBER_TEST_FAKE_KEY");
-            for (key, value) in extra {
-                command.env(key, value);
-            }
-        },
-    )
-    .status
+    child_output(test, home, extra).status
 }
 
 /// Like [`child`], but returns the whole run so the parent can read
-/// stderr off it. Built on the same environment setup; [`child`] and its
-/// callers are unchanged.
+/// stderr off it. Built on the same environment setup.
 #[track_caller]
 fn child_output(test: &str, home: &Path, extra: &[(&str, &str)]) -> std::process::Output {
     let module = module_path!().split_once("::").unwrap().1;
     fakes::rerun_prepared(
         &format!("{module}::{test}"),
-        &[(CHILD, "1"), (DIR_CHILD, "1")],
+        &[(CHILD, "1")],
         CHILD_DEADLINE,
         |command| {
             command.env("FIBER_HOME", home);
@@ -591,7 +575,11 @@ fn doctor_exits_1_for_a_deleted_directory() {
         std::process::exit(doctor(VERSION, &*clock, &Remote));
     }
     let setup = Setup::new();
-    let output = child_output("doctor_exits_1_for_a_deleted_directory", &setup.home(), &[]);
+    let output = child_output(
+        "doctor_exits_1_for_a_deleted_directory",
+        &setup.home(),
+        &[(DIR_CHILD, "1")],
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let module = module_path!().split_once("::").unwrap().1;
     let bare = stdout

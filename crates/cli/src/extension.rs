@@ -66,8 +66,7 @@ pub fn install_first_party(
                 .map(str::to_owned),
         )
         .collect();
-    let (providers, _) =
-        extensions::Providers::load_planned(home, &plan).map_err(CliError::from)?;
+    let (providers, _) = extensions::Providers::load_planned(home, &plan)?;
     let names: std::collections::BTreeSet<_> = plan
         .items()
         .flat_map(|item| item.providers.iter().map(|data| data.name.as_str()))
@@ -94,7 +93,7 @@ pub fn install_first_party(
             login.push(need);
         }
     }
-    let installed = plan.commit().map_err(CliError::from)?;
+    let installed = plan.commit()?;
     Ok(FirstPartyInstall {
         installed,
         summary,
@@ -297,7 +296,7 @@ fn update_all(
         input,
         err,
     } = io;
-    let listing = extensions::list(home, clock).map_err(CliError::from)?;
+    let listing = extensions::list(home, clock)?;
     // Each damaged directory is named once here; the per-extension
     // installs below stay silent about them.
     for hit in &listing.damaged {
@@ -325,14 +324,14 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
         input,
         err,
     } = io;
-    let removal = extensions::removal(home, typed, clock).map_err(CliError::from)?;
+    let removal = extensions::removal(home, typed, clock)?;
     let approved = approve::remove_approved(&removal.names, &removal.data, terminal, input, err)?;
     if !approved {
         writeln!(err, "fiber: nothing was removed.").unwrap_or(());
         return Ok(1);
     }
     let names = removal.names.clone();
-    removal.commit().map_err(CliError::from)?;
+    removal.commit()?;
     for name in names {
         writeln!(err, "fiber: removed {name}").unwrap_or(());
     }
@@ -450,7 +449,7 @@ fn remove_in(
         writeln!(err, "fiber: nothing was removed.").unwrap_or(());
         return Ok(1);
     }
-    extensions::Store::never_in(home, &project, &item, &digest).map_err(CliError::from)?;
+    extensions::Store::never_in(home, &project, &item, &digest)?;
     writeln!(
         err,
         "fiber: removed {} from this project; it is not offered again until its content changes",
@@ -461,7 +460,7 @@ fn remove_in(
 }
 
 fn list(home: &Path, clock: &dyn Clock, out: &mut dyn Write) -> Result<(), CliError> {
-    let listing = extensions::list(home, clock).map_err(CliError::from)?;
+    let listing = extensions::list(home, clock)?;
     for hit in &listing.damaged {
         write_line(out, &format!("{hit}")).unwrap_or(());
     }
@@ -558,8 +557,7 @@ fn commit_plan(
                 config::Layer::Project,
                 &format!("extensions.\"{}\".enabled", config::short_name(name)),
                 serde_json::Value::Bool(true),
-            )
-            .map_err(CliError::from)?;
+            )?;
         }
         for name in plan.fresh_names() {
             config::set(
@@ -569,8 +567,7 @@ fn commit_plan(
                 config::Layer::Global,
                 &format!("extensions.\"{}\".enabled", config::short_name(name)),
                 serde_json::Value::Bool(false),
-            )
-            .map_err(CliError::from)?;
+            )?;
         }
     }
     plan.commit().map(Some).map_err(CliError::from)
