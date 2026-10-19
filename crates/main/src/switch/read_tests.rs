@@ -2498,13 +2498,26 @@ fn settle_waits_for_the_late_childs_reap() {
         &settled,
         "the late child's reap holds the settle",
     );
+    // Armed before the reap's release, so the late spawn holds between
+    // its leader's reap and the count drop: the acknowledgement proves
+    // the leader is reaped while the count stays raised, so the settle
+    // holds on the count alone once the scripted probes run out.
+    let (reaped, is_reaped) = mpsc::channel::<()>();
+    let (free_reaped, reaped_freed) = mpsc::channel::<()>();
+    reads.pause_at_reaped(reaped, reaped_freed);
     free_reap.send(()).expect("the reap's release");
+    Deadline::after(DEADLINE)
+        .recv(&is_reaped)
+        .expect("the spawn reaped its leader");
     // The scripted probes keep the group listed past the reap, so one
     // pass after it is never enough: each advance drives one confirmed
-    // poll park, and the answer arrives once the real probe finds the
-    // group empty. Each advance follows a confirmed park under the shared
-    // drive, and the answer arrives through it.
-    let drive = Deadline::after(DEADLINE);
+    // poll park while the group is still listed, and the real probe then
+    // retires the group so the settle parks at its end while only the
+    // count is raised. Each advance follows a confirmed park, each wait
+    // takes its own deadline, and the clock never moves past the end: at
+    // a park at the end the test releases the held count and waits for
+    // the answer the count drop delivers.
+    let end = clock.origin() + doors::SHUTDOWN_BOUND;
     let mut answer: Option<bool> = None;
     while answer.is_none() {
         match settled.try_recv() {
@@ -2517,18 +2530,77 @@ fn settle_waits_for_the_late_childs_reap() {
                 panic!("the settle ended without answering")
             }
         }
-        if drive.left().is_zero() {
-            break;
-        }
         let poll = clock
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        let _stepped = poll_step(&clock, poll, GROUP_POLL, &drive);
+        // The next poll never passes the end: past it the settle parks at
+        // the end itself, which the step below reports without advancing.
+        assert!(
+            poll <= end,
+            "the next poll stays short of the settle's end: {poll:?} past {end:?}"
+        );
+        // Like `poll_step`, but an end park also reports no step: only
+        // this drive waits out the spawn count, so only it accepts the
+        // settle parking at its end. `poll_step` still fails any other
+        // park for its other callers.
+        let stepped: Option<Mark> =
+            match clock.try_advance_when_parked(Some(poll), None, GROUP_POLL, PARK_PAUSE) {
+                Ok(mark) => Some(mark),
+                Err(Miss::NoPark) => None,
+                Err(Miss::Mismatch {
+                    watched: (_, Some(at)),
+                    ..
+                }) if at == end => None,
+                Err(miss @ Miss::Mismatch { .. }) => {
+                    panic!("{miss} at {:?}; parked: {:?}", clock.now(), clock.parked())
+                }
+            };
+        match stepped {
+            Some(_) => {
+                assert!(
+                    listed(&reads).contains(&pgid),
+                    "the poll park still lists the late group: {:?}",
+                    listed(&reads)
+                );
+            }
+            None => {
+                if let Ok(got) = settled.try_recv() {
+                    answer = Some(got);
+                    break;
+                }
+                // No fresh poll park: either the settle answered, handled
+                // above, or it parks at its end while only the count is
+                // raised. The park wait proves which without moving the
+                // clock.
+                assert!(
+                    clock.await_parked(end, DEADLINE),
+                    "the settle parks at its end once the group is gone"
+                );
+                assert!(
+                    listed(&reads).is_empty(),
+                    "only the count holds the settle at its end: {:?}",
+                    listed(&reads)
+                );
+                assert_eq!(
+                    reads.lock().spawning,
+                    1,
+                    "the held count holds the settle at its end"
+                );
+                free_reaped.send(()).expect("the reaped release");
+                answer = Some(
+                    Deadline::after(DEADLINE)
+                        .recv_or_fail(&settled, "the settle after the count drop"),
+                );
+                break;
+            }
+        }
     }
     let answer = match answer {
         Some(answer) => answer,
-        None => drive.recv(&settled).expect("the settle"),
+        None => Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
     };
     assert!(answer, "settle waits out the reap");
     let error = Deadline::after(DEADLINE)
