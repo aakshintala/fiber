@@ -29,6 +29,26 @@ fn content(text: &str, images: &[ImageRef], session_dir: &std::path::Path) -> se
 }
 
 #[test]
+fn image_and_pdf_text_files_pin_every_byte() {
+    assert_eq!(
+        include_bytes!("../prompt/image-left-out.md").as_slice(),
+        b"[Image {path} left out: this model does not take images.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/image-unreadable.md").as_slice(),
+        b"[Image {path} could not be read.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/pdf-left-out.md").as_slice(),
+        b"[PDF {path} left out: this model does not take images.]\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/pdf-unreadable.md").as_slice(),
+        b"[PDF {path} could not be read.]\n"
+    );
+}
+
+#[test]
 fn no_image_leaves_the_content_a_plain_string() {
     assert_eq!(
         content("done\n", &[], std::path::Path::new("/nowhere")),
