@@ -77,8 +77,9 @@ fn prompt(text: &str) -> Delivery {
     )
 }
 
-/// Moves the clock to `to` and wakes the loop with a reply naming nothing,
-/// as a real clock's timeout would; returns once the loop has taken it.
+/// Moves the clock to `to` once the loop thread parks at `to`, and wakes
+/// the loop with a reply naming nothing, as a real clock's timeout would;
+/// returns once the loop has taken it.
 #[track_caller]
 fn advance_to(
     clock: &FakeClock,

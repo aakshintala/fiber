@@ -334,11 +334,15 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
         clock.await_thread_parked(loop_thread, Some(deadline), WITHIN),
         "the loop waits on the call's deadline",
     );
-    clock.advance_when_parked(
+    let mark = clock.advance_when_parked(
         Some(deadline),
         Some(loop_thread),
         Duration::from_secs(60) - Duration::from_millis(1),
         &Deadline::after(WITHIN),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(deadline), WITHIN),
+        "the loop parks at the deadline again",
     );
     assert!(
         tap.pending()
