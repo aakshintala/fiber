@@ -90,11 +90,12 @@ fn finish_now(hub: &Hub, clock: &FakeClock, revoked: Revoked) {
         {
             return;
         }
-        assert!(
-            clock.await_parked(end, Duration::from_secs(1)),
-            "finish waits for its deadline"
+        clock.advance_when_parked_threads(
+            Some(end),
+            2,
+            crate::port::STOP_CLOSE_WAIT,
+            &fakes::Deadline::after(Duration::from_secs(1)),
         );
-        clock.advance(crate::port::STOP_CLOSE_WAIT);
         fakes::Deadline::after(Duration::from_secs(2))
             .recv_or_fail(&finished_rx, "finish exits at its deadline");
         panic!("finish waited for fake time with nothing to wait for");

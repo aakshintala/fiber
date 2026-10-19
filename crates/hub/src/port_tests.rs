@@ -732,7 +732,12 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         clock.await_parked(start + STOP_CLOSE_WAIT, WITHIN),
         "the stop waits out its bound"
     );
-    let mark = clock.advance_marked(STOP_CLOSE_WAIT.checked_sub(TICK).unwrap());
+    let mark = clock.advance_when_parked(
+        Some(start + STOP_CLOSE_WAIT),
+        None,
+        STOP_CLOSE_WAIT.checked_sub(TICK).unwrap(),
+        &Deadline::after(WITHIN),
+    );
     assert!(
         clock.await_parked_since(&mark, Some(start + STOP_CLOSE_WAIT), WITHIN),
         "the stop reparks at its bound after the advance"
@@ -741,7 +746,12 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         done.try_recv().is_err(),
         "the hub has not stopped before its bound"
     );
-    clock.advance(TICK);
+    clock.advance_when_parked(
+        Some(start + STOP_CLOSE_WAIT),
+        None,
+        TICK,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
