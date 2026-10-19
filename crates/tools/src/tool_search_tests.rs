@@ -1,5 +1,5 @@
 use contract::ErrorCode;
-use contract::provider::{NO_MATCH, ToolDefinition, loaded_text};
+use contract::provider::{NO_MATCH, TOOL_SEARCH, ToolDefinition, loaded_text};
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
 use fakes::{CancelToken, Recorder};
@@ -292,4 +292,81 @@ fn a_limit_past_u64_loads_every_match() {
 
     assert_eq!(loaded(&output).map(|names| names.len()), Some(9));
     assert_eq!(output.error, None);
+}
+
+#[test]
+fn effects_contact_no_host() {
+    let effects = search()
+        .effects(&query("plumbus"))
+        .expect("valid arguments have effects");
+
+    assert_eq!(effects.hosts, Some(vec![]));
+}
+
+#[test]
+fn the_definition_names_the_tool_and_never_defers() {
+    let definition = search().definition();
+
+    assert_eq!(definition.name, TOOL_SEARCH);
+    assert_eq!(definition.name, "tool_search");
+    assert!(!definition.deferred);
+}
+
+#[test]
+fn the_schema_matches_the_interfaces_literal() {
+    let definition = search().definition();
+
+    assert_eq!(
+        definition.input_schema,
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Words describing the tool you need."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The most tools to load; 8 when absent."
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    );
+}
+
+#[test]
+fn the_description_names_the_sources() {
+    let definition = search().definition();
+
+    assert_eq!(
+        definition.description,
+        "Searches the deferred tools by name, description and parameter names, and loads the best matches so you can call them. Deferred tools come from: fx, gh."
+    );
+}
+
+#[test]
+fn the_description_without_sources_is_the_base_sentence() {
+    let definition = ToolSearch::new(vec![], vec![]).definition();
+
+    assert_eq!(
+        definition.description,
+        "Searches the deferred tools by name, description and parameter names, and loads the best matches so you can call them."
+    );
+}
+
+#[test]
+fn the_guideline_is_the_tool_search_section() {
+    let guideline = search().guidelines();
+
+    assert_eq!(guideline, crate::guidelines::of("tool_search"));
+    assert!(
+        guideline
+            .as_deref()
+            .is_some_and(|text| text.contains("When a tool you need is missing")),
+        "{guideline:?}"
+    );
 }

@@ -250,7 +250,9 @@ impl Tool for ToolSearch {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let _args: Args =
             crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
-        Ok(no_effects())
+        let mut effects = no_effects();
+        effects.hosts = Some(vec![]);
+        Ok(effects)
     }
 
     fn run(
