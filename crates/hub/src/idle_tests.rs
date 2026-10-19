@@ -66,7 +66,7 @@ fn serve_in(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
-) -> mpsc::Receiver<i32> {
+) -> (mpsc::Receiver<i32>, thread::ThreadId) {
     serve_at(temp, idle, clock, Level::Info)
 }
 
@@ -76,7 +76,7 @@ fn serve_at(
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
-) -> mpsc::Receiver<i32> {
+) -> (mpsc::Receiver<i32>, thread::ThreadId) {
     serve_mode(temp, idle, clock, level, crate::Mode::OnDemand)
 }
 
@@ -87,11 +87,11 @@ fn serve_mode(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
     mode: crate::Mode,
-) -> mpsc::Receiver<i32> {
+) -> (mpsc::Receiver<i32>, thread::ThreadId) {
     let home = temp.dir.clone();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
+    let handle = thread::Builder::new()
         .name("hub-test-serve".to_owned())
         .spawn(move || {
             let code = crate::serve(
@@ -117,7 +117,8 @@ fn serve_mode(
             done_tx.send(code).unwrap_or(());
         })
         .unwrap();
-    done_rx
+    let serve_id = handle.thread().id();
+    (done_rx, serve_id)
 }
 
 /// [`serve_mode`] with the hub's shared environment.
@@ -128,11 +129,11 @@ fn serve_mode_env(
     level: Level,
     mode: crate::Mode,
     environments: Arc<crate::Environments>,
-) -> mpsc::Receiver<i32> {
+) -> (mpsc::Receiver<i32>, thread::ThreadId) {
     let home = temp.dir.clone();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
+    let handle = thread::Builder::new()
         .name("hub-test-serve".to_owned())
         .spawn(move || {
             let code = crate::serve(
@@ -155,7 +156,8 @@ fn serve_mode_env(
             done_tx.send(code).unwrap_or(());
         })
         .unwrap();
-    done_rx
+    let serve_id = handle.thread().id();
+    (done_rx, serve_id)
 }
 
 /// Serves the hub on a thread with its handle and its signal flag.
@@ -283,10 +285,15 @@ fn connect(temp: &Temp) -> Client {
 fn with_no_clients_the_hub_exits_at_idle_exit() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_in(&temp, IDLE, Arc::clone(&clock));
+    let (done, serve_id) = serve_in(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     // Exactly the deadline: the exit is due at, not after, it.
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        Some(serve_id),
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -321,9 +328,14 @@ fn last_two(log: &str) -> (String, String, u64) {
 fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
+    let (done, serve_id) = serve_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
     await_idle_park(&clock, clock.origin(), "at start");
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        Some(serve_id),
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -342,10 +354,15 @@ fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
 fn a_hub_whose_socket_was_removed_still_exits_at_idle_exit() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_in(&temp, IDLE, Arc::clone(&clock));
+    let (done, serve_id) = serve_in(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     fs::remove_file(temp.socket()).unwrap();
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        Some(serve_id),
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -361,7 +378,12 @@ fn one_tick_before_idle_exit_the_hub_still_answers() {
     let clock = fakes::clock::FakeClock::new();
     let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
-    clock.advance(IDLE.checked_sub(TICK).unwrap());
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        None,
+        IDLE.checked_sub(TICK).unwrap(),
+        &Deadline::after(WITHIN),
+    );
     // A hub that had exited answers EOF or refuses: the hello proves it
     // still serves.
     let client = connect(&temp);
@@ -369,7 +391,7 @@ fn one_tick_before_idle_exit_the_hub_still_answers() {
     drop(client);
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
-    clock.advance(IDLE);
+    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -387,13 +409,13 @@ fn a_connected_client_keeps_the_hub_and_leaving_starts_the_timer() {
     let client = connect(&temp);
     await_open_park(&clock, "after the arrival");
     // Far past any deadline: an open client has none.
-    clock.advance(IDLE * 100);
+    clock.advance_when_parked(None, None, IDLE * 100, &Deadline::after(WITHIN));
     drop(client);
     // The timer starts at the departure, so this park also proves the hub
     // outlived the advance.
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
-    clock.advance(IDLE);
+    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -411,20 +433,30 @@ fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
     await_idle_park(&clock, clock.origin(), "at start");
     let first = connect(&temp);
     await_open_park(&clock, "after the first arrival");
-    clock.advance(IDLE);
+    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
     drop(first);
     let first_zero = clock.now();
     await_idle_park(&clock, first_zero, "after the first departure");
-    clock.advance(IDLE.checked_sub(TICK).unwrap());
+    clock.advance_when_parked(
+        Some(first_zero + IDLE),
+        None,
+        IDLE.checked_sub(TICK).unwrap(),
+        &Deadline::after(WITHIN),
+    );
     // Within the window: the hello proves the hub still serves.
     let second = connect(&temp);
     await_open_park(&clock, "after the second arrival");
     // Past the first departure's deadline: the reconnect cleared it.
-    clock.advance(IDLE);
+    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
     drop(second);
     let second_zero = clock.now();
     await_idle_park(&clock, second_zero, "after the second departure");
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(second_zero + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -445,11 +477,11 @@ fn a_spawn_failure_rollback_restarts_the_timer() {
     let (counted, _peer) = UnixStream::pair().unwrap();
     let n = hub.register(&counted).expect("the clone succeeds");
     await_open_park(&clock, "after the count");
-    clock.advance(IDLE);
+    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
     hub.rollback(n);
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the rollback");
-    clock.advance(IDLE);
+    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -470,7 +502,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     // start-up park: the advance and the arrival below both block in
     // `Tick::wake` until the guard drops.
     let held = hub.tick.hold();
-    // Thread A moves fake time past the idle exit. Its wake finds the
+    // Thread A moves fake time to the idle exit. Its wake finds the
     // guard held and reports through the armed attempt at once, before
     // it blocks on the guard: the report proves the offset already moved.
     let (attempt_tx, attempt_rx) = mpsc::channel();
@@ -479,7 +511,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     let advance = thread::spawn({
         let clock = Arc::clone(&clock);
         move || {
-            clock.advance(IDLE + Duration::from_secs(1));
+            clock.advance_when_parked(Some(origin + IDLE), None, IDLE, &Deadline::after(WITHIN));
             a_tx.send(()).unwrap_or(());
         }
     });
@@ -534,7 +566,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     // that raced the arrival ends nothing while fake time stays frozen.
     hub.rollback(n);
     let zero = clock.now();
-    assert_eq!(zero, origin + IDLE + Duration::from_secs(1));
+    assert_eq!(zero, origin + IDLE);
     await_idle_park(&clock, zero, "after the rollback");
     // The idle park above already proves the hub is still waiting: it has
     // not exited, so no code is waiting on its result.
@@ -543,7 +575,7 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
         "the advance that raced the arrival does not end the hub"
     );
     // Driving the timer from the departure exits the hub.
-    clock.advance(IDLE);
+    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -657,7 +689,7 @@ fn a_signal_shuts_down_connected_clients() {
 #[test]
 fn zero_idle_exit_stops_at_the_first_empty_wait() {
     let temp = Temp::new();
-    let done = serve_in(
+    let (done, _) = serve_in(
         &temp,
         Duration::ZERO,
         Arc::clone(&fakes::clock::FakeClock::new()),
@@ -733,7 +765,7 @@ fn raise_sigterm() {
 fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_mode(
+    let (done, serve_id) = serve_mode(
         &temp,
         BRIEF,
         Arc::clone(&clock),
@@ -745,7 +777,12 @@ fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
         clock.await_parked_unbounded(WITHIN),
         "the installed hub waits with no idle deadline"
     );
-    clock.advance(Duration::from_secs(3600));
+    clock.advance_when_parked(
+        None,
+        Some(serve_id),
+        Duration::from_secs(3600),
+        &Deadline::after(WITHIN),
+    );
     let client = connect(&temp);
     drop(client);
     assert!(
@@ -770,7 +807,7 @@ fn an_installed_hub_waits_for_the_lock_then_binds() {
         .unwrap()
         .expect("the other hub's lock");
     let clock = fakes::clock::FakeClock::new();
-    let done = serve_mode(
+    let (done, _) = serve_mode(
         &temp,
         BRIEF,
         Arc::clone(&clock),
@@ -870,7 +907,12 @@ fn an_idle_exit_lands_when_run_was_replaced_by_a_second_hub() {
     // hub takes the new directory's lock and binds the same `run/hub`.
     fs::remove_dir_all(temp.dir.join("run")).unwrap();
     let (hub_b, got_b, done_b, _clock_b) = serve_second_hub(&temp);
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done_a)
@@ -889,7 +931,12 @@ fn an_idle_exit_lands_when_run_is_gone_entirely() {
     let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     fs::remove_dir_all(temp.dir.join("run")).unwrap();
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -907,7 +954,12 @@ fn an_idle_exit_connects_nowhere_through_the_socket_path() {
     fs::remove_file(temp.socket()).unwrap();
     let rebound = UnixListener::bind(temp.socket()).unwrap();
     rebound.set_nonblocking(true).unwrap();
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     assert_eq!(
         Deadline::after(DEADLINE)
             .recv(&done)
@@ -987,7 +1039,7 @@ fn a_signal_during_a_hung_first_capture_stops_with_no_environment_built() {
     let clock = fakes::clock::FakeClock::new();
     let origin = clock.origin();
     let environments = crate::Environments::new(inherited_env(&shell, &temp.dir), &temp.dir);
-    let done = serve_mode_env(
+    let (done, _) = serve_mode_env(
         &temp,
         IDLE,
         Arc::clone(&clock),
@@ -1033,7 +1085,7 @@ fn close_runs_before_hub_stopped_in_the_shutdown_race() {
         held_tx.send(()).unwrap_or(());
         Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
     }));
-    let done = serve_mode_env(
+    let (done, _) = serve_mode_env(
         &temp,
         IDLE,
         Arc::clone(&clock),
@@ -1090,7 +1142,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         held_tx.send(()).unwrap_or(());
         Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
     }));
-    let done = serve_mode_env(
+    let (done, serve_id) = serve_mode_env(
         &temp,
         IDLE,
         Arc::clone(&clock),
@@ -1102,7 +1154,12 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         .recv(&held_rx)
         .expect("the capture holds before publishing");
     await_idle_park(&clock, clock.origin(), "at start");
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        Some(serve_id),
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     crate::testkit::await_true("close begins", {
         let environments = Arc::clone(&environments);
         move || environments.is_closed()
@@ -1213,7 +1270,7 @@ fn start_stalled_hub() -> Stalled {
         held_tx.send(()).unwrap_or(());
         release_rx.recv().unwrap_or(());
     }));
-    let done = serve_mode_env(
+    let (done, serve_id) = serve_mode_env(
         &temp,
         IDLE,
         Arc::clone(&clock),
@@ -1225,7 +1282,12 @@ fn start_stalled_hub() -> Stalled {
         .recv(&held_rx)
         .expect("the capture holds before publishing");
     await_idle_park(&clock, clock.origin(), "at start");
-    clock.advance(IDLE);
+    clock.advance_when_parked(
+        Some(clock.origin() + IDLE),
+        Some(serve_id),
+        IDLE,
+        &Deadline::after(WITHIN),
+    );
     crate::testkit::await_true("close begins", {
         let environments = Arc::clone(&environments);
         move || environments.is_closed()
