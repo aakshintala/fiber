@@ -448,6 +448,27 @@ fn alt_0_goes_home() {
 }
 
 #[test]
+fn alt_0_goes_home_on_the_on_screen_sessions_row() {
+    let mut app = homed(80, 24);
+    app.on_line(live(SESSION));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb"));
+    type_text(&mut app, "hi");
+    assert_eq!(press(&mut app, "alt+0"), Effect::None);
+    assert!(app.session().is_none());
+    frame(&mut app);
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&contract::SessionId(SESSION.to_owned())))
+        .map(|row| row.key)
+        .expect("SESSION row");
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(key)))
+    );
+}
+
+#[test]
 fn an_unknown_action_does_nothing() {
     let mut app = homed(80, 24);
     assert_eq!(app.on_action("no_such_action"), Effect::None);

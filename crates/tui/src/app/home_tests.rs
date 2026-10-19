@@ -4757,3 +4757,87 @@ fn the_back_hint_bolds_the_key_and_dims_the_rest() {
         );
     }
 }
+
+/// The row key of `session` on home.
+fn row_key(app: &App, session: &str) -> u64 {
+    app.home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&contract::SessionId(session.to_owned())))
+        .map(|row| row.key)
+        .unwrap_or_else(|| panic!("row {session}"))
+}
+
+#[test]
+fn slash_home_from_a_session_focuses_the_on_screen_sessions_row() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "first work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    home_from(&mut app, "s_bbbbbbbbbbbbbbbb");
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(row_key(
+            &app,
+            "s_bbbbbbbbbbbbbbbb"
+        ))))
+    );
+}
+
+#[test]
+fn slash_home_focuses_an_exited_row_hidden_behind_more() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    answer_recent(
+        &mut app,
+        &recent,
+        &[
+            ("s_aaaaaaaaaaaaaaaa", "newest"),
+            ("s_bbbbbbbbbbbbbbbb", "second"),
+            ("s_cccccccccccccccc", "third"),
+            ("s_dddddddddddddddd", "fourth"),
+        ],
+    );
+    // The fourth row hides behind more; opening it attaches its
+    // exited session.
+    let key = more_key(&app, "-w").expect("the fourth row is hidden");
+    open(&mut app, key);
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(key)))
+    );
+}
+
+#[test]
+fn slash_home_with_no_row_for_the_session_leaves_the_box_focused() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn slash_home_on_home_leaves_focus_unchanged() {
+    let mut app = home();
+    linked(&mut app);
+    home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
+    drawn(&mut app);
+    // The entry bar focused, with a live came-from row behind it:
+    // `/home` must not refocus that row.
+    app.focus = None;
+    let _ = enter_text(&mut app, "/home");
+    assert!(app.on_home());
+    drawn(&mut app);
+    assert_eq!(app.focused(), None);
+}

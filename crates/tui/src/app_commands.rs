@@ -489,7 +489,8 @@ impl App {
         }
         let rest = rest.trim().to_owned();
         let effect = match name {
-            "home" | "new" => self.leave(),
+            "home" => self.leave_on_row(),
+            "new" => self.leave(),
             "resume" => self.resume_list(),
             "model" => {
                 self.draft.clear();

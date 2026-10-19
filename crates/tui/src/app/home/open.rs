@@ -261,6 +261,24 @@ impl App {
         })
     }
 
+    /// Goes home on the attached session's row: `leave`, then focus
+    /// that row once home draws, expanding its project when the row is
+    /// an exited one hidden behind more. With no row for the session,
+    /// or no session on screen, home keeps its focus.
+    pub(in crate::app) fn leave_on_row(&mut self) -> Effect {
+        let key = self
+            .session()
+            .and_then(|session| self.home.as_ref()?.sessions.row(session))
+            .map(|row| row.key);
+        let effect = self.leave();
+        if let Some(key) = key
+            && self.on_home()
+        {
+            self.focus_row(key);
+        }
+        effect
+    }
+
     /// Opens the row with `key` while home draws.
     pub(super) fn open_row(&mut self, key: u64) -> Effect {
         if !self.on_home() {
