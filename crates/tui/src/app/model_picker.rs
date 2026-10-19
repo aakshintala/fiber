@@ -385,7 +385,7 @@ impl App {
             return format!("thinking {level} {END}");
         }
         if let Some(level) = level {
-            return format!("{reference} with {level} {END}");
+            return format!("{reference} · {level} {END}");
         }
         format!("{reference} {END}")
     }

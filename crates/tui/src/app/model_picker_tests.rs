@@ -4179,7 +4179,7 @@ fn a_send_while_busy_pushes_the_pending_notice() {
     assert_eq!(newest_code(&app), "switch_pending");
     assert_eq!(
         app.notice(),
-        Some("acme/m1 with high applies when this turn ends")
+        Some("acme/m1 · high applies when this turn ends")
     );
     // The acceptance writes the choice and adds no notice of its own:
     // the pending one already said it would apply.
@@ -4200,7 +4200,7 @@ fn a_send_while_busy_in_a_folded_pass_pushes_the_pending_notice() {
     assert_eq!(newest_code(&app), "switch_pending");
     assert_eq!(
         app.notice(),
-        Some("acme/m1 with high applies when this turn ends")
+        Some("acme/m1 · high applies when this turn ends")
     );
 }
 
@@ -4230,7 +4230,7 @@ fn an_accept_while_busy_adds_no_notice() {
     assert_eq!(newest_code(&app), "switch_pending");
     assert_eq!(
         app.notice(),
-        Some("acme/m1 with high applies when this turn ends")
+        Some("acme/m1 · high applies when this turn ends")
     );
 }
 
@@ -4275,7 +4275,7 @@ fn a_rejection_replaces_the_pending_notice() {
     let id = line["id"].as_str().expect("an id").to_owned();
     assert_eq!(
         app.notice(),
-        Some("acme/m1 with high applies when this turn ends")
+        Some("acme/m1 · high applies when this turn ends")
     );
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
     // The rejection takes the pending notice's place: its code and
