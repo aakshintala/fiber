@@ -26,7 +26,7 @@ mod harness;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::events::{ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
     CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
@@ -439,6 +439,47 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     assert!(!String::from_utf8_lossy(&sent.body).contains("sk-secret"));
     assert!(sent.header("user-agent").unwrap().starts_with("fiber/"));
     assert_eq!(sent.header("accept"), Some("text/event-stream"));
+}
+
+#[test]
+fn a_cache_write_is_counted_under_the_request_lifetime() {
+    // The probe's warming block: 2,347 input tokens with 2,344 written.
+    let warming = json!({"input_tokens": 2347, "input_tokens_details":
+        {"cache_write_tokens": 2344, "cached_tokens": 0},
+        "output_tokens": 28});
+    let events = vec![
+        json!({"type": "response.output_text.delta", "delta": "Hi."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Hi."}]}}),
+    ];
+    let server = ProviderServer::start([
+        fakes::wire::stream_with_usage(&events, warming.clone()),
+        fakes::wire::stream_with_usage(&events, warming.clone()),
+    ])
+    .unwrap();
+    let protocol = Responses::new(endpoint(&server));
+    // The harness request runs an hour-lifetime cache; a five-minute one
+    // keys the same write `5m`.
+    let (hour, _) = run(protocol.call(&request()));
+    let mut five_minutes = request();
+    five_minutes.cache_lifetime = CacheLifetime::FiveMinutes;
+    let (short, _) = run(protocol.call(&five_minutes));
+    let hour = hour.unwrap();
+    assert_eq!(hour.text(), "Hi.");
+    assert_eq!(hour.tokens.input, 3);
+    assert_eq!(hour.tokens.cache_read, 0);
+    assert_eq!(
+        hour.tokens.cache_write,
+        std::collections::BTreeMap::from([("1h".to_owned(), 2344)])
+    );
+    assert_eq!(hour.tokens.output, 28);
+    let short = short.unwrap();
+    assert_eq!(short.tokens.input, 3);
+    assert_eq!(
+        short.tokens.cache_write,
+        std::collections::BTreeMap::from([("5m".to_owned(), 2344)])
+    );
 }
 
 #[test]

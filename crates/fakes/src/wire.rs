@@ -29,6 +29,31 @@ pub fn stream(events: &[Value]) -> Response {
     Response::stream(body)
 }
 
+/// An `openai-responses` stream of `events`, then a completed reply
+/// carrying `usage` as its terminal usage: a caller warming the cache or
+/// reading from it names its own counts here.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "a test helper; a failure is the test's"
+)]
+pub fn stream_with_usage(events: &[Value], usage: Value) -> Response {
+    let mut body = String::new();
+    for event in events {
+        body.push_str(&format!(
+            "event: {}\ndata: {event}\n\n",
+            event["type"].as_str().unwrap()
+        ));
+    }
+    let done = json!({"type": "response.completed", "response": {
+        "id": "resp_1", "status": "completed", "usage": usage}});
+    body.push_str(&format!(
+        "event: {}\ndata: {done}\n\n",
+        done["type"].as_str().unwrap()
+    ));
+    Response::stream(body)
+}
+
 /// An `openai-responses` stream answering `Hello.` in two fragments.
 pub fn hello() -> Response {
     stream(&[
