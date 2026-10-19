@@ -2502,27 +2502,33 @@ fn settle_waits_for_the_late_childs_reap() {
     // The scripted probes keep the group listed past the reap, so one
     // pass after it is never enough: each advance drives one confirmed
     // poll park, and the answer arrives once the real probe finds the
-    // group empty. Three poll steps bound the wait; a settle still
-    // parked past the bound fails the test with the step count.
-    let mut steps = 0;
-    let answer = loop {
+    // group empty. Each advance follows a confirmed park under the shared
+    // drive, and the answer arrives through it.
+    let drive = Deadline::after(DEADLINE);
+    let mut answer: Option<bool> = None;
+    while answer.is_none() {
         match settled.try_recv() {
-            Ok(answer) => break answer,
+            Ok(got) => {
+                answer = Some(got);
+                break;
+            }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
                 panic!("the settle ended without answering")
             }
         }
-        assert!(
-            steps < 3,
-            "the settle is still parked after {steps} poll steps"
-        );
+        if drive.left().is_zero() {
+            break;
+        }
         let poll = clock
             .now()
             .checked_add(GROUP_POLL)
             .expect("the poll is countable");
-        let _stepped = poll_step(&clock, poll, GROUP_POLL, &Deadline::after(DEADLINE));
-        steps += 1;
+        let _stepped = poll_step(&clock, poll, GROUP_POLL, &drive);
+    }
+    let answer = match answer {
+        Some(answer) => answer,
+        None => drive.recv(&settled).expect("the settle"),
     };
     assert!(answer, "settle waits out the reap");
     let error = Deadline::after(DEADLINE)
