@@ -1306,10 +1306,7 @@ fn clock_jump_past_deadline_during_retry_wait_fails() {
         clock.await_parked(target, WAIT),
         "the retry wait to park at its target"
     );
-    // The retry waiter parks at its target and the watcher parks at the deadline, so waiting
-    // for the deadline to park before advancing mismatches: the only park during the retry wait
-    // is the retry waiter. The migration to advance_when_parked lands in a later PR
-    // (docs/testing.md "Waits and timeouts").
+    // Late wake past the 30 s retry park to 100 s, past the 60 s deadline; the park is proven just above (ruling 6261259790).
     clock.advance(Duration::from_secs(100));
     let failure =
         err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the jumped retry wait to fail"));
