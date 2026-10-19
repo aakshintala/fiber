@@ -1,7 +1,8 @@
 //! Paired device tables and revocation (`docs/invocation.md`, "Remote clients").
 use crate::{failed, finish, sessions::request, sessions_search::utc, table::pad, write_line};
+use contract::commands::hub::{Device, HubCommand, NoArgs};
 use contract::{ErrorCode, shapes::Failure};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::io::{self, BufReader, Write};
 
 /// Lists the paired devices through the hub's local socket.
@@ -23,8 +24,7 @@ fn list(
     let result = request(
         &mut BufReader::new(stream),
         "c_devices",
-        "devices",
-        Map::new(),
+        HubCommand::Devices(NoArgs {}),
     )?;
     let malformed = || {
         failed(
@@ -72,8 +72,9 @@ fn revoke(
     request(
         &mut BufReader::new(stream),
         "c_revoke",
-        "revoke",
-        Map::from_iter([("device".to_owned(), Value::from(device))]),
+        HubCommand::Revoke(Device {
+            device: device.to_owned(),
+        }),
     )?;
     write_line(out, device)
 }

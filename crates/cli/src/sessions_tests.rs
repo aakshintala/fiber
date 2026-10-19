@@ -16,7 +16,7 @@ use std::os::unix::net::UnixStream;
 use contract::HubLine;
 use serde_json::{Map, Value, json};
 
-use super::{Ask, delete, delete_run, export, run};
+use super::{Ask, answer_of, delete, delete_run, export, run};
 use fakes::Deadline;
 
 #[test]
@@ -552,8 +552,27 @@ fn the_hub_closing_before_answering_is_io_failed() {
     setup.started(ROOT, None);
     let mut hub = FakeHub::new(&[]);
     let (out, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
-    assert_eq!(got.unwrap_err().code, ErrorCode::IoFailed);
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::IoFailed);
+    assert_eq!(
+        failure.message,
+        "the hub closed the connection before answering `delete`"
+    );
     assert_eq!(out, "");
+}
+
+#[test]
+fn a_rejection_without_a_message_through_delete_names_delete() {
+    let setup = Setup::new();
+    setup.started(ROOT, None);
+    let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1, "payload": {
+        "command_id": "c_delete", "code": "busy",
+    }});
+    let mut hub = FakeHub::new(&[rejected]);
+    let (_, _, got) = run_delete(&setup, &mut hub, ROOT, false, true, false, &mut Unread);
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Busy);
+    assert_eq!(failure.message, "the hub refused `delete`");
 }
 
 #[test]
@@ -564,4 +583,90 @@ fn an_unknown_selector_is_not_found_and_never_connects() {
     let (_, _, got) = run_delete(&setup, &mut hub, "s_zz", false, true, false, &mut Unread);
     assert_eq!(got.unwrap_err().code, ErrorCode::SessionNotFound);
     assert_eq!(hub.connects, 0);
+}
+
+fn hub_answer(kind: &str, payload: Value) -> HubLine {
+    HubLine {
+        kind: kind.into(),
+        ts: 1,
+        schema_version: 1,
+        payload: payload.as_object().unwrap().clone(),
+    }
+}
+
+#[test]
+fn an_answer_for_another_command_id_is_no_answer() {
+    let line = hub_answer(
+        "command_accepted",
+        json!({"command_id": "c_other", "result": 1}),
+    );
+    assert_eq!(answer_of(&line, "c_1", "delete"), None);
+}
+
+#[test]
+fn an_accepted_answer_carries_its_result() {
+    let line = hub_answer(
+        "command_accepted",
+        json!({"command_id": "c_1", "result": {"token": "t"}}),
+    );
+    assert_eq!(
+        answer_of(&line, "c_1", "pair"),
+        Some(Ok(json!({"token": "t"})))
+    );
+}
+
+#[test]
+fn an_accepted_answer_without_a_result_is_null() {
+    let line = hub_answer("command_accepted", json!({"command_id": "c_1"}));
+    assert_eq!(answer_of(&line, "c_1", "refresh"), Some(Ok(Value::Null)));
+}
+
+#[test]
+fn a_rejected_answer_carries_its_code_and_message() {
+    let line = hub_answer(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "busy", "message": "run"}),
+    );
+    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Busy);
+    assert_eq!(failure.message, "run");
+}
+
+#[test]
+fn an_unknown_rejection_code_is_other() {
+    let line = hub_answer(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "future", "message": "m"}),
+    );
+    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Other("future".into()));
+}
+
+#[test]
+fn a_rejection_without_a_usable_code_is_io_failed() {
+    for payload in [
+        json!({"command_id": "c_1", "message": "m"}),
+        json!({"command_id": "c_1", "code": 7, "message": "m"}),
+    ] {
+        let failure = answer_of(&hub_answer("command_rejected", payload), "c_1", "delete")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(failure.code, ErrorCode::IoFailed);
+    }
+}
+
+#[test]
+fn a_rejection_without_a_message_names_the_command() {
+    let line = hub_answer(
+        "command_rejected",
+        json!({"command_id": "c_1", "code": "busy"}),
+    );
+    let failure = answer_of(&line, "c_1", "delete").unwrap().unwrap_err();
+    assert_eq!(failure.message, "the hub refused `delete`");
+}
+
+#[test]
+fn another_kind_with_the_matching_id_is_no_answer() {
+    let line = hub_answer("session_left", json!({"command_id": "c_1"}));
+    assert_eq!(answer_of(&line, "c_1", "delete"), None);
 }

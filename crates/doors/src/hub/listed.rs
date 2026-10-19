@@ -175,8 +175,15 @@ pub(crate) fn authenticate(
         source,
     };
     stream.set_write_timeout(Some(idle)).map_err(hello_error)?;
-    let command = serde_json::to_vec(&serde_json::json!({"id":"c_authenticate", "command":"authenticate", "args":{"token":token.expose()}}))
-        .map_err(|_| hello_error(io::Error::other("could not write authentication command")))?;
+    let command = serde_json::to_vec(&contract::commands::hub::HubCommandLine {
+        id: contract::CommandId("c_authenticate".into()),
+        command: contract::commands::hub::HubCommand::Authenticate(
+            contract::commands::hub::Authenticate {
+                token: token.clone(),
+            },
+        ),
+    })
+    .map_err(|_| hello_error(io::Error::other("could not write authentication command")))?;
     support::framing::write_line(&mut stream, &command).map_err(hello_error)?;
     let deadline = clock.now().checked_add(idle);
     loop {

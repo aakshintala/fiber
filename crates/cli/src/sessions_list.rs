@@ -8,6 +8,7 @@ use std::io::{self, BufReader, Write};
 
 use contract::ErrorCode;
 use contract::SessionId;
+use contract::commands::hub::{HubCommand, SessionsArgs};
 use contract::events::{SessionState, WaitingKind};
 use contract::shapes::Failure;
 use contract::shapes::Usage;
@@ -141,15 +142,11 @@ fn run(
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
 ) -> Result<(), Failure> {
-    let mut args = serde_json::Map::new();
-    if !all && project.in_repository {
-        args.insert(
-            "project".to_owned(),
-            Value::String(log::project_key(&project.path)),
-        );
-    }
+    let command = HubCommand::Sessions(SessionsArgs {
+        project: (!all && project.in_repository).then(|| log::project_key(&project.path)),
+    });
     let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    let result = request(&mut BufReader::new(stream), LIST_ID, "sessions", args)?;
+    let result = request(&mut BufReader::new(stream), LIST_ID, command)?;
     let answer: Answer = serde_json::from_value(result).map_err(|e| {
         failed(
             ErrorCode::IoFailed,
@@ -185,8 +182,7 @@ pub fn resolve_listed(
     let result = request(
         &mut BufReader::new(stream),
         LIST_ID,
-        "sessions",
-        serde_json::Map::new(),
+        HubCommand::Sessions(SessionsArgs { project: None }),
     )?;
     let answer: Answer = serde_json::from_value(result).map_err(|e| {
         failed(

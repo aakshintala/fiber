@@ -6,8 +6,9 @@
 use std::io::{self, BufReader, Write};
 
 use contract::ErrorCode;
+use contract::commands::hub::{HubCommand, NoArgs};
 use contract::shapes::Failure;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::sessions::request;
 use crate::{failed, finish, write_line};
@@ -33,8 +34,8 @@ pub(crate) fn run(
 ) -> Result<(), Failure> {
     let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
     let mut read = BufReader::new(stream);
-    request(&mut read, REFRESH_ID, "refresh", Map::new())?;
-    let result = request(&mut read, STATUS_ID, "status", Map::new())?;
+    request(&mut read, REFRESH_ID, HubCommand::Refresh(NoArgs {}))?;
+    let result = request(&mut read, STATUS_ID, HubCommand::Status(NoArgs {}))?;
     let source = result
         .get("variables")
         .and_then(|variables| variables.get("source"))

@@ -43,6 +43,72 @@ fn accepted(command: &str) -> Vec<u8> {
 }
 
 #[test]
+fn the_tools_probe_carries_no_args_key() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let id = SessionId(mint("s_"));
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let listener = UnixListener::bind(run.join(&id.0)).unwrap();
+    let (served_tx, served_rx) = mpsc::channel::<()>();
+    let _served = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut raw = String::new();
+        reader.read_line(&mut raw).unwrap();
+        let sub: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let sub_id = sub["id"].as_str().unwrap().to_owned();
+        let mut writer = stream.try_clone().unwrap();
+        writer.write_all(&accepted(&sub_id)).unwrap();
+        writer.flush().unwrap();
+        raw.clear();
+        reader.read_line(&mut raw).unwrap();
+        let steered: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(steered["command"], "steer");
+        let steer_id = steered["id"].as_str().unwrap().to_owned();
+        writer.write_all(&accepted(&steer_id)).unwrap();
+        writer.flush().unwrap();
+        raw.clear();
+        reader.read_line(&mut raw).unwrap();
+        let probe: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let probe_id = probe["id"].as_str().unwrap().to_owned();
+        // `Command::Tools` is a unit variant, so it writes no `args` key.
+        assert_eq!(
+            probe,
+            serde_json::json!({"id": probe_id, "command": "tools"}),
+            "the tools probe carries no args key"
+        );
+        let _sent = served_tx.send(());
+    });
+    let (done_tx, done_rx) = mpsc::channel();
+    let home_client = home.clone();
+    let id_client = id.clone();
+    let _steered = thread::spawn(move || {
+        let mut commit = || true;
+        let mut on_queued = || {};
+        let outcome = steer(
+            &home_client,
+            &id_client,
+            &mint("c_"),
+            "pin",
+            &mut commit,
+            &mut on_queued,
+        );
+        let _sent = done_tx.send(outcome);
+    });
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("steer answered"),
+        Steered::Accepted
+    );
+    Deadline::after(DEADLINE)
+        .recv(&served_rx)
+        .expect("the server read the probe line");
+}
+
+#[test]
 fn commit_runs_only_after_the_subscribe_is_answered() {
     let temp = Temp::new();
     let home = temp.0.join("h");

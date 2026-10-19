@@ -12,9 +12,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::commands::hub::{HubCommand, HubCommandLine, NoArgs};
 use contract::events::Variables;
 use contract::shapes::Failure;
-use contract::{ErrorCode, HubLine};
+use contract::{CommandId, ErrorCode, HubLine};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::{AsFd, BorrowedFd};
 use serde::Serialize;
@@ -310,10 +311,15 @@ fn exchange(
         )
     };
     stream.set_nonblocking(true).map_err(lost)?;
-    let request = format!("{{\"id\":\"{STATUS_ID}\",\"command\":\"status\"}}\n");
+    let mut request = serde_json::to_vec(&HubCommandLine {
+        id: CommandId(STATUS_ID.to_owned()),
+        command: HubCommand::Status(NoArgs {}),
+    })
+    .map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    request.push(b'\n');
     let mut sent = 0;
     while sent < request.len() {
-        match stream.write(request.as_bytes().get(sent..).unwrap_or_default()) {
+        match stream.write(request.get(sent..).unwrap_or_default()) {
             Ok(0) => {
                 return Err(failed(
                     ErrorCode::IoFailed,
@@ -405,44 +411,27 @@ fn answer(line: &[u8]) -> Result<Option<Reply>, Failure> {
     let Ok(line) = serde_json::from_slice::<HubLine>(line) else {
         return Ok(None);
     };
-    let field = |key: &str| line.payload.get(key).and_then(Value::as_str);
-    if field("command_id") != Some(STATUS_ID) {
+    let Some(result) = crate::sessions::answer_of(&line, STATUS_ID, "status") else {
         return Ok(None);
-    }
-    match line.kind.as_str() {
-        "command_accepted" => {
-            let result = line.payload.get("result");
-            let version = result
-                .and_then(|result| result.get("fiber_version"))
-                .and_then(Value::as_str);
-            let clients = result
-                .and_then(|result| result.get("clients"))
-                .and_then(Value::as_u64);
-            let variables = match result.and_then(|result| result.get("variables")) {
-                None => Err("the hub's answer to status has no variables".to_owned()),
-                Some(variables) => serde_json::from_value::<Variables>(variables.clone())
-                    .map_err(|_| "the hub's answer to status has malformed variables".to_owned()),
-            };
-            match (version, clients) {
-                (Some(version), Some(clients)) => Ok(Some(Reply {
-                    version: version.to_owned(),
-                    clients,
-                    variables,
-                })),
-                (Some(_) | None, Some(_) | None) => Err(failed(
-                    ErrorCode::IoFailed,
-                    "the hub's answer to status has no fiber_version or clients",
-                )),
-            }
-        }
-        "command_rejected" => {
-            let code = field("code")
-                .and_then(|code| serde_json::from_value(Value::String(code.to_owned())).ok())
-                .unwrap_or(ErrorCode::IoFailed);
-            let message = field("message").unwrap_or("the hub refused status");
-            Err(failed(code, message))
-        }
-        _ => Ok(None),
+    };
+    let result = result?;
+    let version = result.get("fiber_version").and_then(Value::as_str);
+    let clients = result.get("clients").and_then(Value::as_u64);
+    let variables = match result.get("variables") {
+        None => Err("the hub's answer to status has no variables".to_owned()),
+        Some(variables) => serde_json::from_value::<Variables>(variables.clone())
+            .map_err(|_| "the hub's answer to status has malformed variables".to_owned()),
+    };
+    match (version, clients) {
+        (Some(version), Some(clients)) => Ok(Some(Reply {
+            version: version.to_owned(),
+            clients,
+            variables,
+        })),
+        (Some(_) | None, Some(_) | None) => Err(failed(
+            ErrorCode::IoFailed,
+            "the hub's answer to status has no fiber_version or clients",
+        )),
     }
 }
 

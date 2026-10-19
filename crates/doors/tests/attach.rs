@@ -544,6 +544,20 @@ fn stood_in(server: (JoinHandle<()>, Receiver<Vec<String>>), operation: &str) ->
     }
 }
 
+/// A full envelope line of `kind` with `payload`, as a session writes
+/// it: every line a session writes is an envelope (`docs/events.md`,
+/// "The envelope").
+fn enveloped(kind: &str, payload: Value) -> String {
+    serde_json::to_string(&serde_json::json!({
+        "kind": kind,
+        "session_id": "s_stand",
+        "ts": 0,
+        "schema_version": SCHEMA_VERSION,
+        "payload": payload,
+    }))
+    .unwrap()
+}
+
 fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String {
     serde_json::to_string(&serde_json::json!({
         "kind": "command_accepted",
@@ -754,20 +768,18 @@ fn attach_with_a_label_sends_credential_before_the_prompt() {
             let command = prompted["id"].as_str().unwrap();
             write_line(
                 writer,
-                &serde_json::to_string(&serde_json::json!({
-                    "kind": "turn_started",
-                    "payload": {"input": [{"command_id": command,
-                        "content": [{"type": "text", "text": "hi"}]}]},
-                }))
-                .unwrap(),
+                &enveloped(
+                    "turn_started",
+                    serde_json::json!({"input": [{"command_id": command,
+                        "content": [{"type": "text", "text": "hi"}]}]}),
+                ),
             );
             write_line(
                 writer,
-                &serde_json::to_string(&serde_json::json!({
-                    "kind": "turn_completed",
-                    "payload": {"outcome": "completed"},
-                }))
-                .unwrap(),
+                &enveloped(
+                    "turn_completed",
+                    serde_json::json!({"outcome": "completed"}),
+                ),
             );
         },
     );
@@ -807,12 +819,11 @@ fn attach_with_a_rejected_label_fails_printing_nothing() {
         assert_eq!(second["command"], "credential");
         write_line(
             writer,
-            &serde_json::to_string(&serde_json::json!({
-                "kind": "command_rejected",
-                "payload": {"command_id": second["id"],
-                    "code": "credential_missing", "message": "no such label"},
-            }))
-            .unwrap(),
+            &enveloped(
+                "command_rejected",
+                serde_json::json!({"command_id": second["id"],
+                    "code": "credential_missing", "message": "no such label"}),
+            ),
         );
         // No prompt follows: attach returns on the rejection, closing
         // the connection, so the next read is the EOF, within DEADLINE.
@@ -837,5 +848,115 @@ fn attach_with_a_rejected_label_fails_printing_nothing() {
     assert_eq!(failed.code, ErrorCode::CredentialMissing);
     assert_eq!(failed.message, "no such label");
     assert!(out.is_empty(), "a rejection prints nothing");
+    stood_in(server, "the stand-in to see the connection end");
+}
+
+#[test]
+fn a_different_schema_version_that_is_not_an_envelope_is_still_session_held() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    // Its own listener, not `stand_in`: the subscribe is answered with a
+    // line that carries no `session_id` or `ts`, so it is not an envelope.
+    // The version check runs on the raw line before any envelope parse,
+    // so the answer still declines instead of closing.
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("attach connected");
+        stream
+            .set_read_timeout(Some(DEADLINE))
+            .expect("a read timeout is set");
+        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+        let mut writer = stream;
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("the subscribe arrives");
+        let sub: Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(sub["command"], "subscribe");
+        write_line(
+            &mut writer,
+            &serde_json::to_string(&serde_json::json!({
+                "kind": "command_accepted",
+                "schema_version": SCHEMA_VERSION + 1,
+                "payload": {"command_id": sub["id"]},
+            }))
+            .unwrap(),
+        );
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        None,
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
+
+    assert_eq!(failed.code, ErrorCode::SessionHeld);
+    assert!(
+        failed.message.contains(&(SCHEMA_VERSION + 1).to_string()),
+        "the message names the session's version: {}",
+        failed.message
+    );
+    assert!(
+        failed.message.contains(&SCHEMA_VERSION.to_string()),
+        "the message names this build's version: {}",
+        failed.message
+    );
+    assert!(out.is_empty());
+    server.join().expect("the listener answered the subscribe");
+}
+
+#[test]
+fn a_line_that_is_not_an_envelope_is_not_printed() {
+    let temp = Temp::new();
+    let home = temp.0.join("h");
+    let run = home.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let id = SessionId(mint("s_"));
+    let socket = run.join(&id.0);
+    let server = stand_in(&socket, SCHEMA_VERSION, |_, _, prompted, writer| {
+        let command = prompted["id"].as_str().unwrap();
+        write_line(
+            writer,
+            &enveloped(
+                "turn_started",
+                serde_json::json!({"input": [{"command_id": command,
+                        "content": [{"type": "text", "text": "hi"}]}]}),
+            ),
+        );
+        // JSON, but not an envelope: no `session_id`, `ts` or
+        // `schema_version`. Every line a session writes is an
+        // envelope, so none of the turn's own lines looks like this.
+        write_line(writer, r#"{"kind":"note"}"#);
+        write_line(
+            writer,
+            &enveloped(
+                "turn_completed",
+                serde_json::json!({"outcome": "completed"}),
+            ),
+        );
+    });
+
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        None,
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    assert_eq!(code.unwrap(), 0);
+    let text = String::from_utf8(out).unwrap();
+    assert_eq!(
+        kinds_of_text(&text),
+        ["turn_started", "turn_completed"].map(String::from)
+    );
     stood_in(server, "the stand-in to see the connection end");
 }

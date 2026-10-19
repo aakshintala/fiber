@@ -3,14 +3,13 @@
 //! ordinary client of the delegate's socket (`docs/delegates.md`,
 //! "Streams"; `docs/invocation.md`, "Processes").
 
-use std::io::BufReader;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use contract::SessionId;
+use contract::commands::{Command, CommandLine, ContentArgs, SentPart, SubscribeLevel};
 use contract::shapes::Failure;
+use contract::{CommandId, SessionId};
 
-use crate::attach::{check_version, is_answer, next_line, rejection, send};
+use crate::attach::{Unsubscribed, is_answer, next_line, open, rejected, send, subscribed};
 use crate::mint;
 
 /// A test-only pause point at the acknowledgement wait: armed by the
@@ -119,46 +118,21 @@ pub fn steer(
     on_queued: &mut dyn FnMut(),
 ) -> Steered {
     let socket = home.join("run").join(&id.0);
-    let Ok(stream) = UnixStream::connect(&socket) else {
-        return Steered::Gone;
+    let opened = match open(&socket, id, SubscribeLevel::Summary) {
+        Ok(opened) => opened,
+        Err(_) => return Steered::Gone,
     };
-    let Ok(clone) = stream.try_clone() else {
-        return Steered::Gone;
-    };
-    let mut reader = BufReader::new(clone);
-    let mut writer = stream;
-    let sub = mint("c_");
-    if send(
-        &mut writer,
-        id,
-        &sub,
-        "subscribe",
-        serde_json::json!({"level": "summary"}),
-    )
-    .is_err()
-    {
-        return Steered::Gone;
-    }
     // Test-only: the commit-order test holds here until it holds the
     // acknowledgement, so a commit before the answer fails deterministically.
     #[cfg(test)]
     pause_at_ack_wait();
-    // The acknowledgement is written before the writer starts, so it is
-    // the first line this connection reads, ahead of the fold.
-    loop {
-        let Some((_, line)) = next_line(&mut reader) else {
-            return Steered::Gone;
-        };
-        if is_answer(&line, "command_rejected", &sub) {
-            return Steered::Rejected(rejection(&line));
+    let (mut reader, mut writer) = match subscribed(opened, id) {
+        Ok(pair) => pair,
+        Err(Unsubscribed::Rejected(failure) | Unsubscribed::Version(failure)) => {
+            return Steered::Rejected(failure);
         }
-        if is_answer(&line, "command_accepted", &sub) {
-            if let Err(failure) = check_version(id, &line) {
-                return Steered::Rejected(failure);
-            }
-            break;
-        }
-    }
+        Err(_) => return Steered::Gone,
+    };
     // Test-only: the commit-order test asserts inside `commit` that this
     // fired, so a commit before the answer fails deterministically.
     #[cfg(test)]
@@ -169,16 +143,30 @@ pub fn steer(
     if send(
         &mut writer,
         id,
-        command,
-        "steer",
-        serde_json::json!({"content": [{"type": "text", "text": text}]}),
+        &CommandLine {
+            id: CommandId(command.to_owned()),
+            command: Command::Steer(ContentArgs {
+                content: vec![SentPart::Text {
+                    text: text.to_owned(),
+                }],
+            }),
+        },
     )
     .is_err()
     {
         return Steered::Gone;
     }
     let probe = mint("c_");
-    if send(&mut writer, id, &probe, "tools", serde_json::json!({})).is_err() {
+    if send(
+        &mut writer,
+        id,
+        &CommandLine {
+            id: CommandId(probe.clone()),
+            command: Command::Tools,
+        },
+    )
+    .is_err()
+    {
         return Steered::Gone;
     }
     let mut queued = false;
@@ -187,7 +175,7 @@ pub fn steer(
             return Steered::Gone;
         };
         if is_answer(&line, "command_rejected", command) {
-            return Steered::Rejected(rejection(&line));
+            return Steered::Rejected(rejected(&line));
         }
         if is_answer(&line, "command_accepted", command) {
             return Steered::Accepted;
