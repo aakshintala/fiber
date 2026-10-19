@@ -512,6 +512,7 @@ impl Loop {
             | Delivery::ExtensionExec(_)
             | Delivery::ExtensionLog(_)
             | Delivery::ExtensionJob(..)
+            | Delivery::ProposeNotes(..)
             | Delivery::ExtensionUsage(_)
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
@@ -535,6 +536,13 @@ impl Loop {
             return Ok(());
         }
         match delivery {
+            Delivery::ProposeNotes(ask, ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    self.take_notes(ask, ack)?;
+                }
+            }
             Delivery::InnerCall(request) => self.run_alone(request)?,
             Delivery::Prompt(message, ack) => {
                 if self.closing {
@@ -692,6 +700,13 @@ impl Loop {
     /// `delivery` while a turn is in flight and nothing is pending.
     pub(crate) fn admit_running(&mut self, delivery: Delivery, turn: &TurnId) -> Result<(), Error> {
         match delivery {
+            Delivery::ProposeNotes(_, ack) => {
+                if self.closing {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    reject(ack, ErrorCode::Busy, BUSY);
+                }
+            }
             Delivery::InnerCall(request) => self.deferred.push_back(Delivery::InnerCall(request)),
             Delivery::Prompt(_, ack) => {
                 if self.closing {
