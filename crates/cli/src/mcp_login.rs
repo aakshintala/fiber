@@ -18,7 +18,7 @@ use contract::mcp_tokens::TokenFiles;
 use extensions::{Browser, Decision, Index, Store};
 
 use crate::approve::say;
-use crate::mcp::{Streams, config_failure};
+use crate::mcp::Streams;
 use crate::{CliError, project_of, with_dirs};
 
 /// A config path segment holding a `.` is quoted, as the startup seam
@@ -88,7 +88,7 @@ fn approved_url(
     between: &dyn Fn(),
     clock: &Arc<dyn Clock>,
 ) -> Result<String, CliError> {
-    let declared = config::declared(workspace).map_err(config_failure)?;
+    let declared = config::declared(workspace)?;
     let Some(entry) = declared.mcp_servers.get(server) else {
         return Err(unapproved(server));
     };

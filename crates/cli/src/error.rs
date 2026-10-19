@@ -517,6 +517,7 @@ impl CliError {
 
 impl From<CliError> for Failure {
     fn from(error: CliError) -> Self {
+        // debt: this conversion match, a `Forwarded` passthrough plus `Failure::from(&other)` once `Failure` gains a constructor per code.
         match error {
             CliError::Forwarded(failure) => failure,
             other @ (CliError::Config(_)

@@ -431,6 +431,29 @@ fn a_config_invalid_login_names_the_server_with_no_code() {
 }
 
 #[test]
+fn a_broken_hooks_file_fails_the_login_as_config_not_forwarded() {
+    // The repository declares the server, so the login reaches the
+    // approval read; the hooks settings file is not an object of hooks,
+    // which only `declared` refuses. A type-erased failure would arrive
+    // as `Forwarded` with the same code.
+    let setup = Setup::new();
+    setup.declare_remote(Layer::Repository, "docs", URL);
+    fs::create_dir_all(setup.workspace().join(".fiber/config")).unwrap();
+    fs::write(
+        setup.workspace().join(".fiber/config/hooks.json"),
+        r#"{"hooks": []}"#,
+    )
+    .unwrap();
+    let remote = FakeRemote::ok();
+    let browser = FakeBrowser::new();
+    let (ran, _) = login(&setup, "docs", &remote, &browser, &|| {});
+    let failure = ran.result.unwrap_err();
+    assert!(matches!(failure, CliError::Config(_)), "{failure:?}");
+    assert_eq!(failure.code(), ErrorCode::ConfigInvalid);
+    assert!(remote.calls.lock().unwrap().is_empty());
+}
+
+#[test]
 fn a_url_with_userinfo_is_refused_before_the_login() {
     let setup = Setup::new();
     setup.declare_remote(Layer::Global, "docs", "https://user@example.test/mcp");

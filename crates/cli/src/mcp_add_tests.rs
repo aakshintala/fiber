@@ -1230,6 +1230,34 @@ fn a_repo_approval_hashes_the_checked_snapshot_never_a_replacement() {
 }
 
 #[test]
+fn a_broken_hooks_file_fails_a_repository_add_as_config_not_forwarded() {
+    // The declaration write succeeds, so the add reaches the approval
+    // record; the hooks settings file is not an object of hooks, which
+    // only `declared` refuses. A type-erased failure would arrive as
+    // `Forwarded` with the same code.
+    let setup = Setup::new();
+    fs::create_dir_all(setup.workspace().join(".fiber/config")).unwrap();
+    fs::write(
+        setup.workspace().join(".fiber/config/hooks.json"),
+        r#"{"hooks": []}"#,
+    )
+    .unwrap();
+    let ran = ok(
+        &setup,
+        Layer::Repository,
+        "docs",
+        Some(URL),
+        &[],
+        &[],
+        &[],
+        "",
+    );
+    let failure = ran.result.unwrap_err();
+    assert!(matches!(failure, CliError::Config(_)), "{failure:?}");
+    assert_eq!(failure.code(), ErrorCode::ConfigInvalid);
+}
+
+#[test]
 fn a_declaration_debug_prints_names_never_values() {
     let remote = McpDeclaration::Remote {
         url: "https://user:pass@example.test/mcp?token=zzz".to_owned(),

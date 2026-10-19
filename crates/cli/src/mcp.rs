@@ -253,7 +253,7 @@ fn record_approval(
             .open(PathBuf::from(lock_name))
             .map_err(|e| approve_hint(&e.to_string()))?;
         lock_file.lock().map_err(|e| approve_hint(&e.to_string()))?;
-        let declared = config::declared(workspace).map_err(config_failure)?;
+        let declared = config::declared(workspace)?;
         match declared.mcp_servers.get(name) {
             Some(current) if current == expected => current.clone(),
             _ => {
