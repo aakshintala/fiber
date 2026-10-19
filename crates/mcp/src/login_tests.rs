@@ -184,6 +184,7 @@ fn drive_releasing_on_panic<T>(
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(drive)) {
         Ok(value) => value,
         Err(payload) => {
+            // Failure-path release inside a panic handler that re-raises the original payload; it proves nothing (ruling 6203478697).
             clock.advance(CALLBACK_WAIT + Duration::from_secs(1));
             std::panic::resume_unwind(payload);
         }
@@ -2333,6 +2334,7 @@ fn a_reset_in_the_drain_breaks_the_drain() {
         };
         assert!(served.is_none(), "a reset head in the drain ended the wait");
         answerer.join().unwrap();
+        // No code under test waits on the clock here; the answering thread is joined, so this zero-length move only snapshots the parks (ruling 6179406086).
         assert_eq!(
             clock.advance_marked(Duration::ZERO),
             mark,
