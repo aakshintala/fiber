@@ -52,7 +52,7 @@ impl Temp {
     }
 
     fn dir_of(&self, project: &str, n: u64) -> PathBuf {
-        recent::session_dir(&self.dir, project, &id(n))
+        log::session_dir(&self.dir, project, &id(n))
     }
 
     /// Session `n` in `project`, continuing session `from` when given: its

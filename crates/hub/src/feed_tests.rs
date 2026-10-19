@@ -58,7 +58,7 @@ impl Temp {
     /// Session `n`'s directory in `project`, its log ending in `last`.
     fn session(&self, n: u64, project: &str, last: &str) -> String {
         let id = id(n);
-        let dir = recent::session_dir(&self.dir, project, &id);
+        let dir = log::session_dir(&self.dir, project, &id);
         fs::create_dir_all(&dir).unwrap();
         let log = format!("{{\"kind\":\"session_started\"}}\n{{\"kind\":\"{last}\"}}\n");
         fs::write(dir.join("events.jsonl"), log).unwrap();
@@ -1131,7 +1131,7 @@ fn a_session_without_a_log_still_gets_its_crashed_row() {
     let id = id(1);
     // The directory exists but holds no log: the session crashed
     // before writing a line.
-    fs::create_dir_all(recent::session_dir(&temp.dir, "p", &id)).unwrap();
+    fs::create_dir_all(log::session_dir(&temp.dir, "p", &id)).unwrap();
     let session = FakeSession::bind(&temp.dir, &id);
     let line = status_line(&id, &status("n", "/w", "idle", None));
     session.say(&line);
@@ -1178,7 +1178,7 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     assert_eq!(sub.raw("the status"), line);
     // The followed run exits, and the resumed run has written past its
     // `fiber_exited` already.
-    let log = recent::session_dir(&temp.dir, "p", &id).join("events.jsonl");
+    let log = log::session_dir(&temp.dir, "p", &id).join("events.jsonl");
     let mut file = fs::OpenOptions::new().append(true).open(log).unwrap();
     file.write_all(b"{\"kind\":\"fiber_exited\"}\n{\"kind\":\"fiber_started\"}\n")
         .unwrap();
@@ -1199,7 +1199,7 @@ fn an_exit_line_from_before_the_follow_is_not_the_followed_runs() {
     let id = temp.session(1, "p", "fiber_started");
     // The earlier run's exit line is already in the log when the hub
     // follows: only an exit line written after that point ends this run.
-    let log = recent::session_dir(&temp.dir, "p", &id).join("events.jsonl");
+    let log = log::session_dir(&temp.dir, "p", &id).join("events.jsonl");
     fs::write(
         &log,
         "{\"kind\":\"session_started\"}\n{\"kind\":\"fiber_exited\"}\n{\"kind\":\"fiber_started\"}\n",
@@ -1286,7 +1286,7 @@ fn turned(ts: u64) -> String {
 impl Temp {
     /// Appends one line to session `n`'s `events.jsonl` in `project`.
     fn log(&self, n: u64, project: &str, line: &str) {
-        let log = recent::session_dir(&self.dir, project, &id(n)).join("events.jsonl");
+        let log = log::session_dir(&self.dir, project, &id(n)).join("events.jsonl");
         fs::OpenOptions::new()
             .append(true)
             .open(log)
@@ -1626,7 +1626,7 @@ fn a_feed_subscriber_alone_gets_no_attention() {
 /// `last` as the final line.
 fn logged(temp: &Temp, n: u64, last: &Value) -> (String, PathBuf) {
     let session = id(n);
-    let dir = recent::session_dir(&temp.dir, "-w", &session);
+    let dir = log::session_dir(&temp.dir, "-w", &session);
     fs::create_dir_all(&dir).unwrap();
     let first = json!({
         "kind": "session_started", "session_id": session, "ts": 1, "schema_version": 1,

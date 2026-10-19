@@ -915,7 +915,7 @@ fn start_with_null_content_is_invalid_arguments() {
 /// Seeds `temp`'s `recent.jsonl` with session `id` crashed, its directory
 /// made, and starts the hub's feed.
 fn crashed_feed(temp: &Temp, hub: &Arc<Hub>, id: &str) {
-    fs::create_dir_all(crate::recent::session_dir(&temp.dir, "p", id)).unwrap();
+    fs::create_dir_all(log::session_dir(&temp.dir, "p", id)).unwrap();
     let row: crate::RecentRow = serde_json::from_value(json!({
         "session_id": id, "ts": 3, "project": "p", "workspace": "/w", "name": "n",
         "how": "crashed", "status": crate::fake::status("n", "/w", "idle", None),

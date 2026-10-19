@@ -18,6 +18,7 @@ use std::thread;
 use super::*;
 use crate::fake::status;
 use crate::testkit::id;
+use log::session_dir;
 
 struct Temp {
     dir: PathBuf,

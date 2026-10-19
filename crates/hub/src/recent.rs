@@ -70,7 +70,7 @@ impl RecentRow {
 
     /// Whether the session's directory is still there.
     pub(crate) fn dir_exists(&self, home: &Path) -> bool {
-        session_dir(home, &self.project, &self.session_id.0).is_dir()
+        log::dir_exists(&log::session_dir(home, &self.project, &self.session_id.0))
     }
 }
 
@@ -215,14 +215,6 @@ pub(crate) fn seeds(home: &Path) -> Vec<RecentRow> {
         .collect()
 }
 
-/// `projects/<project>/sessions/<id>` under `home`.
-pub(crate) fn session_dir(home: &Path, project: &str, id: &str) -> PathBuf {
-    home.join("projects")
-        .join(project)
-        .join("sessions")
-        .join(id)
-}
-
 /// How many directory lookups `feed` made: every `follow` connects
 /// first, so a stale socket leaves this at 0. Test-only: nextest runs
 /// each test in its own process, so the count is race-free.
@@ -269,7 +261,7 @@ pub fn append_exited(
     status: Option<SessionStatus>,
     clock: &dyn Clock,
 ) -> Result<(), RecentError> {
-    if !dir.is_dir() {
+    if !log::dir_exists(dir) {
         return Ok(());
     }
     let name = |path: Option<&Path>| {

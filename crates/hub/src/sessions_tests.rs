@@ -23,8 +23,9 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::{FakeSession, status, status_line};
-use crate::recent::{Left, RecentRow, session_dir};
+use crate::recent::{Left, RecentRow};
 use crate::testkit::{args, id};
+use log::session_dir;
 
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
