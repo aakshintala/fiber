@@ -1536,7 +1536,12 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
         clock.await_parked(due, WAIT_FOR_TIMER),
         "the timer waits for its due time"
     );
-    clock.advance(Duration::from_secs(5));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT_FOR_TIMER),
+    );
     Deadline::after(WAIT_FOR_TIMER)
         .recv(&done)
         .expect("the timer callback completed");
@@ -1612,7 +1617,12 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         clock.await_parked(due, WAIT_FOR_TIMER),
         "the timer waits for its due time"
     );
-    clock.advance(Duration::from_secs(5));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT_FOR_TIMER),
+    );
     // The child reached its script, so the suspension below stays put:
     // nothing advances the fake clock while the exec is held.
     let started = ready.wait(WAIT_FOR_TIMER);
@@ -1693,7 +1703,12 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         clock.await_parked(due, WAIT_FOR_TIMER),
         "the timer waits for its due time"
     );
-    clock.advance(Duration::from_secs(5));
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::from_millis(100),
+        &Deadline::after(WAIT_FOR_TIMER),
+    );
     // The child reached its script, so it is at or on its way to the gate:
     // the gate read comes before the block open, whatever the scheduling.
     let started = ready.wait(WAIT_FOR_TIMER);

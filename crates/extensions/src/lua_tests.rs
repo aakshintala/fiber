@@ -222,16 +222,23 @@ fn provider_load_race(completion_first: bool) {
     let (result_tx, result_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     let asked = clock.now();
-    thread::spawn(move || result_tx.send(caller.provider_functions("p")));
+    let abandon_at = asked + LOAD_TIMEOUT + GRACE;
+    let caller_thread = thread::spawn(move || result_tx.send(caller.provider_functions("p")));
     Deadline::after(WAIT).recv_or_fail(&held_rx, "provider held in read");
-    assert!(clock.await_parked(asked + LOAD_TIMEOUT + GRACE, WAIT));
+    assert!(clock.await_parked(abandon_at, WAIT));
     if completion_first {
         release_tx.send(()).unwrap();
         Deadline::after(WAIT).recv_or_fail(&recorded_rx, "load result recorded before abandonment");
         let (advanced_tx, advanced_rx) = mpsc::channel();
         let advance_clock = Arc::clone(&clock);
+        let caller_id = caller_thread.thread().id();
         thread::spawn(move || {
-            advance_clock.advance_marked(LOAD_TIMEOUT + GRACE);
+            advance_clock.advance_when_parked(
+                Some(abandon_at),
+                Some(caller_id),
+                LOAD_TIMEOUT + GRACE,
+                &Deadline::after(WAIT),
+            );
             advanced_tx.send(()).unwrap();
         });
         Deadline::after(WAIT).recv_or_fail(&moved_rx, "clock moved before hub wake");
@@ -245,7 +252,12 @@ fn provider_load_race(completion_first: bool) {
         );
         assert!(ext.is_running());
     } else {
-        clock.advance(LOAD_TIMEOUT + GRACE);
+        clock.advance_when_parked(
+            Some(abandon_at),
+            Some(caller_thread.thread().id()),
+            LOAD_TIMEOUT + GRACE,
+            &Deadline::after(WAIT),
+        );
         let err = Deadline::after(WAIT)
             .recv_or_fail(&result_rx, "abandonment before recording")
             .unwrap_err();
@@ -824,6 +836,7 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         })
     )));
     stop(&hub);
+    // No thread of the code under test waits on the clock: the spinning callback reads it in its interrupt and never parks (ruling 6179406086).
     clock.advance(Duration::from_millis(1000));
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),
@@ -890,7 +903,9 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let (tx, rx) = mpsc::channel();
     let run = |what: &'static str, f: fn(&LuaExtension) -> Result<Value, Error>| {
         let (ext, tx) = (Arc::clone(&ext), tx.clone());
-        thread::spawn(move || tx.send((what, f(&ext))));
+        thread::spawn(move || tx.send((what, f(&ext))))
+            .thread()
+            .id()
     };
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
@@ -904,7 +919,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         "waited for models to reach the server"
     );
     run("queued", |e| e.command("queued", "").map(Value::String));
-    run("sign", |e| e.provider_call("p", "sign", Value::Null));
+    let sign = run("sign", |e| e.provider_call("p", "sign", Value::Null));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for sign to pass its clock check");
@@ -913,7 +928,12 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         clock.await_parked(abandon, WAIT_SERVER),
         "waited for sign to park at its grace"
     );
-    clock.advance(Duration::from_millis(50) + GRACE);
+    clock.advance_when_parked(
+        Some(abandon),
+        Some(sign),
+        Duration::from_millis(50) + GRACE,
+        &Deadline::after(WAIT),
+    );
     let mut seen = BTreeMap::new();
     // One deadline for the whole wait: the loop drains one stream.
     let wait = Deadline::after(WAIT);
@@ -1770,7 +1790,8 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     // deadline naming the wait.
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || tx.send(caller.hook("before_message", 0, serde_json::json!({}))));
+    let caller_thread =
+        thread::spawn(move || tx.send(caller.hook("before_message", 0, serde_json::json!({}))));
     // Withhold the worker's completion past the answer wait below.
     let (hold_tx, hold_rx) = mpsc::channel();
     super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
@@ -1791,7 +1812,18 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
         )),
         "waited for the worker to run the hook"
     );
-    clock.advance(Duration::from_millis(50));
+    let timeout_at = clock.origin() + Duration::from_millis(50);
+    let caller_id = caller_thread.thread().id();
+    assert!(
+        clock.await_thread_parked(caller_id, Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
+    clock.advance_when_parked(
+        Some(timeout_at),
+        Some(caller_id),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
@@ -1845,7 +1877,7 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     // deadline naming the wait.
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || tx.send(caller.command("spin", "")));
+    let caller_thread = thread::spawn(move || tx.send(caller.command("spin", "")));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for the command to start");
@@ -1863,7 +1895,18 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
         )),
         "waited for the worker to run the command"
     );
-    clock.advance(Duration::from_millis(50));
+    let timeout_at = clock.origin() + Duration::from_millis(50);
+    let caller_id = caller_thread.thread().id();
+    assert!(
+        clock.await_thread_parked(caller_id, Some(timeout_at), WAIT),
+        "waited for the caller to park at its timeout"
+    );
+    clock.advance_when_parked(
+        Some(timeout_at),
+        Some(caller_id),
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
     let err = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
