@@ -590,6 +590,146 @@ end })"#,
     assert_success(&run_case(&setup, "exec-signal", &value));
 }
 
+/// A failing hang case names the stuck request, matches the whole stream
+/// through `fiber_exited`, and panics nowhere.
+fn assert_hang_failure(output: &Output, reason: &str) {
+    assert_failure(output, reason);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("expect["),
+        "the stream must match through fiber_exited: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("panicked") && !stderr.contains("panicked"),
+        "the child must fail by verdict, not by panic: {stdout} {stderr}"
+    );
+}
+
+/// One hanging exec with no `env` to redact: the request names the program.
+fn hang_request(program: &str, secret: &str) -> Value {
+    json!({"program": program, "env": {"FIBER_X": secret}})
+}
+
+fn hang_hook(timeout_ms: u32, secret: &str) -> String {
+    hang_hook_with(timeout_ms, "blocking", secret)
+}
+
+fn hang_hook_with(timeout_ms: u32, on_failure: &str, secret: &str) -> String {
+    format!(
+        r#"fiber.hook("after_tool", {{ timeout = {timeout_ms}, on_failure = "{on_failure}", run = function()
+  host.exec("/case-test-do-not-run", {{}}, {{env = {{FIBER_X = "{secret}"}}}})
+end}})"#
+    )
+}
+
+/// The `expect` entry for the tool call a blocking hook withholds: the
+/// hook's timeout ran the callback to its end, so the result carries only
+/// the withheld line.
+fn withheld_tool_call_completed() -> Value {
+    json!({
+        "kind": "tool_call_completed",
+        "payload": {
+            "content": [{
+                "type": "text",
+                "text": "Output withheld: the `after_tool` hook of extension casefixture failed."
+            }]
+        }
+    })
+}
+
+/// The stream a blocking hook leaves when its exec ends at the hook's own
+/// timeout: the tool output is withheld and the turn still completes.
+const HANG_KINDS: [&str; 19] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    // `fiber_exited` closes every run; it is appended per test below.
+];
+
+#[test]
+fn a_hang_advance_releases_the_callback_to_its_timeout() {
+    let setup = setup(&hang_hook(1000, "1"));
+    write_tool_fixture(&setup);
+    let mut kinds = HANG_KINDS.to_vec();
+    kinds.push("fiber_exited");
+    let mut expect = expected(&kinds);
+    expect[12] = withheld_tool_call_completed();
+    let mut value = session(tool_script(), "hi", expect);
+    value["clock"] = json!([{"advance_ms": 1000, "hang": 1}]);
+    value["host"] = json!({"exec": [{
+        "request": hang_request("/case-test-do-not-run", "1"),
+        "reply": {"hang": true}
+    }]});
+    assert_success(&run_case(&setup, "hang-released", &value));
+}
+
+#[test]
+fn an_unclocked_hang_fails_naming_the_request() {
+    let setup = setup(&hang_hook(1000, "1"));
+    write_tool_fixture(&setup);
+    let mut kinds = HANG_KINDS.to_vec();
+    kinds.push("fiber_exited");
+    let mut expect = expected(&kinds);
+    expect[12] = withheld_tool_call_completed();
+    let mut value = session(tool_script(), "hi", expect);
+    value["host"] = json!({"exec": [{
+        "request": hang_request("/case-test-do-not-run", "1"),
+        "reply": {"hang": true}
+    }]});
+    assert_hang_failure(
+        &run_case(&setup, "hang-unclocked", &value),
+        "host.exec[1] hung",
+    );
+}
+
+#[test]
+fn a_second_hang_past_the_advance_fails_naming_its_entry() {
+    // The first hook is non-blocking so the chain still runs the second
+    // after the advance releases the first at its timeout; a blocking
+    // failure would stop the chain and leave entry 2 unused.
+    let setup = setup(&format!(
+        "{}\n{}",
+        hang_hook_with(1000, "non-blocking", "1"),
+        hang_hook(3000, "2")
+    ));
+    write_tool_fixture(&setup);
+    let mut kinds = HANG_KINDS.to_vec();
+    kinds.push("fiber_exited");
+    let mut value = session(tool_script(), "hi", expected(&kinds));
+    value["clock"] = json!([{"advance_ms": 1000, "hang": 1}]);
+    value["host"] = json!({"exec": [
+        {
+            "request": hang_request("/case-test-do-not-run", "1"),
+            "reply": {"hang": true}
+        },
+        {
+            "request": hang_request("/case-test-do-not-run", "2"),
+            "reply": {"hang": true}
+        }
+    ]});
+    assert_hang_failure(
+        &run_case(&setup, "hang-second", &value),
+        "host.exec[2] hung",
+    );
+}
+
 #[test]
 fn the_retry_deadline_is_fixed_before_retry_scheduled_even_with_a_timer() {
     for timer_ms in [2000, 500] {
