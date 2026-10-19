@@ -16,7 +16,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{Jobs as _, Stop, Taken};
 use contract::tool::{Answered, Ask, Asking, Output, Tool};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
-use fakes::clock::{FakeClock, Miss};
+use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
 
@@ -24,6 +24,7 @@ use super::super::Watched;
 use super::{DelegateMessage, LastSeq, Launch, Steer, Steered, Watch};
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
+use crate::timing_tests::{Step, try_step};
 use contract::Envelope;
 
 /// How long a test waits on the wall clock before it fails.
@@ -31,11 +32,6 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
-
-/// One wait inside `try_advance_when_parked` for a fresh park: a poll
-/// pause, not a deadline. At most 100 ms, so a driver whose runner left
-/// its park without a clock move sees its end condition within one pause.
-const PAUSE: Duration = Duration::from_millis(100);
 
 /// The resuming call's action, from its `Ask`.
 fn action() -> ActionId {
@@ -407,21 +403,10 @@ fn drive(clock: &FakeClock, stop: &AtomicBool, deadline: fakes::Deadline) {
                     // The runner's poll horizon: a park further ahead is
                     // the drain wait, which its own end wakes.
                     Some(gap) if gap <= Duration::from_secs(1) => {
-                        match clock.try_advance_when_parked(Some(until), None, gap, PAUSE) {
-                            Ok(_) => {}
-                            Err(Miss::NoPark) => {}
-                            Err(Miss::Mismatch {
-                                watched: (_, Some(watched)),
-                                ..
-                            }) => {
+                        match try_step(clock, until, gap) {
+                            Step::Moved | Step::NoPark => {}
+                            Step::Next(watched) => {
                                 carried = Some(watched);
-                            }
-                            Err(
-                                miss @ Miss::Mismatch {
-                                    watched: (_, None), ..
-                                },
-                            ) => {
-                                panic!("{miss}; now={:?} parked={:?}", clock.now(), clock.parked());
                             }
                         }
                     }

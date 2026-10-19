@@ -29,7 +29,7 @@ use contract::jobs::Jobs as _;
 use contract::shapes::{Failure, Usage};
 use contract::{ActionId, ErrorCode, JobId, PreSessionExit, Seq, SessionId};
 use fakes::Deadline;
-use fakes::clock::{FakeClock, Miss};
+use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
 use super::{
@@ -39,6 +39,7 @@ use super::{
 use crate::delegate::outcome::Termination;
 use crate::registry::Registry;
 use crate::support::{exited, usage};
+use crate::timing_tests::{Step, try_step};
 use support::clock::Parker;
 
 /// How long a test waits on the wall clock before it fails.
@@ -46,43 +47,6 @@ const DEADLINE: Duration = Duration::from_secs(3);
 
 /// The stop bound the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
-
-/// One wait inside `try_advance_when_parked` for a fresh park: a poll
-/// pause, not a deadline. At most 100 ms, so a driver whose runner left
-/// its park without a clock move sees its end condition within one pause.
-const PAUSE: Duration = Duration::from_millis(100);
-
-/// One `try_advance_when_parked` call's outcome: the move landed, no fresh
-/// park arrived within the pause, or a park at another instant was
-/// watched and is carried into the next pass.
-enum Step {
-    Moved,
-    NoPark,
-    Next(Instant),
-}
-
-/// One `try_advance_when_parked` call at the instant the driver read or
-/// carried this pass, moving `advance` and no further. Never checks a
-/// deadline and never moves time itself: the driver's own pass top fails
-/// at its deadline. A watched park with no deadline panics naming it:
-/// the runner never parks without one.
-fn try_step(clock: &FakeClock, until: Instant, advance: Duration) -> Step {
-    match clock.try_advance_when_parked(Some(until), None, advance, PAUSE) {
-        Ok(_) => Step::Moved,
-        Err(Miss::NoPark) => Step::NoPark,
-        Err(Miss::Mismatch {
-            watched: (_, Some(watched)),
-            ..
-        }) => Step::Next(watched),
-        Err(
-            miss @ Miss::Mismatch {
-                watched: (_, None), ..
-            },
-        ) => {
-            panic!("{miss}; now={:?} parked={:?}", clock.now(), clock.parked());
-        }
-    }
-}
 
 /// A fake watch: replays queued replies and records when it ran.
 struct Script {
@@ -476,13 +440,20 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
 /// wait. A scoped driver thread does the advancing; the test thread's
 /// single receive is the wall-clock deadline for the whole wait, so a
 /// runner that never reaches the drain fails the test instead of hanging
-/// it.
+/// it. The `AFTER_DRAIN_DEADLINE` hook is a pause point between the drain
+/// deadline's computation and its first park: it signals `reached`, then
+/// blocks until `release`. On that signal the driver releases the hook,
+/// then moves 1 s toward the park the runner registers next, through the
+/// helper, so the second lands between computation and registration with
+/// the driver as the clock's only mover. The release must come first: the
+/// helper only moves toward a park the runner holds, and the runner holds
+/// none while it sits in the hook.
 #[track_caller]
 fn wake_until_draining(
     clock: &Arc<FakeClock>,
     _bound: Duration,
-    gate: &Mutex<()>,
-    hook_pending: &AtomicBool,
+    reached: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
 ) {
     let stop = Arc::new(AtomicBool::new(false));
     let driver_stop = Arc::clone(&stop);
@@ -492,6 +463,7 @@ fn wake_until_draining(
     thread::scope(|scope| {
         scope.spawn(move || {
             let mut carried: Option<Instant> = None;
+            let mut released = false;
             loop {
                 if driver_stop.load(Ordering::Relaxed) {
                     return;
@@ -503,50 +475,55 @@ fn wake_until_draining(
                         driver_clock.parked()
                     );
                 }
-                // One pass under the gate: the hook on the runner's own
-                // thread cannot move the clock mid-pass, and the pass
-                // releases the gate before it yields or waits out the flag.
-                let (draining, step) = {
-                    let _guard = super::lock(gate);
-                    let mut candidate = carried.take();
-                    if candidate.is_some_and(|watched| watched <= driver_clock.now()) {
-                        candidate = None;
+                // Once: the pause-point handshake. The runner sits in the
+                // hook holding no park, so the 1 s cannot move before the
+                // release; the park it registers next is its drain wait.
+                if !released && reached.try_recv().is_ok() {
+                    let _sent = release.send(());
+                    released = true;
+                    let until = loop {
+                        if driver_stop.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if deadline.left().is_zero() {
+                            panic!(
+                                "the runner did not reach the drain wait; now={:?} parked={:?}",
+                                driver_clock.now(),
+                                driver_clock.parked()
+                            );
+                        }
+                        match park_ahead(&driver_clock) {
+                            Some(until) => break until,
+                            None => thread::yield_now(),
+                        }
+                    };
+                    match try_step(&driver_clock, until, Duration::from_secs(1)) {
+                        Step::Moved | Step::NoPark => {}
+                        Step::Next(watched) => {
+                            carried = Some(watched);
+                        }
                     }
-                    match candidate.or_else(|| park_ahead(&driver_clock)) {
-                        Some(until) => match until.checked_duration_since(driver_clock.now()) {
-                            Some(gap) if gap > super::POLL => (true, None),
-                            Some(gap) => (false, Some(try_step(&driver_clock, until, gap))),
-                            None => (false, None),
+                    continue;
+                }
+                let mut candidate = carried.take();
+                if candidate.is_some_and(|watched| watched <= driver_clock.now()) {
+                    candidate = None;
+                }
+                match candidate.or_else(|| park_ahead(&driver_clock)) {
+                    Some(until) => match until.checked_duration_since(driver_clock.now()) {
+                        Some(gap) if gap > super::POLL => {
+                            let _sent = done_tx.send(());
+                            return;
+                        }
+                        Some(gap) => match try_step(&driver_clock, until, gap) {
+                            Step::Moved | Step::NoPark => {}
+                            Step::Next(watched) => {
+                                carried = Some(watched);
+                            }
                         },
-                        None => (false, None),
-                    }
-                };
-                if draining {
-                    let _sent = done_tx.send(());
-                    return;
-                }
-                match step {
-                    Some(Step::Next(watched)) => {
-                        carried = Some(watched);
-                    }
-                    Some(Step::Moved | Step::NoPark) => {}
+                        None => thread::yield_now(),
+                    },
                     None => thread::yield_now(),
-                }
-                // The hook sets the flag before it blocks on the gate, so
-                // yielding here hands the gate over instead of retaking it
-                // within nanoseconds of releasing it.
-                while hook_pending.load(Ordering::SeqCst) {
-                    if driver_stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    if deadline.left().is_zero() {
-                        panic!(
-                            "the runner did not reach the drain wait; now={:?} parked={:?}",
-                            driver_clock.now(),
-                            driver_clock.parked()
-                        );
-                    }
-                    thread::yield_now();
                 }
             }
         });
@@ -690,40 +667,32 @@ fn wait_ready(path: &std::path::Path) {
 /// waiting on that clock); with no park ahead the wait yields.
 fn wait_retired(clock: &Arc<FakeClock>, pgid: u32) {
     let deadline = Deadline::after(DEADLINE);
-    within(&format!("pgid {pgid} retires"), DEADLINE, {
-        let clock = Arc::clone(clock);
-        move || {
-            let mut carried: Option<Instant> = None;
-            loop {
-                if !listed(pgid) {
-                    return;
-                }
-                if deadline.left().is_zero() {
-                    panic!(
-                        "pgid {pgid} retires; now={:?} parked={:?}",
-                        clock.now(),
-                        clock.parked()
-                    );
-                }
-                let mut candidate = carried.take();
-                if candidate.is_some_and(|watched| watched <= clock.now()) {
-                    candidate = None;
-                }
-                match candidate.or_else(|| park_ahead(&clock)) {
-                    Some(until) => match until.checked_duration_since(clock.now()) {
-                        Some(gap) if gap <= super::POLL => match try_step(&clock, until, gap) {
-                            Step::Moved | Step::NoPark => {}
-                            Step::Next(watched) => {
-                                carried = Some(watched);
-                            }
-                        },
-                        _ => thread::yield_now(),
-                    },
-                    None => thread::yield_now(),
-                }
-            }
+    let mut carried: Option<Instant> = None;
+    while listed(pgid) {
+        if deadline.left().is_zero() {
+            panic!(
+                "pgid {pgid} retires; now={:?} parked={:?}",
+                clock.now(),
+                clock.parked()
+            );
         }
-    });
+        let mut candidate = carried.take();
+        if candidate.is_some_and(|watched| watched <= clock.now()) {
+            candidate = None;
+        }
+        match candidate.or_else(|| park_ahead(clock)) {
+            Some(until) => match until.checked_duration_since(clock.now()) {
+                Some(gap) if gap <= super::POLL => match try_step(clock, until, gap) {
+                    Step::Moved | Step::NoPark => {}
+                    Step::Next(watched) => {
+                        carried = Some(watched);
+                    }
+                },
+                _ => thread::yield_now(),
+            },
+            None => thread::yield_now(),
+        }
+    }
 }
 
 /// How many SIGKILLs went to `pgid` so far.
@@ -1132,29 +1101,30 @@ fn a_delayed_drain_still_feeds_the_fold() {
     let watchdog = Watchdog::matching(&release.to_string_lossy());
     // The watch never connects: only the drain can carry the line.
     let rig = rig(vec![]);
-    // Forces the interleaving: the clock advances between the drain
-    // deadline being computed and the runner registering its park. The hook
-    // moves time on the runner's own thread; the gate serialises it with
-    // the driver's passes, and the flag hands the gate over: the driver
-    // yields after each pass while the flag is set instead of retaking the
-    // gate within nanoseconds of releasing it.
-    let gate = Arc::new(Mutex::new(()));
-    let hook_pending = Arc::new(AtomicBool::new(false));
-    let hook_clock = Arc::clone(&rig.clock);
-    let hook_gate = Arc::clone(&gate);
-    let hook_flag = Arc::clone(&hook_pending);
+    // A pause point between the drain deadline's computation and its first
+    // park: the hook signals it has been reached, then blocks until the
+    // driver releases it. The driver releases it and moves 1 s toward the
+    // park the runner registers next, so the second lands between
+    // computation and registration with the driver as the clock's only
+    // mover. Both channels exist before the hook is installed, so before
+    // `rig.start` starts the runner that runs it. The release wait fails
+    // closed, like the pause points in `fakes::clock`: if the driver is
+    // gone without releasing, the runner panics instead of parking past
+    // the point unreleased.
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
     super::lock(&super::AFTER_DRAIN_DEADLINE).replace(Box::new(move || {
-        hook_flag.store(true, Ordering::SeqCst);
-        let _guard = super::lock(&hook_gate);
-        hook_clock.advance(Duration::from_secs(1));
-        hook_flag.store(false, Ordering::SeqCst);
+        let _sent = reached_tx.send(());
+        Deadline::after(Duration::from_secs(5))
+            .recv(&release_rx)
+            .expect("waited for the driver to release the drain pause point");
     }));
     rig.start(&shell, Duration::from_secs(30), 1024);
     // The runner is waiting for the drain once it is parked at the stop
     // bound. Each wake is given only after the runner has parked on the
     // clock, so the reap lands on a wake it is waiting for; the clock stays
     // still once the bound park is seen, so only the drain's end can wake it.
-    wake_until_draining(&rig.clock, Duration::from_secs(30), &gate, &hook_pending);
+    wake_until_draining(&rig.clock, Duration::from_secs(30), reached_rx, release_tx);
     assert!(
         rig.inbox.try_recv().is_err(),
         "the fold waits for the drain"
@@ -1249,20 +1219,11 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
                 // thread's receive.
                 let until = ahead[0];
                 let advance = until - now;
-                if until >= now + BOUND {
-                    match try_step(&clock, until, advance) {
-                        Step::Moved => return,
-                        Step::NoPark => {}
-                        Step::Next(watched) => {
-                            carried = Some(watched);
-                        }
-                    }
-                } else {
-                    match try_step(&clock, until, advance) {
-                        Step::Moved | Step::NoPark => {}
-                        Step::Next(watched) => {
-                            carried = Some(watched);
-                        }
+                match try_step(&clock, until, advance) {
+                    Step::Moved if until >= now + BOUND => return,
+                    Step::Moved | Step::NoPark => {}
+                    Step::Next(watched) => {
+                        carried = Some(watched);
                     }
                 }
             }
