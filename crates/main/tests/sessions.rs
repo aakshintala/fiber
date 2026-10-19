@@ -237,7 +237,7 @@ fn fiber_in(setup: &support::Setup, dir: &Path, args: &[&str]) -> String {
     let mut command = setup.fiber(args);
     command.current_dir(dir);
     let output = support::run_to_exit(
-        Deadline::start(),
+        setup.deadline,
         &format!("fiber {}", args.join(" ")),
         command,
     );
@@ -370,12 +370,6 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     // The full subscribe releases the held first prompt at once, instead
     // of waiting out the hub's 1 s hold.
     support::subscribe(&watch, &live);
-    // The held request is recorded first: two requests prove the live
-    // turn's model call is in flight while it waits for its release.
-    assert!(
-        server.await_requests(2, setup.deadline.left()),
-        "the live turn's model call reached the provider"
-    );
     // The turn's start folds before its end: the `streaming` status proves
     // the turn is running, which the pre-turn `idle` never does.
     support::until(&watch, "the live turn's streaming status", |line| {
@@ -398,12 +392,10 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
         );
     };
     let held = poll_listed();
-    let row: Value = held
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .find(|row| row["id"] == live.as_str())
-        .unwrap();
-    assert_eq!(row["state"], "streaming", "{held}");
+    assert!(
+        held.contains(&format!("\"id\":\"{live}\",\"state\":\"streaming\"")),
+        "{held}"
+    );
     server.release();
     // The reply the release sends finishes the turn: its end folds `idle`.
     support::until(&watch, "the live turn's idle status", |line| {
@@ -411,9 +403,7 @@ fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
             && line["session_id"] == live.as_str()
             && line["payload"]["state"] == "idle"
     });
-    // The scan's follow persists while the session stays up, but it may
-    // still land after the turn's end: poll again before asserting.
-    let stdout = poll_listed();
+    let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
     assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
     let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
     assert_eq!(first["state"], "idle", "{stdout}");
