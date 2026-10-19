@@ -397,6 +397,21 @@ fn input_size_counts_a_pdf_as_media_unless_text_only() {
     );
 }
 
+#[test]
+fn input_size_counts_tool_search_results_as_text_not_media() {
+    let request = sized_request(vec![Input::ToolSearchResult {
+        action_id: contract::ActionId("a_1".into()),
+        loaded: vec!["a".into(), "b".into()],
+    }]);
+    assert_eq!(
+        input_size(b"abc", &request, false),
+        InputSize {
+            bytes: 3,
+            media: false
+        }
+    );
+}
+
 fn sized_request(conversation: Vec<Input>) -> ModelRequest {
     ModelRequest {
         system_prompt: String::new(),

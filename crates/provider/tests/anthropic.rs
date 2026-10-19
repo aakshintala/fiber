@@ -39,6 +39,80 @@ use probes::Recorded;
 
 use harness::{anthropic_completed as completed_reply, anthropic_sse as stream, run, sent_body};
 
+#[test]
+fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
+    let server = ProviderServer::start(vec![
+        harness::anthropic_completed(),
+        harness::anthropic_completed(),
+    ])
+    .unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    {
+        let mut req = request();
+        req.conversation.push(Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            model: model.clone(),
+            call: ToolCallRequested {
+                name: "tool_search".into(),
+                arguments: json!({"query":"q"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        });
+        req.conversation.push(Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: vec!["a".into(), "b".into()],
+        });
+        req.conversation.insert(
+            2,
+            Input::ToolCall {
+                action_id: ActionId("a_2".into()),
+                model: ep.reference(),
+                call: ToolCallRequested {
+                    name: "sibling".into(),
+                    arguments: json!({}),
+                    provider_id: None,
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                },
+            },
+        );
+        req.conversation.push(Input::ToolResult {
+            action_id: ActionId("a_2".into()),
+            text: "sibling answer".into(),
+            is_error: false,
+            images: vec![],
+            pdfs: vec![],
+        });
+        let protocol = Messages::new(ep.clone());
+        run(protocol.call(&req)).0.unwrap();
+        req.conversation[3] = Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "Loaded: a, b.".into(),
+            is_error: false,
+            images: vec![],
+            pdfs: vec![],
+        };
+        run(protocol.call(&req)).0.unwrap();
+        let requests = server.requests();
+        let pair = &requests[requests.len() - 2..];
+        assert_eq!(pair[0].body, pair[1].body, "{model}");
+        let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            messages[2]["content"][0],
+            json!({"type":"tool_result", "tool_use_id":"a_1", "content":"Loaded: a, b."})
+        );
+    }
+}
+
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../research")

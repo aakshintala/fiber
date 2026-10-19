@@ -41,6 +41,51 @@ use probes::Recorded;
 
 use harness::{responses_sse as stream, run, sent_body};
 
+#[test]
+fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
+    let server = ProviderServer::start(vec![Response::stream(stream(&[json!({"type":"response.completed", "response":{"id":"r1", "status":"completed", "output":[], "usage":{"input_tokens":1,"output_tokens":0}}})])), Response::stream(stream(&[json!({"type":"response.completed", "response":{"id":"r1", "status":"completed", "output":[], "usage":{"input_tokens":1,"output_tokens":0}}})]))]).unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    {
+        let mut req = request();
+        req.conversation.push(Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            model: model.clone(),
+            call: ToolCallRequested {
+                name: "tool_search".into(),
+                arguments: json!({"query":"q"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+        });
+        req.conversation.push(Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: vec!["a".into(), "b".into()],
+        });
+
+        let protocol = Responses::new(ep.clone());
+        run(protocol.call(&req)).0.unwrap();
+        req.conversation[2] = Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "Loaded: a, b.".into(),
+            is_error: false,
+            images: vec![],
+            pdfs: vec![],
+        };
+        run(protocol.call(&req)).0.unwrap();
+        let requests = server.requests();
+        let pair = &requests[requests.len() - 2..];
+        assert_eq!(pair[0].body, pair[1].body, "{model}");
+        let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
+        assert_eq!(
+            body["input"][2],
+            json!({"type":"function_call_output", "call_id":"a_1", "output":"Loaded: a, b."})
+        );
+    }
+}
+
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../research")
