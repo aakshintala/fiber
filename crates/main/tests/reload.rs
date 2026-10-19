@@ -610,7 +610,18 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
         .expected
         .extend(["command_accepted", "command_rejected", "fiber_exited"]);
     assert_one_clients(&session.stream);
-    assert_eq!(kinds_without_clients(&session.stream), session.expected);
+    // Compact JSON per line: the payloads the kinds list hides.
+    let dump = session
+        .stream
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        kinds_without_clients(&session.stream),
+        session.expected,
+        "stream mismatch:\n{dump}"
+    );
     let rejection = session
         .stream
         .iter()
