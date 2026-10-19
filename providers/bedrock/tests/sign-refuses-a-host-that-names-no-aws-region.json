@@ -1,0 +1,28 @@
+{
+  "call": {
+    "provider": "bedrock",
+    "function": "sign",
+    "arg": {
+      "method": "POST",
+      "url": "https://example.test/model/m/invoke-with-response-stream",
+      "headers": {}
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "sh"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "\u0000AKIDEXAMPLE\u0000wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\u0000",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "credential_failed"
+  }
+}

@@ -18,6 +18,11 @@ const PROVIDER_FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../providers/anthropic/providers/anthropic.json"),
     ),
     (
+        "bedrock",
+        "bedrock",
+        include_str!("../../../providers/bedrock/providers/bedrock.json"),
+    ),
+    (
         "codex",
         "codex",
         include_str!("../../../providers/codex/providers/codex.json"),

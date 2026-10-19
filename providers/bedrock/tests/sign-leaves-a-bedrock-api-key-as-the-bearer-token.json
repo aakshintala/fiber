@@ -1,0 +1,30 @@
+{
+  "call": {
+    "provider": "bedrock",
+    "function": "sign",
+    "arg": {
+      "method": "POST",
+      "url": "https://bedrock-runtime.ap-south-1.amazonaws.com/model/global.anthropic.claude-haiku-4-5-20251001-v1%3A0/invoke-with-response-stream",
+      "headers": {
+        "content-type": "application/json"
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "sh"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "ABSKexample-key\u0000\u0000\u0000",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "returns": {
+    "authorization": "Bearer ABSKexample-key"
+  }
+}

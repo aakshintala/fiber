@@ -19,7 +19,7 @@ use fakes::{TempDir, finished};
 const WITHIN: Duration = Duration::from_secs(30);
 
 /// Every file the generator writes, from the repository root.
-const GENERATED: [&str; 8] = [
+const GENERATED: [&str; 9] = [
     "providers/anthropic/providers/anthropic.json",
     "providers/gemini/providers/gemini.json",
     "providers/openai/providers/openai.json",
@@ -27,6 +27,7 @@ const GENERATED: [&str; 8] = [
     "providers/muse/providers/muse.json",
     "providers/opencode/providers/opencode-go.json",
     "providers/opencode/providers/opencode-zen.json",
+    "providers/bedrock/providers/bedrock.json",
     "xtask/tests/models-dev.json",
 ];
 
