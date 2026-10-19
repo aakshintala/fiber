@@ -366,7 +366,8 @@ fn every_call_is_decided_before_any_runs_and_results_return_in_request_order() {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolCall { .. } => None,
+            | Input::ToolCall { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
     assert_eq!(results.len(), 3);

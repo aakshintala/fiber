@@ -190,10 +190,88 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::User { .. }
             | Input::Assistant { .. }
             | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => None,
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
         })
         .collect();
 
+    let render_result = |out: &mut Vec<(&'static str, Vec<Value>)>,
+                         action_id: &ActionId,
+                         text: &str,
+                         is_error: bool,
+                         images: &[contract::provider::ImageRef],
+                         pdfs: &[contract::provider::PdfRef]| {
+        let found = calls.get(action_id).copied();
+        let call = found.map(|(call, _)| call);
+        let prepared = crate::images::prepare(
+            text,
+            images,
+            pdfs,
+            &request.session_dir,
+            endpoint.text_only,
+            crate::images::PdfForm::Native,
+        );
+        // A result whose call another model reference made goes as
+        // plain text (`docs/model-routing.md`, "Google Generative
+        // AI wire facts"). An orphan keeps today's native rendering.
+        if let Some((made, made_model)) = found
+            && *made_model != reference
+        {
+            let line = if is_error { "failed" } else { "returned" };
+            push(
+                out,
+                "user",
+                json!({"text": format!("The tool {} {line}:\n{}", made.name, prepared.text)}),
+            );
+            for image in &prepared.images {
+                push(
+                    out,
+                    "user",
+                    json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}}),
+                );
+            }
+            for document in &prepared.documents {
+                push(
+                    out,
+                    "user",
+                    json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}}),
+                );
+            }
+            return;
+        }
+        // A failed call sends the documented `error` key in place
+        // of `output` (googleapis
+        // `google/ai/generativelanguage/v1beta/content.proto`,
+        // `FunctionResponse.response`: "if the function call failed
+        // to execute, the response can have an \"error\" key").
+        let result = if is_error {
+            json!({"error": prepared.text})
+        } else {
+            json!({"output": prepared.text})
+        };
+        let mut response =
+            json!({"name": call.map_or("", |c| c.name.as_str()), "response": result});
+        // An image rides in `parts`, beside the `response` the
+        // model read, as does a PDF (`docs/model-routing.md`,
+        // "Google Generative AI wire facts").
+        if !prepared.images.is_empty() || !prepared.documents.is_empty() {
+            let mut parts: Vec<Value> = prepared.images.iter().map(|image| {
+                json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}})
+            }).collect();
+            parts.extend(prepared.documents.iter().map(|document| {
+                json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}})
+            }));
+            if let Some(map) = response.as_object_mut() {
+                map.insert("parts".into(), Value::Array(parts));
+            }
+        }
+        let response = with(
+            response,
+            call.and_then(|c| c.provider_id.as_ref())
+                .map(|id| json!({"id": id.0})),
+        );
+        push(out, "user", json!({"functionResponse": response}));
+    };
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     // A signature on a `functionCall`, waiting for that call. It never
     // rides onto text or into the next reply.
@@ -278,6 +356,17 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     with(json!({ "functionCall": function }), signature.take()),
                 );
             }
+            Input::ToolSearchResult { action_id, loaded } => {
+                park(&mut out, &mut signature);
+                render_result(
+                    &mut out,
+                    action_id,
+                    &contract::provider::loaded_text(loaded),
+                    false,
+                    &[],
+                    &[],
+                );
+            }
             Input::ToolResult {
                 action_id,
                 text,
@@ -286,78 +375,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 pdfs,
             } => {
                 park(&mut out, &mut signature);
-                let found = calls.get(action_id).copied();
-                let call = found.map(|(call, _)| call);
-                let prepared = crate::images::prepare(
-                    text,
-                    images,
-                    pdfs,
-                    &request.session_dir,
-                    endpoint.text_only,
-                    crate::images::PdfForm::Native,
-                );
-                // A result whose call another model reference made goes as
-                // plain text (`docs/model-routing.md`, "Google Generative
-                // AI wire facts"). An orphan keeps today's native rendering.
-                if let Some((made, made_model)) = found
-                    && *made_model != reference
-                {
-                    let line = if *is_error { "failed" } else { "returned" };
-                    push(
-                        &mut out,
-                        "user",
-                        json!({"text": format!("The tool {} {line}:\n{}", made.name, prepared.text)}),
-                    );
-                    for image in &prepared.images {
-                        push(
-                            &mut out,
-                            "user",
-                            json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}}),
-                        );
-                    }
-                    for document in &prepared.documents {
-                        push(
-                            &mut out,
-                            "user",
-                            json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}}),
-                        );
-                    }
-                    continue;
-                }
-                // A failed call sends the documented `error` key in place
-                // of `output` (googleapis
-                // `google/ai/generativelanguage/v1beta/content.proto`,
-                // `FunctionResponse.response`: "if the function call failed
-                // to execute, the response can have an \"error\" key").
-                let result = if *is_error {
-                    json!({"error": prepared.text})
-                } else {
-                    json!({"output": prepared.text})
-                };
-                let mut response = json!({
-                    "name": call.map_or("", |c| c.name.as_str()),
-                    "response": result,
-                });
-                // An image rides in `parts`, beside the `response` the
-                // model read, as does a PDF (`docs/model-routing.md`,
-                // "Google Generative AI wire facts").
-                if !prepared.images.is_empty() || !prepared.documents.is_empty() {
-                    let mut parts: Vec<Value> = prepared.images.iter().map(|image| {
-                        json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}})
-                    }).collect();
-                    parts.extend(prepared.documents.iter().map(|document| {
-                        json!({"inlineData": {"mimeType": "application/pdf", "data": document.data}})
-                    }));
-                    if let Some(map) = response.as_object_mut() {
-                        map.insert("parts".into(), Value::Array(parts));
-                    }
-                }
-                let response = with(
-                    response,
-                    call.and_then(|c| c.provider_id.as_ref())
-                        .map(|id| json!({"id": id.0})),
-                );
-                push(&mut out, "user", json!({ "functionResponse": response }));
+                render_result(&mut out, action_id, text, *is_error, images, pdfs);
             }
         }
     }

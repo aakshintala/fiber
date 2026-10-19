@@ -112,6 +112,49 @@ impl Provider for Fake {
 }
 
 #[test]
+fn tool_search_results_round_trip_with_loaded_names_including_an_empty_list() {
+    for loaded in [vec!["a".into(), "b".into()], vec![]] {
+        let input = Input::ToolSearchResult {
+            action_id: ActionId("a_1".into()),
+            loaded: loaded.clone(),
+        };
+        let value = serde_json::to_value(&input).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "type": "tool_search_result", "action_id": "a_1", "loaded": loaded
+            })
+        );
+        assert_eq!(serde_json::from_value::<Input>(value).unwrap(), input);
+    }
+}
+
+#[test]
+fn tool_search_has_a_stable_name_and_providers_do_not_defer_by_default() {
+    assert_eq!(TOOL_SEARCH, "tool_search");
+    assert!(!Fake.defers());
+}
+
+#[test]
+fn tool_search_text_files_pin_every_byte() {
+    assert_eq!(
+        include_bytes!("../prompt/no-match.md").as_slice(),
+        b"No deferred tool matched the query.\n"
+    );
+    assert_eq!(
+        include_bytes!("../prompt/loaded.md").as_slice(),
+        b"Loaded: {names}.\n"
+    );
+}
+
+#[test]
+fn tool_search_texts_strip_the_newline_and_join_loaded_names() {
+    assert_eq!(NO_MATCH, "No deferred tool matched the query.");
+    assert_eq!(loaded_text(&["a".into(), "b".into()]), "Loaded: a, b.");
+    assert_eq!(loaded_text(&["a".into()]), "Loaded: a.");
+}
+
+#[test]
 fn a_user_s_images_are_absent_when_empty_and_read_back_when_full() {
     let plain = Input::User {
         text: "hi".into(),

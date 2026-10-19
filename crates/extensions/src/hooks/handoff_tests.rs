@@ -463,6 +463,54 @@ fn a_check_hook_is_not_registered() {
 }
 
 #[test]
+fn tool_search_results_render_as_the_tools_answer_with_or_without_a_call() {
+    let home = Home::new();
+    home.install(
+        "echo",
+        &hook(
+            "non-blocking",
+            r#"return { note = json.encode(call.messages) }"#,
+        ),
+    );
+    let session = home.load(&[]);
+    let call = Input::ToolCall {
+        action_id: ActionId("a_1".into()),
+        model: "fake/m".into(),
+        call: ToolCallRequested {
+            name: "tool_search".into(),
+            arguments: json!({"query":"q"}),
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+    };
+    let result = Input::ToolSearchResult {
+        action_id: ActionId("a_1".into()),
+        loaded: vec!["a".into(), "b".into()],
+    };
+    for (conversation, expected) in [
+        (
+            vec![call, result.clone()],
+            json!([
+                {"role":"assistant", "content":[{"type":"text", "text":"Called the tool tool_search with arguments {\"query\":\"q\"}"}]},
+                {"role":"user", "content":[{"type":"text", "text":"The tool tool_search returned:\nLoaded: a, b."}]}
+            ]),
+        ),
+        (
+            vec![result],
+            json!([
+                {"role":"user", "content":[{"type":"text", "text":"A tool returned:\nLoaded: a, b."}]}
+            ]),
+        ),
+    ] {
+        let answer = dispatch(&session, HandoffTrigger::Auto, None, conversation);
+        let (text, _) = note(&answer).expect("a hook wrote a note");
+        assert_eq!(serde_json::from_str::<Value>(text).unwrap(), expected);
+    }
+}
+
+#[test]
 fn the_conversation_renders_as_neutral_messages() {
     let home = Home::new();
     home.install(

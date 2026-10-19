@@ -130,7 +130,8 @@ fn user_text(input: &Input) -> &str {
         Input::Assistant { .. }
         | Input::Reasoning { .. }
         | Input::ToolCall { .. }
-        | Input::ToolResult { .. } => {
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => {
             panic!("not a user item: {input:?}")
         }
     }

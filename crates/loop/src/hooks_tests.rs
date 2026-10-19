@@ -285,7 +285,8 @@ impl Ran {
                 Input::User { .. }
                 | Input::Assistant { .. }
                 | Input::Reasoning { .. }
-                | Input::ToolCall { .. } => None,
+                | Input::ToolCall { .. }
+                | Input::ToolSearchResult { .. } => None,
             })
             .expect("a tool result")
     }
