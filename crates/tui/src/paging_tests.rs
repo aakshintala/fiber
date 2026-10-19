@@ -4269,3 +4269,77 @@ fn reload_reports_the_same_failure_again() {
         "{texts:?}"
     );
 }
+
+/// The page's bound seam shares the install and its cache: the first draw
+/// calls once per distinct input and carries the renderer's lines, the
+/// second draw calls nothing.
+#[test]
+fn bound_shares_the_renderer_and_its_cache_with_the_page() {
+    // Kills crates/tui/src/ext.rs:58 replace Ext::bind -> Bound with
+    // Default::default(): the default Bound carries no handle and a fresh
+    // cache, so the renderer is never called and no row carries its lines.
+    // The phase-one `> 0` / non-empty / `zxqy` asserts fail with the mutant
+    // applied, and the phase-two non-empty / `zxqy` asserts fail with it
+    // too, since the totals stay at zero; no run needed.
+    let lines = session(1, true);
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    app.on_key(Key::CtrlO, now());
+    let fake = Rc::new(Fake {
+        styled: true,
+        ..Fake::lines(1)
+    });
+    // The install recounts every page through the bound seam: each distinct
+    // ledger input calls exactly once.
+    app.use_renderer(fake.clone());
+    let drawn: Vec<String> = resident(&app)
+        .iter()
+        .flat_map(|at| {
+            app.pages()
+                .page_text_open_turns(*at)
+                .map(|(rows, ..)| drawn_texts(&rows))
+                .unwrap_or_default()
+        })
+        .collect();
+    assert!(calls() > 0, "the bound renderer draws");
+    assert!(
+        !fake.per_input.borrow().is_empty(),
+        "the renderer saw an input"
+    );
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count == 1),
+        "each input called once"
+    );
+    assert!(
+        drawn.iter().any(|line| line.contains("zxqy")),
+        "a row carries the renderer's lines: {drawn:?}"
+    );
+    let total = *fake.calls.borrow();
+    assert!(total > 0, "the renderer was called");
+    // The same draw again hits the bound clone's shared cache: nothing
+    // calls again and the rows keep the renderer's lines.
+    search(&app);
+    assert_eq!(calls(), 0, "the second draw hits the bound cache");
+    assert_eq!(*fake.calls.borrow(), total, "the second draw calls nothing");
+    assert!(
+        !fake.per_input.borrow().is_empty(),
+        "the renderer still saw an input"
+    );
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count == 1),
+        "no input called twice"
+    );
+    let again: Vec<String> = resident(&app)
+        .iter()
+        .flat_map(|at| {
+            app.pages()
+                .page_text_open_turns(*at)
+                .map(|(rows, ..)| drawn_texts(&rows))
+                .unwrap_or_default()
+        })
+        .collect();
+    assert!(
+        again.iter().any(|line| line.contains("zxqy")),
+        "a row still carries the renderer's lines: {again:?}"
+    );
+}
