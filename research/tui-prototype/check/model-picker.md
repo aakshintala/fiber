@@ -19,3 +19,7 @@ One run per case: `--picker CASE`.
 - prices-free: gemma-3-27b `›` on the accent bar reading `free` for its prices, the rest priced; same panel, bar and legend.
 - prices-noprice: gpt-6-nano `›` on the accent bar with no price text, only its labelled switch cost, the rest priced; same panel, bar and legend.
 - prices-tiered: claude-sonnet-5-5 `›` on the accent bar at its tiered rates with the `tier 200k+` mark, the rest at their own rates; same panel, bar and legend.
+- install-missing: three installed providers as in `list`, then below a blank row a `databricks · not installed` row with the name in accent and the mark dim, its two models dim with no prices and no thinking chips; same panel, bar and legend.
+- install-running: the same row below the installed sections reading `⟳ installing` with the spinner in attention, its models still dim; same panel, bar and legend.
+- install-failed: the same row below the installed sections still marked not installed, with an indented error line in error under its dim models; same panel, bar and legend.
+- install-done: a fourth `databricks` section with its two models listed, then the install summary (`✓ installed databricks …` with its providers and base URLs, what it replaces and carries) and a dim `databricks needs a credential: run `fiber login databricks`` line; same panel, bar and legend.
