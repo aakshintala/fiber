@@ -1146,6 +1146,7 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
     gates[1].open();
     // The second change is held for the 100 ms interval, then written.
     let due = clock.now() + Duration::from_millis(100);
+    assert!(clock.await_parked(due, DEADLINE), "the held change waits");
     clock.advance_when_parked(
         Some(due),
         session.turn_thread,
