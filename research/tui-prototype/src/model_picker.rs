@@ -361,6 +361,8 @@ pub fn install_fixture() -> Provider {
 pub enum Install {
     /// the row sits below the installed sections, marked not installed
     Missing,
+    /// the install runs; the row reads installing with the spinner
+    Installing,
 }
 
 /// The catalogue on screen: the hub's on a remote terminal, else the
@@ -568,6 +570,15 @@ pub(crate) const CASES: &[Case<State>] = &[
         check: "three installed providers as in `list`, then below a blank row a `databricks · not installed` row with the name in accent and the mark dim, its two models dim with no prices and no thinking chips; same panel, bar and legend.",
         build: || State {
             install: Some(Install::Missing),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-running",
+        help: "the not-installed row while its install runs",
+        check: "the same row below the installed sections reading `⟳ installing` with the spinner in attention, its models still dim; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Installing),
             ..base()
         },
     },
@@ -1080,14 +1091,15 @@ fn footer(s: &State) -> Row {
 /// The not-installed provider's rows below the installed sections: the
 /// row with the gutter and the name in accent, then its models dim with
 /// no prices and no thinking chips, since nothing installed has either.
-fn pending_rows(p: &Provider) -> Vec<Row> {
+/// While the install runs the mark gives way to the spinner in attention.
+fn pending_rows(s: &State, p: &Provider, install: Install) -> Vec<Row> {
+    let mark = match install {
+        Install::Missing => sp(" · not installed", dim()),
+        Install::Installing => sp(format!(" ⟳ installing {} ", spin(s)), fg(ORANGE)),
+    };
     let mut out = vec![
         row(vec![]),
-        row(vec![
-            sp("  ", Style::new()),
-            sp(p.name, fg(BLUE)),
-            sp(" · not installed", dim()),
-        ]),
+        row(vec![sp("  ", Style::new()), sp(p.name, fg(BLUE)), mark]),
     ];
     for m in &p.models {
         let mut spans = vec![
@@ -1179,8 +1191,8 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             }
         }
     }
-    if matches!(s.install, Some(Install::Missing)) {
-        out.extend(pending_rows(&install_fixture()));
+    if let Some(install) = s.install {
+        out.extend(pending_rows(s, &install_fixture(), install));
     }
     out
 }
@@ -2587,6 +2599,51 @@ mod tests {
             "needs a credential",
         ] {
             assert!(!t.contains(word), "missing case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_running_row_reads_installing_with_the_spinner_in_attention() {
+        use ratatui::style::Modifier;
+        let mut s = for_case("install-running");
+        s.still = true;
+        let rows = view(&s, 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the installing provider");
+        assert!(t.contains("installing"), "the row does not read installing");
+        assert!(
+            t.contains("\u{25cb}"),
+            "no still spinner glyph on the installing row"
+        );
+        assert!(
+            !t.contains("not installed"),
+            "the installing row keeps the missing mark"
+        );
+        // The spinner and its word read in the attention colour.
+        let row = rows
+            .iter()
+            .find(|r| plain(r).contains("installing"))
+            .unwrap();
+        let ink = row
+            .spans
+            .iter()
+            .find(|sp| sp.content.contains("installing"))
+            .unwrap();
+        assert_eq!(ink.style.fg, Some(ORANGE), "installing is not attention");
+        assert!(
+            !ink.style.add_modifier.contains(Modifier::DIM),
+            "installing went dim"
+        );
+        // Its models stay dim below while nothing is installed yet.
+        assert!(t.contains("dbrx-instruct"), "missing the pending models");
+        let pending = t.find("installing").unwrap();
+        assert!(
+            !t[pending..].contains("thinking"),
+            "the installing models grow chips"
+        );
+        // Nothing failed or finished here.
+        for word in ["\u{2713} installed", "\u{2717}", "needs a credential"] {
+            assert!(!t.contains(word), "running case draws {word}");
         }
     }
 
