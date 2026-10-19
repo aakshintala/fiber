@@ -220,6 +220,14 @@ fn home_lists_live_and_exited_projects_and_keeps_the_box_at_the_bottom() {
     assert!(!grid.rows.iter().any(|row| row.contains("exited 1")));
     assert_box_at_bottom(&grid);
     assert!(
+        !grid
+            .rows
+            .iter()
+            .any(|row| row.contains("back to the session")),
+        "no back hint on the launch home:\n{}",
+        grid.contents
+    );
+    assert!(
         !grid.rows[row_at(&grid, "exited 3")].contains("turn"),
         "an old status without turns draws no turns segment"
     );
