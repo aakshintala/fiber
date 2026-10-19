@@ -3802,10 +3802,24 @@ fn resident(app: &App) -> Vec<usize> {
         .collect()
 }
 
-/// The search-style draw over every resident page.
+/// The search-style draw over every resident page: every ledger row
+/// draws, open or not, so the renderer sees each distinct input once.
+/// A normal draw skips closed groups' ledgers, so only this draw
+/// reaches every input.
 fn search(app: &App) {
     for at in resident(app) {
         app.pages().page_text_open_turns(at);
+    }
+}
+
+/// The search-style draw over every resident page of `pages`: every
+/// ledger row draws, open or not, so the renderer sees each distinct
+/// input once.
+fn search_pages(pages: &Pages) {
+    for at in 0..pages.index().pages().len() {
+        if pages.part(at).is_some() {
+            pages.page_text_open_turns(at);
+        }
     }
 }
 
@@ -3874,19 +3888,29 @@ fn a_new_width_calls_again_and_a_failure_never_calls_again() {
         fail_edits: true,
         ..Fake::lines(1)
     });
-    pages.ext.handle = Handle::create();
-    pages.ext.handle.set(fake.clone());
     for line in &lines {
         pages.apply(line);
     }
-    // Loading every page counts it under the fake.
-    assert!(!joined(&mut pages, &lines).is_empty());
+    // Installing after the fold starts the entries empty: transients
+    // drawn while folding never reach the renderer.
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(fake.clone());
+    // The search-style draw calls once per distinct input: successes
+    // cache their lines, edits fail and stay cached as failures.
+    search_pages(&pages);
     assert!(calls() > 0, "the first width calls");
     assert!(!fake.failed.borrow().is_empty(), "an edit failed");
+    assert!(
+        fake.per_input.borrow().values().all(|count| *count == 1),
+        "each input called once"
+    );
+    // A repeated search-style draw hits the hot cache.
+    search_pages(&pages);
+    assert_eq!(calls(), 0, "the hot cache calls nothing");
     // A new width drops the entries: every successful input calls
     // again, each failure stays cached.
     pages.set_width(100);
-    assert!(!joined(&mut pages, &lines).is_empty());
+    search_pages(&pages);
     assert!(calls() > 0, "the new width calls again");
     for (input, count) in &counts(&fake) {
         if fake.failed.borrow().contains(input) {
@@ -3897,7 +3921,8 @@ fn a_new_width_calls_again_and_a_failure_never_calls_again() {
     }
     // Back at the old width the entries are gone too: a third call.
     pages.set_width(80);
-    assert!(!joined(&mut pages, &lines).is_empty());
+    search_pages(&pages);
+    assert!(calls() > 0, "the old width calls again");
     for (input, count) in &counts(&fake) {
         if fake.failed.borrow().contains(input) {
             assert_eq!(*count, 1, "a failing input never calls again");
@@ -3953,25 +3978,32 @@ fn dropping_a_page_calls_again_on_reload() {
     let lines = session(2, false);
     let mut pages = Pages::new(80);
     let fake = Rc::new(Fake::lines(1));
-    pages.ext.handle = Handle::create();
-    pages.ext.handle.set(fake.clone());
     for line in &lines {
         pages.apply(line);
     }
-    assert!(!joined(&mut pages, &lines).is_empty());
+    // Installing after the fold starts the entries empty: transients
+    // drawn while folding never reach the renderer.
+    pages.ext.handle = Handle::create();
+    pages.ext.handle.set(fake.clone());
+    // The search-style draw caches every resident input once: a normal
+    // draw skips closed groups' ledgers, so only this draw reaches
+    // every input.
+    search_pages(&pages);
     assert!(calls() > 0, "loading calls");
     assert!(
         fake.per_input.borrow().values().all(|count| *count == 1),
         "each input called once"
     );
     // Drop every closed page: the open page stays, and redrawing it
-    // costs nothing.
+    // hits the hot cache.
     pages.trim(0, 0);
     let open = pages.closed.len();
     assert!(pages.part(open).is_some(), "the open page stays");
     pages.page_text_open_turns(open);
     assert_eq!(calls(), 0, "an undropped page does not call again");
-    // Reloading a dropped page calls its inputs again, exactly once.
+    // Reloading a dropped page calls its inputs again, exactly once:
+    // the reload counts without reaching closed ledgers, so the next
+    // search-style draw misses each of its inputs once.
     let range = pages
         .index()
         .pages()
@@ -3981,6 +4013,7 @@ fn dropping_a_page_calls_again_on_reload() {
         pages.load(&history(&lines, &range));
     }
     assert!(pages.part(0).is_some(), "page 0 loads back");
+    search_pages(&pages);
     assert!(calls() > 0, "the reload calls again");
     assert!(
         fake.per_input.borrow().values().all(|count| *count <= 2),
@@ -3999,6 +4032,9 @@ fn installing_a_renderer_recounts_under_its_lines() {
     let lines = session(1, true);
     let mut app = app(80, 20);
     open(&mut app, &lines);
+    // Open every ledger first: the recount draws only open ledgers,
+    // so closed ones would stay silent under any renderer.
+    app.on_key(Key::CtrlO, now());
     let rows = |app: &App| {
         app.pages()
             .index()
@@ -4034,15 +4070,21 @@ fn a_fresh_copy_shares_the_renderer_with_an_empty_cache() {
     for line in &lines {
         pages.apply(line);
     }
-    assert!(!joined(&mut pages, &lines).is_empty());
-    // The copy draws through the same install: the same fake is
-    // called, once per distinct input, then never again.
+    search_pages(&pages);
+    assert!(calls() > 0, "the session draws");
+    // The copy draws through the same install with an empty cache: the
+    // same fake is called, once per distinct input, then never again.
+    // Folding the lines into the copy is what the land and tail swaps
+    // do; the copy carries no rows of its own.
     let mut fresh = pages.fresh();
     assert!(fresh.ext.flat, "the copy keeps the flag");
+    for line in &lines {
+        fresh.apply(line);
+    }
     calls();
-    assert!(!joined(&mut fresh, &lines).is_empty());
+    search_pages(&fresh);
     assert!(calls() > 0, "an empty cache calls");
-    assert!(!joined(&mut fresh, &lines).is_empty());
+    search_pages(&fresh);
     assert_eq!(calls(), 0, "the second draw hits");
 }
 
