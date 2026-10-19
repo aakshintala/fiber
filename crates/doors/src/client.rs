@@ -311,11 +311,11 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
                 reject(conn, Some(id), ErrorCode::Closing, ENDED);
                 return;
             };
-            let read = history(&log, &args);
+            let read = history(&log, &conn.gate.session_id, &args);
             drop(log);
             match read {
                 Ok(lines) => accept(conn, id, Some(CommandResult::History { lines })),
-                Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, message),
+                Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
             }
         }
         Command::Prompt(args) => {
@@ -660,16 +660,45 @@ fn deliver_message(
 /// log, with none.
 fn history(
     log: &log::Log,
+    own: &contract::SessionId,
     args: &contract::commands::HistoryArgs,
-) -> Result<Vec<Envelope>, &'static str> {
+) -> Result<Vec<Envelope>, String> {
+    let ancestor = match args.session_id.as_ref().filter(|id| *id != own) {
+        None => None,
+        Some(id) => {
+            if !valid_session_id(&id.0) {
+                return Err(format!(
+                    "{} is not a session id: one is `s_` followed by 16 lowercase hex digits.",
+                    id.0
+                ));
+            }
+            let chain = log::history(log.dir()).map_err(|_| UNFIT.to_owned())?;
+            let segment = chain
+                .into_iter()
+                .rev()
+                .skip(1)
+                .find(|segment| segment.session_id == *id)
+                .ok_or_else(|| {
+                    format!(
+                        "Session {} is neither this session nor one it continues.",
+                        id.0
+                    )
+                })?;
+            Some(segment)
+        }
+    };
+    let count = ancestor
+        .as_ref()
+        .and_then(|segment| segment.to)
+        .map_or_else(|| log.count(), |to| to.0.saturating_add(1));
     let (start, max, to) = match args.from_seq {
         Some(from_seq) => {
             let from = from_seq.0;
-            if from >= log.count() {
-                return Err(PAST);
+            if from >= count {
+                return Err(PAST.to_owned());
             }
             let max = match args.to_seq {
-                Some(to) if to < from_seq => return Err(REVERSED),
+                Some(to) if to < from_seq => return Err(REVERSED.to_owned()),
                 Some(to) => usize::try_from(to.0 - from)
                     .map_or(HISTORY, |span| span.saturating_add(1).min(HISTORY)),
                 None => HISTORY,
@@ -677,7 +706,6 @@ fn history(
             (from, max, args.to_seq.map_or(u64::MAX, |to| to.0))
         }
         None => {
-            let count = log.count();
             if count == 0 {
                 return Ok(vec![]);
             }
@@ -688,11 +716,24 @@ fn history(
             (start, max, end)
         }
     };
-    let lines = log.range(start, max).map_err(|_| UNFIT)?;
+    let lines = match ancestor {
+        Some(segment) => segment.range(start, max),
+        None => log.range(start, max),
+    }
+    .map_err(|_| UNFIT.to_owned())?;
     Ok(lines
         .into_iter()
         .filter(|line| line.seq.is_some_and(|seq| seq.0 <= to))
         .collect())
+}
+
+/// A session id cannot name a path outside the sessions directory.
+fn valid_session_id(text: &str) -> bool {
+    let hex = text.strip_prefix("s_").unwrap_or("");
+    hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
