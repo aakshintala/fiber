@@ -1975,8 +1975,12 @@ fn close_ack_waits_for_the_queued_closing_publication() {
     Deadline::after(DEADLINE)
         .recv(&queued_rx)
         .expect("the close request is queued");
+    // The observer stays held, so the wait must still be running after a
+    // bounded receive: a no-wait `closing` would have answered by now.
     assert!(
-        done_rx.try_recv().is_err(),
+        Deadline::after(std::time::Duration::from_millis(500))
+            .recv(&done_rx)
+            .is_err(),
         "closing waits for the observer to publish closing"
     );
     release.send(()).unwrap();
