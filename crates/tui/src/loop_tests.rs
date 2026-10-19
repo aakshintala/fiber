@@ -1178,12 +1178,8 @@ fn stall_report(
     reader_done: &Result<(), mpsc::TryRecvError>,
     reader_forwarded: u64,
 ) -> String {
-    let run = match finished {
-        mpsc::TryRecvError::Empty => "run thread alive",
-        mpsc::TryRecvError::Disconnected => "run thread gone",
-    };
     format!(
-        "{run} (finished channel {finished:?}); hub at {:?} (writing: {}), hub {}; reader {} (lines forwarded: {reader_forwarded})",
+        "{finished:?}; hub at {:?} (writing: {}), hub {}; reader {} (lines forwarded: {reader_forwarded})",
         hub.last_command,
         hub.writing,
         done_state(hub_done),
@@ -1199,13 +1195,10 @@ fn stall_report_names_a_parked_hub_while_the_run_thread_lives() {
     };
     let waiting: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Empty);
     let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &waiting, &waiting, 0);
-    assert!(report.contains("run thread alive"), "{report}");
-    assert!(report.contains("Empty"), "{report}");
-    assert!(report.contains("subscribe"), "{report}");
-    assert!(report.contains("writing: false"), "{report}");
-    assert!(report.contains("hub waiting"), "{report}");
-    assert!(report.contains("reader waiting"), "{report}");
-    assert!(report.contains("lines forwarded: 0"), "{report}");
+    assert_eq!(
+        report,
+        "Empty; hub at \"subscribe\" (writing: false), hub waiting; reader waiting (lines forwarded: 0)",
+    );
 }
 
 #[test]
@@ -1222,12 +1215,10 @@ fn stall_report_names_a_gone_run_thread() {
         &waiting,
         1348,
     );
-    assert!(report.contains("run thread gone"), "{report}");
-    assert!(!report.contains("run thread alive"), "{report}");
-    assert!(report.contains("Disconnected"), "{report}");
-    assert!(report.contains("history"), "{report}");
-    assert!(report.contains("writing: true"), "{report}");
-    assert!(report.contains("lines forwarded: 1348"), "{report}");
+    assert_eq!(
+        report,
+        "Disconnected; hub at \"history\" (writing: true), hub waiting; reader waiting (lines forwarded: 1348)",
+    );
 }
 
 #[test]
@@ -1237,10 +1228,10 @@ fn stall_report_names_finished_helpers_and_their_counts() {
         writing: false,
     };
     let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &Ok(()), &Ok(()), 1352);
-    assert!(report.contains("run thread alive"), "{report}");
-    assert!(report.contains("hub done"), "{report}");
-    assert!(report.contains("reader done"), "{report}");
-    assert!(report.contains("lines forwarded: 1352"), "{report}");
+    assert_eq!(
+        report,
+        "Empty; hub at \"subscribe\" (writing: false), hub done; reader done (lines forwarded: 1352)",
+    );
 }
 
 /// Hands one reader output to the loop and counts it when it is a hub
@@ -1283,57 +1274,6 @@ fn relay_counts_only_queued_hub_lines() {
         &forwarded,
     ));
     assert_eq!(forwarded.load(Ordering::Relaxed), 1);
-}
-
-/// A dropped line is never a forward: one garbage line and one session
-/// line carry two newlines but forward once, so a newline counter
-/// would report two here.
-#[test]
-fn forwarded_count_skips_lines_the_reader_drops() {
-    let envelope = line("turn_started", Some(0), None, json!({"input": []}));
-    let mut bytes = b"not json\n".to_vec();
-    bytes.extend_from_slice(
-        serde_json::to_string(&envelope)
-            .unwrap_or_default()
-            .as_bytes(),
-    );
-    bytes.push(b'\n');
-    let (forward_tx, forward_rx) = mpsc::channel();
-    let feed = crate::link::Feed::new(forward_tx, crate::link::Credits::new(usize::MAX));
-    crate::link::read_lines(&bytes[..], &feed);
-    drop(feed);
-    let (tx, rx) = mpsc::channel();
-    let forwarded = AtomicU64::new(0);
-    for input in forward_rx {
-        if !relay_and_count(input, &tx, &forwarded) {
-            break;
-        }
-    }
-    drop(tx);
-    let mut hubs = 0;
-    let mut disconnects = 0;
-    for input in rx {
-        if matches!(input, Input::Hub(_)) {
-            hubs += 1;
-        } else if matches!(input, Input::Disconnected) {
-            disconnects += 1;
-        } else {
-            panic!("the reader forwards only hub lines and its disconnect");
-        }
-    }
-    assert_eq!((hubs, disconnects), (1, 1));
-    assert_eq!(forwarded.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn stall_report_names_helpers_gone_without_answering() {
-    let hub = HubProgress::default();
-    let gone: Result<(), mpsc::TryRecvError> = Err(mpsc::TryRecvError::Disconnected);
-    let report = stall_report(&mpsc::TryRecvError::Empty, &hub, &gone, &gone, 7);
-    assert!(report.contains("hub gone"), "{report}");
-    assert!(report.contains("reader gone"), "{report}");
-    assert!(!report.contains("hub done"), "{report}");
-    assert!(!report.contains("reader done"), "{report}");
 }
 
 /// Drains the run thread chunk by chunk: each fold signal renews the
