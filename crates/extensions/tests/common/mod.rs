@@ -45,16 +45,10 @@ const ROUNDS: u32 = 30;
 /// One bounded wait for the run's answer or park signal.
 pub(crate) const ROUND: Duration = Duration::from_millis(200);
 
-/// Rounds of waiting for the stalled run to wait on the clock: 15 waits of
-/// `ROUND` are about 3 s of wall clock, the hang guard for a run that never
-/// waits.
-const PARK_ROUNDS: u32 = 15;
-
-/// Rounds of waiting for the stalled process to prove it is stuck: 8 rounds
-/// of two bounded waits are about 3 s of wall clock, the hang guard for a
-/// stall that never appears.
-const STUCK_ROUNDS: u32 = 8;
-
+/// How long each hang guard below waits for the whole wait: one wall-clock
+/// deadline per wait, made before its first check. The per-iteration bounded
+/// receives are only the poll pause between checks, never a fresh deadline.
+///
 /// Waits until the stalled run parks on the clock or answers, returning an
 /// early answer at once. A test moves fake time only once the run is waiting
 /// on it, past its own clock check; a run that answers without ever waiting
@@ -64,9 +58,13 @@ fn wait_parked<T: Send>(
     clock: &fakes::clock::FakeClock,
     done: &std::sync::mpsc::Receiver<T>,
 ) -> Option<T> {
-    for _ in 0..PARK_ROUNDS {
+    let bound = Deadline::after(Duration::from_secs(10));
+    loop {
         if !clock.parked().is_empty() {
             return None;
+        }
+        if bound.left().is_zero() {
+            break;
         }
         match Deadline::after(ROUND).recv(done) {
             Ok(done) => return Some(done),
@@ -86,7 +84,8 @@ fn wait_parked<T: Send>(
 /// sighting. A stall that answers instead fails on its own answer.
 #[track_caller]
 fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Option<T> {
-    for _ in 0..STUCK_ROUNDS {
+    let bound = Deadline::after(Duration::from_secs(10));
+    loop {
         if !fakes::matching(stall).unwrap().is_empty() {
             // Up: still up after a bounded wait means stuck, not starting;
             // an answer meanwhile ends this at once.
@@ -100,6 +99,9 @@ fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Opt
             if !fakes::matching(stall).unwrap().is_empty() {
                 return None;
             }
+        }
+        if bound.left().is_zero() {
+            break;
         }
         match Deadline::after(ROUND).recv(done) {
             Ok(done) => return Some(done),
@@ -120,7 +122,8 @@ fn wait_parked_since<T: Send>(
     mark: &fakes::clock::Mark,
     done: &std::sync::mpsc::Receiver<T>,
 ) -> Option<T> {
-    for _ in 0..PARK_ROUNDS {
+    let bound = Deadline::after(Duration::from_secs(10));
+    loop {
         if clock.await_any_parked_since(mark, ROUND) {
             return None;
         }
@@ -130,6 +133,9 @@ fn wait_parked_since<T: Send>(
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 panic!("the stalled run returns")
             }
+        }
+        if bound.left().is_zero() {
+            break;
         }
     }
     panic!("the stalled run parks on the clock after an advance");

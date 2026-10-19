@@ -77,6 +77,42 @@ fn shows(screen: &Grid, needle: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(needle))
 }
 
+/// The session log's `model_changed` lines for a stall report, so a
+/// catalogue stall says whether a switch already landed. Reads under
+/// construction are absent, never failures: a missing session dir or
+/// log reads as empty.
+fn session_model_changed(setup: &Setup) -> String {
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let mut switches = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&sessions) {
+        for dir in dirs.filter_map(Result::ok) {
+            let log = fs::read_to_string(dir.path().join("events.jsonl")).unwrap_or_default();
+            switches.extend(
+                support::complete_lines(&log)
+                    .into_iter()
+                    .filter(|line| line["kind"] == "model_changed"),
+            );
+        }
+    }
+    format!("session model_changed: {switches:?}")
+}
+
+/// Waits for the open picker to show its answered catalogue with
+/// `gamma`: `gamma` present and the `Reading the model lists` stall
+/// text gone. It reports through the shared `wait_screen_reporting`
+/// helper: on expiry the panic names the catalogue stage and carries
+/// the grid plus the session log, so the next sighting of the stall
+/// says whether the picker opened and whether a switch already
+/// landed.
+#[track_caller]
+fn wait_picker_catalogue(run: &mut Run, setup: &Setup) {
+    run.wait_screen_reporting(
+        "the picker catalogue with gamma",
+        |screen| shows(screen, "gamma") && !shows(screen, "Reading the model lists"),
+        || session_model_changed(setup),
+    );
+}
+
 #[test]
 fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     let setup = Setup::new();
@@ -101,13 +137,19 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     run.wait_screen("the reply", |screen| shows(screen, "Hel"));
     run.turn_finished(from);
     let saved = fs::read(setup.home().join("config.json")).unwrap();
-    // Ctrl+L opens the picker: the wait names the open, drawn catalogue.
-    // The open picker draws from the terminal's own view once the turn
-    // closed, so the finished turn above proves the key is taken.
+    // Ctrl+L opens the picker: the open wait names the picker frame
+    // and the catalogue wait names its answered models, so a stall
+    // says whether the picker never opened or the catalogue never
+    // answered. The open picker draws from the terminal's own view
+    // once the turn closed, so the finished turn above proves the key
+    // is taken.
     run.write(b"\x0c");
-    run.wait_screen("the open picker with its catalogue", |screen| {
-        shows(screen, "Type to search") && shows(screen, "gamma")
-    });
+    run.wait_screen_reporting(
+        "the open picker",
+        |screen| shows(screen, "Type to search"),
+        || session_model_changed(&setup),
+    );
+    wait_picker_catalogue(&mut run, &setup);
     let opened = run.screen().rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),

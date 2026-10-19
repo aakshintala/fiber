@@ -284,6 +284,49 @@ fn file_closed_rereads_the_rows() {
 }
 
 #[test]
+fn save_setting_writes_the_global_layer_through_the_seam() {
+    // The rail queues the save; the seam write below is what the
+    // loop's `save_shares` reaches.
+    let seam = fake();
+    let mut app = home(Some(Arc::clone(&seam)));
+    app.save_setting("tui.theme", "\"solar\"");
+    assert_eq!(
+        seam.writes(),
+        [(
+            PathBuf::from("/w"),
+            Layer::Global,
+            "tui.theme".to_owned(),
+            "\"solar\"".to_owned()
+        )]
+    );
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn global_save_without_a_workspace_writes_at_the_hub_global_parent() {
+    use serde_json::json;
+    // With no local workspace the hub-global parent stands in for the
+    // workspace: the global file answers once, and the set names the
+    // parent at the global layer.
+    no_workspace_remote_case(
+        vec![
+            (
+                json!({"command":"configure","args":{"operation":"global_file"}}),
+                json!({"file":"/hub/config.json"}),
+            ),
+            (
+                json!({"command":"configure","args":{"operation":"set","workspace":"/hub","layer":"global","key":"model","text":"\"hub/m\""}}),
+                json!({"file":"/hub/config.json","warnings":[]}),
+            ),
+        ],
+        |mut app| {
+            app.save_setting("model", "\"hub/m\"");
+            assert_eq!(app.notices.newest(), None);
+        },
+    );
+}
+
+#[test]
 fn a_file_error_is_a_notice() {
     let mut app = attached(Some(fake()));
     slash_settings(&mut app);
@@ -797,6 +840,51 @@ fn remote_editor_case(
     script: Vec<(serde_json::Value, serde_json::Value)>,
     test: impl FnOnce(App) + Send + 'static,
 ) {
+    remote_case(
+        script,
+        |router| {
+            let seam = Arc::new(Fake::new(vec![]));
+            let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
+            let mut app = attached(None);
+            app.set_remote(remote);
+            app
+        },
+        test,
+    );
+}
+
+/// A remote-home app with no local workspace: the seam and the remote
+/// are the hub, so a global save resolves the hub-global parent.
+fn no_workspace_remote_case(
+    script: Vec<(serde_json::Value, serde_json::Value)>,
+    test: impl FnOnce(App) + Send + 'static,
+) {
+    remote_case(
+        script,
+        |router| {
+            let seam = Arc::new(Fake::new(vec![]));
+            let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
+            let mut app = App::new(None);
+            app.set_home(Launch {
+                location: crate::LaunchLocation::Remote {
+                    hub: "box".to_owned(),
+                },
+                ..Default::default()
+            });
+            app.set_size(80, 24);
+            app.set_configure(Some(Arc::clone(&remote) as Arc<dyn Configure>));
+            app.set_remote(remote);
+            app
+        },
+        test,
+    );
+}
+
+fn remote_case(
+    script: Vec<(serde_json::Value, serde_json::Value)>,
+    build: impl FnOnce(std::sync::Arc<crate::remote::Router>) -> App + Send + 'static,
+    test: impl FnOnce(App) + Send + 'static,
+) {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc;
@@ -838,11 +926,7 @@ fn remote_editor_case(
     std::thread::spawn(move || crate::link::read_lines(reader, &feed));
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
-        let seam = Arc::new(Fake::new(vec![]));
-        let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
-        let mut app = attached(None);
-        app.set_remote(remote);
-        test(app);
+        test(build(router));
         done.send(()).unwrap();
     });
     deadline.recv_or_fail(&finished, "remote editor behaviour");

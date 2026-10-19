@@ -49,8 +49,9 @@ pub(crate) struct Remote {
     router: Arc<Router>,
     /// The workspace the catalogue reads use: `take_reads` stores the
     /// workspace in use just before it returns a read, so every read
-    /// after the first goes there. Empty until the first read.
-    reading: Mutex<PathBuf>,
+    /// after the first goes there. None until the first read, and on a
+    /// remote-home launch with no local workspace.
+    reading: Mutex<Option<PathBuf>>,
 }
 impl Remote {
     pub(crate) fn new(local: Arc<dyn Configure>, client_dir: PathBuf, router: Arc<Router>) -> Self {
@@ -58,16 +59,18 @@ impl Remote {
             local,
             client_dir,
             router,
-            reading: Mutex::new(PathBuf::new()),
+            reading: Mutex::new(None),
         }
     }
     /// Stores the workspace the catalogue reads use, taking no other lock.
-    pub(crate) fn set_workspace(&self, workspace: PathBuf) {
+    /// None means the next `models()` reads at the hub's global file,
+    /// as a cold read does.
+    pub(crate) fn set_workspace(&self, workspace: Option<PathBuf>) {
         *support::lock(&self.reading) = workspace;
     }
     /// The workspace the catalogue reads use, for tests.
     #[cfg(test)]
-    pub(crate) fn reading(&self) -> PathBuf {
+    pub(crate) fn reading(&self) -> Option<PathBuf> {
         support::lock(&self.reading).clone()
     }
     fn call<T>(
@@ -88,35 +91,28 @@ impl Remote {
         decode(&decode::result(&line, operation)?).ok_or_else(|| decode::io_error(operation))
     }
     fn workspace(&self, workspace: &Path) -> Result<PathBuf, ConfigureError> {
-        self.workspace_as(workspace, Caller::Loop)
+        self.workspace_as(workspace)
     }
     /// Resolves the workspace a `configure` operation sends: a non-empty
-    /// workspace passes as given when absolute (`docs/invocation.md`,
+    /// path passes as given when absolute (`docs/invocation.md`,
     /// "What the hub speaks": every workspace is absolute); an empty one
-    /// reads the hub's global file and sends its parent directory. A worker
-    /// read asks `global_file` without writing the cache, which only the
-    /// loop path writes, with its connection epoch.
-    fn workspace_as(
-        &self,
-        workspace: &Path,
-        caller: Caller<'_>,
-    ) -> Result<PathBuf, ConfigureError> {
-        if !workspace.as_os_str().is_empty() {
-            if workspace.is_absolute() {
-                return Ok(workspace.into());
-            }
+    /// is an error, as a relative one already is. No-workspace callers
+    /// use `global_parent`, never an empty path here.
+    fn workspace_as(&self, workspace: &Path) -> Result<PathBuf, ConfigureError> {
+        if workspace.as_os_str().is_empty() {
             return Err(decode::io_error("workspace"));
         }
-        let file = match caller {
-            Caller::Loop => self.hub_global()?,
-            Caller::Worker(cancel) => self.hub_global_worker(cancel)?,
-        };
-        if !file.is_absolute() {
-            return Err(decode::io_error("global_file"));
+        if workspace.is_absolute() {
+            return Ok(workspace.into());
         }
-        file.parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| decode::io_error("global_file"))
+        Err(decode::io_error("workspace"))
+    }
+    /// The hub-global parent a no-workspace call sends: the parent of the
+    /// hub's global file, read through the `Result` hub-global read, never
+    /// the `global_file` fallback. The loop path asks, so the read rides
+    /// the connection the loop holds.
+    pub(crate) fn global_parent(&self) -> Result<PathBuf, ConfigureError> {
+        parent_of(self.hub_global()?)
     }
     /// The hub's global file for a worker read: the cached copy when the
     /// loop path has set it, else one `global_file` ask, without writing
@@ -140,7 +136,19 @@ impl Remote {
     /// model and thinking rows, and the scoped models list. The loop
     /// path asks, so the read rides the connection the loop holds.
     pub(crate) fn chip(&self, workspace: &Path) -> Result<Chip, ConfigureError> {
-        let workspace = self.workspace_as(workspace, Caller::Loop)?;
+        let workspace = self.workspace_as(workspace)?;
+        self.chip_at(workspace)
+    }
+    /// Reads the home chips with no local workspace: the hub-global parent
+    /// stands in for the workspace, so the hub model and thinking values
+    /// survive a remote-home launch.
+    pub(crate) fn chip_global(&self) -> Result<Chip, ConfigureError> {
+        let workspace = self.global_parent()?;
+        self.chip_at(workspace)
+    }
+    /// Folds a `settings` answer into the home chips: the hub model and
+    /// thinking on screen, and the scoped list the checklist marks.
+    fn chip_at(&self, workspace: PathBuf) -> Result<Chip, ConfigureError> {
         let rows = self.call(
             "settings",
             json!({"workspace":workspace}),
@@ -175,7 +183,12 @@ impl Remote {
     /// a wait. The picker's refresh rides as a word, one per level.
     fn models(&self, refresh: Refresh) -> Result<Catalogue, ConfigureError> {
         let reading = support::lock(&self.reading).clone();
-        let workspace = self.workspace_as(&reading, Caller::Worker(&Cancel::default()))?;
+        // An empty stored workspace reads at the hub's global file, as a
+        // cold read does: no empty path crosses into the hub.
+        let workspace = match reading.as_deref() {
+            Some(reading) if !reading.as_os_str().is_empty() => self.workspace_as(reading)?,
+            _ => parent_of(self.hub_global_worker(&Cancel::default())?)?,
+        };
         let word = match refresh {
             Refresh::Cached => "cached",
             Refresh::Stale => "stale",
@@ -245,11 +258,34 @@ impl Remote {
         workspace: &Path,
         file: &Path,
     ) -> Result<(String, String), ConfigureError> {
+        let workspace = self.workspace(workspace)?;
+        self.fetch_file_at(workspace, file)
+    }
+    /// Fetches an editable hub file with no local workspace: only a
+    /// hub-global file has an address. A project-scoped file
+    /// (`projects/<key>/...` under Fiber home) is an error on the
+    /// caller's notice path, and no line is sent.
+    pub(crate) fn fetch_file_global(
+        &self,
+        file: &Path,
+    ) -> Result<(String, String), ConfigureError> {
+        let workspace = self.global_parent()?;
+        if file.starts_with(workspace.join("projects")) {
+            return Err(decode::io_error("read_config"));
+        }
+        self.fetch_file_at(workspace, file)
+    }
+    /// Reads `file` at `workspace`: the call both variants share.
+    fn fetch_file_at(
+        &self,
+        workspace: PathBuf,
+        file: &Path,
+    ) -> Result<(String, String), ConfigureError> {
         let line = self
             .router
             .ask(
                 "read_config",
-                json!({"workspace":self.workspace(workspace)?,"path":file}),
+                json!({"workspace":workspace,"path":file}),
                 Caller::Loop,
             )
             .map_err(ask_error)?;
@@ -264,7 +300,41 @@ impl Remote {
         text: &str,
         version: &str,
     ) -> Result<(), ConfigureError> {
-        let line=self.router.ask("write_config",json!({"workspace":self.workspace(workspace)?,"path":file,"text":text,"version":version}),Caller::Loop).map_err(ask_error)?;
+        let workspace = self.workspace(workspace)?;
+        self.store_file_at(workspace, file, text, version)
+    }
+    /// Writes a hub file with no local workspace: only a hub-global file
+    /// has an address. A project-scoped file (`projects/<key>/...` under
+    /// Fiber home) is an error on the caller's notice path, and no line
+    /// is sent.
+    pub(crate) fn store_file_global(
+        &self,
+        file: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), ConfigureError> {
+        let workspace = self.global_parent()?;
+        if file.starts_with(workspace.join("projects")) {
+            return Err(decode::io_error("write_config"));
+        }
+        self.store_file_at(workspace, file, text, version)
+    }
+    /// Writes `file` at `workspace`: the call both variants share.
+    fn store_file_at(
+        &self,
+        workspace: PathBuf,
+        file: &Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), ConfigureError> {
+        let line = self
+            .router
+            .ask(
+                "write_config",
+                json!({"workspace":workspace,"path":file,"text":text,"version":version}),
+                Caller::Loop,
+            )
+            .map_err(ask_error)?;
         decode::result(&line, "write_config").map(|_| ())
     }
     /// The client's global file, for client-owned default rows.
@@ -307,6 +377,17 @@ fn ask_error(error: AskError) -> ConfigureError {
 }
 // debt: three write-side enum matches and decode::layer's reverse match;
 // consolidate into shared tables when a second enum needs wire decoding.
+/// The parent a hub-global file resolves to: an absolute file's
+/// directory, never a workspace. A relative answer is an error naming
+/// `global_file`, so no relative path is ever sent as a workspace.
+fn parent_of(file: PathBuf) -> Result<PathBuf, ConfigureError> {
+    if !file.is_absolute() {
+        return Err(decode::io_error("global_file"));
+    }
+    file.parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| decode::io_error("global_file"))
+}
 fn layer_name(layer: Layer) -> &'static str {
     match layer {
         Layer::Global => "global",
@@ -432,7 +513,7 @@ impl Configure for Remote {
         _clock: Arc<dyn Clock>,
     ) -> Result<crate::ProviderInstall, ConfigureError> {
         let cancel = Cancel::default();
-        let workspace = self.workspace_as(workspace, Caller::Worker(&cancel))?;
+        let workspace = self.workspace_as(workspace)?;
         self.call(
             "install_provider",
             json!({"workspace":workspace,"provider":provider}),

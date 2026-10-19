@@ -1789,20 +1789,18 @@ Linux; the byte and frame counts do.
 Measured in Fiber on macOS arm64 (Darwin 25.6.0) with the `hover` jig,
 `cargo run --release -p tui --example hover -- crates/tui/examples/hover.jsonl`,
 at 160 by 48, 20,000 motion reports per case, the median of 5 runs, with
-truecolour themes: every report draws the screen in memory and compares it
-with the last frame, 93 to 97 µs, and writes nothing unless the target under
-the pointer changed; a report that moves along one target, or repeats one
-cell, costs the same and writes nothing; each change of target costs one
-frame, painted with the theme's colours, 172 to 187 µs and 105 bytes for the
-badge; a fast sweep over a conversation whose lines are targets wrote 1,332
-frames and 405,992 bytes in 20,000 reports.
+truecolour themes: a still pointer, and a pointer moving along one target,
+wrote 1 frame and 135 bytes in 20,000 reports; a change of target on every
+report wrote 20,000 frames and 2,590,000 bytes, painted with the theme's
+colours; a fast sweep over a conversation whose lines are targets wrote 1,458
+frames and 568,722 bytes in 20,000 reports.
 
-Measured in Fiber on Linux x86_64 (6.18.44, a 4-core Intel Xeon at 2.30
-GHz) with the same jig, command, size and runs: a still pointer, and a
-pointer moving along one target, wrote 1 frame and 86 bytes in 20,000
-reports, 115 to 120 µs a report; a change of target on every report wrote
-20,000 frames and 1,580,000 bytes, 79 bytes a frame, 271 µs a report; the
-fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
+Measured in Fiber on Linux x86_64 (7.3.0-9-generic, a 16-core, 24-thread 13th Gen
+Intel Core i7-13700T, load average 1.25 to 3.05 across the runs) with the
+same jig, command, size and runs: a still pointer, and a pointer moving
+along one target, wrote 1 frame and 135 bytes in 20,000 reports; a change
+of target on every report wrote 20,000 frames and 2,590,000 bytes; the
+fast sweep wrote 1,458 frames and 568,722 bytes in 20,000 reports.
 
 ## Look
 

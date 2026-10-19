@@ -5,7 +5,6 @@
 
 use super::App;
 use crate::catalogue::{Catalogue, Refresh};
-use crate::configure::Layer;
 use crate::keys::{Edit, Key};
 use crate::model_picker::{Choice, Mode, command_args, saves, scoped_save};
 use crate::swapped::{Spot, about};
@@ -44,6 +43,8 @@ impl App {
         if read.is_some()
             && let Some(remote) = self.remote()
         {
+            // None stores none: the next `models()` reads at the hub's
+            // global file, as a cold read does.
             remote.set_workspace(self.workspace());
         }
         read
@@ -236,17 +237,16 @@ impl App {
             self.model_picker.close();
             return super::Effect::None;
         }
-        let workspace = self.workspace();
         match self.configure_seam() {
             None if !saves(&choice).is_empty() => self.push_notice(
                 "io_failed",
                 "Saving is not available; the switch is for this session only.".to_owned(),
             ),
             None => {}
-            Some(seam) => {
+            Some(_) => {
                 for (key, text) in saves(&choice) {
-                    match seam.set(&workspace, Layer::Global, &key, &text) {
-                        Ok(_) => {
+                    match self.write_global(&key, &text) {
+                        Some(Ok(_)) => {
                             // A saved model supersedes the session-only
                             // choice the next `start` would carry.
                             if key == "model" {
@@ -254,9 +254,12 @@ impl App {
                             }
                             self.picker_saved(&key, &choice)
                         }
-                        Err(error) => {
+                        Some(Err(error)) => {
                             self.push_notice("io_failed", format!("Saving {key} failed: {error}"))
                         }
+                        // No workspace to address on a local terminal:
+                        // the choice rides the next `start` unsaved.
+                        None => {}
                     }
                 }
             }
@@ -372,13 +375,9 @@ impl App {
         {
             self.model_picker.session_only = None;
         }
-        let Some(seam) = self.configure_seam() else {
-            return;
-        };
-        let workspace = self.workspace();
         for (key, text) in writes {
-            match seam.set(&workspace, Layer::Global, &key, &text) {
-                Ok(_) => {
+            match self.write_global(&key, &text) {
+                Some(Ok(_)) => {
                     // A saved model supersedes the session-only choice
                     // the next `start` would carry.
                     if key == "model" {
@@ -386,9 +385,12 @@ impl App {
                     }
                     self.picker_accepted(&key, &text)
                 }
-                Err(error) => {
+                Some(Err(error)) => {
                     self.push_notice("io_failed", format!("Saving {key} failed: {error}"));
                 }
+                // No workspace to address on a local terminal: the write
+                // is dropped, as a missing seam drops it.
+                None => {}
             }
         }
     }
@@ -616,19 +618,19 @@ impl App {
         // A string list always serialises; the fallback keeps the save
         // total.
         let text = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_owned());
-        let workspace = self.workspace();
-        match self.configure_seam() {
-            Some(seam) => match seam.set(&workspace, Layer::Global, "scoped_models", &text) {
-                Ok(_) => {
-                    self.model_picker.scoped = list;
-                    if let Some(home) = self.home.as_mut() {
-                        home.launch.scoped_models = self.model_picker.scoped.clone();
-                    }
+        // `write_global` is `None` with no seam, so one match covers
+        // both: with no seam, or no workspace to address on a local
+        // terminal, nothing changed.
+        match self.write_global("scoped_models", &text) {
+            Some(Ok(_)) => {
+                self.model_picker.scoped = list;
+                if let Some(home) = self.home.as_mut() {
+                    home.launch.scoped_models = self.model_picker.scoped.clone();
                 }
-                Err(error) => {
-                    self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
-                }
-            },
+            }
+            Some(Err(error)) => {
+                self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
+            }
             None => self.push_notice(
                 "io_failed",
                 "Saving is not available; nothing changed.".to_owned(),
