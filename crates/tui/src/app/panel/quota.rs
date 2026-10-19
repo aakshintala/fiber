@@ -6,8 +6,9 @@ use contract::{CommandId, Envelope};
 
 use crate::view::panel::{Card, cards};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, QuotaInfo};
+use serde_json::json;
 
-use super::super::{App, Link, mint, session_command};
+use super::super::{App, Effect, Link, mint, session_command};
 
 /// The cache age in `docs/tools.md`, "Fetching".
 const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
@@ -45,6 +46,12 @@ impl Query {
             self.ask = Ask::Refused;
             self.rows.clear();
         }
+    }
+
+    /// Whether a fetch is in flight: the quota view shows `fetching`
+    /// over the cached answer until its answer lands.
+    pub(crate) fn fetching(&self) -> bool {
+        matches!(self.ask, Ask::Asked(_))
     }
 }
 
@@ -113,6 +120,42 @@ impl App {
         let session = self.session()?.clone();
         let id = CommandId(mint());
         let line = session_command(&id.0, "quota", &session, None).to_string();
+        self.panel_state.quota.ask = Ask::Asked(id);
+        Some(line)
+    }
+
+    /// Opens the quota view and fetches every label's quota: the view
+    /// draws the cached answer at once and redraws on the fetch's answer,
+    /// which also updates the panel card. The draft is left for panel
+    /// and status-line clicks; a slash command clears it before calling
+    /// this method.
+    pub(crate) fn quota_view(&mut self) -> Effect {
+        self.open_session_view(super::super::SessionView::Quota);
+        match self.quota_fetch() {
+            Some(line) => Effect::Send(vec![line]),
+            None => Effect::None,
+        }
+    }
+
+    /// Sends one `quota` with `fetch: true`, unless a fetch is already in
+    /// flight: its answer redraws the view. An explicit open retries
+    /// after a refusal. Never put in the conversation's pending
+    /// commands: the answer folds into the panel card's rows by its id.
+    fn quota_fetch(&mut self) -> Option<String> {
+        if self.link != Link::Up {
+            return None;
+        }
+        if self.attached_row().is_some_and(|row| row.left.is_some()) {
+            return None;
+        }
+        let query = &mut self.panel_state.quota;
+        if matches!(query.ask, Ask::Asked(_)) {
+            return None;
+        }
+        let session = self.session()?.clone();
+        let id = CommandId(mint());
+        let line =
+            session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
         self.panel_state.quota.ask = Ask::Asked(id);
         Some(line)
     }

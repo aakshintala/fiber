@@ -258,3 +258,60 @@ fn no_queries_without_a_card_session_or_live_link() {
     app.link = Link::Up;
     first(&mut app);
 }
+
+/// The command lines an effect sends, parsed.
+fn sent(effect: crate::app::Effect) -> Vec<Value> {
+    match effect {
+        crate::app::Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        crate::app::Effect::None
+        | crate::app::Effect::Quit
+        | crate::app::Effect::ListFiles
+        | crate::app::Effect::ReadImage(_)
+        | crate::app::Effect::FindPause { .. }
+        | crate::app::Effect::Search { .. }
+        | crate::app::Effect::Editor { .. }
+        | crate::app::Effect::Exit(_)
+        | crate::app::Effect::Copy(_)
+        | crate::app::Effect::OpenLink(_)
+        | crate::app::Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn opening_the_view_sends_fetch_true_and_shares_the_flight() {
+    let mut app = attached();
+    let lines = sent(app.quota_view());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "quota");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(lines[0]["args"], json!({"fetch": true}));
+    assert!(!app.pending.contains_key(lines[0]["id"].as_str().unwrap()));
+    assert!(app.session_view_open());
+    assert!(app.panel_state.quota.fetching());
+    // A second opening shares the in-flight fetch: no new line.
+    assert!(sent(app.quota_view()).is_empty());
+    assert!(app.panel_state.quota.fetching());
+}
+
+#[test]
+fn opening_the_view_retries_after_a_refusal() {
+    let mut app = attached();
+    let lines = sent(app.quota_view());
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    assert!(
+        queries(app.on_line(session_line(
+            "command_rejected",
+            json!({"command_id": id, "code": "denied", "message": "No."})
+        )))
+        .is_empty()
+    );
+    assert!(!app.panel_state.quota.fetching());
+    let retry = sent(app.quota_view());
+    assert_eq!(retry.len(), 1);
+    assert_eq!(retry[0]["command"], "quota");
+    assert_eq!(retry[0]["args"], json!({"fetch": true}));
+    assert_ne!(retry[0]["id"], lines[0]["id"]);
+}

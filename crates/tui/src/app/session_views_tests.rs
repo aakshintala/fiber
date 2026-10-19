@@ -1353,3 +1353,84 @@ fn a_list_press_and_release_on_different_serials_opens_nothing() {
     );
     assert!(!app.item_open());
 }
+
+fn slash_quota(app: &mut App) -> Effect {
+    app.on_edit(Edit::Paste("/quota".to_owned()));
+    app.on_key(Key::Enter, now())
+}
+
+/// The command lines an effect sends, parsed.
+fn sent(effect: Effect) -> Vec<Value> {
+    match effect {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap_or_default())
+            .collect(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => Vec::new(),
+    }
+}
+
+#[test]
+fn slash_quota_opens_the_view_and_fetches_with_fetch_true() {
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    let lines = sent(slash_quota(&mut app));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "quota");
+    assert_eq!(lines[0]["args"], json!({"fetch": true}));
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert!(app.session_view_open());
+    assert!(app.input().is_empty());
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("Quota"));
+    assert!(shown.contains("fetching"));
+    // A second opening shares the in-flight fetch: the view reopens with
+    // no new line.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    assert!(sent(slash_quota(&mut app)).is_empty());
+    assert!(app.session_view_open());
+    assert!(screen(&app, 80, 24).0.contains("fetching"));
+}
+
+#[test]
+fn slash_quota_without_a_session_shows_a_notice_and_sends_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(80, 24);
+    assert!(sent(slash_quota(&mut app)).is_empty());
+    assert!(!app.session_view_open());
+    assert!(screen(&app, 80, 24).0.contains("No session on screen."));
+    assert_eq!(app.notices.newest(), Some("No session on screen."));
+}
+
+#[test]
+fn the_fetch_answer_redraws_the_view_and_clears_fetching() {
+    let mut app = attached(80, 24);
+    app.link = crate::app::Link::Up;
+    let lines = sent(slash_quota(&mut app));
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    app.on_line(session_line(
+        SESSION,
+        "command_accepted",
+        None,
+        json!({"command_id": id,
+            "result": {"quota": [
+                {"provider": "codex", "credential": "default",
+                    "windows": [{"name": "weekly", "percent_used": 38.0}]},
+            ], "notice_at": 80.0}}),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(!shown.contains("fetching"), "{shown}");
+    assert!(shown.contains("codex · default"), "{shown}");
+    assert!(shown.contains("62%"), "{shown}");
+}

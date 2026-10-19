@@ -290,3 +290,10 @@ fn matched_agrees_with_the_filter_fold_wherever_it_matches() {
         }
     }
 }
+
+#[test]
+fn quota_opens_the_view_from_the_list() {
+    let all = rows(&[]);
+    let quota = all.iter().find(|row| row.name == "quota").unwrap();
+    assert_eq!(quota.line(), "/quota  Opens the quota view.  command");
+}

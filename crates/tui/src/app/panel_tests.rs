@@ -1551,3 +1551,32 @@ fn the_model_line_opens_the_picker() {
         Some(crate::model_picker::Mode::Choose)
     );
 }
+
+#[test]
+fn the_quota_spot_opens_the_view_and_fetches() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = attached();
+    app.link = crate::app::Link::Up;
+    let lines = match app.on_click(TargetId::Panel(Spot::Quota)) {
+        Effect::Send(lines) => lines
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap_or_default())
+            .collect::<Vec<_>>(),
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::ReadImage(_)
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_) => panic!("no fetch line"),
+    };
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "quota");
+    assert_eq!(lines[0]["args"], json!({"fetch": true}));
+    assert!(app.session_view_open());
+}

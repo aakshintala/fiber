@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::{rows, segment_spans};
 use crate::app::App;
 use crate::app::items::testkit::{SESSION, commands, hello, session_line};
+use crate::app::panel::Spot;
 use crate::home::Launch;
 use crate::markdown::{Role, style};
 
@@ -43,7 +44,9 @@ fn window_share_is_left_and_floors_at_zero() {
     for (used, figure) in [(35.0, "65%"), (99.0, "1%"), (100.0, "0%"), (101.0, "0%")] {
         let rows = rows(&app(window(used), 80.0), 30);
         assert_eq!(text(&rows)[1], format!("codex weekly{:>18}", figure));
-        assert!(rows.iter().all(|r| r.spot.is_none()));
+        // The title opens nothing; every row opens the quota view.
+        assert!(rows[0].spot.is_none());
+        assert!(rows[1..].iter().all(|r| r.spot == Some(Spot::Quota)));
     }
 }
 
@@ -184,13 +187,21 @@ fn empty_quota_has_no_card_slab_title_or_segment() {
 }
 
 #[test]
-fn title_and_long_names_fit_the_card_and_the_card_has_no_targets() {
+fn title_and_long_names_fit_the_card_and_its_rows_open_the_view() {
     let app = app(
         json!([{"provider": "a very long provider credential name that will not fit", "credential": "work", "windows": [{"name": "weekly", "percent_used": 35.0}]}]),
         80.0,
     );
     let rows = super::super::rows(&app, 28);
-    assert!(rows.iter().all(|r| r.spot.is_none()));
+    // The edges and title open nothing; every row between opens the view.
+    assert!(rows[0].spot.is_none());
+    assert!(rows[1].spot.is_none());
+    assert!(
+        rows[2..rows.len() - 1]
+            .iter()
+            .all(|r| r.spot == Some(Spot::Quota))
+    );
+    assert!(rows.last().unwrap().spot.is_none());
     assert_eq!(rows[1].line.spans[0].content, "Quota");
     assert!(
         rows[1].line.spans[0]
@@ -218,7 +229,14 @@ fn quota_card_snapshots_at_floor_and_sixty_columns() {
         let mut buffer = Buffer::empty(area);
         let mut targets = Vec::new();
         super::super::draw(&app, area, &mut buffer, &mut targets);
-        assert!(targets.is_empty());
+        // Every row opens the quota view; the snapshot pins the text.
+        assert!(!targets.is_empty());
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.id == crate::mouse::TargetId::Panel(Spot::Quota)),
+            "{targets:?}"
+        );
         insta::with_settings!({snapshot_path => "../snapshots"}, {
             insta::assert_snapshot!(format!("quota_card_{width}"), crate::view::text(&buffer));
         });

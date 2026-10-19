@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 
 use super::{Row, sides, title_row};
 use crate::app::App;
+use crate::app::panel::Spot;
 use crate::markdown::{Role, style};
 
 struct Limit {
@@ -86,7 +87,7 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
         text,
     )];
     for limit in limits {
-        // debt: quota rows and segments open nothing, upgrade trigger: #2526 lands.
+        // Each row opens the quota view, which fetches every label's quota.
         out.push(Row {
             line: sides(
                 vec![Span::styled(limit.name, style(Role::Muted))],
@@ -96,14 +97,14 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
                 ),
                 text,
             ),
-            spot: None,
+            spot: Some(Spot::Quota),
             tint: None,
             edge: false,
         });
         if let Some(share) = limit.share {
             out.push(Row {
                 line: Line::from(bar(share, text.saturating_sub(2), limit.low)),
-                spot: None,
+                spot: Some(Spot::Quota),
                 tint: None,
                 edge: false,
             });
@@ -120,7 +121,8 @@ pub(super) fn rows(app: &App, text: usize) -> Vec<Row> {
     clippy::cast_sign_loss,
     reason = "share is clamped to 0..=100 and fill is bounded by cells"
 )]
-fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
+/// Shared with the `/quota` view, whose bars match the card's.
+pub(crate) fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
     let fill = if share > 0.0 {
         ((share / 100.0 * cells as f64).round() as usize)
             .max(1)
@@ -137,7 +139,7 @@ fn bar(share: f64, cells: usize, low: bool) -> Vec<Span<'static>> {
     ]
 }
 
-/// The narrow layout's Q segment, with no click target until `/quota`.
+/// The narrow layout's Q segment, opening the quota view.
 pub(crate) fn segment_spans(app: &App) -> Option<Vec<Span<'static>>> {
     let limits = limits(app);
     if limits.is_empty() {

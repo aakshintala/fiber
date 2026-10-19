@@ -40,6 +40,10 @@ pub(crate) enum Spot {
     /// The Session card's spend rows: opens the usage view (`docs/tui.md`,
     /// "The panel").
     Usage,
+    /// The Quota card's rows and the narrow layout's Q segment: opens the
+    /// quota view and fetches every label's quota (`docs/tui.md`,
+    /// "The panel").
+    Quota,
     /// A Changed files card row, by its rank in `changed_files_view::ranked`.
     File(usize),
     /// A Delegates card row, by its job's serial: a press and a release
@@ -639,6 +643,7 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Context => self.open_session_view(super::SessionView::Context),
             Spot::Usage => self.open_session_view(super::SessionView::Usage),
+            Spot::Quota => self.quota_view(),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::File(rank) => self.open_changed_file(rank),
             Spot::Delegate(serial) => self.open_serial(serial),

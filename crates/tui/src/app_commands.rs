@@ -535,6 +535,10 @@ impl App {
                 self.draft.clear();
                 self.open_session_view(super::SessionView::Usage)
             }
+            "quota" => {
+                self.draft.clear();
+                self.quota_view()
+            }
             "rules" => self.open_config_view(super::ConfigView::Rules),
             "login" => self.open_config_view(super::ConfigView::Login),
             // `?` and `help`.
