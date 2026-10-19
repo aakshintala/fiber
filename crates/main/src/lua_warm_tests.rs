@@ -80,8 +80,18 @@ fn prompt(text: &str) -> Delivery {
 /// Moves the clock to `to` and wakes the loop with a reply naming nothing,
 /// as a real clock's timeout would; returns once the loop has taken it.
 #[track_caller]
-fn advance_to(clock: &FakeClock, inbox: &mpsc::Sender<Delivery>, to: Instant) {
-    clock.advance(to.saturating_duration_since(clock.now()));
+fn advance_to(
+    clock: &FakeClock,
+    loop_thread: std::thread::ThreadId,
+    inbox: &mpsc::Sender<Delivery>,
+    to: Instant,
+) {
+    clock.advance_when_parked(
+        Some(to),
+        Some(loop_thread),
+        to.saturating_duration_since(clock.now()),
+        &Deadline::after(DEADLINE),
+    );
     let (done, taken) = mpsc::channel();
     inbox
         .send(Delivery::Reply(
@@ -214,18 +224,19 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let start = clock.now();
     inbox.send(prompt("hi")).unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    let looping = thread::spawn(move || done.send(looped.run()).unwrap());
+    let loop_thread = looping.thread().id();
     // On the default 1-hour lifetime the refresh is due 30 s before it ends.
     let due = start + Duration::from_secs(3570);
     assert!(clock.await_parked(due, DEADLINE), "the refresh is due");
-    advance_to(&clock, &inbox, due);
+    advance_to(&clock, loop_thread, &inbox, due);
     // Warming stopped at the cap, 3600 s; the idle clock counts from there.
     let exit = start + Duration::from_secs(3660);
     assert!(
         clock.await_parked(exit, DEADLINE),
         "idle counts from the cap"
     );
-    advance_to(&clock, &inbox, exit);
+    advance_to(&clock, loop_thread, &inbox, exit);
     let ran = Deadline::after(DEADLINE)
         .recv(&finished)
         .expect("run ended in time");
