@@ -489,7 +489,8 @@ impl App {
         }
         let rest = rest.trim().to_owned();
         let effect = match name {
-            "home" | "new" => self.leave(),
+            "home" => self.leave_on_row(),
+            "new" => self.leave(),
             "resume" => self.resume_list(),
             "model" => {
                 self.draft.clear();
@@ -569,6 +570,12 @@ impl App {
         self.end_overlay();
         if matches!(self.phase, Phase::Pending { .. }) {
             return false;
+        }
+        // Opening a session from home forgets where home came from,
+        // so the back key and its hint go quiet everywhere the next
+        // route home starts: a row open, a card switch, `/close`.
+        if let Some(home) = self.home.as_mut() {
+            home.came_from = None;
         }
         self.phase = Phase::Starting;
         self.clear_selection();

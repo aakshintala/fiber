@@ -244,11 +244,12 @@ impl App {
         }
     }
 
-    /// Runs an action: `new_session` and `go_home` leave for home the way
-    /// `/new` does, dropping focus and any steering selection first, so
-    /// the cursor is in the input box. `session_only` chooses in the open
-    /// model picker for this session only, or saves the open checklist
-    /// as `scoped_models`. Anything else does nothing.
+    /// Runs an action: `new_session` leaves for home the way `/new`
+    /// does, and `go_home` the way `/home` does, on the on-screen
+    /// session's row. Both drop focus and any steering selection first,
+    /// so the entry bar or the row takes focus. `session_only` chooses
+    /// in the open model picker for this session only, or saves the open
+    /// checklist as `scoped_models`. Anything else does nothing.
     fn on_action(&mut self, id: &'static str) -> Effect {
         if id == "session_only" {
             return self.model_picker_session_only();
@@ -261,7 +262,11 @@ impl App {
         self.copied = false;
         self.focus = None;
         self.steering.clear(&mut self.draft);
-        let effect = self.leave();
+        let effect = if id == "go_home" {
+            self.leave_on_row()
+        } else {
+            self.leave()
+        };
         self.edited();
         self.settle();
         effect

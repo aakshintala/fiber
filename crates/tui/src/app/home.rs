@@ -77,6 +77,9 @@ pub(super) struct Home {
     /// from before the attach sets no marker: the session is live and
     /// resuming, and still gets its line.
     pub(super) left_after_attach: Option<SessionId>,
+    /// The session home came from, while its row is live: `→` and `Esc`
+    /// go back to it, and the foot names the way back.
+    pub(super) came_from: Option<SessionId>,
 }
 
 impl Home {
@@ -119,12 +122,42 @@ fn hint_key(spans: &mut Vec<Span<'static>>, key: &str, label: &str) {
     ));
 }
 
+/// The back part of the foot hint: `→ or Esc back to the session`
+/// naming the action's first bound key, or `→ back to the session`
+/// when the action holds no key. The `→` part is always present while
+/// the back key is live: plain `→` is the arrow, like `↑↓`.
+fn hint_back(spans: &mut Vec<Span<'static>>, esc: Option<&str>) {
+    if !spans.is_empty() {
+        spans.push(Span::styled(
+            " · ",
+            Style::new().add_modifier(Modifier::DIM),
+        ));
+    }
+    spans.push(Span::styled("→", Style::new().add_modifier(Modifier::BOLD)));
+    if let Some(key) = esc {
+        spans.push(Span::styled(
+            " or ",
+            Style::new().add_modifier(Modifier::DIM),
+        ));
+        spans.push(Span::styled(
+            key.to_owned(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::styled(
+        " back to the session",
+        Style::new().add_modifier(Modifier::DIM),
+    ));
+}
+
 /// The foot hint with its keys bold: each action by its first bound
 /// key, leaving an unbound action's part out with its joiner.
 fn home_foot(
     open: Option<String>,
     delete: Option<String>,
     key_map: Option<String>,
+    back: bool,
+    esc: Option<String>,
 ) -> ratatui::text::Line<'static> {
     let mut spans = Vec::new();
     if let Some(label) = open {
@@ -135,6 +168,9 @@ fn home_foot(
         );
     }
     hint_key(&mut spans, "↑↓", "move");
+    if back {
+        hint_back(&mut spans, esc.as_deref());
+    }
     if let Some(label) = delete {
         hint_key(&mut spans, &label, "deletes an exited one");
     }
@@ -172,6 +208,7 @@ impl App {
             chooser: Chooser::default(),
             questions: Questions::default(),
             left_after_attach: None,
+            came_from: None,
         });
         self.sync_project();
         if self.home.as_ref().is_some_and(|home| home.no_workspace()) {
@@ -369,6 +406,8 @@ impl App {
                 self.keys().first_label("open_focused"),
                 self.keys().first_label("delete_session"),
                 self.keys().first_label("key_map"),
+                self.came_from_live(),
+                self.keys().first_label("close_or_interrupt"),
             )
         };
         Some(HomeScreen {
@@ -650,8 +689,8 @@ impl App {
         }
     }
 
-    /// Opens home at the session list: home, with the next frame
-    /// focusing the list, or the input box when the list is empty.
+    /// Goes home, focused on the first exited row: with the next frame
+    /// focusing that row, or the input box when no exited row shows.
     pub(super) fn resume_list(&mut self) -> Effect {
         let effect = self.leave();
         if let Some(home) = self.home.as_mut() {
@@ -733,6 +772,13 @@ impl App {
             .is_some_and(|home| home.chooser.picker().is_some())
         {
             return self.picker_key(key);
+        }
+        // Esc on home goes back to the session home came from, with a
+        // chip or a row focused as well as from the entry bar.
+        if matches!(key, Key::Esc)
+            && let Some(effect) = self.go_back()
+        {
+            return Some(effect);
         }
         // A focused chip takes its keys ahead of focus: arrows move,
         // Enter clicks, typing returns to the entry bar. `None` passes
@@ -887,6 +933,14 @@ impl App {
         // entry bar and applies there.
         if self.focused_chip().is_some()
             && let Some(effect) = self.chip_edit(edit)
+        {
+            return Some(effect);
+        }
+        // `→` with no chip focused goes back to the session home came
+        // from; with a chip focused the chip row keeps it.
+        if matches!(edit, Edit::Right)
+            && self.focused_chip().is_none()
+            && let Some(effect) = self.go_back()
         {
             return Some(effect);
         }

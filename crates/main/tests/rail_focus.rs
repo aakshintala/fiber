@@ -266,6 +266,27 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
         grid.contents.contains(HINT_MIDDLE) && tint(grid, "second live") == lifted(&raised)
     });
     run.write(b"\x1b[D");
+    // ← ← widened home with the second session's row: the foot names
+    // the back key.
+    let home = run.wait_screen("home with both sessions live", |grid| {
+        grid.contents.contains(HOME_COUNTS)
+    });
+    assert!(
+        home.rows
+            .iter()
+            .any(|row| row.contains("→ or Esc back to the session")),
+        "the back hint on home:\n{}",
+        home.contents
+    );
+
+    // → goes back to the second session; ← ← widens home again, so
+    // the Enter step below is unchanged.
+    run.write(b"\x1b[C");
+    run.wait_screen("the second session back on screen", |grid| {
+        rail_drawn(grid) && tint(grid, "second live") == raised
+    });
+    run.write(b"\x1b[D");
+    run.write(b"\x1b[D");
     run.wait_screen("home with both sessions live", |grid| {
         grid.contents.contains(HOME_COUNTS)
     });
