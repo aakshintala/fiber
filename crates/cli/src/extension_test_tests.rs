@@ -638,17 +638,19 @@ PERL
     let descendant = ready.wait(READY_WAIT)[0];
     let watchdog = Watchdog::group(group);
 
-    assert!(
-        clock.await_parked(clock.origin() + case_limit, TEST_WAIT),
-        "runner did not wait on its case deadline"
+    clock.advance_when_parked(
+        Some(clock.origin() + case_limit),
+        None,
+        case_limit,
+        &Deadline::after(TEST_WAIT),
     );
-    clock.advance(case_limit);
     let second_signal = clock.now() + Duration::from_secs(1);
-    assert!(
-        clock.await_parked(second_signal, TEST_WAIT),
-        "runner did not wait before its second SIGTERM"
+    clock.advance_when_parked(
+        Some(second_signal),
+        None,
+        Duration::from_secs(1),
+        &Deadline::after(TEST_WAIT),
     );
-    clock.advance(Duration::from_secs(1));
     let grace_end = clock.now() + Duration::from_secs(4);
     let marked = clock
         .mark_parked(grace_end, TEST_WAIT)
@@ -658,7 +660,12 @@ PERL
         clock.await_parked_since(&marked, Some(grace_end), TEST_WAIT),
         "child reaper did not wake the grace wait"
     );
-    clock.advance(Duration::from_secs(4));
+    clock.advance_when_parked(
+        Some(grace_end),
+        None,
+        Duration::from_secs(4),
+        &Deadline::after(TEST_WAIT),
+    );
 
     let (code, out, err) = Deadline::after(TEST_WAIT).recv(&receive).unwrap();
     assert_eq!(code, 1);
