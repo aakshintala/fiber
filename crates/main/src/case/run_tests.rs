@@ -143,11 +143,7 @@ fn case_run_with_host(
 fn hang_exec_entry(program: &str) -> extensions::ExecEntry {
     extensions::ExecEntry {
         request: json!({"program": program}),
-        reply: Ok(extensions::ExecReply {
-            end: extensions::ExecEnd::Hang,
-            stdout: String::new(),
-            stderr: String::new(),
-        }),
+        reply: Ok(extensions::ExecReply::Hang),
     }
 }
 

@@ -19,8 +19,8 @@ pub struct HttpEntry {
     pub reply: Result<(u16, Vec<u8>), (ErrorCode, String)>,
 }
 
-/// How a scripted `host.exec` run ended: its exit code or the signal
-/// that ended it, shaped like a real run's (`host.rs` sets only the
+/// How a completed scripted `host.exec` run ended: its exit code or the
+/// signal that ended it, shaped like a real run's (`host.rs` sets only the
 /// present one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecEnd {
@@ -28,20 +28,23 @@ pub enum ExecEnd {
     Code(i32),
     /// The signal number that ended the process.
     Signal(i32),
+}
+
+/// The result of a scripted `host.exec` run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecReply {
+    /// A process that ended, with its termination reason and streams.
+    Completed {
+        /// How the run ended.
+        end: ExecEnd,
+        /// Standard output.
+        stdout: String,
+        /// Standard error.
+        stderr: String,
+    },
     /// The process never exits: the scripted run parks on the case clock
     /// until the callback's deadline.
     Hang,
-}
-
-/// The result of a scripted `host.exec` run: how it ended and both streams.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecReply {
-    /// How the run ended.
-    pub end: ExecEnd,
-    /// Standard output.
-    pub stdout: String,
-    /// Standard error.
-    pub stderr: String,
 }
 
 /// One scripted result for a `host.exec` request.

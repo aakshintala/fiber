@@ -321,9 +321,7 @@ pub(super) fn admit<'a>(
                 let case_value = request.case_value();
                 let (index, outcome) = script.exec(case_value.clone());
                 match outcome {
-                    Ok(ExecReply {
-                        end: ExecEnd::Hang, ..
-                    }) => match deadline {
+                    Ok(ExecReply::Hang) => match deadline {
                         Some(until) => {
                             // A process that never exits: the worker parks on
                             // the case clock until the callback's deadline,
@@ -356,7 +354,7 @@ pub(super) fn admit<'a>(
                             ))))
                         }
                     },
-                    Ok(ExecReply {
+                    Ok(ExecReply::Completed {
                         end,
                         stdout,
                         stderr,
@@ -367,9 +365,6 @@ pub(super) fn admit<'a>(
                             ExecEnd::Signal(number) => {
                                 (None, Some(support::group::signal_name(number)))
                             }
-                            // The hang arm above owns this end: a hang never
-                            // answers at once, so no immediate reply carries it.
-                            ExecEnd::Hang => (None, None),
                         };
                         let ran = exec::Ran {
                             exit_code,

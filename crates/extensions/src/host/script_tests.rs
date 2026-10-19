@@ -70,7 +70,7 @@ fn http(request: Value) -> HttpEntry {
 fn exec(request: Value) -> ExecEntry {
     ExecEntry {
         request,
-        reply: Ok(ExecReply {
+        reply: Ok(ExecReply::Completed {
             end: ExecEnd::Code(0),
             stdout: "ok".to_owned(),
             stderr: String::new(),
@@ -81,11 +81,7 @@ fn exec(request: Value) -> ExecEntry {
 fn hang_entry(request: Value) -> ExecEntry {
     ExecEntry {
         request,
-        reply: Ok(ExecReply {
-            end: ExecEnd::Hang,
-            stdout: String::new(),
-            stderr: String::new(),
-        }),
+        reply: Ok(ExecReply::Hang),
     }
 }
 
@@ -110,16 +106,7 @@ fn hang_matches_record_redacted_requests_and_pending_filters_on_the_deadline() {
     let now = clock.now();
     let (first, outcome) = script.exec(request.clone());
     assert_eq!(first, 1);
-    assert!(
-        matches!(
-            outcome,
-            Ok(ExecReply {
-                end: ExecEnd::Hang,
-                ..
-            })
-        ),
-        "{outcome:?}"
-    );
+    assert!(matches!(outcome, Ok(ExecReply::Hang)), "{outcome:?}");
     // At the edge a deadline of now is not stuck: only a later one is.
     script.hang_matched(first, &request, now);
     assert!(script.pending_hangs(now).is_empty());
@@ -438,7 +425,7 @@ fn exec_matches_program_arguments_and_working_directory_in_order() {
     );
     assert_eq!(
         script.exec(request).1,
-        Ok(ExecReply {
+        Ok(ExecReply::Completed {
             end: ExecEnd::Code(0),
             stdout: "ok".to_owned(),
             stderr: String::new(),
@@ -549,7 +536,7 @@ fn an_exec_request_with_the_same_env_matches_its_entry() {
     let script = HostScript::new(vec![], vec![exec(request.clone())], Vec::new());
     assert_eq!(
         script.exec(request).1,
-        Ok(ExecReply {
+        Ok(ExecReply::Completed {
             end: ExecEnd::Code(0),
             stdout: "ok".to_owned(),
             stderr: String::new(),
@@ -569,7 +556,7 @@ fn exec_returns_a_signal_end() {
         vec![],
         vec![ExecEntry {
             request: request.clone(),
-            reply: Ok(ExecReply {
+            reply: Ok(ExecReply::Completed {
                 end: ExecEnd::Signal(9),
                 stdout: String::new(),
                 stderr: String::new(),
@@ -579,7 +566,7 @@ fn exec_returns_a_signal_end() {
     );
     assert_eq!(
         script.exec(request).1,
-        Ok(ExecReply {
+        Ok(ExecReply::Completed {
             end: ExecEnd::Signal(9),
             stdout: String::new(),
             stderr: String::new(),

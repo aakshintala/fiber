@@ -571,11 +571,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
         }
         return Ok(extensions::ExecEntry {
             request: Value::Object(request.clone()),
-            reply: Ok(extensions::ExecReply {
-                end: extensions::ExecEnd::Hang,
-                stdout: String::new(),
-                stderr: String::new(),
-            }),
+            reply: Ok(extensions::ExecReply::Hang),
         });
     }
     let end = match (reply.contains_key("code"), reply.contains_key("signal")) {
@@ -601,7 +597,7 @@ fn parse_exec(value: &Value, index: usize) -> Result<extensions::ExecEntry, Stri
     let stderr = string(reply, "stderr", &format!("{prefix}.reply"))?;
     Ok(extensions::ExecEntry {
         request: Value::Object(request.clone()),
-        reply: Ok(extensions::ExecReply {
+        reply: Ok(extensions::ExecReply::Completed {
             end,
             stdout,
             stderr,
@@ -663,7 +659,7 @@ fn parse_hang(
     let hangs = exec
         .get(hang.saturating_sub(1))
         .and_then(|entry| entry.reply.as_ref().ok())
-        .is_some_and(|reply| reply.end == extensions::ExecEnd::Hang);
+        .is_some_and(|reply| matches!(reply, extensions::ExecReply::Hang));
     if !hangs {
         return Err(format!(
             "{prefix}.hang: must name a host.exec entry whose reply is hang"
