@@ -50,6 +50,25 @@ impl Home {
         .unwrap();
     }
 
+    /// Installs `fiber.test/<short>` with no entry script: it loads with
+    /// no VM, so its name still reaches `retain` but no service is set on it.
+    pub(crate) fn install_bare(&self, short: &str) {
+        let src = self.root.path().join("src").join(short);
+        std::fs::create_dir_all(&src).unwrap();
+        let manifest = serde_json::json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
+        std::fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
+        crate::plan(
+            &self.home(),
+            &crate::Request::Path(src),
+            "0.1.0",
+            &crate::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
     /// Installs `fiber.test/<short>` with `memory_mib` in its manifest, so
     /// the hook runs under a raised cap.
     pub(crate) fn install_with_memory(&self, short: &str, init: &str, memory_mib: u64) {

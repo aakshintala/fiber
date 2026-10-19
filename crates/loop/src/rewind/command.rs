@@ -131,6 +131,7 @@ impl Loop {
         // No session message enters after this: one admitted before it and
         // still behind the `rewind` is dropped with the drain below.
         self.close_admission();
+        self.close_extension_starts();
         self.stop_jobs_for_rewind()?;
         let new_session_id = SessionId(crate::mint("s_"));
         // `rewound` names the point's session only for an ancestor point:

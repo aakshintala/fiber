@@ -39,6 +39,29 @@ pub trait Drive: Send + Sync {
     );
 }
 
+/// Starts an extension-owned delegate: the session owns the job, with the
+/// model's delegate admission and limits. `main` implements it and injects
+/// it into `extensions` for `host.delegate` (`docs/architecture.md`,
+/// "The call rules").
+pub trait HostDelegate: Send + Sync {
+    /// Starts the delegate `extension` names in `arguments`, calling `bind`
+    /// with the new id before any child spawns, under the registry's start
+    /// gate. Blocking. Called with no hub lock held. Calls `bind` at most
+    /// once. After an `Err` that followed `bind`, the caller unbinds.
+    fn start(
+        &self,
+        extension: &str,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        bind: &mut dyn FnMut(&crate::JobId),
+    ) -> Result<crate::JobId, crate::shapes::Failure>;
+    /// Stops every running extension-owned delegate whose extension is not
+    /// in `loaded`, and returns how many were sent a stop.
+    fn retain(&self, loaded: &[String]) -> usize;
+    /// Stops those of `jobs` still running, and returns the count. Never
+    /// blocks on a job's end.
+    fn cancel(&self, jobs: &[crate::JobId]) -> usize;
+}
+
 #[cfg(test)]
 #[path = "extension_tests.rs"]
 mod tests;

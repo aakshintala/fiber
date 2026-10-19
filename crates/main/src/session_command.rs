@@ -422,6 +422,7 @@ pub(crate) fn run_new(
         timing.clone(),
         shell_read_only.clone(),
     )?;
+    let delegates = Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let permissions = ask_permissions(
@@ -490,6 +491,7 @@ pub(crate) fn run_new(
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
+    extensions.delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
     let answerable = !one_turn;
     extensions.answerable(answerable);
     extensions.browse_with(
@@ -529,6 +531,7 @@ pub(crate) fn run_new(
         &tools,
         &session,
         host_model,
+        Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
         session_servers,
         answerable,
         log.clone(),

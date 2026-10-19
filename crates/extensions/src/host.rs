@@ -22,6 +22,7 @@ use ureq::Agent;
 use crate::oauth::{self, Browser, Holder};
 
 mod ask;
+mod delegate;
 mod drive;
 pub(crate) mod exec;
 pub(crate) mod failure;
@@ -241,6 +242,7 @@ pub(crate) fn install(
         note_failure,
     )?;
     model::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
+    delegate::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
     drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
     tool::install(lua, &host, &tag, Rc::clone(&entry))?;
     ask::install(lua, &host, &tag, entry)?;
@@ -322,6 +324,14 @@ pub(crate) enum Request {
     Exec(exec::ExecRequest),
     /// `host.model`: one model request through the session's routing.
     Model(contract::model::HostModelRequest),
+    /// `host.delegate`: start a delegate job the session owns, keeping
+    /// `run` under `handle` until the start answers.
+    Delegate {
+        /// The snapshotted spec as its argument map.
+        arguments: Map<String, Value>,
+        /// The chunk-local `run` handle this start answers.
+        handle: u64,
+    },
     /// `host.oauth.callback`: serve one request on this localhost port,
     /// answering only `path` when set.
     Callback { port: u16, path: Option<String> },
@@ -340,6 +350,7 @@ impl Request {
             | Self::Tool(_)
             | Self::Drive(_)
             | Self::Model(_)
+            | Self::Delegate { .. }
             | Self::Exec(_)
             | Self::Lock => false,
         }
@@ -380,6 +391,9 @@ pub(crate) enum Reply {
     /// How a `host.model` call ended: its text, tokens and cost, or the
     /// code and message the callback raises as `{ code, message }`.
     Model(Result<contract::model::HostModelReply, (contract::ErrorCode, String)>),
+    /// How a `host.delegate` call ended: the started job's id, or the
+    /// code and message the callback raises as `{ code, message }`.
+    Delegate(Result<contract::JobId, (contract::ErrorCode, String)>),
     /// The query parameters of the one request the callback served, or the
     /// code and message `host.oauth.callback` raises.
     Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
@@ -407,6 +421,7 @@ pub(crate) fn request_from(
         ("drive", Some(LuaValue::Table(spec))) => Request::Drive(drive_request(spec)?),
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("model", Some(LuaValue::Table(spec))) => Request::Model(model::request(spec)?),
+        ("delegate", Some(LuaValue::Table(spec))) => delegate::request(spec)?,
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
             port: opts.get("port")?,
             path: opts.get("path")?,
@@ -765,6 +780,7 @@ pub(crate) fn resume_values(
         | Reply::Drive(Err(failed_with))
         | Reply::Exec(Err(failed_with))
         | Reply::Model(Err(failed_with))
+        | Reply::Delegate(Err(failed_with))
         | Reply::Query(Err(failed_with)) => failed(failed_with),
         Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
         Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
@@ -781,6 +797,7 @@ pub(crate) fn resume_values(
         // A `host.model` answer is one table: its text and its usage,
         // whose `cost` is nil when the provider reported none and no price
         // applied.
+        Reply::Delegate(Ok(id)) => delegate::resume(lua, Ok(id)),
         Reply::Model(Ok(answered)) => {
             let result = model::reply(lua, &answered.text, &answered.tokens, answered.cost)?;
             Ok(MultiValue::from_vec(vec![LuaValue::Table(result)]))

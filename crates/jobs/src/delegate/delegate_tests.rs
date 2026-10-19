@@ -1131,3 +1131,145 @@ fn a_refused_model_never_asks_for_the_credential() {
         "no process starts"
     );
 }
+
+#[test]
+fn a_start_held_past_the_sweep_is_refused_closed_with_no_bind_no_job_no_launch() {
+    let rig = rig();
+    let mut spawned = tool(&rig);
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let held_release = std::sync::Mutex::new(release_rx);
+    spawned.resolve.credential = Arc::new(move |_| {
+        let _sent = reached_tx.send(());
+        let _released = held_release.lock().unwrap().recv();
+        Ok(None)
+    });
+    let (result_tx, result_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bound = Vec::new();
+        let result = spawned.start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.push(id.clone())
+        });
+        let _sent = result_tx.send((result.map(|id| id.0), bound));
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&reached_rx)
+        .expect("the start reached the pause point");
+    // The registry half of the sweep: close, then the sweep's first read.
+    rig.registry.close_extension_starts();
+    assert!(
+        contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty(),
+        "nothing runs yet"
+    );
+    drop(release_tx);
+    let (result, bound) = wait.recv(&result_rx).expect("the start answered");
+    let error = result.expect_err("the held start is refused");
+    assert!(matches!(&error, crate::JobsError::ExtensionStartsClosed));
+    assert_eq!(error.code(), contract::ErrorCode::Closing);
+    assert!(bound.is_empty(), "bind never ran");
+    assert!(
+        contract::jobs::Jobs::running(rig.registry.as_ref()).is_empty(),
+        "no job was recorded"
+    );
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_close_waits_for_a_start_holding_the_gate_then_lists_it() {
+    let rig = rig();
+    let spawned = Arc::new(tool(&rig));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (result_tx, result_rx) = mpsc::channel();
+    let starter = Arc::clone(&spawned);
+    std::thread::spawn(move || {
+        let mut bound = Vec::new();
+        let result = starter.start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.push(id.clone());
+            let _sent = entered_tx.send(());
+            let _released = release_rx.recv();
+        });
+        let _sent = result_tx.send((result.map(|id| id.0), bound));
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&entered_rx).expect("bind holds the gate");
+    // The close takes the same gate, so it cannot return yet.
+    let closed_registry = Arc::clone(&rig.registry);
+    let (closed_tx, closed_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        closed_registry.close_extension_starts();
+        let _sent = closed_tx.send(());
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&closed_rx)
+            .is_err(),
+        "the close waits on the start gate"
+    );
+    drop(release_tx);
+    let (result, bound) = wait.recv(&result_rx).expect("the start answered");
+    let id = result.expect("the admitted start commits");
+    assert_eq!(bound, vec![contract::JobId(id.clone())]);
+    wait.recv(&closed_rx).expect("the close returned");
+    let Delivery::ExtensionJob(started, _) =
+        wait.recv(&rig.inbox).expect("the admitted start is sent")
+    else {
+        panic!("the admitted start is sent first");
+    };
+    assert_eq!(started.job_id.0, id);
+    assert_eq!(
+        contract::jobs::Jobs::running(rig.registry.as_ref()),
+        vec![contract::JobId(id.clone())]
+    );
+    // A later extension start is refused, while a model start still runs.
+    let _watchdog = child_group(&rig);
+    let error = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |_| {})
+        .expect_err("starts stay closed");
+    assert!(matches!(&error, crate::JobsError::ExtensionStartsClosed));
+    assert_eq!(error.code(), contract::ErrorCode::Closing);
+    let output = spawned.run(
+        &arguments("fiber:fake/m"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "the model path is unchanged");
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 2);
+    assert_eq!(rig.registry.stop_delegates(), 2);
+    assert_cancelled_notice(&rig);
+    assert_cancelled_notice(&rig);
+}
+
+#[test]
+fn a_closed_start_at_the_cap_is_refused_closed_not_full() {
+    let rig = rig();
+    let mut held = Vec::new();
+    for n in 0..10 {
+        let id = contract::JobId(format!("j_{n}"));
+        held.push(rig.registry.open_extension_started(
+            id.clone(),
+            "a".into(),
+            "scan".into(),
+            "/child/events.jsonl".into(),
+            contract::jobs::Stop(Box::new(|| {})),
+            crate::support::delegate_started(&id.0),
+        ));
+    }
+    contract::jobs::Jobs::close_extension_starts(rig.registry.as_ref());
+    let mut bound = Vec::new();
+    let spawned = tool(&rig);
+    let error = spawned
+        .start_extension("a", &arguments("fiber:fake/m"), &mut |id| {
+            bound.push(id.clone())
+        })
+        .expect_err("the closed start is refused");
+    assert!(matches!(&error, crate::JobsError::ExtensionStartsClosed));
+    assert_eq!(error.code(), contract::ErrorCode::Closing);
+    assert!(bound.is_empty(), "bind never ran");
+    assert_eq!(
+        contract::jobs::Jobs::running(rig.registry.as_ref()).len(),
+        10,
+        "the listed ten stay"
+    );
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}

@@ -161,6 +161,12 @@ pub trait Jobs: Send + Sync {
         let _ = (job_id, text);
         Err(WriteError::NotRunning)
     }
+
+    /// Refuses every later extension-owned delegate start with `closing`.
+    /// The loop calls it once on each end path (a normal end, a shutdown,
+    /// a rewind), before that path's first `running()` read. A second call
+    /// changes nothing. Returns at once. Test fakes keep the default.
+    fn close_extension_starts(&self) {}
 }
 
 /// `write` could not reach the job.

@@ -120,6 +120,7 @@ fn running_delegates(inner: &super::Inner) -> usize {
 
 #[derive(Debug)]
 pub(crate) enum Admit<E> {
+    Closed,
     Full,
     Start(E),
 }
@@ -151,8 +152,18 @@ pub(crate) enum Waited {
 }
 
 impl Registry {
-    pub(crate) fn admit<T, E>(&self, start: impl FnOnce() -> Result<T, E>) -> Result<T, Admit<E>> {
+    pub(crate) fn admit<T, E>(
+        &self,
+        extension: bool,
+        start: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, Admit<E>> {
         let _gate = lock(&self.start_gate);
+        // The closed-starts check runs before the delegate cap: a start
+        // after a sweep begins gets `closing` even with 10 extension
+        // delegates still listed, never `DelegatesFull`.
+        if extension && lock(&self.inner).extension_starts_closed {
+            return Err(Admit::Closed);
+        }
         if running_delegates(&lock(&self.inner)) >= DELEGATE_CAP {
             return Err(Admit::Full);
         }

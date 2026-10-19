@@ -751,6 +751,28 @@ impl SessionExtensions {
         }
     }
 
+    /// The started VM for `name`, for tests that drive one loaded extension.
+    #[cfg(test)]
+    pub(crate) fn lua_extension(&self, name: &str) -> Option<Arc<LuaExtension>> {
+        self.lua.iter().find(|ext| ext.name() == name).cloned()
+    }
+
+    /// Hands the session's delegate starter to every extension's
+    /// `host.delegate`, then stops the running delegates of extensions no
+    /// longer loaded: at session start nothing runs, so nothing stops, and
+    /// on a reload a dropped extension's delegates end cancelled.
+    pub fn delegate_to(&self, delegate: Arc<dyn contract::extension::HostDelegate>) {
+        for extension in &self.lua {
+            extension.set_delegate(Arc::clone(&delegate));
+        }
+        let loaded: Vec<String> = self
+            .loaded
+            .iter()
+            .map(|loaded| loaded.name.clone())
+            .collect();
+        delegate.retain(&loaded);
+    }
+
     /// Whether the session loaded any extension, even one without hooks.
     pub fn has_extensions(&self) -> bool {
         !self.loaded.is_empty()

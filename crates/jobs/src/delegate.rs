@@ -318,6 +318,7 @@ impl DelegateSpawn {
             }
         };
         let admitted = self.registry.admit(
+            extension.is_some(),
             #[allow(
                 clippy::result_large_err,
                 reason = "every jobs boundary returns the crate's error enum by value"
@@ -428,6 +429,7 @@ impl DelegateSpawn {
                 }
                 Ok(output)
             }
+            Err(crate::registry::runs::Admit::Closed) => Err(JobsError::ExtensionStartsClosed),
             Err(crate::registry::runs::Admit::Full) => Err(JobsError::DelegatesFull),
             Err(crate::registry::runs::Admit::Start(error)) => Err(error),
         }

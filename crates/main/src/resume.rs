@@ -501,6 +501,7 @@ fn resumed_session(
         timing.clone(),
         shell_read_only.clone(),
     )?;
+    let delegates = std::sync::Arc::new(delegates);
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let workspace = std::path::PathBuf::from(&folded.workspace);
@@ -553,6 +554,7 @@ fn resumed_session(
         id.clone(),
     ));
     extensions.model_to(host_model.clone());
+    extensions.delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
     let answerable = !one_turn;
     extensions.answerable(answerable);
     extensions.browse_with(
@@ -592,6 +594,7 @@ fn resumed_session(
         &tools,
         &session,
         host_model,
+        Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
         session_servers,
         answerable,
         log.clone(),

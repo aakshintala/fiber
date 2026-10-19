@@ -335,6 +335,7 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
         | Reply::Drive(_)
         | Reply::Exec(_)
         | Reply::Model(_)
+        | Reply::Delegate(_)
         | Reply::Query(_)
         | Reply::Lock(_)
         | Reply::Ask(_)

@@ -35,10 +35,21 @@ const IDLE: Duration = Duration::from_secs(60);
 
 /// Jobs a test lists by hand. Each stop sent is reported on `stops`. An
 /// end is sent under the lock `running` reads, as the registry sends it.
+/// `order` records the close and every `running` read, so a test fails if
+/// `close_extension_starts` moves after a sweep's first read. `gate` and
+/// `closed` model the registry's start gate and closed-starts flag: `start`
+/// refuses with `closing` once closed, and `close_extension_starts` sets
+/// the flag under the gate. `hold` parks one `start` at a pause point.
 struct Listed {
     ids: Mutex<Vec<JobId>>,
     stops: Mutex<Sender<JobId>>,
     snapshot_pause: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+    order: Mutex<Vec<String>>,
+    gate: Mutex<()>,
+    closed: Mutex<bool>,
+    hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+    bound: Mutex<Vec<JobId>>,
+    launched: Mutex<usize>,
 }
 
 impl Listed {
@@ -48,6 +59,12 @@ impl Listed {
             ids: Mutex::new(ids.iter().map(|id| JobId((*id).into())).collect()),
             stops: Mutex::new(stops),
             snapshot_pause: Mutex::new(None),
+            order: Mutex::new(Vec::new()),
+            gate: Mutex::new(()),
+            closed: Mutex::new(false),
+            hold: Mutex::new(None),
+            bound: Mutex::new(Vec::new()),
+            launched: Mutex::new(0),
         });
         (listed, stopped)
     }
@@ -55,6 +72,50 @@ impl Listed {
     /// Lists `id` as running.
     fn add(&self, id: &str) {
         self.ids.lock().unwrap().push(JobId(id.into()));
+    }
+
+    /// Parks the next `start` at a pause point: it sends `reached`, then
+    /// blocks until the test drops or sends on `release`.
+    fn hold_start(&self, reached: Sender<()>, release: Receiver<()>) {
+        *self.hold.lock().unwrap() = Some((reached, release));
+    }
+
+    /// An extension-owned delegate start, modelling the registry's rule: a
+    /// held start signals before the gate is taken; under the gate a
+    /// closed flag refuses with `closing` and records nothing, and an open
+    /// one binds, lists and launches.
+    fn start(&self, id: &str) -> Result<JobId, (ErrorCode, String)> {
+        if let Some((reached, release)) = self.hold.lock().unwrap().take() {
+            let _sent = reached.send(());
+            let _released = release.recv();
+        }
+        let _gate = self.gate.lock().unwrap();
+        if *self.closed.lock().unwrap() {
+            return Err((
+                ErrorCode::Closing,
+                "The session is ending, so no delegate was started.".into(),
+            ));
+        }
+        let job = JobId(id.into());
+        self.bound.lock().unwrap().push(job.clone());
+        self.ids.lock().unwrap().push(job.clone());
+        *self.launched.lock().unwrap() += 1;
+        Ok(job)
+    }
+
+    /// What `start` recorded, in order.
+    fn bound(&self) -> Vec<JobId> {
+        self.bound.lock().unwrap().clone()
+    }
+
+    /// How many starts reached the launch.
+    fn launched(&self) -> usize {
+        *self.launched.lock().unwrap()
+    }
+
+    /// The close and `running` reads, in order.
+    fn order(&self) -> Vec<String> {
+        self.order.lock().unwrap().clone()
     }
 
     /// Ends `id`: its notice reaches `inbox`, then `running` drops it.
@@ -146,12 +207,19 @@ impl Jobs for Listed {
     fn foreground(&self, _: Foreground) {}
 
     fn running(&self) -> Vec<JobId> {
+        self.order.lock().unwrap().push("running".into());
         let ids = self.ids.lock().unwrap().clone();
         if let Some((reached, release)) = self.snapshot_pause.lock().unwrap().take() {
             reached.send(()).unwrap();
             let _released = release.recv();
         }
         ids
+    }
+
+    fn close_extension_starts(&self) {
+        let _gate = self.gate.lock().unwrap();
+        *self.closed.lock().unwrap() = true;
+        self.order.lock().unwrap().push("close".into());
     }
 
     fn deliver_to(&self, _: Sender<Delivery>) {}
@@ -1744,4 +1812,113 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
 /// The session file's lines for a loop that never ran.
 fn held_of(world: &World) -> Vec<Envelope> {
     log::read(&world.held.dir).unwrap()
+}
+
+#[test]
+fn a_normal_end_closes_extension_starts_before_its_first_running_read() {
+    let (jobs, stops) = Listed::new(&["j_extension"]);
+    let mut world = World::new(jobs.clone());
+    world
+        .looped
+        .write(
+            &contract::events::Event::JobStarted(contract::events::JobStarted {
+                job_id: JobId("j_extension".into()),
+                tool: None,
+                extension: Some("test/scan".into()),
+                description: "scan".into(),
+                output_path: "/child/events.jsonl".into(),
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    let inbox = world.inbox.clone();
+    std::thread::spawn(move || {
+        done.send(world.looped.settled(Ok(()))).unwrap();
+    });
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_extension");
+    jobs.end_delegate("j_extension", &inbox, "PRIVATE SENTINEL");
+    ran(&finished);
+    // The close runs before the sweep's first `running()` read, not only
+    // before the stop: the log starts with the close, then the read.
+    let order = jobs.order();
+    assert!(
+        order.len() >= 2 && order[0] == "close" && order[1] == "running",
+        "{order:?}"
+    );
+}
+
+#[test]
+fn a_start_held_past_the_normal_end_sweep_is_refused_closed() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs.clone());
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    jobs.hold_start(reached_tx, release_rx);
+    let (result_tx, result_rx) = mpsc::channel();
+    let starter = Arc::clone(&jobs);
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(starter.start("j_new"));
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&reached_rx)
+        .expect("the start holds at the pause point");
+    // No job runs, so the sweep returns at once, after the close.
+    world.looped.settled(Ok(())).unwrap();
+    drop(release_tx);
+    let Err((code, message)) = wait.recv(&result_rx).expect("the start answered") else {
+        panic!("the held start is refused");
+    };
+    assert_eq!(code, ErrorCode::Closing);
+    assert_eq!(
+        message,
+        "The session is ending, so no delegate was started."
+    );
+    let order = jobs.order();
+    assert!(
+        order.len() >= 2 && order[0] == "close" && order[1] == "running",
+        "{order:?}"
+    );
+    assert!(jobs.bound().is_empty(), "no bind was recorded");
+    assert_eq!(jobs.launched(), 0, "nothing launched");
+    assert!(jobs.running().is_empty(), "no job was listed");
+}
+
+#[test]
+fn a_start_held_past_the_shutdown_sweep_is_refused_closed() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs.clone());
+    world.cancel.shutdown(143);
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    jobs.hold_start(reached_tx, release_rx);
+    let (result_tx, result_rx) = mpsc::channel();
+    let starter = Arc::clone(&jobs);
+    std::thread::spawn(move || {
+        let _sent = result_tx.send(starter.start("j_new"));
+    });
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&reached_rx)
+        .expect("the start holds at the pause point");
+    // The shutdown path closes before `settle`'s first `running()` read.
+    world.looped.settled(Ok(())).unwrap();
+    drop(release_tx);
+    let Err((code, message)) = wait.recv(&result_rx).expect("the start answered") else {
+        panic!("the held start is refused");
+    };
+    assert_eq!(code, ErrorCode::Closing);
+    assert_eq!(
+        message,
+        "The session is ending, so no delegate was started."
+    );
+    let order = jobs.order();
+    assert!(
+        order.len() >= 2 && order[0] == "close" && order[1] == "running",
+        "{order:?}"
+    );
+    assert!(jobs.bound().is_empty(), "no bind was recorded");
+    assert_eq!(jobs.launched(), 0, "nothing launched");
+    assert!(jobs.running().is_empty(), "no job was listed");
 }

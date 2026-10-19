@@ -1397,3 +1397,228 @@ fn models_says_quota_loading_while_the_reader_is_held_then_lists_the_label() {
     release.send(()).unwrap();
     assert_eq!(models_text(&models), "CAT\nQuota:\np/c: primary 43% used");
 }
+
+/// A session's delegate service with the jobs rig's long-running child:
+/// the launcher sleeps, the registry delivers to `inbox`, and `resolve`
+/// maps `deep` to the fake model. `launch` is replaced after `new`,
+/// because the session's own launcher would re-execute the binary.
+struct ServiceRig {
+    _dir: fakes::TempDir,
+    delegates: super::Delegates,
+    inbox: std::sync::mpsc::Receiver<contract::inbox::Delivery>,
+}
+
+/// The rig's last child, read from its pidfile, armed as its watchdog so
+/// a failing test leaves no child behind: `exec` replaces the shell, so
+/// a command-line match would never see the rig's directory.
+#[track_caller]
+fn child_guard(rig: &ServiceRig) -> fakes::Watchdog {
+    let pidfile = rig._dir.path().join("child.pid");
+    let pid: u32 = fakes::within(
+        "the child writes its pid",
+        Duration::from_secs(3),
+        move || loop {
+            let Ok(text) = std::fs::read_to_string(&pidfile) else {
+                std::thread::yield_now();
+                continue;
+            };
+            let Ok(pid) = text.trim().parse() else {
+                std::thread::yield_now();
+                continue;
+            };
+            return pid;
+        },
+    );
+    fakes::Watchdog::group(pid)
+}
+
+fn service_rig(depth: u32) -> ServiceRig {
+    let dir = fakes::TempDir::new("fiber-delegates-service");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let sessions = dir.path().join("sessions");
+    std::fs::create_dir(&sessions).unwrap();
+    let registry = jobs::Registry::new(
+        artifacts,
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
+    contract::jobs::Jobs::deliver_to(registry.as_ref(), inbox_tx);
+    let pid = dir.path().join("child.pid");
+    let launch: jobs::Launch = Arc::new(move |launched: &jobs::Launched| {
+        let _ = launched;
+        let mut command = std::process::Command::new("sh");
+        command.args([
+            "-c",
+            &format!("echo $$ > '{}'; exec sleep 60", pid.display()),
+        ]);
+        command
+    });
+    let mut delegates = super::Delegates::new(
+        "/bin/fiber".into(),
+        dir.path().into(),
+        SessionId("s_parent".into()),
+        dir.path().into(),
+        sessions,
+        registry,
+        clock,
+        jobs::Resolve {
+            lookup: Arc::new(|model: &str| match model {
+                "deep" => Ok("fake/m:high".to_owned()),
+                _ => Err(format!("Unknown delegate model {model:?}.")),
+            }),
+            catalogue: Arc::from("Roles:\ndeep: fake/m:high"),
+            credential: Arc::new(|_| Ok(None)),
+        },
+    );
+    delegates.launch = launch;
+    delegates.depth = depth;
+    ServiceRig {
+        _dir: dir,
+        delegates,
+        inbox: inbox_rx,
+    }
+}
+
+/// Receives the started job's `ExtensionJob`: its send registers the job
+/// as running under the same lock, so a later `retain` finds it.
+#[track_caller]
+fn await_started(rig: &ServiceRig, id: &contract::JobId) {
+    let contract::inbox::Delivery::ExtensionJob(started, _) =
+        Deadline::after(Duration::from_secs(3))
+            .recv(&rig.inbox)
+            .expect("the start is delivered")
+    else {
+        panic!("the start precedes the end");
+    };
+    assert_eq!(&started.job_id, id);
+}
+
+/// Waits until the registry lists no running job.
+fn await_idle(rig: &ServiceRig) {
+    let jobs = Arc::clone(&rig.delegates.jobs);
+    fakes::within("the job ends", Duration::from_secs(3), move || {
+        loop {
+            if contract::jobs::Jobs::running(jobs.as_ref()).is_empty() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+}
+
+fn arguments() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::json!({
+        "description": "scan",
+        "prompt": "hi",
+        "model": "deep",
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+/// `start` from a `Delegates` whose depth is 2 fails `depth_exceeded`
+/// without calling `bind`: the guard in `tool()` fires first.
+#[test]
+fn a_start_at_depth_two_fails_depth_exceeded_without_binding() {
+    use contract::extension::HostDelegate;
+    let rig = service_rig(2);
+    let mut bound = false;
+    let error = HostDelegate::start(
+        &rig.delegates,
+        "fiber.test/x",
+        &arguments(),
+        &mut |_: &contract::JobId| bound = true,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::DepthExceeded);
+    assert!(!bound, "no binding before the refusal");
+}
+
+/// `start` at depth 0 calls `bind` once with the returned id: the
+/// registry's `running()` then holds that id, and its inbox gets
+/// `Delivery::ExtensionJob` with the extension and no tool.
+#[test]
+fn a_start_at_depth_zero_binds_and_lists_its_job() {
+    use contract::extension::HostDelegate;
+    let rig = service_rig(0);
+    let mut bound = Vec::new();
+    let id = HostDelegate::start(&rig.delegates, "fiber.test/x", &arguments(), &mut |id| {
+        bound.push(id.clone())
+    })
+    .unwrap();
+    assert_eq!(bound, vec![id.clone()], "bind runs once with the id");
+    assert!(
+        contract::jobs::Jobs::running(rig.delegates.jobs.as_ref()).contains(&id),
+        "the registry lists the started job"
+    );
+    let contract::inbox::Delivery::ExtensionJob(started, delegate) =
+        Deadline::after(Duration::from_secs(3))
+            .recv(&rig.inbox)
+            .expect("the start is delivered")
+    else {
+        panic!("the start precedes the end");
+    };
+    assert_eq!(started.job_id, id);
+    assert_eq!(delegate.job_id, id);
+    assert_eq!(started.extension.as_deref(), Some("fiber.test/x"));
+    assert_eq!(started.tool, None);
+    let _guard = child_guard(&rig);
+    assert_eq!(HostDelegate::cancel(&rig.delegates, &[id]), 1);
+    await_idle(&rig);
+}
+
+/// `retain(&[])` stops the running child and returns 1; `cancel` with
+/// that id returns 0 once it has ended.
+#[test]
+fn retain_stops_what_is_no_longer_loaded_and_cancel_counts_true_stops() {
+    use contract::extension::HostDelegate;
+    let rig = service_rig(0);
+    let mut bound = Vec::new();
+    let id = HostDelegate::start(&rig.delegates, "fiber.test/x", &arguments(), &mut |id| {
+        bound.push(id.clone())
+    })
+    .unwrap();
+    await_started(&rig, &id);
+    assert_eq!(HostDelegate::retain(&rig.delegates, &[]), 1);
+    await_idle(&rig);
+    assert_eq!(HostDelegate::cancel(&rig.delegates, &[id]), 0);
+}
+
+/// N17: with a stored list that lacks `x`, `start` for `x` returns
+/// `Ok(id)` and the job is stopped; with `x` listed, it is not.
+#[test]
+fn a_start_missing_from_the_stored_list_ends_stopped() {
+    use contract::extension::HostDelegate;
+    let rig = service_rig(0);
+    HostDelegate::retain(&rig.delegates, &["fiber.test/kept".to_owned()]);
+    let mut bound = Vec::new();
+    let id = HostDelegate::start(&rig.delegates, "fiber.test/x", &arguments(), &mut |id| {
+        bound.push(id.clone())
+    })
+    .unwrap();
+    assert_eq!(bound, vec![id.clone()]);
+    await_started(&rig, &id);
+    await_idle(&rig);
+    assert!(
+        contract::jobs::Jobs::running(rig.delegates.jobs.as_ref()).is_empty(),
+        "the unlisted job is stopped"
+    );
+    HostDelegate::retain(&rig.delegates, &["fiber.test/x".to_owned()]);
+    let mut bound = Vec::new();
+    let kept = HostDelegate::start(&rig.delegates, "fiber.test/x", &arguments(), &mut |id| {
+        bound.push(id.clone())
+    })
+    .unwrap();
+    assert_eq!(bound, vec![kept.clone()]);
+    assert!(
+        contract::jobs::Jobs::running(rig.delegates.jobs.as_ref()).contains(&kept),
+        "the listed job keeps running"
+    );
+    let _guard = child_guard(&rig);
+    assert_eq!(HostDelegate::cancel(&rig.delegates, &[kept]), 1);
+    await_idle(&rig);
+}

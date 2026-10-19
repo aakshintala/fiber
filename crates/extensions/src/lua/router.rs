@@ -49,6 +49,9 @@ pub(super) struct Router {
     /// The session's model `host.model` calls through, set late by
     /// `model_to`. None before it, or once the extension is sealed.
     model: Option<Arc<dyn contract::model::HostModel>>,
+    /// The session's delegate starter `host.delegate` starts through, set
+    /// late by `delegate_to`. None before it, or once the extension is sealed.
+    pub(super) delegate: Option<Arc<dyn contract::extension::HostDelegate>>,
     /// Ephemeral events emitted before any emitter, in call order, flushed
     /// on the first one: at most [`MAX_PENDING_EVENTS`], oldest dropped
     /// first.
@@ -95,6 +98,13 @@ impl Router {
     pub(super) fn dispose(&mut self) {
         self.disposed = true;
         self.model = None;
+        self.delegate = None;
+    }
+
+    /// Whether `deliver_to` has given the hub an inbox: a `host.delegate`
+    /// before the session runs fails closed instead of reaching the service.
+    pub(super) fn has_inbox(&self) -> bool {
+        self.inbox.is_some()
     }
 
     /// The deliveries that ended before any inbox, in call order.
@@ -245,6 +255,31 @@ impl Hub {
         shared.router.model.clone()
     }
 
+    /// Hands the session's delegate starter to this extension's
+    /// `host.delegate`. A later service replaces the last, as `set_inbox`
+    /// does.
+    pub(crate) fn set_delegate(
+        &self,
+        delegate: std::sync::Arc<dyn contract::extension::HostDelegate>,
+    ) {
+        let mut shared = self.lock();
+        if shared.router.disposed {
+            return;
+        }
+        shared.router.delegate = Some(delegate);
+    }
+
+    /// The delegate starter `host.delegate` starts through: none before
+    /// `delegate_to`, once dropped, or once sealed, so no start follows
+    /// `fiber_exited`.
+    pub(crate) fn delegate(&self) -> Option<std::sync::Arc<dyn contract::extension::HostDelegate>> {
+        let shared = self.lock();
+        if shared.router.disposed || shared.router.sealed {
+            return None;
+        }
+        shared.router.delegate.clone()
+    }
+
     /// Drops every later emission and delivery from this extension; called by
     /// `Session::quiesce` before `fiber_exited`. A running callback is not
     /// stopped; only its output is dropped. The injected model goes with
@@ -254,6 +289,7 @@ impl Hub {
         let mut shared = self.lock();
         shared.router.sealed = true;
         shared.router.model = None;
+        shared.router.delegate = None;
         let cancels: Vec<std::sync::Arc<super::host_calls::ModelCancel>> =
             shared.models.values().cloned().collect();
         drop(shared);
