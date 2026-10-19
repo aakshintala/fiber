@@ -1613,6 +1613,14 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
 struct CountingHooks {
     calls: AtomicUsize,
     redact: bool,
+    waits: AtomicUsize,
+    barrier: Mutex<Option<RunBarrier>>,
+}
+
+struct RunBarrier {
+    arrived: Sender<()>,
+    release: Receiver<()>,
+    inbox: Sender<Delivery>,
 }
 
 impl CountingHooks {
@@ -1622,6 +1630,28 @@ impl CountingHooks {
 }
 
 impl contract::hook::Hooks for CountingHooks {
+    fn wait_for_runs(&self) {
+        self.waits.fetch_add(1, Ordering::SeqCst);
+        if let Some(barrier) = self.barrier.lock().unwrap().take() {
+            barrier.arrived.send(()).unwrap();
+            let _released = barrier.release.recv();
+            barrier
+                .inbox
+                .send(Delivery::ExtensionExec(contract::events::ExtensionExec {
+                    extension: "test/barrier".into(),
+                    program: "sh".into(),
+                    args: vec!["-c".into(), "exit 0".into()],
+                    cwd: "/tmp".into(),
+                    process: contract::shapes::Process {
+                        exit_code: Some(0),
+                        signal: None,
+                        timed_out: false,
+                    },
+                }))
+                .unwrap();
+        }
+    }
+
     fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
         contract::hook::AfterToolAnswer {
@@ -1732,6 +1762,74 @@ impl World {
         self.looped = self.looped.hooks(dyned);
         self
     }
+}
+
+#[test]
+fn shutdown_settle_waits_for_runs_before_its_final_drain() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let hooks = Arc::new(CountingHooks::default());
+    let mut world = World::new(jobs).hooked(hooks.clone());
+    let (arrived, arrival) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    *hooks.barrier.lock().unwrap() = Some(RunBarrier {
+        arrived,
+        release: released,
+        inbox: world.inbox.clone(),
+    });
+    world.cancel.shutdown(143);
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let settled = world.looped.settled(Ok(()));
+        let _sent = done.send((settled, world.held));
+    });
+    Deadline::after(DEADLINE)
+        .recv(&arrival)
+        .expect("the loop entered the run barrier");
+    release.send(()).unwrap();
+    let (settled, held) = Deadline::after(DEADLINE)
+        .recv(&result)
+        .expect("settle returned");
+    settled.unwrap();
+    assert_eq!(hooks.waits.load(Ordering::SeqCst), 1);
+    assert_eq!(held.kinds(), ["session_started", "extension_exec"]);
+    let lines = held.durable();
+    assert_eq!(lines[1].payload["program"], "sh");
+    assert_eq!(lines[1].payload["process"]["exit_code"], 0);
+}
+
+#[test]
+fn normal_settle_does_not_wait_for_runs() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let hooks = Arc::new(CountingHooks::default());
+    let mut world = World::new(jobs).hooked(hooks.clone());
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let settled = world.looped.settled(Ok(()));
+        let _sent = done.send((settled, world.held));
+    });
+    let (settled, held) = Deadline::after(DEADLINE)
+        .recv(&result)
+        .expect("normal settle returned");
+    settled.unwrap();
+    assert_eq!(hooks.waits.load(Ordering::SeqCst), 0);
+    assert_eq!(held.kinds(), ["session_started"]);
+}
+
+#[test]
+fn shutdown_settle_without_hooks_returns() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs);
+    world.cancel.shutdown(143);
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let settled = world.looped.settled(Ok(()));
+        let _sent = done.send((settled, world.held));
+    });
+    let (settled, held) = Deadline::after(DEADLINE)
+        .recv(&result)
+        .expect("unhooked settle returned");
+    settled.unwrap();
+    assert_eq!(held.kinds(), ["session_started"]);
 }
 
 #[test]

@@ -1360,6 +1360,75 @@ fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
     );
 }
 
+#[test]
+fn session_wait_for_runs_queues_an_exec_before_returning() {
+    use crate::lua::{Pause, pause_settle, unpause_settle};
+    let home = Home::new();
+    let ready = home.root.path().join("ready");
+    home.install(
+        "barrier",
+        Some(&format!(
+            r#"fiber.command("run", {{ timeout = 5000, run = function()
+  host.exec("sh", {{"-c", "echo $$ > \\\"$0\\\"", {ready:?}}})
+  return "finished"
+end }})"#,
+            ready = ready.display().to_string(),
+        )),
+        &[],
+    );
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let (tx, rx) = mpsc::channel();
+    session.deliver_to(tx);
+    let (arrived, arrival) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = std::sync::Mutex::new(released);
+    pause_settle(Arc::new(move |_, pause| {
+        if pause == Pause::ExecEnding {
+            let _sent = arrived.send(());
+            let _released = released.lock().unwrap().recv();
+        }
+    }));
+    let lua = Arc::clone(&session.lua[0]);
+    let (done, completed) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = done.send(lua.command("run", ""));
+    });
+    Deadline::after(WAIT)
+        .recv(&arrival)
+        .expect("the exec ended before its delivery");
+    let waiter = Arc::clone(&session);
+    let (done, returned) = mpsc::channel();
+    thread::spawn(move || {
+        waiter.wait_for_runs();
+        let _sent = done.send(());
+    });
+    assert!(
+        matches!(
+            Deadline::after(Duration::from_millis(200)).recv(&returned),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the session barrier waits for its Lua VM"
+    );
+    release.send(()).unwrap();
+    Deadline::after(WAIT)
+        .recv(&returned)
+        .expect("the session barrier returned");
+    let contract::inbox::Delivery::ExtensionExec(line) = rx
+        .try_recv()
+        .expect("the line is queued before the barrier returns")
+    else {
+        panic!("expected extension_exec");
+    };
+    assert_eq!(line.program, "sh");
+    assert_eq!(line.process.exit_code, Some(0));
+    assert!(matches!(
+        Deadline::after(WAIT).recv(&completed).unwrap(),
+        Err(crate::Error::Stopped { .. })
+    ));
+    unpause_settle();
+}
+
 fn hold_init(url: &str) -> String {
     format!(
         "fiber.command(\"hold\", {{ timeout = 8000, run = function() local r = host.http({{ url = \"{url}\" }}) host.status(\"late\") host.log(\"late\") host.emit({{x=1}}) return r.body end }})\n"

@@ -65,14 +65,18 @@ pub(crate) fn start(
             // `host.exec` group as it stops a tool call's: SIGTERM now,
             // SIGKILL 800 ms later for a group still alive
             // (`docs/invocation.md`, "Shutdown").
-            extensions::stop_every_callback();
-            // The code first: the loop reads it once the stopper wakes it.
-            turn.shutdown(code);
-            reads.cancel();
-            stopper();
-            for id in jobs.running() {
-                jobs.stop(&id);
-            }
+            shutdown_steps(
+                code,
+                |code| turn.shutdown(code),
+                extensions::stop_every_callback,
+                || {
+                    reads.cancel();
+                    stopper();
+                    for id in jobs.running() {
+                        jobs.stop(&id);
+                    }
+                },
+            );
         }),
         Box::new(|| {
             support::group::kill_every_group();
@@ -91,3 +95,19 @@ pub(crate) fn start(
     }));
     None
 }
+
+fn shutdown_steps(
+    code: i32,
+    publish: impl FnOnce(i32),
+    stop_callbacks: impl FnOnce(),
+    rest: impl FnOnce(),
+) {
+    stop_callbacks();
+    // The code first: the loop reads it once the stopper wakes it.
+    publish(code);
+    rest();
+}
+
+#[cfg(test)]
+#[path = "shutdown_tests.rs"]
+mod tests;
