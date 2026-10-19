@@ -3862,9 +3862,14 @@ fn quota_answers_without_waiting_for_the_inbox() {
     let opened = Opened::open(vec![]);
     let rows = serde_json::json!([{"provider": "p", "credential": "work", "credit": {"remaining": 4.2, "limit": 10.0}, "unreachable": true}]);
     let quota: Vec<contract::events::QuotaInfo> = serde_json::from_value(rows.clone()).unwrap();
-    opened
-        .session
-        .quota(Arc::new(move || (quota.clone(), 70.0)));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    opened.session.quota(Arc::new({
+        let seen = Arc::clone(&seen);
+        move |fetch| {
+            seen.lock().unwrap().push(fetch);
+            (quota.clone(), 70.0)
+        }
+    }));
     let socket = opened.socket.clone();
     opened.session.run(Vec::new(), Arc::new(|| false), move |_inbox| {
         let client = Client::connect(&socket).unwrap();
@@ -3876,10 +3881,17 @@ fn quota_answers_without_waiting_for_the_inbox() {
         let answer = response(&client, "quota");
         assert_eq!(kind(&answer), "command_accepted");
         assert_eq!(answer["payload"]["result"], serde_json::json!({"quota": rows, "notice_at": 70.0}));
+        // The fetch flag travels from the line to the reader: the same
+        // rows come back, and the reader saw the flag.
+        send(&client, r#"{"id":"fetch","command":"quota","args":{"fetch":true}}"#);
+        let answer = response(&client, "fetch");
+        assert_eq!(kind(&answer), "command_accepted");
+        assert_eq!(answer["payload"]["result"], serde_json::json!({"quota": rows, "notice_at": 70.0}));
         send(&client, r#"{"id":"bad","command":"quota","args":{"future":1}}"#);
         assert_eq!(rejection(&response(&client, "bad")), ("invalid_arguments", UNFIT));
         Ok(())
     }).unwrap();
+    assert_eq!(*seen.lock().unwrap(), [false, true]);
     opened.close();
 }
 

@@ -1018,3 +1018,268 @@ fn a_failed_loader_spawn_is_retried_by_the_model_reader() {
     receive(&ended, "the retried loader's end");
     assert!(store.state.lock().unwrap().started);
 }
+
+#[test]
+fn the_door_reader_fetches_only_with_the_flag() {
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, windows_body()),
+        fakes::Response::status(
+            200,
+            b"{\"windows\": [{\"name\": \"primary\", \"used_percent\": 11.0}]}".to_vec(),
+        ),
+    ]);
+    // The readers build their own store, as `Switching::quota_readers`
+    // wires them: the flag on the door reader selects the path.
+    let readers = fixture.switching.quota_readers();
+    let (rows, notice_at) = (readers.door)(true);
+    assert_eq!(fixture.server.requests().len(), 1, "no fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+    let (rows, _) = (readers.door)(false);
+    assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+    let (rows, _) = (readers.door)(true);
+    assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
+    assert_eq!(
+        rows,
+        [info(
+            "qp",
+            "work",
+            QuotaEntry::Reported(Quota::Windows(vec![Window {
+                name: "primary".to_owned(),
+                used: WindowUse::Percent {
+                    used: 11.0,
+                    resets_at: None,
+                },
+            }])),
+        )
+        .unwrap()]
+    );
+}
+
+#[test]
+fn fetch_true_starts_a_fetch_on_a_fresh_cache() {
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, windows_body()),
+        fakes::Response::status(
+            200,
+            b"{\"windows\": [{\"name\": \"primary\", \"used_percent\": 11.0}]}".to_vec(),
+        ),
+    ]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let first = QuotaEntry::Reported(quota_value());
+    let lua = store.held_instance("qp");
+    assert_eq!(read_to_end(Arc::clone(&lua), pair_of("work")), first);
+    assert_eq!(fixture.server.requests().len(), 1);
+    // The cache is fresh: no clock ever moved, so its age is far below the
+    // 5-minute freshness bound and a due-check would never refetch. (The
+    // providers' clocks live inside the fixture, so the test cannot advance
+    // one; the frozen clock keeps the primed cache fresh by itself.) The
+    // fetch path still starts one fetch per label and answers its value.
+    let (rows, notice_at) = store.answer_fetch();
+    assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info(
+            "qp",
+            "work",
+            QuotaEntry::Reported(Quota::Windows(vec![Window {
+                name: "primary".to_owned(),
+                used: WindowUse::Percent {
+                    used: 11.0,
+                    resets_at: None,
+                },
+            }])),
+        )
+        .unwrap()]
+    );
+}
+
+#[test]
+fn without_fetch_the_answer_comes_from_cache_with_no_new_fetch() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, windows_body())]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::Reported(quota_value())
+    );
+    assert_eq!(fixture.server.requests().len(), 1);
+    let (rows, notice_at) = store.answer();
+    assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
+    assert_eq!(notice_at, 80.0);
+    assert_eq!(
+        rows,
+        [info("qp", "work", QuotaEntry::Reported(quota_value())).unwrap()]
+    );
+}
+
+#[test]
+fn a_failed_fetch_without_a_last_value_answers_unreachable() {
+    let fixture = http_fixture(vec![denied()]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    // Nothing ever fetched, so the failed fetch has no last value: the
+    // row is `unreachable` with no value, through the failure mapper.
+    assert_eq!(store.answer_fetch(), (vec![failed("qp", "work")], 80.0));
+}
+
+#[test]
+fn a_failed_fetch_with_a_last_value_answers_unreachable_with_it() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, windows_body()), denied()]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::Reported(quota_value())
+    );
+    // The retry fails, keeping the last value: the row carries it with
+    // `unreachable`, through the value mapper.
+    assert_eq!(
+        store.answer_fetch(),
+        (
+            vec![
+                info(
+                    "qp",
+                    "work",
+                    QuotaEntry::Unreachable {
+                        last: Some((quota_value(), Duration::from_secs(0))),
+                    },
+                )
+                .unwrap()
+            ],
+            80.0
+        )
+    );
+}
+
+#[test]
+fn fetch_true_waits_for_a_held_loader_then_answers() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    let (entered, at_register) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    store.pause_at_register(entered, released);
+    let (found, got) = mpsc::channel();
+    let reader = store.clone();
+    std::thread::spawn(move || found.send(reader.answer_fetch()));
+    receive(&at_register, "the loader before the quota check");
+    // The loader is held before resolving any label: the fetch path holds
+    // with it instead of answering the empty snapshot as complete.
+    assert!(
+        got.try_recv().is_err(),
+        "the fetch path answered before the loader finished"
+    );
+    release.send(()).unwrap();
+    let (rows, notice_at) = receive(&got, "the fetch path's answer");
+    assert_eq!(notice_at, 80.0);
+    let weekly = Quota::Windows(vec![Window {
+        name: "weekly".to_owned(),
+        used: WindowUse::Percent {
+            used: 35.0,
+            resets_at: None,
+        },
+    }]);
+    assert_eq!(
+        rows,
+        [
+            failed("qp", "broken"),
+            info("qp", "home", QuotaEntry::Reported(weekly.clone())).unwrap(),
+            info("qp", "work", QuotaEntry::Reported(weekly)).unwrap(),
+        ]
+    );
+}
+
+#[test]
+fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    let (entered, at_register) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    store.pause_at_register(entered, released);
+    let (found, got) = mpsc::channel();
+    let reader = store.clone();
+    std::thread::spawn(move || found.send(reader.answer_fetch()));
+    receive(&at_register, "the loader before the quota check");
+    assert!(
+        got.try_recv().is_err(),
+        "the fetch path answered before the budget expired"
+    );
+    // Past the budget on the loader clock, which the waiter reads: no
+    // label resolved, so every startup label answers `unreachable`.
+    // Advancing only after the loader's wait signal, never a sleep.
+    fixture
+        .switching
+        .reloadable()
+        .loader
+        .clock
+        .sleep(LOADER_BUDGET + Duration::from_secs(1));
+    assert_eq!(
+        receive(&got, "the expired budget's answer"),
+        (
+            vec![
+                failed("qp", "broken"),
+                failed("qp", "home"),
+                failed("qp", "work"),
+            ],
+            80.0
+        )
+    );
+    release.send(()).unwrap();
+}
+
+#[test]
+fn fetch_true_answers_unreachable_when_shutdown_fires_while_unchecked() {
+    let fixture = fixture(false, false, &[]);
+    let store = fixture.switching.quota_store();
+    drop(fixture.switching);
+    // The loader finds no session and ends it unchecked: every startup
+    // label answers `unreachable` at once, never partial and never empty
+    // as complete.
+    assert_eq!(
+        store.answer_fetch(),
+        (
+            vec![
+                failed("qp", "broken"),
+                failed("qp", "home"),
+                failed("qp", "work"),
+            ],
+            80.0
+        )
+    );
+}
+
+#[test]
+fn a_fetched_no_quota_stays_absent() {
+    let fixture = http_fixture(vec![fakes::Response::status(200, b"null".to_vec())]);
+    let store = fixture.switching.quota_store();
+    let (done, ended) = mpsc::channel();
+    store.note_loaded(done);
+    assert!(matches!(store.entries(), QuotaView::Loading));
+    receive(&ended, "the loader's end");
+    // The forced fetch resolves no quota: the label stays absent, as in
+    // the cached path, instead of answering `unreachable`.
+    assert_eq!(store.answer_fetch(), (Vec::new(), 80.0));
+}

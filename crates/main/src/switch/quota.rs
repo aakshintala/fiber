@@ -1,5 +1,19 @@
 //! Non-waiting client quota, sharing providers and credential reads with
 //! model switches (`docs/tools.md`, "Fetching").
+//!
+//! Timing bounds: the fetch path answers within 8 s of its fetches
+//! starting, plus loading.
+//!
+//! | Wait | Bound |
+//! |---|---|
+//! | Loader wait | `LOADER_BUDGET` on the loader clock |
+//! | One label's fetch | its flight's own deadline (start + 8 s) |
+//! | Sequential label waits | still ~8 s after fetch start: every flight
+//! started together shares one deadline |
+//! | Loader and key reads | the existing read timeouts, unchanged |
+
+use std::sync::Condvar;
+use std::time::Duration;
 
 use super::*;
 use contract::ErrorCode;
@@ -7,7 +21,27 @@ use contract::events::{QuotaCredit, QuotaInfo, QuotaWindow};
 use contract::shapes::{Failure, True};
 use extensions::{CredentialPair, Quota, QuotaEntry, WindowUse};
 
-pub(crate) type QuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+/// How long the fetch path waits for a cold loader to check every
+/// provider: comfortably above the key reads' own timeouts, which bound
+/// the loader's work. Past it the fetch path answers `unreachable` for
+/// every startup label instead of hanging a `/quota`.
+const LOADER_BUDGET: Duration = Duration::from_secs(30);
+
+/// How long one loader wait parks between predicate rechecks: a missed
+/// exit is rechecked instead of slept through, and a fake-clock advance
+/// past the budget is noticed at most this late.
+const LOADER_POLL: Duration = Duration::from_millis(50);
+
+/// The driver quota reader: without `fetch` it answers from the caches at
+/// once; with `fetch` it starts one fetch per key-read label, whatever
+/// the cache's age, and answers once every fetch it started has ended.
+/// The cached path ignores the flag. One reader map per flag value is not
+/// needed: the fetch path shares flights label-wise underneath.
+pub(crate) type QuotaRead = Arc<dyn Fn(bool) -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+
+/// The notice reader: only what is already cached, never fetching. The
+/// loop's notice path takes this shape, so it stays as it is.
+pub(crate) type NoticeQuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
 
 /// The model-facing quota reader: one snapshot per call, answering from
 /// the caches at once without waiting for loading, key reads or fetches
@@ -78,6 +112,9 @@ struct Store {
     started: Weak<StartLock>,
     reads: Arc<Reads>,
     state: Mutex<Held>,
+    /// Signalled at every `load()` exit, success or shutdown: the fetch
+    /// path waits on it while the loader has not checked every provider.
+    loaded: Condvar,
     #[cfg(test)]
     labels_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     /// Holds the loader after it starts a provider and before it checks
@@ -100,7 +137,7 @@ struct Store {
 pub(crate) struct QuotaReaders {
     pub(crate) door: QuotaRead,
     pub(crate) model: ModelQuotaRead,
-    pub(crate) notice: QuotaRead,
+    pub(crate) notice: NoticeQuotaRead,
 }
 
 impl Switching {
@@ -111,7 +148,13 @@ impl Switching {
         let doors = Arc::clone(&store);
         let model = Arc::clone(&store);
         QuotaReaders {
-            door: Arc::new(move || doors.answer()),
+            door: Arc::new(move |fetch| {
+                if fetch {
+                    doors.answer_fetch()
+                } else {
+                    doors.answer()
+                }
+            }),
             model: Arc::new(move || model.entries()),
             notice: Arc::new(move || store.cached()),
         }
@@ -137,6 +180,7 @@ impl Switching {
             started: Arc::downgrade(&self.started),
             reads: self.reads.clone(),
             state: Mutex::default(),
+            loaded: Condvar::new(),
             #[cfg(test)]
             labels_pause: Mutex::default(),
             #[cfg(test)]
@@ -268,6 +312,110 @@ impl Store {
         self.with_threshold(quota)
     }
 
+    /// The fetch path: one fetch per label whose key read succeeded,
+    /// whatever the cache's age, answering once every fetch it started
+    /// has ended (`docs/invocation.md`, "What each command does",
+    /// `quota`). A label whose fetch failed or timed out answers
+    /// `unreachable`; with zero labels it answers empty at once. Neither
+    /// lock is held across a fetch or a wait: labels are cloned under the
+    /// lock like the cached path clones them.
+    fn answer_fetch(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
+        let spawn = |store: Arc<Self>| {
+            std::thread::Builder::new()
+                .name("fiber-quota-load".into())
+                .spawn(move || store.load())
+                .map(|_| ())
+        };
+        let (checked, labels, failed, _) = self.snapshot_starting(spawn);
+        let (labels, mut quota) = match checked {
+            true => (labels, failed),
+            // A cold cache: wait for the loader's label list instead of
+            // answering the partial snapshot as complete.
+            false => match self.wait_loaded() {
+                Some((labels, failed)) => (labels, failed),
+                // The budget expired or the session shut down with the
+                // loader still unchecked: no label resolved, so every
+                // startup label answers `unreachable` through the failure
+                // mapper, never partial and never empty as complete.
+                None => return self.with_threshold(self.startup_unreachable()),
+            },
+        };
+        // Every flight starts before any wait: the flights share one
+        // deadline, so the sequential waits still end ~8 s after the
+        // fetches start instead of staggering a fresh 8 s per label.
+        let waits = labels
+            .iter()
+            .map(|label| {
+                let wait = label.lua.force_start_quota(&label.pair, label.key.as_ref());
+                (label, wait)
+            })
+            .collect::<Vec<_>>();
+        quota.extend(waits.into_iter().filter_map(|(label, wait)| {
+            fetch_row(
+                &label.provider,
+                &label.label,
+                label.lua.wait_quota(&label.pair, wait),
+            )
+        }));
+        self.with_threshold(quota)
+    }
+
+    /// Waits for the loader to check every provider, then resnapshots the
+    /// label list. `None` when the `LOADER_BUDGET` expired or the session
+    /// shut down while still unchecked. The predicate rechecks `checked`
+    /// under the lock, so a notify that landed before the wait and a
+    /// spurious wakeup both resnapshot harmlessly.
+    fn wait_loaded(self: &Arc<Self>) -> Option<(Vec<Label>, Vec<QuotaInfo>)> {
+        let clock = self
+            .now
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .loader
+            .clock
+            .clone();
+        let start = clock.now();
+        let end = start.checked_add(LOADER_BUDGET).unwrap_or(start);
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if guard.checked {
+                return Some((guard.labels.clone(), guard.failed.clone()));
+            }
+            // A dropped session ends the wait: the loader already exited
+            // unchecked, so its labels answer `unreachable`.
+            self.started.upgrade()?;
+            if clock.now() >= end {
+                return None;
+            }
+            let parked = support::clock::park(
+                clock.as_ref(),
+                Some(end),
+                Some(LOADER_POLL),
+                &self.loaded,
+                guard,
+                |held| held.checked,
+            );
+            let Some(next) = parked else {
+                // The clock never parks without invoking the wait; ending
+                // the wait answers instead of spinning past it.
+                return None;
+            };
+            guard = next;
+        }
+    }
+
+    /// Every startup credential label as `unreachable`: the loader never
+    /// resolved any of them, so none may answer a value and none may go
+    /// missing. Providers with no labels contribute none, as in loading.
+    fn startup_unreachable(&self) -> Vec<QuotaInfo> {
+        let mut rows = Vec::new();
+        for (_, data) in &self.providers {
+            for label in self.startup_config.credentials().labels(data) {
+                rows.push(failed(&data.name, &label));
+            }
+        }
+        rows
+    }
+
     #[allow(
         clippy::expect_used,
         reason = "Config validates quota.notice_at and supplies its numeric default"
@@ -288,6 +436,9 @@ impl Store {
     }
 
     fn load(self: &Arc<Self>) {
+        // Notified at every exit, success or shutdown: the fetch path's
+        // loader wait ends with the loader, never past it.
+        let _loaded = NotifyLoaded(self);
         #[cfg(test)]
         let _ended = Loaded(self);
         let loader = self
@@ -495,6 +646,14 @@ impl Store {
 
 #[cfg(test)]
 struct Loaded<'a>(&'a Store);
+/// Signals the loader's end at every `load()` exit, success or shutdown:
+/// the fetch path's loader wait ends with the loader, never past it.
+struct NotifyLoaded<'a>(&'a Store);
+impl Drop for NotifyLoaded<'_> {
+    fn drop(&mut self) {
+        self.0.loaded.notify_all();
+    }
+}
 #[cfg(test)]
 impl Drop for Loaded<'_> {
     fn drop(&mut self) {
@@ -559,6 +718,19 @@ fn silent(provider: &str, labels: &[String]) -> Vec<Silent> {
             credential: label.clone(),
         })
         .collect()
+}
+
+/// One awaited fetch as its answer row: the value where the fetch
+/// resolved one, `unreachable` with no value where the fetch failed or
+/// timed out with nothing ever fetched. A label reporting no quota stays
+/// absent, as in the cached path.
+fn fetch_row(provider: &str, label: &str, entry: QuotaEntry) -> Option<QuotaInfo> {
+    match entry {
+        QuotaEntry::Unreachable { last: None } => Some(failed(provider, label)),
+        QuotaEntry::Reported(_)
+        | QuotaEntry::NoQuota
+        | QuotaEntry::Unreachable { last: Some(_) } => info(provider, label, entry),
+    }
 }
 
 fn info(provider: &str, label: &str, entry: QuotaEntry) -> Option<QuotaInfo> {

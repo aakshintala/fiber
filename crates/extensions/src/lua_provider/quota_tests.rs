@@ -1625,3 +1625,124 @@ fn quota_pending_is_true_only_before_any_fetch_finishes_or_fails() {
     ));
     server.release();
 }
+
+/// Waits for the flight `wait` names to end, failing at the suite's
+/// deadline instead of parking past it.
+#[track_caller]
+fn wait_flight(provider: &Arc<LuaProvider>, wait: QuotaFlight) -> QuotaEntry {
+    let provider = Arc::clone(provider);
+    let pair = pair();
+    fakes::within(
+        "provider.wait_quota",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || provider.wait_quota(&pair, wait),
+    )
+}
+
+#[test]
+fn force_start_fetches_whatever_the_cache_age() {
+    let root = fakes::TempDir::new("fiber-quota-force-start");
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
+    let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
+    let first = QuotaEntry::Reported(percent("primary", 10.0, None));
+    assert_eq!(read(&provider), first);
+    assert_eq!(server.requests().len(), 1);
+    // The cache is fresh: the fake clock never moved, so a due-check
+    // would never refetch. Only the force-start starts a new fetch.
+    let wait = provider.force_start_quota(&pair(), None);
+    assert!(
+        server.await_requests(2, WAIT),
+        "the force-start never reached the server"
+    );
+    assert_eq!(
+        wait_flight(&provider, wait),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn force_start_shares_an_in_flight_flight() {
+    let root = fakes::TempDir::new("fiber-quota-force-shared");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let provider = http_quota_provider(&root, &server.url(), FakeClock::new());
+    let first = provider.force_start_quota(&pair(), None);
+    assert!(
+        server.await_requests(1, WAIT),
+        "the first force-start never reached the server"
+    );
+    // The flight is still held open: the second force-start shares it,
+    // starting no fetch of its own.
+    let second = provider.force_start_quota(&pair(), None);
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "the shared force-start fetched again"
+    );
+    server.release();
+    let want = QuotaEntry::Reported(percent("primary", 10.0, None));
+    assert_eq!(wait_flight(&provider, first), want);
+    assert_eq!(wait_flight(&provider, second), want);
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn a_wait_reports_its_own_flight_when_the_flight_is_replaced() {
+    let root = fakes::TempDir::new("fiber-quota-wait-replaced");
+    let (provider, clock) = quota_provider(&root, "nil");
+    let pair = pair();
+    let t0 = clock.now();
+    let value = percent("primary", 42.5, None);
+    seed(
+        &provider,
+        Some((Some(value.clone()), t0)),
+        Some(Flight { id: 7, started: t0 }),
+    );
+    // The force-start shares the seeded flight instead of starting one:
+    // the wait below names flight 7.
+    let wait = provider.force_start_quota(&pair, None);
+    assert_eq!(wait.id, 7, "the force-start did not share flight 7");
+    let (tx, rx) = mpsc::channel();
+    let reader = {
+        let provider = Arc::clone(&provider);
+        let pair = pair.clone();
+        std::thread::spawn(move || tx.send(provider.wait_quota(&pair, wait)))
+    };
+    assert!(
+        clock.await_parked(t0 + Duration::from_secs(8), WAIT),
+        "the wait never parked on flight 7"
+    );
+    // Hold the cache while the clock passes flight 7's deadline, so the
+    // wait wakes only after flight 7 has expired and flight 8 is in the
+    // slot: the wait must report on flight 7, not wait on flight 8.
+    {
+        let mut states = lock(&provider.quotas.state);
+        clock.advance_when_parked(
+            Some(t0 + Duration::from_secs(8)),
+            Some(reader.thread().id()),
+            Duration::from_secs(8),
+            &Deadline::after(WAIT),
+        );
+        let now = clock.now();
+        let cache = states.get_mut(&pair).unwrap();
+        assert!(expire_overdue(cache, now, &provider.quotas.parker));
+        let id = cache.next_id;
+        cache.next_id = id.wrapping_add(1);
+        cache.flight = Some(Flight { id, started: now });
+    }
+    match Deadline::after(WAIT).recv(&rx) {
+        Ok(found) => assert_eq!(
+            found,
+            QuotaEntry::Unreachable {
+                last: Some((value, Duration::from_secs(8))),
+            },
+            "the wait did not report on its own flight"
+        ),
+        Err(_) => panic!("the wait held past its own flight's deadline"),
+    }
+}
