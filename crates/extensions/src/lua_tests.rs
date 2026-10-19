@@ -890,7 +890,9 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let (tx, rx) = mpsc::channel();
     let run = |what: &'static str, f: fn(&LuaExtension) -> Result<Value, Error>| {
         let (ext, tx) = (Arc::clone(&ext), tx.clone());
-        thread::spawn(move || tx.send((what, f(&ext))));
+        thread::spawn(move || tx.send((what, f(&ext))))
+            .thread()
+            .id()
     };
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
@@ -904,7 +906,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         "waited for models to reach the server"
     );
     run("queued", |e| e.command("queued", "").map(Value::String));
-    run("sign", |e| e.provider_call("p", "sign", Value::Null));
+    let sign = run("sign", |e| e.provider_call("p", "sign", Value::Null));
     Deadline::after(WAIT)
         .recv(&went)
         .expect("waited for sign to pass its clock check");
@@ -913,7 +915,12 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         clock.await_parked(abandon, WAIT_SERVER),
         "waited for sign to park at its grace"
     );
-    clock.advance(Duration::from_millis(50) + GRACE);
+    clock.advance_when_parked(
+        Some(abandon),
+        Some(sign),
+        Duration::from_millis(50) + GRACE,
+        &Deadline::after(WAIT),
+    );
     let mut seen = BTreeMap::new();
     // One deadline for the whole wait: the loop drains one stream.
     let wait = Deadline::after(WAIT);
