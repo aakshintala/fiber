@@ -655,7 +655,12 @@ fn a_suspended_dispatch_spans_the_whole_call() {
         clock.await_thread_parked(id, Some(mark + Duration::from_secs(31)), WAIT),
         "the hook caller parked past its check on the suspended callback"
     );
-    clock.advance(Duration::from_millis(2500));
+    clock.advance_when_parked(
+        Some(mark + Duration::from_secs(31)),
+        Some(id),
+        Duration::from_millis(2500),
+        &Deadline::after(WAIT),
+    );
     assert!(
         ends.lock().unwrap().is_empty(),
         "no completion while the dispatch is suspended"
@@ -723,7 +728,12 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
     );
     // Past the hook's deadline but inside its grace: the caller takes the
     // timeout, the chain fails, and the scope still closes exactly once.
-    clock.advance(Duration::from_millis(1500));
+    clock.advance_when_parked(
+        Some(mark + Duration::from_millis(2000)),
+        Some(id),
+        Duration::from_millis(1500),
+        &Deadline::after(WAIT),
+    );
     let answer = Deadline::after(WAIT)
         .recv(&rx)
         .expect("waited for the timed-out dispatch");
