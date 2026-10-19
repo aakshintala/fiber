@@ -66,6 +66,7 @@ impl Home {
         .unwrap();
         log.append(&started(workspace), None, None).unwrap();
         for text in texts {
+            // No code under test waits on the clock here; it stamps data (ruling 6179406086).
             self.clock.advance(Duration::from_secs(1));
             log.append(&event("text_completed", json!({"text": text})), None, None)
                 .unwrap();
