@@ -614,3 +614,14 @@ pub fn matching_exits(text: &str, deadline: Duration) -> bool {
 #[cfg(test)]
 #[path = "process_group_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod cont_signal_tests {
+    use super::signal_named;
+    use rustix::process::Signal;
+
+    #[test]
+    fn cont_name_reads_as_cont() {
+        assert_eq!(signal_named("CONT").unwrap(), Some(Signal::CONT));
+    }
+}
