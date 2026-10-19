@@ -85,8 +85,10 @@ fn state_line(key: &str, landing: u64) -> StateLine {
 }
 
 #[test]
-fn default_wait_for_runs_returns_without_dispatching_a_hook() {
-    assert!(matches!(Never.wait_for_runs(), ()));
+fn default_wait_for_runs_returns_at_once() {
+    std::thread::scope(|s| {
+        s.spawn(|| Never.wait_for_runs()).join().unwrap();
+    });
 }
 
 #[test]
