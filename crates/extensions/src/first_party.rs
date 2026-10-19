@@ -1,11 +1,32 @@
 //! Which first-party package serves each provider (`docs/extensions.md`,
 //! "A fresh install"): the build script's table of the provider data under
-//! `providers/`, and the hint `extension_missing` gives for a provider.
+//! `providers/`, the model picker's not-installed list, the hub's provider
+//! install verb, and the hint `extension_missing` gives for a provider.
+
+#[cfg(test)]
+#[path = "first_party_tests.rs"]
+mod tests;
 
 /// Each provider a first-party package declares, with that package's short
 /// name: `(provider name, package short name)`, sorted by provider.
 const PROVIDER_PACKAGES: &[(&str, &str)] =
     include!(concat!(env!("OUT_DIR"), "/provider_packages.rs"));
+
+/// Each first-party provider no healthy installed extension declares, sorted
+/// by provider name. Damaged directories contribute no declarations.
+pub fn not_installed_providers(home: &std::path::Path) -> Result<Vec<&'static str>, crate::Error> {
+    let entries = crate::installed::read_entries(home)?;
+    Ok(PROVIDER_PACKAGES
+        .iter()
+        .filter(|(name, _)| {
+            !entries
+                .found
+                .iter()
+                .any(|entry| entry.manifest.providers.contains_key(*name))
+        })
+        .map(|(name, _)| *name)
+        .collect())
+}
 
 /// The short name of the first-party package whose data declares `provider`.
 fn serving_package(provider: &str) -> Option<&'static str> {
