@@ -146,6 +146,7 @@ fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
     queue(&shared, b"two");
     stream.pass(&shared, clock.as_ref());
     queue(&shared, b"three");
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (99 ms before the boundary) (ruling 6179406086).
     clock.advance(Duration::from_millis(99));
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["one"]);
@@ -154,6 +155,7 @@ fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
         Some(clock.origin() + Duration::from_millis(100))
     );
 
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (100 ms at the boundary) (ruling 6179406086).
     clock.advance(Duration::from_millis(1));
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["one", "twothree"]);
@@ -167,12 +169,14 @@ fn a_large_delta_pushes_the_next_one_out_by_its_size() {
     queue(&shared, &vec![b'a'; 20_480]);
     stream.pass(&shared, clock.as_ref());
     queue(&shared, b"b");
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (190 ms into the large delta) (ruling 6179406086).
     clock.advance(Duration::from_millis(190));
     stream.pass(&shared, clock.as_ref());
     assert_eq!(deltas.deltas().len(), 1);
     let due = stream.deadline().unwrap() - clock.origin();
     assert!(due > Duration::from_millis(190), "{due:?}");
     assert!(due < Duration::from_millis(260), "{due:?}");
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (260 ms past the large delta) (ruling 6179406086).
     clock.advance(Duration::from_millis(70));
     stream.pass(&shared, clock.as_ref());
     assert_eq!(deltas.deltas().len(), 2);
@@ -185,6 +189,7 @@ fn an_incomplete_character_waits_for_its_other_half() {
     queue(&shared, &[b'a', bytes[0]]);
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["a"]);
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the incomplete character's 100 ms wait) (ruling 6179406086).
     clock.advance(Duration::from_millis(100));
     queue(&shared, &bytes[1..]);
     stream.pass(&shared, clock.as_ref());
@@ -414,6 +419,7 @@ fn a_dropped_queue_discards_the_carried_tail() {
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["a"]);
     queue(&shared, &vec![b'b'; 65_537]);
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the dropped queue's 100 ms tail) (ruling 6179406086).
     clock.advance(Duration::from_millis(100));
     stream.pass(&shared, clock.as_ref());
     let got = texts(&deltas);
@@ -428,6 +434,7 @@ fn a_kept_queue_keeps_the_carried_tail() {
     queue(&shared, &[b'a', "é".as_bytes()[0]]);
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["a"]);
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the kept queue's 100 ms tail) (ruling 6179406086).
     clock.advance(Duration::from_millis(100));
     queue(&shared, &"é".as_bytes()[1..]);
     stream.pass(&shared, clock.as_ref());
@@ -445,6 +452,7 @@ fn held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib() {
     queue(&shared, &vec![b'b'; 40_000]);
     stream.pass(&shared, clock.as_ref());
     assert_eq!(texts(&deltas), ["one"], "nothing due yet");
+    // No code under test waits on the clock here; JobStream::pass is a direct call that only reads the clock (the capped tail's 100 ms wait) (ruling 6179406086).
     clock.advance(Duration::from_millis(100));
     stream.pass(&shared, clock.as_ref());
     let got = texts(&deltas);
