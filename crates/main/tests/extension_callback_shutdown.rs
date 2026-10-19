@@ -23,6 +23,7 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
@@ -200,6 +201,22 @@ fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
+/// Builds the exec program's script from its mark, ready and hold paths:
+/// it arms its SIGTERM trap, writes its pid to the ready FIFO, then blocks
+/// in `read` on the hold FIFO. `prefix` runs first inside the blocking
+/// command's expansion: the stand-in below passes `kill -STOP $$; `, so
+/// the shell stops inside the expansion and a SIGTERM sent then lands
+/// inside the read.
+fn exec_script(mark: &Path, ready: &Path, hold: &Path, prefix: &str) -> String {
+    format!(
+        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < \"$({}echo {})\" & wait\n",
+        quote(mark),
+        quote(ready),
+        prefix,
+        quote(hold),
+    )
+}
+
 #[test]
 fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
     let setup = Setup::new();
@@ -226,12 +243,7 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
             }
         }
     });
-    let script = format!(
-        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < {}\n",
-        quote(&mark),
-        quote(ready.path()),
-        quote(&hold),
-    );
+    let script = exec_script(&mark, ready.path(), &hold, "");
     let init = format!(
         "fiber.hook(\"after_tool\", {{ timeout = 30000, on_failure = \"blocking\",\n  run = function(call)\n    host.exec(\"sh\", {{\"-c\", [[{script}]]}})\n    return {{ content = \"hooked\" }}\n  end }})\n"
     );
@@ -316,4 +328,151 @@ fn sigterm_stops_an_after_tool_callback_and_its_exec_group() {
             );
         }
     }
+}
+
+/// Whether `ps` shows process `pid` stopped: its state holds `T`. `ps`
+/// runs in its own watched group and its output arrives under a short
+/// bound, so a `ps` that never exits is killed and reported, never read
+/// as running.
+// debt: stopped-state poll shells out to `ps` instead of `rustix::process::waitid`: waitid needs siginfo/ECHILD plumbing and drops the kill-and-report hang-proofing above. Upgrade trigger: a second stopped-state poll in main tests, which moves both onto one shared waitid helper.
+#[track_caller]
+fn is_stopped(deadline: Deadline, pid: u32) -> bool {
+    let mut command = Command::new("ps");
+    command
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    let (child, watchdog) = support::spawn_watched(&mut command);
+    let ps_group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let wait = deadline.left().min(Duration::from_secs(3));
+    let output = match Deadline::after(wait).recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => {
+            match support::kill_group(deadline, ps_group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            watchdog.stand_down(deadline.cleanup());
+            panic!("ps did not exit within {wait:?}");
+        }
+    };
+    watchdog.stand_down(deadline.cleanup());
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout).contains('T')
+}
+
+/// Waits until `ps` shows process `pid` stopped, polling with no sleep to
+/// the test's [`Deadline`]: proof the shell parked inside the blocking
+/// command's expansion, so the SIGTERM below lands inside the read.
+#[track_caller]
+fn wait_stopped(deadline: Deadline, pid: u32) {
+    loop {
+        assert!(
+            !deadline.left().is_zero(),
+            "waited until the deadline for process {pid} to stop"
+        );
+        if is_stopped(deadline, pid) {
+            return;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// Sends SIGCONT to process `pid` through `support::kill_pid`, starting
+/// no process: the shell stopped itself, and SIGTERM stays pending until
+/// SIGCONT resumes it. An id of 1 or less panics before anything runs,
+/// since the signal would reach processes the test does not own.
+#[track_caller]
+fn continue_pid(deadline: Deadline, pid: u32) {
+    assert!(support::kill_pid(deadline, pid, "CONT").unwrap());
+}
+
+#[test]
+fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
+    let setup = Setup::new();
+    let ready = ready_fifo(&setup);
+    let mark = setup.root.path().join("mark");
+    let hold = setup.root.path().join("hold.fifo");
+    fakes::fifo(&hold);
+    // The expansion stops the shell itself before it blocks, so the
+    // SIGTERM below lands inside the blocking read on every run.
+    let script = exec_script(&mark, ready.path(), &hold, "kill -STOP $$; ");
+    // debt: manual process-group, drop guard and watchdog instead of `support::spawn_watched`, which forgets its guard at once and kills only on process death. Upgrade trigger: spawn_watched keeps a drop guard, or a third manual setup appears, which moves all three onto the helper.
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    let mut child = command.spawn().unwrap();
+    let group = child.id();
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    // The pid line proves the trap is armed before any signal goes out.
+    let pid = ready.wait(setup.deadline.left())[0];
+    // The shell stopped inside the blocking command's expansion: SIGTERM
+    // stays pending until SIGCONT resumes it into the read.
+    wait_stopped(setup.deadline, pid);
+    assert!(support::kill_pid(setup.deadline, pid, "TERM").unwrap());
+    continue_pid(setup.deadline, pid);
+    // This write-end open blocks until the exec program's `read` opens the
+    // FIFO: it runs on a thread, and the receive below carries the
+    // deadline. The binding holds the write end until the test ends.
+    let (held, writing) = mpsc::channel();
+    thread::spawn({
+        let hold = hold.clone();
+        move || {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&hold) {
+                match held.send(file) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    });
+    let _writer = setup
+        .deadline
+        .recv(&writing)
+        .expect("the hold FIFO opened for writing");
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    match setup.deadline.recv(&finished) {
+        Ok(status) => assert!(
+            status.unwrap().success(),
+            "the exec program exited through its trap"
+        ),
+        Err(_) => support::expired(
+            setup.deadline,
+            group,
+            &finished,
+            "the exec program to run its trap",
+        ),
+    }
+    // SIGTERM reached the exec program: the trap wrote its mark.
+    assert_eq!(
+        fs::read_to_string(&mark).unwrap_or_default().trim(),
+        "term",
+        "the exec program saw SIGTERM"
+    );
+    // The background `read` outlives the shell: kill the group, check it
+    // emptied, and stand the watchdog down.
+    match support::kill_group(setup.deadline, group, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(group, setup.deadline.cleanup()),
+        "the exec program's group emptied"
+    );
+    std::mem::forget(guard);
+    watchdog.stand_down(setup.deadline.cleanup());
 }
