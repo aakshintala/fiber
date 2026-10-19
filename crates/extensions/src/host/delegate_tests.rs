@@ -429,7 +429,6 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
         .expect("the held start arrives");
     assert_eq!(extension, "ext");
     let due = clock.origin() + Duration::from_millis(100);
-    let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
         .mark_parked(due, WAIT)
         .expect("the timer waits for its due time")
@@ -559,7 +558,6 @@ fn a_second_timer_fires_while_one_start_is_held() {
         .recv(&arrived)
         .expect("the first start arrives");
     assert_eq!(first.get("description"), Some(&Value::from("first")));
-    let due = clock.origin() + Duration::from_millis(100);
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
         .mark_parked(due, WAIT)
