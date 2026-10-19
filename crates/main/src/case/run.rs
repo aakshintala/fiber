@@ -71,6 +71,10 @@ impl CaseRun {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the case runner's waits carry the session inputs the driver needs"
+    )]
     fn with_waits(
         name: String,
         expected: Vec<Value>,
