@@ -94,6 +94,7 @@ fn status(name: &str) -> Event {
         jobs: 0,
         project: "-w".into(),
         clients: 0,
+        closing: false,
     })
 }
 

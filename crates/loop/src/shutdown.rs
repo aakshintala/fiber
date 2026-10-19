@@ -8,7 +8,7 @@ use contract::inbox::Delivery;
 use contract::jobs::Taken;
 use contract::{ErrorCode, JobId};
 
-use crate::inbox::{CLOSING, STALE_REPLY, STALE_STEER, accept, reject};
+use crate::inbox::{CLOSING, STALE_REPLY, STALE_STEER, reject};
 use crate::jobs::{Queued, claimed};
 use crate::{Error, Loop};
 
@@ -211,7 +211,7 @@ impl Loop {
             }
             Delivery::SteerDrop(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_STEER),
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
-            Delivery::Close(ack) => accept(ack),
+            Delivery::Close(ack) => self.take_close(ack),
             Delivery::JobLine(_)
             | Delivery::Message(_)
             | Delivery::InnerCall(_)

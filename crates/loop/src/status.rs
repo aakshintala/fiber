@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Weak, mpsc};
 use std::thread::{Builder, JoinHandle};
 
 use contract::emit::Emit;
@@ -35,6 +35,16 @@ const STOP: &str = "status_stop";
 
 /// A classified subject, kept only on this watcher's queue.
 const SUBJECT: &str = "status_subject";
+
+/// The control line that marks an accepted `close`: the fold sets
+/// `closing` and emits it before the loop answers. A control kind like
+/// the others: it goes to the status watcher alone, never to a client or
+/// the log.
+const CLOSING: &str = "status_closing";
+
+/// The reply half a close request carries: sent once the `session_status`
+/// with `closing` is what the log serves, dropped when the observer ends.
+type Published = std::sync::mpsc::Sender<()>;
 
 /// What a state is, for deciding when `since` restarts: the state's kind,
 /// and the tool name or request id it names.
@@ -70,6 +80,8 @@ pub(crate) struct Fold {
     pending: Vec<Waiting>,
     turn_running: bool,
     retrying: bool,
+    /// True once the session accepted `close`: nothing clears it.
+    closing: bool,
     context: Option<u64>,
     ledger: Ledger,
     spend: Usage,
@@ -124,6 +136,7 @@ impl Fold {
             pending: Vec::new(),
             turn_running: false,
             retrying: false,
+            closing: false,
             context: None,
             spend,
             ledger,
@@ -156,6 +169,7 @@ impl Fold {
                     cost: Some(0.0),
                     subscription_cost: 0.0,
                 },
+                closing: false,
                 delegates: 0,
                 jobs: 0,
                 clients: 0,
@@ -174,6 +188,17 @@ impl Fold {
         };
         fold.last = fold.status();
         fold
+    }
+
+    /// Accepts `close`: sets `closing` once and recomputes the status.
+    /// True when the status changed, as `subject` does.
+    pub(crate) fn close(&mut self) -> bool {
+        if self.closing {
+            return false;
+        }
+        self.closing = true;
+        self.last = self.status();
+        true
     }
 
     /// History is folded: reads the jobs and the branch now, and from here
@@ -528,6 +553,7 @@ impl Fold {
             model: self.model.clone(),
             thinking: self.thinking.clone(),
             state: self.state(),
+            closing: self.closing,
             since: self.since.unwrap_or_default(),
             started: self.started,
             calls: self.calls,
@@ -580,9 +606,18 @@ fn call_step(name: &str, subject: Option<&str>) -> String {
     }
 }
 
-/// Classification's private path to the status watcher; never logged.
+/// Classification's private path to the status watcher, and the request
+/// half of the close handshake; neither is ever logged.
 #[derive(Clone)]
-pub(crate) struct Tap(Injector);
+pub(crate) struct Tap {
+    injector: Injector,
+    closing: mpsc::Sender<Published>,
+    /// Test-only: fired once `closing` has queued its request, so a test
+    /// can order the observer's end after the queue. Never read in
+    /// production builds.
+    #[cfg(test)]
+    queued: Option<mpsc::Sender<()>>,
+}
 
 impl Tap {
     /// Queues the subject with exactly the call payload the log wrote.
@@ -597,20 +632,56 @@ impl Tap {
         let mut line = control(SUBJECT);
         line.payload.insert("call".to_owned(), call);
         line.payload.insert("subject".to_owned(), subject.into());
-        self.0.push_kept(line);
+        self.injector.push_kept(line);
+    }
+
+    /// Test-only: `tx` fires once `closing` has queued its request.
+    #[cfg(test)]
+    pub(crate) fn announce_queued(&mut self, tx: mpsc::Sender<()>) {
+        self.queued = Some(tx);
+    }
+
+    /// Marks the accepted `close`: queues the control line, then waits
+    /// until the `session_status` carrying `closing` is written, or the
+    /// observer has ended. A dropped request sender means the observer is
+    /// gone, so the loop answers at once; a dropped reply means the
+    /// observer ended before it answered, so the loop answers too.
+    pub(crate) fn closing(&self) {
+        let (reply, published) = mpsc::channel();
+        if self.closing.send(reply).is_err() {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(queued) = &self.queued {
+            // The test's own wait fails first and drops the receiver,
+            // which releases this send.
+            match queued.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        self.injector.push_kept(control(CLOSING));
+        match published.recv() {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
 /// The running observer thread.
 pub(crate) struct Status {
     injector: Injector,
+    closing: mpsc::Sender<Published>,
     thread: JoinHandle<()>,
 }
 
 impl Status {
     /// A sender for this observer's private control queue.
     pub(crate) fn tap(&self) -> Tap {
-        Tap(self.injector.clone())
+        Tap {
+            injector: self.injector.clone(),
+            closing: self.closing.clone(),
+            #[cfg(test)]
+            queued: None,
+        }
     }
 
     /// Ends the thread after every line already written, and waits for it:
@@ -677,6 +748,7 @@ fn start(log: &Arc<Log>, fold: Fold) -> Option<Status> {
     let mut watcher = log.watch_all();
     let injector = watcher.injector();
     injector.push_kept(control(LIVE));
+    let (closing, requests) = mpsc::channel::<Published>();
     let thread = Builder::new()
         .name("status".to_owned())
         .spawn(move || {
@@ -685,11 +757,16 @@ fn start(log: &Arc<Log>, fold: Fold) -> Option<Status> {
                 log: weak,
                 live: false,
                 last: None,
+                requests,
             };
             follow(&mut watcher, &mut observer);
         })
         .ok()?;
-    Some(Status { injector, thread })
+    Some(Status {
+        injector,
+        closing,
+        thread,
+    })
 }
 
 /// Folds the watcher's lines until the stop line, the end of the log, or a
@@ -729,6 +806,7 @@ struct Observer {
     log: Weak<Log>,
     live: bool,
     last: Option<SessionStatus>,
+    requests: mpsc::Receiver<Published>,
 }
 
 impl Observer {
@@ -736,6 +814,18 @@ impl Observer {
         let changed = match line.kind.as_str() {
             STOP => return Flow::Stop,
             SUBJECT => self.fold.subject(line),
+            CLOSING => {
+                let changed = self.fold.close();
+                if self.live && changed && !self.emit() {
+                    return Flow::Gone;
+                }
+                if let Ok(reply) = self.requests.try_recv() {
+                    match reply.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                return Flow::Go;
+            }
             LIVE => {
                 self.live = true;
                 self.fold.go_live();

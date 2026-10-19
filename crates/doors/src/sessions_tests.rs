@@ -53,6 +53,7 @@ fn status(name: &str) -> SessionStatus {
         jobs: 0,
         project: "p".into(),
         clients: 0,
+        closing: false,
     }
 }
 

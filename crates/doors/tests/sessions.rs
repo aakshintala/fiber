@@ -77,6 +77,7 @@ fn real_sessions_answer_twice_with_their_latest_summary_and_parent() {
             jobs: 0,
             project: "p".into(),
             clients: 0,
+            closing: false,
         };
         log.append(&Event::SessionStatus(status.clone()), None, None)
             .unwrap();
