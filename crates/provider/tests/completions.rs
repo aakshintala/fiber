@@ -2134,6 +2134,41 @@ fn reply_without_annotations_has_no_hosted_call() {
     assert_eq!(reply.text(), "hi");
 }
 
+/// The generated opencode-go file's entry for `id`, such as its `compat`.
+fn generated_opencode_go_model(id: &str) -> Value {
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../providers/opencode/providers/opencode-go.json"),
+    )
+    .unwrap();
+    let file: Value = serde_json::from_str(&text).unwrap();
+    file["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == id)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn an_opencode_go_completions_request_sends_store_false() {
+    // The endpoint's compat comes from the generated opencode-go file's
+    // completions entry, not from a hand-set flag, so the capture fails
+    // when the table stops declaring store:false there.
+    let model = generated_opencode_go_model("deepseek-v4-flash");
+    assert_eq!(model["protocol"], "openai-completions");
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        model: model["id"].as_str().unwrap().into(),
+        base_url: format!("{}/zen/go/v1", server.url()),
+        compat: Compat::from_data(model["compat"].as_object().unwrap()),
+        ..endpoint(&server)
+    };
+    send(endpoint, &request());
+    assert_eq!(sent_body(&server, 0)["store"], false);
+}
+
 #[test]
 fn non_citation_annotations_yield_no_hosted_call() {
     let chunks = vec![
