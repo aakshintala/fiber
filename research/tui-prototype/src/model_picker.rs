@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{Act, BLUE, ORANGE, Row, SPIN, Ui, bold, dim, fg, hot_row, panel, row, sp, width};
+use crate::{Act, BLUE, ORANGE, RED, Row, SPIN, Ui, bold, dim, fg, hot_row, panel, row, sp, width};
 use ratatui::style::{Modifier, Style};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use unicode_width::UnicodeWidthStr;
@@ -317,10 +317,66 @@ pub fn hub_fixture() -> Vec<Provider> {
     ]
 }
 
+/// The not-installed first-party provider the picker offers below the
+/// installed sections: choosing it installs it, and the row then shows
+/// the install's progress, its error or its summary (#2768). Fixture
+/// data only: the name, models and summary below are made up, like the
+/// rest of this file's catalogue.
+pub fn install_fixture() -> Provider {
+    Provider {
+        name: "databricks",
+        updated: "just now",
+        models: vec![
+            Model {
+                id: "dbrx-instruct",
+                name: "DBRX Instruct",
+                roles: vec!["main"],
+                current: false,
+                levels: vec!["low", "medium", "high"],
+                level: Some("medium"),
+                rebuild: "~90k tokens · $0.28",
+                input: Some(2.50),
+                output: Some(10.00),
+                tier: None,
+            },
+            Model {
+                id: "llama-4-maverick",
+                name: "Llama 4 Maverick",
+                roles: vec!["explorer"],
+                current: false,
+                levels: vec!["low", "medium"],
+                level: Some("low"),
+                rebuild: "~76k tokens · $0.09",
+                input: Some(0.60),
+                output: Some(1.80),
+                tier: None,
+            },
+        ],
+    }
+}
+
+/// What the picker's not-installed row shows: the provider below the
+/// installed sections, then while it installs, on failure, and installed.
+#[derive(Clone, Copy)]
+pub enum Install {
+    /// the row sits below the installed sections, marked not installed
+    Missing,
+    /// the install runs; the row reads installing with the spinner
+    Installing,
+    /// the install failed; the row stays and shows the error
+    Failed { error: &'static str },
+    /// the provider installed; its section joins the list with the summary
+    Done { login: Option<&'static str> },
+}
+
 /// The catalogue on screen: the hub's on a remote terminal, else the
-/// local fixture.
-fn catalog(hub: bool) -> Vec<Provider> {
-    if hub { hub_fixture() } else { fixture() }
+/// local fixture, with the installed provider once its install is done.
+fn catalog(hub: bool, extra: bool) -> Vec<Provider> {
+    let mut all = if hub { hub_fixture() } else { fixture() };
+    if extra {
+        all.push(install_fixture());
+    }
+    all
 }
 
 /// The five models `scoped_models` holds.
@@ -353,6 +409,9 @@ pub struct State {
     pub session: Option<u64>,
     /// Draw the hub's catalogue, as a remote terminal's picker does.
     pub hub: bool,
+    /// The not-installed first-party provider offered below the installed
+    /// sections; None draws the picker as before.
+    pub install: Option<Install>,
 }
 
 /// Every `--picker` case.
@@ -513,6 +572,46 @@ pub(crate) const CASES: &[Case<State>] = &[
             ..base()
         },
     },
+    Case {
+        name: "install-missing",
+        help: "a not-installed provider below the installed ones",
+        check: "three installed providers as in `list`, then below a blank row a `databricks · not installed` row with the name in accent and the mark dim, its two models dim with no prices and no thinking chips; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Missing),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-running",
+        help: "the not-installed row while its install runs",
+        check: "the same row below the installed sections reading `⟳ installing` with the spinner in attention, its models still dim; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Installing),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-failed",
+        help: "the not-installed row keeping its install error",
+        check: "the same row below the installed sections still marked not installed, with an indented error line in error under its dim models; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Failed {
+                error: "fetch failed: connection reset",
+            }),
+            ..base()
+        },
+    },
+    Case {
+        name: "install-done",
+        help: "the installed provider with its summary and login",
+        check: "a fourth `databricks` section with its two models listed, then the install summary (`✓ installed databricks …` with its providers and base URLs, what it replaces and carries) and a dim `databricks needs a credential: run `fiber login databricks`` line; same panel, bar and legend.",
+        build: || State {
+            install: Some(Install::Done {
+                login: Some("databricks"),
+            }),
+            ..base()
+        },
+    },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
@@ -535,7 +634,7 @@ fn base() -> State {
 /// the focused chip's level, else the model's own level.
 pub fn chosen(s: &State) -> (&'static str, &'static str) {
     let mut i = 0;
-    for p in catalog(s.hub) {
+    for p in catalog(s.hub, s.installed()) {
         for m in &p.models {
             if i == s.focus {
                 let level = match s.chip {
@@ -574,8 +673,8 @@ pub fn for_case(case: &str) -> State {
         .unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
-fn count(hub: bool) -> usize {
-    catalog(hub).iter().map(|p| p.models.len()).sum()
+fn count(hub: bool, extra: bool) -> usize {
+    catalog(hub, extra).iter().map(|p| p.models.len()).sum()
 }
 
 /// The text one query token must subsequence-match: provider, id and
@@ -642,7 +741,7 @@ fn id_hits(query: &str, id: &str) -> Vec<usize> {
 /// The flat indices on screen: the scoped set, or everything. The
 /// checklist shows every model whatever the scope says; the query still filters.
 pub fn visible(s: &State) -> Vec<usize> {
-    let all = catalog(s.hub);
+    let all = catalog(s.hub, s.installed());
     let mut flat: Vec<(&str, &Model)> = vec![];
     for p in &all {
         for m in &p.models {
@@ -662,9 +761,9 @@ pub fn visible(s: &State) -> Vec<usize> {
 }
 
 /// The focused model's level count and its current level's index.
-fn model_levels(hub: bool, focus: usize) -> (usize, usize) {
+fn model_levels(hub: bool, extra: bool, focus: usize) -> (usize, usize) {
     let mut i = 0;
-    for p in catalog(hub) {
+    for p in catalog(hub, extra) {
         for m in &p.models {
             if i == focus {
                 let cur = m
@@ -680,6 +779,10 @@ fn model_levels(hub: bool, focus: usize) -> (usize, usize) {
 }
 
 impl State {
+    /// Whether the install finished: its provider joins the catalogue.
+    fn installed(&self) -> bool {
+        matches!(self.install, Some(Install::Done { .. }))
+    }
     /// After the visible rows change the focus stays when still on screen
     /// and otherwise moves to the first visible row; the chip never survives.
     fn keep_focus(&mut self) {
@@ -709,14 +812,14 @@ impl State {
         self.chip = None;
     }
     pub fn chip_left(&mut self) {
-        let (n, cur) = model_levels(self.hub, self.focus);
+        let (n, cur) = model_levels(self.hub, self.installed(), self.focus);
         if n == 0 {
             return;
         }
         self.chip = Some(self.chip.unwrap_or(cur).saturating_sub(1));
     }
     pub fn chip_right(&mut self) {
-        let (n, cur) = model_levels(self.hub, self.focus);
+        let (n, cur) = model_levels(self.hub, self.installed(), self.focus);
         if n == 0 {
             return;
         }
@@ -750,7 +853,7 @@ impl State {
         self.keep_focus();
     }
     pub fn refresh_all(&mut self) {
-        self.refreshing = (0..catalog(self.hub).len()).collect();
+        self.refreshing = (0..catalog(self.hub, self.installed()).len()).collect();
     }
 }
 
@@ -962,20 +1065,32 @@ fn controls(s: &State, w: usize) -> Row {
             format!(
                 " {} of {} models · {} marked ",
                 visible(s).len(),
-                count(s.hub),
+                count(s.hub, s.installed()),
                 s.marked.len()
             )
         } else {
-            format!(" {} of {} marked ", s.marked.len(), count(s.hub))
+            format!(
+                " {} of {} marked ",
+                s.marked.len(),
+                count(s.hub, s.installed())
+            )
         };
         return row(vec![sp(scope, dim())]);
     }
     let scope = if !s.query.is_empty() {
-        format!(" {} of {} models ", visible(s).len(), count(s.hub))
+        format!(
+            " {} of {} models ",
+            visible(s).len(),
+            count(s.hub, s.installed())
+        )
     } else if s.scoped.is_empty() {
         format!(" {} models ", visible(s).len())
     } else {
-        format!(" scoped · {} of {} ", visible(s).len(), count(s.hub))
+        format!(
+            " scoped · {} of {} ",
+            visible(s).len(),
+            count(s.hub, s.installed())
+        )
     };
     let mut parts: Vec<(ratatui::text::Span<'static>, Option<Act>)> =
         vec![(sp(scope, dim()), None)];
@@ -1019,10 +1134,71 @@ fn footer(s: &State) -> Row {
     ])
 }
 
+/// The not-installed provider's rows below the installed sections: the
+/// row with the gutter, the name in accent and the mark, then its models
+/// dim with no prices and no thinking chips, since nothing installed has
+/// either; a failed install adds its error in error underneath.
+fn pending_rows(
+    p: &Provider,
+    mark: ratatui::text::Span<'static>,
+    error: Option<&'static str>,
+) -> Vec<Row> {
+    let mut out = vec![
+        row(vec![]),
+        row(vec![sp("  ", Style::new()), sp(p.name, fg(BLUE)), mark]),
+    ];
+    for m in &p.models {
+        let mut spans = vec![
+            sp("    ", Style::new()),
+            sp(m.id, dim()),
+            sp(" ", Style::new()),
+        ];
+        for r in &m.roles {
+            spans.push(sp(format!("[{r}] "), dim()));
+        }
+        out.push(row(spans));
+    }
+    if let Some(error) = error {
+        out.push(row(vec![sp(format!("    ✗ {error}"), fg(RED))]));
+    }
+    out
+}
+
+/// The installed summary under the list: what the install shows, the
+/// name, source and version, the providers with their base URLs, what it
+/// replaces and what it carries; and for a provider that needs one, the
+/// `fiber login` line. With no credential the summary stands alone.
+fn summary_rows(login: Option<&'static str>) -> Vec<Row> {
+    let mut out = vec![
+        row(vec![
+            sp("    \u{2713} ", fg(BLUE)),
+            sp(
+                "installed databricks 1.4.0 from the first-party registry".to_string(),
+                Style::new(),
+            ),
+        ]),
+        row(vec![sp(
+            "    providers: databricks (https://api.databricks.com) · replaces nothing".to_string(),
+            dim(),
+        )]),
+        row(vec![sp(
+            "    skills: 2 · themes: 1 · binaries: 1".to_string(),
+            dim(),
+        )]),
+    ];
+    if let Some(name) = login {
+        out.push(row(vec![sp(
+            format!("    {name} needs a credential: run `fiber login {name}`"),
+            dim(),
+        )]));
+    }
+    out
+}
+
 /// The panel's body at an inner width: controls, dim provider sections with
 /// a blank row between them, and the visible models, the focused one barred.
 fn body(s: &State, inner: usize) -> Vec<Row> {
-    let all = catalog(s.hub);
+    let all = catalog(s.hub, s.installed());
     let mut at: Vec<(usize, usize)> = vec![];
     for (pi, p) in all.iter().enumerate() {
         for mi in 0..p.models.len() {
@@ -1093,6 +1269,26 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
                     out.push(note_row());
                 }
             }
+        }
+    }
+    if let Some(install) = s.install {
+        match install {
+            Install::Done { login } => out.extend(summary_rows(login)),
+            Install::Missing => out.extend(pending_rows(
+                &install_fixture(),
+                sp(" · not installed", dim()),
+                None,
+            )),
+            Install::Installing => out.extend(pending_rows(
+                &install_fixture(),
+                sp(format!(" ⟳ installing {} ", spin(s)), fg(ORANGE)),
+                None,
+            )),
+            Install::Failed { error } => out.extend(pending_rows(
+                &install_fixture(),
+                sp(" · not installed", dim()),
+                Some(error),
+            )),
         }
     }
     out
@@ -2457,5 +2653,273 @@ mod tests {
             }
         }
         assert_eq!(picks(&view(&for_case("hub"), 100)), 5);
+    }
+
+    #[test]
+    fn the_missing_row_sits_below_the_installed_sections() {
+        let rows = view(&for_case("install-missing"), 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the pending provider");
+        assert!(
+            t.contains("not installed"),
+            "the pending provider is not marked"
+        );
+        // The row sits below the installed providers: past the last section.
+        let last = t.find("gemini-3-lite").unwrap();
+        assert!(
+            t[last..].contains("databricks"),
+            "the pending row is not below the installed sections"
+        );
+        // Its models draw dim with no prices and no thinking chips.
+        for id in ["dbrx-instruct", "llama-4-maverick"] {
+            assert!(t.contains(id), "missing pending model {id}");
+        }
+        let pending = t.find("databricks · not installed").unwrap();
+        assert!(
+            !t[pending..].contains("thinking"),
+            "the pending models grow chips before anything installs"
+        );
+        assert!(
+            !rows
+                .iter()
+                .filter(|r| plain(r).contains("dbrx-instruct"))
+                .any(|r| r.spans.iter().any(|s| s.content.contains("/M"))),
+            "the pending row prices what is not installed"
+        );
+        // The pending rows take no pick: the installed twelve keep theirs.
+        assert_eq!(picks(&rows), 12);
+        // Nothing installs, runs or fails here.
+        for word in [
+            "installing",
+            "\u{2713} installed",
+            "\u{2717}",
+            "needs a credential",
+        ] {
+            assert!(!t.contains(word), "missing case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_running_row_reads_installing_with_the_spinner_in_attention() {
+        use ratatui::style::Modifier;
+        let mut s = for_case("install-running");
+        s.still = true;
+        let rows = view(&s, 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the installing provider");
+        assert!(t.contains("installing"), "the row does not read installing");
+        assert!(
+            t.contains("\u{25cb}"),
+            "no still spinner glyph on the installing row"
+        );
+        assert!(
+            !t.contains("not installed"),
+            "the installing row keeps the missing mark"
+        );
+        // The spinner and its word read in the attention colour.
+        let row = rows
+            .iter()
+            .find(|r| plain(r).contains("installing"))
+            .unwrap();
+        let ink = row
+            .spans
+            .iter()
+            .find(|sp| sp.content.contains("installing"))
+            .unwrap();
+        assert_eq!(ink.style.fg, Some(ORANGE), "installing is not attention");
+        assert!(
+            !ink.style.add_modifier.contains(Modifier::DIM),
+            "installing went dim"
+        );
+        // Its models stay dim below while nothing is installed yet.
+        assert!(t.contains("dbrx-instruct"), "missing the pending models");
+        let pending = t.find("installing").unwrap();
+        assert!(
+            !t[pending..].contains("thinking"),
+            "the installing models grow chips"
+        );
+        // Nothing failed or finished here.
+        for word in ["\u{2713} installed", "\u{2717}", "needs a credential"] {
+            assert!(!t.contains(word), "running case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_failed_row_stays_and_shows_its_error_in_error() {
+        let rows = view(&for_case("install-failed"), 100);
+        let t = text(&rows);
+        assert!(t.contains("databricks"), "missing the failed provider");
+        assert!(
+            t.contains("not installed"),
+            "the failed row leaves the not-installed section"
+        );
+        assert!(
+            t.contains("fetch failed: connection reset"),
+            "the error line is missing"
+        );
+        // The error reads indented in the error role, on its own row.
+        let row = rows
+            .iter()
+            .find(|r| plain(r).contains("connection reset"))
+            .unwrap();
+        assert!(
+            plain(row).starts_with("    "),
+            "the error is not an indented second row"
+        );
+        assert!(
+            !plain(row).contains("not installed"),
+            "the error shares the provider row"
+        );
+        for sp in row.spans.iter().filter(|sp| !sp.content.trim().is_empty()) {
+            assert_eq!(sp.style.fg, Some(RED), "the error is not in error");
+        }
+        // Nothing still runs or finished here.
+        for word in [
+            "installing",
+            "\u{25cb}",
+            "\u{2713} installed",
+            "needs a credential",
+        ] {
+            assert!(!t.contains(word), "failed case draws {word}");
+        }
+    }
+
+    #[test]
+    fn the_done_case_lists_the_provider_with_its_summary_and_login() {
+        let rows = view(&for_case("install-done"), 100);
+        let t = text(&rows);
+        // The provider joins the list as a fourth installed section.
+        assert!(t.contains("databricks"), "missing the installed provider");
+        assert!(
+            t.contains("$2.50 in · $10.00 out /M"),
+            "the installed models show no prices"
+        );
+        assert_eq!(picks(&rows), 14, "the installed models take no pick");
+        assert!(t.contains("14 models"), "the controls miss the new models");
+        // The install summary under the list: name, source and version,
+        // the providers with their base URLs, and what it carries.
+        assert!(
+            t.contains("✓ installed databricks 1.4.0"),
+            "missing the install summary"
+        );
+        assert!(
+            t.contains("providers: databricks (https://api.databricks.com)"),
+            "missing the providers with their base URLs"
+        );
+        assert!(
+            t.contains("skills: 2 · themes: 1 · binaries: 1"),
+            "missing what the install carries"
+        );
+        // The credential line for a provider that needs one.
+        assert!(
+            t.contains("databricks needs a credential: run `fiber login databricks`"),
+            "missing the login line"
+        );
+        // The summary sits under the list, past the installed models.
+        let last = t.find("llama-4-maverick").unwrap();
+        assert!(
+            t[last..].contains("✓ installed databricks"),
+            "the summary is not under the list"
+        );
+        // Nothing pending, running or failed here.
+        for word in ["not installed", "installing", "\u{2717}"] {
+            assert!(!t.contains(word), "done case draws {word}");
+        }
+    }
+
+    #[test]
+    fn without_a_credential_the_summary_stands_alone() {
+        let mut s = base();
+        s.install = Some(Install::Done { login: None });
+        let rows = view(&s, 100);
+        let t = text(&rows);
+        assert!(
+            t.contains("✓ installed databricks 1.4.0"),
+            "missing the install summary"
+        );
+        assert_eq!(picks(&rows), 14, "the installed models take no pick");
+        assert!(
+            !t.contains("needs a credential"),
+            "the login line shows with no credential"
+        );
+    }
+
+    #[test]
+    fn the_done_mark_reads_success_while_the_details_stay_dim() {
+        let rows = view(&for_case("install-done"), 100);
+        let mark = rows
+            .iter()
+            .find(|r| plain(r).contains("✓ installed databricks"))
+            .unwrap();
+        let tick = mark
+            .spans
+            .iter()
+            .find(|sp| sp.content.contains("✓"))
+            .unwrap();
+        assert_eq!(tick.style.fg, Some(BLUE), "the mark is not success");
+        let login = rows
+            .iter()
+            .find(|r| plain(r).contains("needs a credential"))
+            .unwrap();
+        for sp in login
+            .spans
+            .iter()
+            .filter(|sp| !sp.content.trim().is_empty())
+        {
+            assert!(
+                sp.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::DIM),
+                "the login line is not dim"
+            );
+        }
+    }
+
+    #[test]
+    fn the_missing_row_names_the_provider_in_accent_with_a_dim_mark() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("install-missing"), 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let lines: Vec<String> = rows.iter().map(plain).collect();
+        let y = lines
+            .iter()
+            .position(|l| l.contains("databricks") && l.contains("not installed"))
+            .unwrap() as u16;
+        let line = &lines[y as usize];
+        // The name reads in the accent colour; the mark reads dim.
+        let name = line.find("databricks").unwrap();
+        let col = line[..name].chars().count();
+        assert_eq!(buf[(col as u16, y)].fg, BLUE, "the name is not accent");
+        assert!(
+            !buf[(col as u16, y)].modifier.contains(Modifier::DIM),
+            "the name went dim"
+        );
+        let mark = line.find("not installed").unwrap();
+        let mcol = line[..mark].chars().count();
+        assert!(
+            buf[(mcol as u16, y)].modifier.contains(Modifier::DIM),
+            "the mark is not dim"
+        );
+        // The pending models read dim throughout, never accent.
+        let y2 = lines
+            .iter()
+            .position(|l| l.contains("dbrx-instruct"))
+            .unwrap() as u16;
+        let start = lines[y2 as usize][..lines[y2 as usize].find("dbrx-instruct").unwrap()]
+            .chars()
+            .count();
+        for i in 0.."dbrx-instruct".len() {
+            let cell = &buf[(start as u16 + i as u16, y2)];
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "pending model cell {i} is not dim"
+            );
+            assert_ne!(cell.fg, BLUE, "pending model cell {i} takes accent");
+        }
     }
 }
